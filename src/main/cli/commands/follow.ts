@@ -1,10 +1,12 @@
 /**
  * Reading and questioning a call (docs/DESIGN.md sections 5.4, 5.5 and 6.1): `tail`, `context`,
- * `ask`, `search`. Every time printed is local wall-clock time from the API, never an offset.
+ * `ask`, `search`, and `presets`, the ask box's questions. Every time printed is local wall-clock
+ * time from the API, never an offset.
  */
 
 import { type LearnedItem, learnedNote } from "../../../core/vocab/learned.ts";
 import { readSse } from "../../llm/provider.ts";
+import type { Parsed } from "../args.ts";
 import { bool, duration, int, str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import { SpeakerColors } from "../color.ts";
@@ -72,6 +74,7 @@ const tail: Command = {
     const query = {
       format: "json",
       since: int(p, "since", 0, Number.MAX_SAFE_INTEGER),
+      // clock: `--last` counts back from the moment the command runs.
       from: last !== undefined ? Date.now() - last * 1000 : undefined,
       // A one-off read gets the second pass's text first; a follower does not wait on each event.
       review: follow ? "skip" : undefined,
@@ -233,11 +236,37 @@ function askDone(ctx: Ctx, q: string, b: Body, streamed: boolean): number {
 const ask: Command = {
   name: "ask",
   summary: "Answer a question with akou's configured provider (excerpts when it cannot)",
-  usage: 'akou ask "QUESTION" [-c CALL] [--json]',
-  flags: { call: callFlag("live") },
-  examples: ['akou ask "what did we decide about the release?"'],
+  usage: 'akou ask "QUESTION" | akou ask --preset NAME [--speaker NAME]   [-c CALL] [--json]',
+  flags: {
+    call: callFlag("live"),
+    preset: {
+      type: "string",
+      value: "NAME",
+      desc: "ask a preset's question instead (`akou presets list` names them)",
+    },
+    speaker: {
+      type: "string",
+      value: "NAME",
+      desc: "with --preset: the speaker a per-speaker preset asks about",
+    },
+  },
+  examples: [
+    'akou ask "what did we decide about the release?"',
+    "akou ask --preset decisions",
+    "akou ask --preset speaker --speaker Ben",
+  ],
   run: async (ctx, p) => {
-    const q = question(p.positional);
+    const preset = str(p, "preset");
+    if (preset === undefined && str(p, "speaker") !== undefined)
+      return usage(ctx, "--speaker goes with --preset");
+    if (preset !== undefined && p.positional.length > 0)
+      return usage(ctx, "ask takes a question or --preset, not both");
+    let q = question(p.positional);
+    if (preset !== undefined) {
+      const picked = await presetQuestion(ctx, p, preset);
+      if (typeof picked === "number") return picked;
+      q = picked;
+    }
     if (!q) return usage(ctx, "ask needs a question");
     const path = `/calls/${ref(p)}/ask`;
     const write = ctx.io.write;
@@ -286,6 +315,49 @@ const ask: Command = {
   },
 };
 
+/** The question `--preset NAME` asks of the call, filled in for it, or the exit code. */
+async function presetQuestion(ctx: Ctx, p: Parsed, name: string): Promise<string | number> {
+  const speaker = str(p, "speaker");
+  const r = await api(ctx, "GET", "/presets", {
+    query: { call: str(p, "call") ?? "live", speaker },
+  });
+  if (r.status !== 200) return finish(ctx, r, () => "");
+  const all = r.body.presets as Body[];
+  const mine = all.filter((x) => x.name === name);
+  if (mine.length === 1) return String(mine[0].question);
+  if (mine.length > 1) {
+    const who = mine.map((x) => x.speaker).join(", ");
+    return usage(ctx, `preset ${name} asks about one speaker: add --speaker (${who})`);
+  }
+  const raw = await api(ctx, "GET", "/presets");
+  const known = ((raw.body?.presets ?? []) as Body[]).find((x) => x.name === name);
+  if (known?.usesSpeaker) {
+    return usage(
+      ctx,
+      `preset ${name} asks about a speaker, and this call names none: add --speaker`,
+    );
+  }
+  return usage(ctx, `no preset ${name}; \`akou presets list\` names them`);
+}
+
+const presets: Command = {
+  name: "presets",
+  summary: "List the ask presets: the shipped questions and your own files",
+  usage: "akou presets list [--json]",
+  examples: ["akou presets list"],
+  run: async (ctx, p) => {
+    if (p.positional.length !== 1 || p.positional[0] !== "list")
+      return usage(ctx, "presets needs list");
+    const r = await api(ctx, "GET", "/presets");
+    return finish(ctx, r, (b) =>
+      [
+        ...(b.presets as Body[]).map((x) => `${x.name}  ${x.label}${x.bundled ? "" : "  (yours)"}`),
+        `Your own go in ${b.dir} as NAME.md; ask one with akou ask --preset NAME.`,
+      ].join("\n"),
+    );
+  },
+};
+
 const search: Command = {
   name: "search",
   summary: "Exact word hits in a call, with wall times",
@@ -311,4 +383,4 @@ const search: Command = {
   },
 };
 
-export const followCommands: Command[] = [tail, events, context, ask, search];
+export const followCommands: Command[] = [tail, events, context, ask, presets, search];

@@ -69,6 +69,7 @@ interface PendingChip {
 }
 
 const realLater = (ms: number, fn: () => void) => {
+  // clock: the real timer behind the injected `later`; tests pass their own.
   const t = setTimeout(fn, ms);
   return () => clearTimeout(t);
 };

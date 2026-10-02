@@ -137,6 +137,7 @@ async function draftRig(o: { press?: boolean; switches?: string[] } = {}): Promi
           chips.push({ chip: c, terms: terms() });
           push("chip", c);
         },
+        append: (text) => push("append", { text }),
       },
     };
   };
@@ -351,6 +352,31 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       expect(log.events().at(-1)).toMatchObject({ type: "dictation.discarded", id: "d-esc" });
       expect(g.inserted()).toHaveLength(before);
       expect(g.calls.at(-1)).toBe("hide");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a dictation made while the box has the keyboard goes at the end of its field (DC-A4)",
+    async () => {
+      seed(g, "d-more", "see you at the standup");
+      await openBox(g, "d-more");
+      const box = dictation(g).draft;
+      // The window takes the keyboard: the page's own focus listener tells the main side.
+      await g.view.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await until(() => box.takesDictation(), 5000, "the page's focus report");
+      expect(box.append("d-more-2", "and bring the slides")).toBe(true);
+      await g.view.page.waitForFunction(
+        () =>
+          (document.getElementById("draft-text") as HTMLTextAreaElement).value ===
+          "see you at the standup and bring the slides",
+      );
+      // Positive control: the window loses the keyboard, and the box takes no dictation.
+      await g.view.page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      await until(() => !box.takesDictation(), 5000, "the page's blur report");
+      expect(box.append("d-more-3", "never")).toBe(false);
+      await g.view.page.press("#draft-text", "Escape");
+      await until(() => g.answered.at(-1) === "discard", 5000, "the discard");
     },
     UI_TIMEOUT,
   );
@@ -576,7 +602,10 @@ describe("DC-L4: the chip asks once, from the draft box's page", () => {
       ).toEqual(["Kubernetes", "Grafana"]);
       await page.uncheck("#chip input[data-term='Grafana']");
       await page.click("#chip-learn");
-      await until(() => g.terms().includes("Kubernetes"), 5000, "the word learned");
+      // The learner saves the word before it writes `accepted` and `ignored`: wait for all four
+      // events, not only the word in the file.
+      await until(() => statuses(r.id).length === 4, 5000, "the answer written");
+      expect(g.terms()).toContain("Kubernetes");
       expect(g.terms()).not.toContain("Grafana");
       expect(statuses(r.id)).toEqual(["proposed", "proposed", "accepted", "ignored"]);
     },

@@ -117,6 +117,7 @@ export function quotedForms(forms: readonly string[]): string {
 }
 
 /** When a fix was made, as the end of a sentence: ` today`, ` on Mon`; nothing if unknown. */
+// clock: the default of an injected `now`; tests pass their own.
 export function when(at: number | undefined, now = Date.now(), tz = localZone()): string {
   if (at === undefined) return "";
   const day = dayLabel(at, now, tz);

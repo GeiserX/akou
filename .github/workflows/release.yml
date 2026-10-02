@@ -3,7 +3,10 @@ name: release
 # The release (docs/DESIGN.md section 9, scripts/release-checklist.md). On a `v*` tag it checks that
 # every version string equals the tag, builds the capture helper, the macOS app (unsigned: ad-hoc
 # signed, not notarized) and the CLI binaries, checks each built artifact without opening anything,
-# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS.
+# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS, a build
+# attestation for every asset, and notes that start with the version's CHANGELOG.md section.
+#
+# A tag runs no tests: it releases only a commit whose ci-ok is green (docs/CI-CD.md CI-19).
 #
 # Run it by hand (workflow_dispatch) for a dry run: the same builds and checks, the artifacts
 # uploaded to the run, and no release. `allow_missing_helper` lets a dry run build the app before
@@ -61,7 +64,11 @@ env:
 jobs:
   version:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The tested-commit step may wait for CI on the tagged commit to finish.
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +91,28 @@ jobs:
           fi
       - name: the bundled word lists are what the build script makes from its pinned source
         run: bun scripts/build-dictionaries.ts --check
-      - run: bun run check
+      # The release notes start with this version's CHANGELOG.md section (docs/CI-CD.md CI-20);
+      # `--check` above already failed if it is missing.
+      - name: the version's changelog section, for the release notes
+        run: |
+          mkdir -p notes
+          bun scripts/stamp-version.ts --notes > notes/changelog.md
+          cat notes/changelog.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notes
+          path: notes/changelog.md
+          if-no-files-found: error
+          retention-days: 14
+      # A tag releases only a commit CI already passed (docs/CI-CD.md CI-19), so the tests are not
+      # run again here: the newest ci.yml run of the tagged commit must end with ci-ok green. A pull
+      # request or a dry run has its own ci.yml run.
+      - name: the tagged commit passed ci-ok
+        if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: bun scripts/ci/tested-commit.ts "$SHA" --wait-minutes 90
 
   app:
     needs: version
@@ -302,6 +330,8 @@ jobs:
           done
 
   # The image of the tag is part of the release: no GitHub release goes out while it failed.
+  # Every asset gets a build provenance attestation, the one signature (docs/CI-CD.md CI-21):
+  # keyless, so there is no key to guard. `gh attestation verify <file> -R GeiserX/akou` checks one.
   release:
     needs: [app, cli, image-manifest]
     if: github.ref_type == 'tag'
@@ -309,17 +339,35 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notes
+          path: notes
       - name: SHA256SUMS
         working-directory: dist
         run: |
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
+      - name: attest every file SHA256SUMS lists
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: every asset verifies against its attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: dist
+        run: |
+          for f in akou-*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done
       - name: publish the release (a prerelease while 0.x; never a draft)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,7 +377,8 @@ jobs:
           version="${TAG#v}"
           prerelease=""
           case "$version" in 0.*|*-*) prerelease="--prerelease" ;; esac
-          cat > notes.md <<'EOF'
+          { cat ../notes/changelog.md; echo; } > notes.md
+          cat >> notes.md <<'EOF'
           **This build is not signed by Apple.** The first time you open akou, macOS refuses it. On macOS 14, Control-click akou in Applications, choose Open, then Open again. On macOS 15 and later, open akou once, then go to System Settings, Privacy & Security, and click Open Anyway. After an update macOS may ask for the microphone and system audio again. The speech models are downloaded on first run. See [docs/getting-started.md](https://github.com/GeiserX/akou/blob/main/docs/getting-started.md).
           EOF
           gh release create "$TAG" \

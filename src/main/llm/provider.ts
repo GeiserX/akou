@@ -100,6 +100,7 @@ export async function runProvider(
 ): Promise<CompleteResult> {
   const timeoutMs = o.timeoutMs ?? ANSWER_TIMEOUT_MS;
   const deadline = new AbortController();
+  // clock: a deadline on a provider's answer over the network.
   const timer = setTimeout(() => deadline.abort(), timeoutMs);
   const signal = o.signal ? AbortSignal.any([o.signal, deadline.signal]) : deadline.signal;
   let live = true;
