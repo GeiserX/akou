@@ -584,7 +584,9 @@ describe("the player bar (W5.3 to W5.6)", () => {
           await page.evaluate(() => {
             (document.getElementById("follow") as HTMLElement).hidden = false;
           });
-          for (const width of [1440, 900, 800]) {
+          // Back to wide from 1248, where the wide layout's column wraps the bar: WebKit kept the
+          // wrapped height there until the shell's last row was min-content (TS-14).
+          for (const width of [1440, 900, 800, 1248, 1440]) {
             await page.setViewportSize({ width, height: 800 });
             const m = await page.evaluate(() => {
               const bar = document.getElementById("player-bar") as HTMLElement;
