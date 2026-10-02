@@ -23,7 +23,7 @@ import { everyText, liveModelName } from "../main/asr/model-text.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
-import { onDictationPage } from "./dictation-page.ts";
+import { onDictationPage, SERVER_ENGINE_KEY, serverEngineControl } from "./dictation-page.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
 import { MODELS_KEYS } from "./models-rows.ts";
@@ -662,6 +662,8 @@ export class SettingsPage {
     else if (key === "asr.languages") controls = [this.languagesControl(id, value)];
     else if (key === "app.hotkey") controls = this.hotkeyControls(id, String(value ?? ""));
     else if (key === "share.bind") controls = [this.bindControl(id, String(value ?? ""))];
+    else if (key === SERVER_ENGINE_KEY)
+      controls = [serverEngineControl(id, String(value ?? "auto"))];
     else if (key === "server.default_model" && this.models.length > 0)
       controls = [
         selectBox({

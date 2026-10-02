@@ -53,6 +53,9 @@ pub const PROTOCOL: &str = "akou-dictate/1";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Target {
     pub app: String,
+    /// The app's name as people know it (`Slack`), empty where the OS gives none: what a per-app
+    /// rule is called on the Dictation page (DC-U9). Never matched on, unlike `app`.
+    pub name: String,
     pub pid: i64,
     pub window: String,
     /// `editable`, `not-editable`, `unknown` or `secure`.
@@ -70,6 +73,7 @@ impl Target {
     fn json(&self) -> Json {
         Json::obj(vec![
             ("app", Json::str(&self.app)),
+            ("name", Json::str(&self.name)),
             ("pid", Json::Int(self.pid)),
             ("window", Json::str(&self.window)),
             ("field", Json::str(&self.field)),
@@ -86,6 +90,7 @@ impl Target {
         }
         Ok(Target {
             app: v.str_or("app", ""),
+            name: v.str_or("name", ""),
             pid: v.get("pid").and_then(Value::as_i64).unwrap_or(0),
             window: v.str_or("window", ""),
             field,
@@ -647,6 +652,7 @@ mod tests {
                     send_key: "Enter".into(),
                     target: Some(Target {
                         app: "Slack".into(),
+                        name: String::new(),
                         pid: 42,
                         window: "w".into(),
                         field: "editable".into(),
@@ -754,6 +760,7 @@ mod tests {
     fn helper_lines_round_trip_through_the_reader() {
         let t = Target {
             app: "Slack".into(),
+            name: "Slack".into(),
             pid: 7,
             window: "w1".into(),
             field: "editable".into(),
@@ -852,6 +859,7 @@ mod tests {
     fn the_shared_fixture_lines_match_the_app() {
         let t = Target {
             app: "Slack".into(),
+            name: "Slack".into(),
             pid: 7,
             window: "w1".into(),
             field: "editable".into(),

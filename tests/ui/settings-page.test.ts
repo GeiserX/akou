@@ -227,6 +227,33 @@ describe("the Settings page", () => {
   );
 
   test(
+    "Server mode's engine for other computers' dictation is a choice in words, as on the server's page",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        await openSettings(page);
+        const sent = patches(page);
+        await page.click("#settings-go-server");
+        const engine = "#page-settings select#set-server-dictation-engine";
+        await page.waitForSelector(engine);
+        expect(await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent))).toEqual([
+          "Automatic",
+          "Fast",
+          "Best",
+          "A model, by its id…",
+        ]);
+        await page.selectOption(engine, "best");
+        await until(() => sent.length === 1, 5000, "the save");
+        expect(sent).toEqual([{ "server.dictation_engine": "best" }]);
+        expect((await rig.api("GET", "/config")).body.settings["server.dictation_engine"]).toBe(
+          "best",
+        );
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Settings clicked again from an Advanced page saves what is typed there first",
     async () => {
       await withRig({}, async (rig) => {

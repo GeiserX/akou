@@ -66,6 +66,8 @@ async function dictationPage(
           server: { slots: 1, engine: "auto", served_last_hour: 3 },
           proxy: origin ? { from: origin, to: local } : undefined,
         });
+  // The registry's default, which the fixture's schema does not carry.
+  if (fx) fx.settings["server.dictation_engine"] = "auto";
   await page.goto(`${origin ?? local}/#dictation`);
   await page.waitForSelector("#login", { state: "visible" });
   await page.fill("#login-secret", PASSWORD);
@@ -113,6 +115,30 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       await until(() => fx.patches.length === 1, 5000, "the save");
       expect(fx.patches).toEqual([{ "server.dictation_slots": 2 }]);
 
+      // The engine is a choice in words, never the raw value in a text field, with a way to name
+      // a model by its id, which the setting takes too.
+      const engine = "#page-dictation select#set-server-dictation-engine";
+      expect(await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent))).toEqual([
+        "Automatic",
+        "Fast",
+        "Best",
+        "A model, by its id…",
+      ]);
+      expect(await page.inputValue(engine)).toBe("auto");
+      await page.selectOption(engine, "best");
+      await until(() => fx.patches.length === 2, 5000, "the engine saved");
+      expect(fx.patches[1]).toEqual({ "server.dictation_engine": "best" });
+      const typed = "#page-dictation #set-server-dictation-engine-typed";
+      expect(await page.isVisible(typed)).toBe(false);
+      await page.selectOption(engine, "~");
+      await page.waitForSelector(typed, { state: "visible" });
+      // Choosing to type saves nothing until a model is named.
+      expect(fx.patches).toHaveLength(2);
+      await page.fill(typed, "qwen3-asr-1.7b");
+      await page.press(typed, "Tab");
+      await until(() => fx.patches.length === 3, 5000, "the model saved");
+      expect(fx.patches[2]).toEqual({ "server.dictation_engine": "qwen3-asr-1.7b" });
+
       // The count is read again each time the page is shown.
       fx.server = { slots: 2, engine: "auto", served_last_hour: 4 };
       await page.click("#server-nav [data-page='jobs']");
@@ -120,6 +146,8 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       await page.waitForFunction(() =>
         document.getElementById("dictation-served")?.textContent?.endsWith(": 4"),
       );
+      // Drawn again, the model named is the choice shown, by its id.
+      expect(await page.inputValue(engine)).toBe("qwen3-asr-1.7b");
     },
     UI_TIMEOUT,
   );
@@ -155,6 +183,21 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         5000,
         "the value saved",
       );
+      await page.selectOption("#page-dictation select#set-server-dictation-engine", "best");
+      await until(
+        async () =>
+          (await rig.api("GET", "/config")).body.settings["server.dictation_engine"] === "best",
+        5000,
+        "the engine saved",
+      );
+      expect(patches).toEqual([
+        { "server.dictation_slots": 2 },
+        { "server.dictation_engine": "best" },
+      ]);
+      // The next test dictates with no model named: back to the server's default.
+      expect(
+        (await rig.api("PATCH", "/config", { "server.dictation_engine": "auto" })).status,
+      ).toBe(200);
     },
     UI_TIMEOUT,
   );
