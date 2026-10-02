@@ -217,83 +217,159 @@ describe("akou-5an.114: queued jobs of one priority go by the loaded model", () 
   });
 });
 
-describe("akou-5an.107: two jobs on a Metal llama-server take turns", () => {
-  test("at concurrency 2 two best jobs both end done, and llama-server starts once", async () => {
-    const t = tempDir("akou-metal-");
-    const log = join(t.dir, "llama.log");
-    const lockDir = join(t.dir, "build");
-    const spec: ModelSpec = {
-      kind: "module",
-      path: FAKE_MODELS,
-      model: "fake-parakeet",
-      options: {},
-      final: {
-        kind: "llama-server",
-        engine: QWEN_ASR,
-        model: join(t.dir, "q.gguf"),
-        mmproj: join(t.dir, "p.gguf"),
-        accelerator: "metal",
-        // Slow to load, as Qwen is, so the two jobs overlap.
-        command: [process.execPath, FAKE_LLAMA, "--fake-log", log, "--fake-loading-ms", "500"],
-        // The build's folder holds the pid file every Metal llama-server reads at its start.
-        build: { dir: lockDir, archives: [], platform: "darwin-arm64" },
-      },
-    };
-    const svc = new JobService({
-      dir: join(t.dir, "jobs"),
-      version: "0.0.0",
-      models: () => spec,
-      shelf: new ModelStore({
-        dir: () => join(t.dir, "models"),
-        machine: () => null,
-        catalog: () => MODELS,
-        autoDownload: () => false,
-        maxGb: () => 0,
-        unusedDays: () => 0,
-        log: () => {},
-      }),
-      defaultModel: () => "auto",
-      diarizer: () => "embeddings",
-      secrets: () => [],
-      hostListed: () => false,
-      retainDays: () => 7,
-      maxAudioMinutes: () => 240,
-      concurrency: () => 2,
+/**
+ * A JobService on a Metal llama-server spec, with no HTTP server: the fake recognizer under a fake
+ * llama-server whose pid file lives in one shared build folder, as every Metal llama-server's does.
+ */
+function metalService(o: {
+  concurrency?: number;
+  dictationSlots?: number;
+  modelIdleMinutes?: number;
+  decode?: (path: string, signal: AbortSignal) => Promise<Float32Array>;
+}) {
+  const t = tempDir("akou-metal-");
+  const log = join(t.dir, "llama.log");
+  const spec: ModelSpec = {
+    kind: "module",
+    path: FAKE_MODELS,
+    model: "fake-parakeet",
+    options: {},
+    final: {
+      kind: "llama-server",
+      engine: QWEN_ASR,
+      model: join(t.dir, "q.gguf"),
+      mmproj: join(t.dir, "p.gguf"),
+      accelerator: "metal",
+      // Slow to load, as Qwen is, so two jobs overlap.
+      command: [process.execPath, FAKE_LLAMA, "--fake-log", log, "--fake-loading-ms", "500"],
+      // The build's folder holds the pid file every Metal llama-server reads at its start.
+      build: { dir: join(t.dir, "build"), archives: [], platform: "darwin-arm64" },
+    },
+  };
+  const svc = new JobService({
+    dir: join(t.dir, "jobs"),
+    version: "0.0.0",
+    models: () => spec,
+    shelf: new ModelStore({
+      dir: () => join(t.dir, "models"),
+      machine: () => null,
+      catalog: () => MODELS,
+      autoDownload: () => false,
+      maxGb: () => 0,
+      unusedDays: () => 0,
       log: () => {},
+    }),
+    defaultModel: () => "auto",
+    diarizer: () => "embeddings",
+    secrets: () => [],
+    hostListed: () => false,
+    retainDays: () => 7,
+    maxAudioMinutes: () => 240,
+    concurrency: () => o.concurrency ?? 1,
+    ...(o.dictationSlots !== undefined && { dictationSlots: () => o.dictationSlots as number }),
+    ...(o.modelIdleMinutes !== undefined && {
+      modelIdleMinutes: () => o.modelIdleMinutes as number,
+    }),
+    ...(o.decode && { decode: o.decode }),
+    log: () => {},
+  });
+  svc.start();
+  let n = 0;
+  const add = (interactive = false): string => {
+    const audio = join(svc.uploadDir, `m${n}.upload`);
+    writeFileSync(audio, NOTE);
+    const a = svc.submit({
+      key_id: "key_a",
+      preset: "fast",
+      language: "auto",
+      keywords: [],
+      diarize: false,
+      callback_url: null,
+      metadata: null,
+      idempotency_key: null,
+      file_sha256: String(n++ % 10).repeat(64),
+      audio,
+      ...(interactive && { interactive: true }),
     });
-    svc.start();
-    try {
-      const ids: string[] = [];
-      for (let i = 0; i < 2; i++) {
-        const audio = join(svc.uploadDir, `m${i}.upload`);
-        writeFileSync(audio, NOTE);
-        const a = svc.submit({
-          key_id: "key_a",
-          preset: "fast",
-          language: "auto",
-          keywords: [],
-          diarize: false,
-          callback_url: null,
-          metadata: null,
-          idempotency_key: null,
-          file_sha256: String(i).repeat(64),
-          audio,
-        });
-        if (!("job" in a)) throw new Error(JSON.stringify(a));
-        ids.push(a.job.id);
-      }
-      await until(
-        () => ids.every((id) => ["done", "failed"].includes(svc.store.job(id)?.status ?? "")),
-        30_000,
-        "both jobs to end",
-      );
-      expect(
-        ids.map((id) => `${svc.store.job(id)?.status} ${svc.store.job(id)?.error?.message ?? ""}`),
-      ).toEqual(["done ", "done "]);
-      expect(starts(log)).toBe(1);
-    } finally {
+    if (!("job" in a)) throw new Error(JSON.stringify(a));
+    return a.job.id;
+  };
+  const status = (id: string) =>
+    `${svc.store.job(id)?.status} ${svc.store.job(id)?.error?.message ?? ""}`;
+  const ended = (ids: string[]) =>
+    until(
+      () => ids.every((id) => ["done", "failed"].includes(svc.store.job(id)?.status ?? "")),
+      30_000,
+      "the jobs to end",
+    );
+  return {
+    svc,
+    log,
+    add,
+    status,
+    ended,
+    close: () => {
       svc.close();
       t.cleanup();
+    },
+  };
+}
+
+describe("akou-5an.107: two jobs on a Metal llama-server take turns", () => {
+  test("at concurrency 2 two best jobs both end done, and llama-server starts once", async () => {
+    const m = metalService({ concurrency: 2 });
+    try {
+      const ids = [m.add(), m.add()];
+      await m.ended(ids);
+      expect(ids.map(m.status)).toEqual(["done ", "done "]);
+      expect(starts(m.log)).toBe(1);
+    } finally {
+      m.close();
+    }
+  });
+
+  test("a dictation on a Metal llama-server waits for the running job, then ends done", async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const m = metalService({
+      dictationSlots: 1,
+      decode: async (path, signal) => {
+        if (path.endsWith("m0.upload")) await held;
+        return readUploadAudio(path, { signal });
+      },
+    });
+    try {
+      const file = m.add();
+      await until(() => m.svc.store.job(file)?.status === "running", 10_000, "the file job");
+      const dictation = m.add(true);
+      // The lane has a free Worker, so only the running Metal job keeps the dictation queued.
+      await Bun.sleep(1000);
+      expect(m.svc.store.job(dictation)?.status).toBe("queued");
+      release();
+      await m.ended([file, dictation]);
+      expect([file, dictation].map(m.status)).toEqual(["done ", "done "]);
+    } finally {
+      release();
+      m.close();
+    }
+  });
+});
+
+describe("akou-5an.104: the idle timer lets the model go on its own", () => {
+  test("with server.model_idle_minutes 0.02 and the real clock, the Worker unloads unasked", async () => {
+    const m = metalService({ modelIdleMinutes: 0.02 });
+    try {
+      const id = m.add();
+      await m.ended([id]);
+      expect(m.status(id)).toBe("done ");
+      // Positive control: the Worker holds the model once the job ends.
+      expect(m.svc.loaded()).toHaveLength(1);
+      // Nothing calls releaseIdle here: only the timer can unload it, 1.2 s after the job.
+      await until(() => m.svc.loaded().length === 0, 10_000, "the idle timer to unload the model");
+    } finally {
+      m.close();
     }
   });
 });

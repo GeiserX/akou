@@ -9,10 +9,12 @@
  *   once, each in its own Worker with its models loaded; the next is the highest `priority`, then
  *   the oldest, except that among jobs of one priority a job on a model an idle Worker holds goes
  *   first, so a switch of preset does not reload a model (at most `WARM_PASS_LIMIT` times past one
- *   job). An idle Worker keeps its models for `server.model_idle_minutes`, then lets them go.
+ *   job). An idle Worker keeps its models for `server.model_idle_minutes`, then lets them go. A
+ *   submit past `server.queue_max` or `server.queue_max_per_key` is refused with a retry time
+ *   from the jobs that ended, and the same numbers give the queue's ETA.
  * - **One Metal llama-server at a time.** Two on Metal stop each other (llama-server.ts), so a job
- *   whose engine runs on a Metal llama-server waits while another such job runs, in any Worker. A submit past `server.queue_max` or `server.queue_max_per_key` is refused with a
- *   retry time from the jobs that ended, and the same numbers give the queue's ETA.
+ *   whose engine runs on a Metal llama-server waits while another such job runs, in any Worker,
+ *   the dictation lane's included.
  * - **Every state change is one transaction** in the store: the job's state, its feed event and its
  *   delivery. A job the last process left running is queued again at start, in its place.
  * - **Remotes** (section 14): a queued job this server cannot run, or one a `server.remotes` entry
@@ -901,7 +903,7 @@ export class JobService {
         if (!needed) wake = Math.min(wake, left);
         continue;
       }
-      if (!needed && s.model !== null && idleMs > 0) {
+      if (!needed && s.model !== null && idleMs > 0 && left <= 0) {
         this.o.log("info", `jobs: ${s.model} unloaded after ${idleMs / 60_000} min with no job`);
       }
       s.worker.close();
@@ -1124,6 +1126,9 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
+    // A queued job that ends without starting (a failed download, a remote's answer) is not
+    // passed over again.
+    this.passedOver.delete(job.id);
     const e =
       end.status === "done"
         ? this.store.finish(job.id, end, {
