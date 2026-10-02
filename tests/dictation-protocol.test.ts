@@ -21,7 +21,7 @@ const read = (name: string) =>
 
 test("every line the Rust helper writes is a trusted message, never log text", () => {
   const lines = read("helper-lines.jsonl");
-  expect(lines.length).toBe(24);
+  expect(lines.length).toBe(25);
   for (const line of lines) {
     const m = parseHelperLine(line);
     expect({ line, kind: m.kind }).toEqual({ line, kind: "msg" });
@@ -48,7 +48,7 @@ test("positive control: a line in the old dialect is only log text", () => {
 });
 
 test("every command the app writes is the fixture's line, which the Rust helper parses", () => {
-  const target = { app: "Slack", pid: 7, window: "w1", field: "editable" as const };
+  const target = { app: "Slack", name: "Slack", pid: 7, window: "w1", field: "editable" as const };
   const commands: AppToHelper[] = [
     {
       type: "rebind",

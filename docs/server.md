@@ -65,6 +65,8 @@ bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-serve
 bun src/main/cli/cli.ts serve
 ```
 
+Speaker labels (`diarize`) with Nemotron, the default speaker model, run in the `akou-diarize` helper, which the app carries and a source checkout does not. Download `akou-diarize-<version>-darwin-arm64.tar.gz` from the release, unpack it, and put `akou-diarize` on the server's `PATH`, or set `asr.diarizeHelper` to its path in `~/.config/akou/config.json`, for example `{ "asr.diarizeHelper": ["/Users/YOU/bin/akou-diarize"] }`. Releases up to 0.5.4 have no such file: build it with `cargo build --release` in `native/akou-diarize` instead. Or set `asr.diarizer` to `embeddings`, which needs no helper. Without either, a job that asks for `diarize` fails with `diarize_unavailable` and says the same.
+
 It keeps its settings, keys and jobs in `~/.config/akou` and the models in `~/Library/Application Support/akou/models`. To reach it from another machine, put a proxy with TLS in front of it (a `tailscale serve` of port 8476 on a tailnet works) and set `{ "api.bind": "127.0.0.1", "server.behind_proxy": true }` in `~/.config/akou/config.json`.
 
 To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons/io.github.geiserx.akou.serve.plist` with your user name, the checkout's path and Bun's path filled in, then run `sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.geiserx.akou.serve.plist`:

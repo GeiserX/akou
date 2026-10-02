@@ -61,6 +61,8 @@ export const APP_MODES = ["direct", "draft", "draft-send"] as const;
  */
 export interface AppRule {
   app: string;
+  /** The app's name as people know it (`Slack`), shown for the rule; never matched. */
+  name?: string;
   mode?: (typeof APP_MODES)[number];
   insert?: (typeof DICTATION_INSERTS)[number];
   sendKey?: string;
@@ -308,7 +310,7 @@ export const SETTINGS = {
       /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v as string)
         ? null
         : "is a preset name (auto, fast, ...) or an engine id from the model catalog",
-    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: the hardware's choice, `fast` today.",
+    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: `best` (Qwen3-ASR) wherever it is downloaded, else `fast` (Parakeet) when that is, else `best` on a GPU with 16 GB of memory and `fast` elsewhere; `GET /v1/server` `auto` says which and why.",
   },
   "server.auto_download": {
     type: "boolean",
@@ -874,7 +876,7 @@ export const SETTINGS = {
   "dictation.apps": {
     type: "apps",
     default: [],
-    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
+    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); `name`, optional, is the name of the app the rule is shown by (`Slack`) and is never matched; a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
   },
   "dictation.pill": {
     type: "string",
@@ -1027,9 +1029,10 @@ export function validateSetting(
   }
 }
 
-/** Each field of a per-app rule and the values it takes; `app` and `language` are checked apart. */
+/** Each field of a per-app rule and the values it takes; `app`, `name` and `language` are checked apart. */
 const APP_FIELDS: Readonly<Record<string, readonly string[] | null>> = {
   app: null,
+  name: null,
   mode: APP_MODES,
   insert: DICTATION_INSERTS,
   sendKey: DICTATION_SEND_KEYS,
@@ -1058,6 +1061,9 @@ export function validateApps(
         ok: false,
         error: `${at}: app must be a bundle id, executable name or window class`,
       };
+    }
+    if (o.name !== undefined && (typeof o.name !== "string" || o.name.length > 200)) {
+      return { ok: false, error: `${at}: name must be the app's name, up to 200 characters` };
     }
     if (seen.has(o.app)) return { ok: false, error: `${at}: ${o.app} already has a rule` };
     seen.add(o.app);
