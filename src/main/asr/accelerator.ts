@@ -205,8 +205,40 @@ const gpuOf = (a: Accelerator): AcceleratorState["gpu"] => (a === "cpu" ? null :
 /** The choice from the setting and the machine, before llama-server is asked. */
 export function detectAccelerator(setting: AcceleratorSetting, p: Probe): AcceleratorState {
   const available = availableBuilds(p);
-  const { active, reason } = chooseAccelerator(setting, findDevices(p), available);
-  return { setting, active, gpu: gpuOf(active), device: null, verified: false, available, reason };
+  const devices = findDevices(p);
+  const { active, reason } = chooseAccelerator(setting, devices, available);
+  return {
+    setting,
+    active,
+    gpu: gpuOf(active),
+    device: null,
+    verified: false,
+    available,
+    reason: reason + severalNodes(active, devices, imageBuild(p)),
+  };
+}
+
+/** An image's install: its builds and llama-server are set by the Dockerfile. */
+const imageBuild = (p: Probe): boolean =>
+  p.env.AKOU_ACCELERATORS !== undefined || p.env.AKOU_LLAMA_SERVER !== undefined;
+
+/**
+ * llama.cpp picks among the render nodes it can open by its own device order, never by a DRI
+ * path, so with several open (an SR-IOV iGPU's virtual functions beside it) it may run on one
+ * detection did not choose: on an Intel UHD 770 it opened a virtual function, which hung. Mesa's
+ * device-select layer could pin the chosen node by its PCI bus address (`DRI_PRIME=pci-<bus>!`),
+ * which a virtual function does not share, but that is not built: it needs a run on a box with
+ * virtual functions. Until then, an image is told to see one node; a native install, which cannot
+ * hide nodes that way, is told which ones llama-server may open. Empty when one node or none is
+ * open, or the build is not on one.
+ */
+function severalNodes(active: Accelerator, devices: readonly Device[], image: boolean): string {
+  if (active !== "vulkan" && active !== "sycl" && active !== "rocm") return "";
+  const nodes = devices.filter((d) => d.usable && d.node.startsWith("/dev/dri/"));
+  const one = nodes.find((d) => d.vendor !== "nvidia") ?? nodes[0];
+  if (!one || nodes.length < 2) return "";
+  const seen = `; llama-server can open ${nodes.length} render nodes here (${nodes.map((d) => d.node).join(", ")}) and picks by its own order, which may not be ${one.node}`;
+  return image ? `${seen}: pass only that node (docker run --device ${one.node})` : seen;
 }
 
 /** ggml's device name prefixes, per backend. */

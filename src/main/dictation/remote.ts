@@ -312,8 +312,12 @@ async function answer(
   if (typeof body.text !== "string") {
     throw new RemoteDictationError("status", `${target.base} answered with no text`, res.status);
   }
+  // `und` is what a server answers when its engine names no language; `unknown` is what older
+  // servers answered. Neither is a language.
   const lang =
-    typeof body.language === "string" && body.language !== "unknown" ? body.language : null;
+    typeof body.language === "string" && body.language !== "und" && body.language !== "unknown"
+      ? body.language
+      : null;
   return {
     text: body.text.trim(),
     language: lang,

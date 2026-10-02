@@ -46,6 +46,11 @@ export interface FinalUnit {
   samples: Float32Array;
   lang: "auto" | string;
   glossary: readonly string[];
+  /**
+   * The ISO codes an `auto` decode may choose among, over the engine's own list (`asr.languages`):
+   * a job's `languages[]`. Absent or empty: the engine's list.
+   */
+  allowed?: readonly string[];
 }
 
 /** An engine of the final pass (`asr.final.engines`). */

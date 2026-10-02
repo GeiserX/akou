@@ -11,10 +11,13 @@ import { join } from "node:path";
 import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
 import {
   JOB_TRIM_PAD_SECONDS,
+  type JobProgress,
   JobWorker,
   runFinalPass,
   runJobPass,
 } from "../src/main/asr/finalize-worker.ts";
+import { NemotronDiarizer } from "../src/main/asr/nemotron.ts";
+import { jobModels, jobWarnings } from "../src/main/server/jobs.ts";
 import { concat, FakeModels, MemoryAudio, RATE, silence, speak } from "./fixtures/asr-fake.ts";
 import { roomNoise } from "./fixtures/audio.ts";
 import { LogBuilder, T0 } from "./helpers.ts";
@@ -126,6 +129,62 @@ describe("SV-J7: a mono path through the finalize worker", () => {
       const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
       expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([[null, "hello world"]]);
     }
+  });
+
+  test("[akou-5an.109] the speaker helper missing: speakers says why, a warning, no speaker model named", async () => {
+    const x = concat(silence(0.3), speak(["hello", "world"]), silence(0.5));
+    const models = new FakeModels();
+    const missing = join(import.meta.dir, "fixtures", "no-such-akou-diarize");
+    models.diarizer = () =>
+      new NemotronDiarizer({ command: [missing], model: "nemotron.onnx", threads: 1 });
+    const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
+    expect(r.text).toBe("hello world");
+    expect(r.speakers.asked).toBe(true);
+    expect(r.speakers.labelled).toBe(false);
+    expect(r.speakers.error).not.toBeNull();
+    expect(jobWarnings(r)).toEqual([expect.stringContaining(r.speakers.error as string)]);
+    expect(r.diarized).toBe(false);
+    expect(jobModels("fake-parakeet", r.diarized, "nemotron")).toEqual([
+      "fake-parakeet",
+      "silero-vad",
+    ]);
+    // A file with no speech never reaches the speaker model, so it is not named either.
+    const quiet = await runJobPass({ samples: silence(1), diarize: true, decode: null }, models);
+    expect(quiet.speakers).toEqual({ asked: true, labelled: false, error: null });
+    expect(quiet.diarized).toBe(false);
+    // Positive control: a speaker model that answers labels the lines, and warns of nothing.
+    const ok = await job(concat(silence(0.3), speak(["hello", "world"]), silence(0.5)), {}, true);
+    expect(ok.result.speakers).toEqual({ asked: true, labelled: true, error: null });
+    expect(ok.result.diarized).toBe(true);
+    expect(jobWarnings(ok.result)).toEqual([]);
+  });
+
+  test("[akou-5an.24.1] words are timed into the file across pieces and halved spans, with confidences", async () => {
+    const x = concat(silence(1), speak(["hello", "world"]), silence(2), speak(["ok", "great"]));
+    const { result } = await job(x, { words: true });
+    expect(result.words.map((w) => w.w)).toEqual(["hello", "world", "ok", "great"]);
+    // "hello" starts about one second in, "ok" about 1 + 0.74 + 2 s in: file times, not piece times.
+    expect(result.words[0]?.s).toBeCloseTo(1, 1);
+    expect(result.words[2]?.s).toBeCloseTo(3.74, 1);
+    for (const w of result.words) expect(w.c).toBe(0.9);
+    // A refused span halved: the halves' words keep their own times.
+    const many = Array.from({ length: 70 }, (_, i) => (i % 2 ? "hello" : "world"));
+    const halved = await job(speak(many, { gapSeconds: 0.05 }), { refuseOver: 12, words: true });
+    expect(halved.result.words.length).toBe(70);
+    const starts = halved.result.words.map((w) => w.s as number);
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    expect(starts.at(-1)).toBeGreaterThan(20);
+    // Positive control: an engine that gives no words gives none, and no confidence.
+    expect((await job(x)).result.words).toEqual([]);
+  });
+
+  test("[akou-5an.24.1] a span the engine still refuses at the floor is listed as skipped", async () => {
+    const x = concat(silence(0.3), speak(["hello", "world"]), silence(0.5));
+    const { result } = await job(x, { refuseOver: 0.2 });
+    expect(result.text).toBe("");
+    expect(result.skipped).toEqual([
+      { s: expect.any(Number), e: expect.any(Number), error: "span too long for the fake engine" },
+    ]);
   });
 
   test("without diarize no diarizer runs", async () => {
@@ -303,5 +362,63 @@ describe("SV-R5: silence and hallucination guards on every job", () => {
     const { result, models } = await job(silence(10));
     expect(result.segments).toEqual([]);
     expect(Object.keys(models.loads)).toEqual([]);
+  });
+});
+
+describe("akou-5an.116: a job's progress", () => {
+  const THREE = concat(
+    silence(0.3),
+    speak(["hello", "world"], { voice: 1 }),
+    silence(1.5),
+    speak(["ok", "great"], { voice: 4 }),
+    silence(1.5),
+    speak(["thanks"], { voice: 1 }),
+    silence(0.3),
+  );
+
+  test("a diarized pass moves from diarize to transcribe, and the seconds done only grow", async () => {
+    const seen: JobProgress[] = [];
+    const r = await runJobPass(
+      { samples: THREE, diarize: true, decode: null, progress: (p) => seen.push(p) },
+      new FakeModels(),
+    );
+    expect(r.text).toBe("hello world ok great thanks");
+    const stages = seen.map((p) => p.stage).filter((s, i, a) => s !== a[i - 1]);
+    expect(stages).toEqual(["diarize", "transcribe"]);
+    const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+    expect(done.length).toBeGreaterThan(2);
+    for (let i = 1; i < done.length; i++) {
+      expect(done[i] as number).toBeGreaterThanOrEqual(done[i - 1] as number);
+    }
+    expect(new Set(done).size).toBeGreaterThan(2);
+    for (const p of seen) expect(p.total_s).toBe(r.duration_s);
+    expect(done.at(-1) as number).toBeLessThanOrEqual(r.duration_s);
+    // The stage times come back with the result.
+    expect(r.stages?.diarize_s).toBeGreaterThanOrEqual(0);
+    expect(r.stages?.transcribe_s).toBeGreaterThan(0);
+  });
+
+  test("without speaker labels there is no diarize stage, and no diarize time", async () => {
+    const seen: JobProgress[] = [];
+    const r = await runJobPass(
+      { samples: THREE, diarize: false, decode: null, progress: (p) => seen.push(p) },
+      new FakeModels(),
+    );
+    expect(new Set(seen.map((p) => p.stage))).toEqual(new Set(["transcribe"]));
+    expect(r.stages?.diarize_s).toBeNull();
+  });
+
+  test("the progress crosses the Worker boundary to the host", async () => {
+    const w = new JobWorker({ kind: "module", path: FAKE, model: "fake-parakeet" });
+    cleanups.push(() => w.close());
+    const seen: JobProgress[] = [];
+    await w.run({
+      samples: THREE.slice(),
+      diarize: true,
+      decode: null,
+      progress: (p) => seen.push(p),
+    });
+    expect(seen.map((p) => p.stage)).toContain("diarize");
+    expect(seen.at(-1)?.stage).toBe("transcribe");
   });
 });

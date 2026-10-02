@@ -183,7 +183,12 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
     // A start answers 201; an attach to the call already recording answers 200 with the same body
     // type, so a client generated from the file does not read it as the error.
     const responses = doc.paths["/v1/calls"]?.post?.responses as Record<string, unknown>;
-    expect(Object.keys(responses).sort()).toEqual(["200", "201", "default"]);
+    // Its refusals (4xx, 5xx) are listed too, by status (PG-A7).
+    expect(
+      Object.keys(responses)
+        .filter((s) => !/^[45]/.test(s))
+        .sort(),
+    ).toEqual(["200", "201", "default"]);
     expect(responses["200"]).toMatchObject({ content: { "application/json": {} } });
   });
 });
@@ -440,7 +445,10 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
     try {
       const doc = (await app.get("/openapi.json")).body;
       expect(doc.paths["/v1/calls"]).toBeDefined();
-      expect(doc.paths["/v1/events"]).toBeUndefined();
+      // The desktop app takes file jobs (akou-5an.119); keys and the OpenAI door are server mode's.
+      expect(doc.paths["/v1/jobs"]?.post?.operationId).toBe("jobs.create");
+      expect(doc.paths["/v1/keys"]).toBeUndefined();
+      expect(doc.paths["/v1/audio/transcriptions"]).toBeUndefined();
     } finally {
       await app.server.stop();
     }
@@ -657,6 +665,13 @@ describe("[SI-2] an operation takes the verb the other doors already use (PRINCI
     ["akou_add_note", "POST /v1/calls/{id}/notes"],
     ["akou_name_speaker", "POST /v1/calls/{id}/speakers"],
     ["akou_merge_speakers", "POST /v1/calls/{id}/speakers/merge"],
+    ["akou_edit_note", "PATCH /v1/calls/{id}/notes/{nid}"],
+    ["akou_delete_note", "DELETE /v1/calls/{id}/notes/{nid}"],
+    ["akou_finalize", "POST /v1/calls/{id}/finalize"],
+    ["akou_template_list", "GET /v1/templates"],
+    ["akou_template_get", "GET /v1/templates/{name}"],
+    ["akou_open_window", "POST /v1/window"],
+    ["akou_config_get", "GET /v1/config"],
   ];
   const verbMismatches = (doc: OpenApiDoc) => {
     const byRoute = new Map(

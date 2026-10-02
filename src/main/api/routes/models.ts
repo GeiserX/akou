@@ -75,6 +75,11 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { "model?": "string" },
       ok: 202,
+      errors: {
+        404: ["not_found"],
+        409: ["not_ready", "preset_unavailable"],
+        422: ["bad_field", "unknown_model"],
+      },
     },
     async (c) => {
       const b = await c.body<{ model?: unknown }>();
@@ -102,6 +107,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { model: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const b = await c.body<{ model?: unknown }>();
@@ -125,6 +131,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { dir: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const b = await c.body<{ dir?: unknown }>();
@@ -146,6 +153,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       params: { id: "The model id, from models.get." },
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["model_in_use", "not_ready"] },
     },
     (c) => {
       const del = c.app.deleteModel;

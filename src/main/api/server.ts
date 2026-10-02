@@ -38,6 +38,7 @@ import {
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
+import { deviceRoutes } from "./routes/devices.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
 import { fixRoutes } from "./routes/fix.ts";
 import { followRoutes } from "./routes/follow.ts";
@@ -91,6 +92,8 @@ export interface ApiApp {
   models(): ModelsStatus;
   /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
   accelerator?(): AcceleratorState | null;
+  /** What a job that names no model runs here, and why (SV-R2). */
+  autoChoice?(): { model: string; preset: string; reason: string };
   /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
   presetAvailable?(name: string): boolean | undefined;
   /** The recognizers `GET /v1/server` lists: where each runs and whether its files are there. */
@@ -145,6 +148,8 @@ export interface ApiApp {
   config(): LoadedConfig;
   /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
   secretStore?(): "keychain" | null;
+  /** The capture helper's device query (`GET /devices`, `GET /apps`). Throws `DevicesRefused`. */
+  devices?(): Promise<import("../capture/devices.ts").CaptureDevices>;
   /** Writes `config.json` and applies it; the running parts pick up what they can. */
   /**
    * Writes the config file. A key the API cannot write keeps its value on disk, except those in
@@ -214,7 +219,7 @@ export interface ApiApp {
   recognizer?(): "loading" | "ready" | "unavailable";
   /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
-  /** The file jobs of server mode (docs/ux/SERVER.md section 5); none in app mode. */
+  /** The file jobs (docs/ux/SERVER.md section 5), in both modes; null while akou starts. */
   jobs?(): import("../server/jobs.ts").JobService | null;
   /** Dictation (docs/ux/DICTATION.md); app mode only. */
   dictation?(): import("../dictation/service.ts").DictationService | null;
@@ -261,8 +266,9 @@ export interface ApiServer {
 }
 
 /**
- * The route table. With a mode, the routes that akou serves: the job routes exist in server mode
- * only, so the desktop app answers 404 for them (SV-J1). With none, every route, for the OpenAPI
+ * The route table. With a mode, the routes that akou serves: the keys and the OpenAI door exist in
+ * server mode only, so the desktop app answers 404 for them; the job routes are in both, so the
+ * desktop app takes a file job with its own token (SV-J1). With none, every route, for the OpenAPI
  * file (`scripts/openapi.ts`), which marks each with its modes.
  */
 export function buildRouter(mode?: Mode): Router<ApiApp> {
@@ -270,6 +276,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   settingsRoutes(r);
   modelRoutes(r);
   callRoutes(r);
+  deviceRoutes(r);
   workspaceRoutes(r);
   followRoutes(r);
   queryRoutes(r);
@@ -280,8 +287,8 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   postCallRoutes(r);
   handoffRoutes(r);
   serverRoutes(r);
+  jobRoutes(r);
   if (mode !== "app") {
-    jobRoutes(r);
     keyRoutes(r);
     openaiRoutes(r);
   }

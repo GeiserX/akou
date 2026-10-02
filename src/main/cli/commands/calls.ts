@@ -1,9 +1,10 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
  * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls` and
- * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
+ * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `templates`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
+import { processAlive } from "../../../core/log/writer.ts";
 import { finalText } from "../../asr/final-text.ts";
 import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
@@ -22,6 +23,7 @@ import {
   ref,
   wall,
 } from "../context.ts";
+import { processTable, recordingBelow, stopAll, stopList } from "../heal.ts";
 
 const start: Command = {
   name: "start",
@@ -407,6 +409,36 @@ const enhance: Command = {
   },
 };
 
+const templates: Command = {
+  name: "templates",
+  summary: "List the note templates, or print one as the enhanced notes would use it",
+  usage: "akou templates list | akou templates show NAME   [--json]",
+  examples: ["akou templates list", "akou templates show standup"],
+  run: async (ctx, p) => {
+    const [sub, name, ...rest] = p.positional;
+    if (sub === "list" && name === undefined) {
+      const r = await api(ctx, "GET", "/templates");
+      return finish(ctx, r, (b) =>
+        [
+          ...(b.details as Body[]).map(
+            (t) =>
+              `${t.name}${t.bundled ? "" : "  (yours)"}${t.match.length > 0 ? `  match: ${t.match.join(", ")}` : ""}`,
+          ),
+          `Your own go in ${b.dir}; a file named like a shipped one replaces it.`,
+        ].join("\n"),
+      );
+    }
+    if (sub === "show") {
+      if (!name || rest.length > 0) return usage(ctx, "templates show needs one name");
+      const r = await api(ctx, "GET", `/templates/${enc(name)}`);
+      return finish(ctx, r, (b) => String(b.text).replace(/\n$/, ""));
+    }
+    return usage(ctx, "templates needs list, or show NAME");
+  },
+};
+/** How long `akou quit` waits for the app to finish quitting before it stops it. */
+const QUIT_WAIT_MS = 20_000;
+
 const quit: Command = {
   name: "quit",
   summary: "Stop the app cleanly (the live call is stopped and its log ended first)",
@@ -420,6 +452,16 @@ const quit: Command = {
         "akou quit stops the app on this machine, and AKOU_URL points at a server, which it never stops; unset AKOU_URL to quit the local app",
       );
     }
+    // Every process that makes up the app, read before it starts to go: the app, the ElectroBun
+    // launcher above it and its helpers below (akou-m23).
+    // An app in this very process (the tests' rigs) is never waited for as a process, nor are this
+    // process's children taken for its helpers.
+    const found = ctx.client.runtime();
+    const rt = found && found.pid !== process.pid ? found : null;
+    const rows = (rt ? await processTable() : []) ?? [];
+    // Never this command, nor the processes between it and the app: a harness the app started may
+    // be the one running `akou quit`.
+    const others = rt ? stopList(rows, rt.pid).filter((p) => p !== rt.pid) : [];
     let r: Awaited<ReturnType<typeof api>>;
     try {
       r = await api(ctx, "POST", "/quit", { launch: false });
@@ -437,12 +479,51 @@ const quit: Command = {
       return EXIT.ok;
     }
     if (r.status !== 202) return finish(ctx, r, () => "");
-    // Returns once the app is gone, so a script can start it again straight after.
-    const deadline = performance.now() + 20_000;
-    while (ctx.client.runtime() && performance.now() < deadline) {
+    // Returns once every process of the app is gone, so a script can start it again straight
+    // after: `runtime.json` goes before the process exits, and the launcher has outlived the app
+    // before (akou-m23).
+    const deadline = performance.now() + QUIT_WAIT_MS;
+    const appAlive = () => ctx.client.runtime() !== null || (!!rt && processAlive(rt.pid));
+    while (appAlive() && performance.now() < deadline) {
       await new Promise((res) => setTimeout(res, 50));
     }
-    const gone = ctx.client.runtime() === null;
+    if (appAlive() && rt) {
+      // The app answered 202 and has not finished quitting: it is stopped, as the quit promised,
+      // unless a call is still recording, which nothing here ever ends.
+      const now = await processTable();
+      if (now === null) {
+        // A list that cannot be read may hide a recording helper: nothing is stopped.
+        const how =
+          process.platform === "win32"
+            ? `end akou (pid ${rt.pid}) in Task Manager`
+            : `kill -KILL ${rt.pid} stops it by hand`;
+        const why = process.platform === "win32" ? "on Windows" : "ps failed";
+        const message = `akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s, and the processes below it could not be listed (${why}), so nothing was stopped; ${how}`;
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: false, running: true, message }));
+        else ctx.io.err(`akou: ${message}`);
+        return EXIT.software;
+      }
+      // A recording is a helper whose audio file grows, or one whose file cannot be read (a path
+      // `ps` cut at a space). A helper left over from an ended call, its file still, is not one.
+      const rec = await recordingBelow(now, rt.pid);
+      if (rec && rec.growing !== false) {
+        const message = `akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s and a call is still recording (capture helper pid ${rec.pid}), so nothing was stopped; kill -KILL ${rt.pid} stops it by hand, the audio so far stays`;
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: false, running: true, message }));
+        else ctx.io.err(`akou: ${message}`);
+        return EXIT.software;
+      }
+      ctx.io.err(`akou: akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s; stopped it`);
+      await stopAll([rt.pid]);
+    }
+    let gone = !appAlive();
+    if (gone) {
+      // The launcher and the helpers end with the app; any still there a moment later are stopped.
+      const settle = performance.now() + 2000;
+      while (others.some(processAlive) && performance.now() < settle) {
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      gone = (await stopAll(others.filter(processAlive))).length === 0;
+    }
     if (ctx.json) ctx.io.out(JSON.stringify({ ok: gone, running: !gone }));
     else if (gone) ctx.io.out("akou has quit");
     else ctx.io.err("akou: the app is still shutting down");
@@ -472,5 +553,6 @@ export const callCommands: Command[] = [
   show,
   finalize,
   enhance,
+  templates,
   quit,
 ];

@@ -291,7 +291,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.default_language": {
     label: "Language when a job names none",
-    help: "A language tag such as es or en-US, or auto to detect it.",
+    help: "Detect it finds each job's language from its audio.",
   },
   "server.default_diarize": {
     label: "Label speakers when a job does not say",
@@ -331,6 +331,12 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.dictation_engine": {
     label: "Engine for other computers' dictation",
+    help: "When their dictation names none. Automatic is the server's default.",
+    choices: [
+      ["auto", "Automatic"],
+      ["fast", "Fast"],
+      ["best", "Best"],
+    ],
   },
 
   // The Dictation page (docs/ux/design-explorations/sd-a-dictation.html).
