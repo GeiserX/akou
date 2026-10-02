@@ -7,6 +7,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { KeyStore } from "../src/main/api/keys.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
@@ -285,5 +288,32 @@ describe("SV-K6: the audit lines in the server's own log", () => {
       `key.created ${made.json.id} "cli-audited" scope jobs from keys.json`,
       `key.revoked ${made.json.id} from keys.json`,
     ]);
+  });
+
+  test("the first key on a server that started with no keys.json is audited", async () => {
+    // The rig's server started with no keys file, and its first key ("ops") was written by a store
+    // with no audit, as `akou keys create` writes it.
+    expect((await asKey(server, admin.key, "GET", "/keys/me")).status).toBe(200);
+    expect(server.logs.map((l) => l.msg).filter((m) => m.includes(admin.id))).toContain(
+      `key.created ${admin.id} "ops" scope admin from keys.json`,
+    );
+
+    const dir = mkdtempSync(join(tmpdir(), "akou-keys-"));
+    try {
+      // Made by the server's own store: the line names the client.
+      const lines: string[] = [];
+      const store = new KeyStore(join(dir, "a"), Date.now, (l) => lines.push(l));
+      const first = store.create({ name: "first", from: "203.0.113.7" });
+      expect(lines).toEqual([`key.created ${first.id} "first" scope jobs from 203.0.113.7`]);
+
+      // Made by the CLI and then read by the server: the line names the file.
+      const seen: string[] = [];
+      const served = new KeyStore(join(dir, "b"), Date.now, (l) => seen.push(l));
+      const made = new KeyStore(join(dir, "b")).create({ name: "from-cli" });
+      expect(served.list().map((k) => k.id)).toEqual([made.id]);
+      expect(seen).toEqual([`key.created ${made.id} "from-cli" scope jobs from keys.json`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

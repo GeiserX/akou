@@ -153,8 +153,12 @@ export class KeyStore {
     this.usedPath = join(configDir, KEYS_USED_FILE);
     this.used = this.readUsed();
     this.usedWritten = { ...this.used };
-    // The keys at start are the baseline: what changes after it is audited.
-    if (audit) this.load();
+    // The keys at start are the baseline: what changes after it is audited. No file is a baseline
+    // too, with no keys, so the first key made on a new server is audited like the others.
+    if (audit) {
+      this.load();
+      this.seen ??= new Map();
+    }
   }
 
   /** Writes an audit line for each key that came, went or changed hosts since the last read. */
