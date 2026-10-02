@@ -1594,6 +1594,53 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
+    "a settings read that throws (akou out of reach) says so where the settings go, never stays on Reading",
+    async () => {
+      const page = await rig.open();
+      // The window is up; only the dictation page's read fails, as when akou goes away.
+      await page.route(
+        (u) => u.pathname === "/api/v1/config",
+        (route) => (route.request().method() === "GET" ? route.abort() : route.continue()),
+      );
+      await page.click("#dictation-open");
+      await page.waitForSelector("#page-dictation [data-empty]", { timeout: 5000 });
+      expect(await text(page, "#page-dictation [data-empty]")).toStartWith(
+        "The dictation settings could not be read: akou is out of reach",
+      );
+      expect(await page.$("#page-dictation .pg-reading")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a save that throws on the way back says why, and the back link still leads to the page",
+    async () => {
+      let fx: DictationFixture | null = null;
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          fx = await dictationFixture(p);
+        },
+      });
+      const f = fx as unknown as DictationFixture;
+      await page.click("#dictation-open");
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#page-dictation #dictation-history-q");
+      await page.route(
+        (u) => u.pathname === "/api/v1/config",
+        (r) => (r.request().method() === "PATCH" ? r.abort() : r.fallback()),
+      );
+      const kept = f.patches.length;
+      await page.fill("#page-dictation [data-key='dictation.retainDays']:not(div)", "7");
+      await page.click("#page-dictation .pg-back");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']", { timeout: 5000 });
+      await page.waitForSelector("#toast:not([hidden])");
+      expect(await text(page, "#toast")).toContain("was not saved: akou is out of reach");
+      expect(f.patches.slice(kept)).toEqual([]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[DC-E7] the engine section: the words while you speak, and the text inserted, in plain words",
     async () => {
       // No streaming model: the default, live, inserts through Parakeet, and the page says so.

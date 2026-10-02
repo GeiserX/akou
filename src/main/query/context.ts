@@ -33,6 +33,7 @@
 import { formatLocalDate, formatWall } from "../../core/log/clock.ts";
 import type { CallState, CallView, Line, Provisional } from "../../core/log/fold.ts";
 import { foldText, tokenize } from "../../core/vocab/correct.ts";
+import { learnedPackLines } from "../../core/vocab/learned.ts";
 import type { QueryTerm } from "./bm25.ts";
 import { type Chunk, ChunkIndex, type ChunkIndexOptions } from "./chunks.ts";
 import { type Classification, classify, type Intent, type SpeakerRef } from "./classify.ts";
@@ -762,6 +763,7 @@ export class CallQuery {
         `The memo is stale: ${memo.uncovered.lines} lines are not covered. Write one with akou_memo_put.`,
       );
     }
+    notes.push(...learnedPackLines(this.view.learnedChanges(), tz));
     const prov = cls.intent === "now" ? this.provisionalLine(o.now) : null;
     const provBlock = prov ? ["Being said now:", prov.rendered] : [];
 
@@ -1077,6 +1079,7 @@ export class CallQuery {
       ...this.dynamicHeader(o.now, o.ref),
       ...this.rememberLines(BLOCK_CAPS.remember),
       ...(memo.stale ? ["The memo is stale. Write one with akou_memo_put."] : []),
+      ...learnedPackLines(this.view.learnedChanges(), tz),
       analysis,
     ];
     const text = [...prefix, ...tail].join("\n");

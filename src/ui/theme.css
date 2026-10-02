@@ -2542,6 +2542,15 @@ body:has(#player-bar:not([hidden])) #jump {
   display: grid;
   gap: 6px;
 }
+/* A word a fix learned, above the fix's field: plain text, Forget at its end. */
+.fix-learned {
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.fix-learned span {
+  flex: 1;
+  color: var(--dim);
+}
 dialog.question {
   max-width: 420px;
 }
