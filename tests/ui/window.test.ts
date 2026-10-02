@@ -1642,13 +1642,13 @@ describe("playback and Fix this line", () => {
           await page.hover('#lines .row[data-id="l000003"]');
           await page.click('#lines .row[data-id="l000003"] .play');
           await until(async () => (await player()).at > 0.3, 8000, "the line playing");
-          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Pause");
           // Space, with focus still on the row's Play button, pauses: it does not restart the line.
           await page.keyboard.press("Space");
           const paused = await player();
           expect(paused.paused).toBe(true);
           expect(paused.at).toBeGreaterThan(0.3);
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           await page.waitForTimeout(400);
           expect((await player()).at).toBe(paused.at);
           await page.keyboard.press("Space");
@@ -1713,7 +1713,7 @@ describe("playback and Fix this line", () => {
             5000,
             "the player cleared",
           );
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
           await page.click("#scroller");
           await page.keyboard.press("Space");

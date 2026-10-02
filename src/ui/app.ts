@@ -440,7 +440,10 @@ class App {
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "ask" || e.type === "answer") asked = true;
         }
-        if (notes) this.notepad.render();
+        if (notes) {
+          this.notepad.render();
+          this.player.marks();
+        }
         if (speakers) this.askPane.renderPresets();
         if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
