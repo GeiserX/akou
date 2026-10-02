@@ -320,7 +320,7 @@ A dictation is one buffer decoded after the release, never a stream of live VAD 
 | Engine | What | Time for 5 s of speech, warm | When it is the default |
 |---|---|---|---|
 | `fast` | Parakeet TDT 0.6B v3 fp32, greedy, in the live Worker that is already loaded at app start ([index.ts](../../src/main/index.ts) `startAsr`) | about 0.1 to 0.15 s (real-time factor 0.02, [asr-benchmark.md](../research/asr-benchmark.md)) | `auto` on a box with no GPU |
-| `best` | Qwen3-ASR 1.7B through llama-server, kept warm ([SERVER.md section 8.1](SERVER.md#81-best-qwen3-asr-on-llama-server)) | about 0.5 to 1 s on Metal (the 61.5 s clip took 7.7 to 9.5 s including the load); unmeasured on CUDA and Vulkan | `auto` where `asr.accelerator` resolves to anything but `cpu` (`metal`, `cuda`, `vulkan`, or a user-set `sycl` or `rocm`; [accelerator.ts](../../src/main/asr/accelerator.ts)) |
+| `best` | Qwen3-ASR 1.7B through llama-server, kept warm ([SERVER.md section 8.1](SERVER.md#81-best-qwen3-asr-on-llama-server)) | about 0.5 to 1 s on Metal (the 61.5 s clip took 7.7 to 9.5 s including the load); on Windows about 0.24 s per 9.5 s clip on CUDA, and slower than the CPU on Vulkan on an integrated GPU (4.7 s against 2.7 s, [asr-12-windows.md](../gates/asr-12-windows.md)) | `auto` where `asr.accelerator` resolves to anything but `cpu` (`metal`, `cuda`, `vulkan`, or a user-set `sycl` or `rocm`; [accelerator.ts](../../src/main/asr/accelerator.ts)) |
 | `remote` | Another akou, section 7.2 | round trip plus the remote's own time | never by default; chosen by the user |
 
 The owner's rule stands: the better transcript wins, and memory or size is never the reason to pick a worse model. `auto` therefore picks `best` wherever a GPU runs it, and the pill's timing shows the cost.
