@@ -166,9 +166,11 @@ function wordsOf(text: string, tokens: readonly Token[]): WordHyp[] {
 
 /**
  * The most audio one request carries, seconds: the second pass's longest request
- * (`REVIEW_CAP_MAX_SECONDS`). On b11200 with Q8_0 and llama-server's 4096-token context, joined
- * FLEURS clips came back whole up to 180 s, lost words at 210 and 240 s, kept about a sixth of
- * them at 300 s, and were refused at 360 s, every loss with no error.
+ * (`REVIEW_CAP_MAX_SECONDS`). The audio (about 13 tokens a second) and the answer share
+ * llama-server's 4096-token context, and the answer stops where it fills. On b11200 with Q8_0 on
+ * an M4, joined FLEURS clips (about 2 words a second) came back whole up to 242 s and kept 100 of
+ * 679 words at 305 s; denser speech (3.3 words a second) came back whole at 180 s and lost its
+ * tail from 210 s; 360 s was refused with HTTP 400. Every loss but the refusal came with no error.
  */
 export const QWEN_MAX_REQUEST_SECONDS = 180;
 

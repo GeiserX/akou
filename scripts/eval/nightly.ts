@@ -279,7 +279,7 @@ export const QWEN_GATE = {
   controlRequests: 50,
   /**
    * The long unit: English clips joined into five minutes, past the 4096-token context. Cut into
-   * requests by the engine it read 5 % WER on an M4; sent uncut it kept 100 of 679 words (86 %).
+   * requests by the engine it read 4.41 % WER on an M4; sent uncut, 86.18 % (100 of 679 words).
    */
   longSeconds: 300,
   /** The WER the long unit stays under, and the uncut control must pass. */
