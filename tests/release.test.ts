@@ -17,8 +17,9 @@ import config, {
   UPDATE_FEED,
 } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
-import { hutchEnv, PINS, pairedHutch } from "../scripts/build-app.ts";
+import { hutchEnv, PINS, pairedHutch, releaseName } from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
+import { main as bumpCask, dmgName, dmgSum, renderCask } from "../scripts/bump-cask.ts";
 import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
 import { verdict } from "../scripts/ci/tested-commit.ts";
 import {
@@ -407,12 +408,15 @@ function releaseWorkflow(): {
   jobs: Record<
     string,
     {
+      needs?: string | string[];
+      if?: string;
       permissions?: Record<string, string>;
       steps?: {
         name?: string;
         uses?: string;
         if?: string;
         run?: string;
+        env?: Record<string, string>;
         with?: Record<string, string>;
       }[];
     }
@@ -631,6 +635,115 @@ describe("[CI-23] releases publish the update feed the app reads", () => {
     expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeGreaterThan(-1);
     expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeLessThan(
       upload.indexOf("--clobber -- stable-*-update.json"),
+    );
+  });
+});
+
+describe("[CI-25] tags bump the Homebrew cask", () => {
+  const sha = "a".repeat(64);
+  const sums = `${"b".repeat(64)}  akou-cli-${pkg.version}-darwin-arm64.tar.gz\n${sha}  ${releaseName(pkg.version)}.dmg\n`;
+
+  /** A bare git repository standing in for the tap, with one commit on its branch. */
+  function fakeTap(): {
+    dir: string;
+    tap: string;
+    head(): string;
+    cask(): string;
+    cleanup(): void;
+  } {
+    const t = tempDir();
+    const tap = join(t.dir, "tap.git");
+    const run = (cwd: string, ...args: string[]) => {
+      const r = Bun.spawnSync(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", ...args],
+        {
+          cwd,
+        },
+      );
+      if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+      return r.stdout.toString().trim();
+    };
+    run(t.dir, "init", "--quiet", "--bare", tap);
+    run(t.dir, "clone", "--quiet", tap, "seed");
+    writeFileSync(join(t.dir, "seed", "README.md"), "tap\n");
+    run(join(t.dir, "seed"), "add", "README.md");
+    run(join(t.dir, "seed"), "commit", "--quiet", "-m", "seed");
+    run(join(t.dir, "seed"), "push", "--quiet", "origin", "HEAD");
+    writeFileSync(join(t.dir, "SHA256SUMS"), sums);
+    return {
+      dir: t.dir,
+      tap,
+      head: () => run(tap, "rev-parse", "HEAD"),
+      cask: () => run(tap, "show", "HEAD:Casks/akou.rb"),
+      cleanup: t.cleanup,
+    };
+  }
+
+  test("the cask installs this version's DMG, checked by its SHA-256, on Apple silicon", () => {
+    expect(dmgName(pkg.version)).toBe(`${releaseName(pkg.version)}.dmg`);
+    const cask = renderCask("1.2.3", sha);
+    expect(cask).toContain('version "1.2.3"');
+    expect(cask).toContain(`sha256 "${sha}"`);
+    expect(cask).toContain(
+      'url "https://github.com/GeiserX/akou/releases/download/v#{version}/akou-#{version}-macos-arm64.dmg"',
+    );
+    expect(cask).toContain("depends_on arch: :arm64");
+    expect(cask).toContain('app "akou.app"');
+  });
+
+  test("the DMG's line is read from SHA256SUMS, and nothing else", () => {
+    expect(dmgSum(sums, pkg.version)).toBe(sha);
+    expect(dmgSum(`${sha} *${releaseName(pkg.version)}.dmg`, pkg.version)).toBe(sha);
+    expect(dmgSum(sums, "9.9.9")).toBeNull();
+  });
+
+  test("[T4.12] Homebrew tap push without a token: a dry-run bump without the secret fails loudly", () => {
+    const t = fakeTap();
+    try {
+      const before = t.head();
+      const sumsFile = join(t.dir, "SHA256SUMS");
+      const args = ["--sums", sumsFile, "--tap", t.tap, "--dry-run"];
+      const said: string[] = [];
+      const err = console.error;
+      console.error = (m: string) => said.push(m);
+      try {
+        expect(bumpCask(args, {})).toBe(1);
+      } finally {
+        console.error = err;
+      }
+      expect(said.join("\n")).toContain("::error::bump-cask: TAP_PUSH_TOKEN is not set");
+      // Positive control: with the secret the same dry run passes, and pushes nothing.
+      expect(quiet(() => bumpCask(args, { TAP_PUSH_TOKEN: "x" }))).toBe(0);
+      expect(t.head()).toBe(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("with TAP_PUSH_TOKEN set the bump lands in the tap, once", () => {
+    const t = fakeTap();
+    try {
+      const args = ["--sums", join(t.dir, "SHA256SUMS"), "--tap", t.tap];
+      expect(quiet(() => bumpCask(args, { TAP_PUSH_TOKEN: "x" }))).toBe(0);
+      expect(t.cask()).toBe(renderCask(pkg.version, sha).trim());
+      const bumped = t.head();
+      // The same version again changes nothing.
+      expect(quiet(() => bumpCask(args, { TAP_PUSH_TOKEN: "x" }))).toBe(0);
+      expect(t.head()).toBe(bumped);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("the bump runs after the release, from a tag push only, with the secret", () => {
+    const cask = releaseWorkflow().jobs.cask;
+    expect(cask?.needs).toBe("release");
+    expect(cask?.if).toBe("github.ref_type == 'tag'");
+    const step = cask?.steps?.find((s) => s.run?.includes("scripts/bump-cask.ts"));
+    expect(step?.run).toContain("bun scripts/bump-cask.ts --sums SHA256SUMS");
+    expect(step?.run).not.toContain("--dry-run");
+    expect(step?.env?.TAP_PUSH_TOKEN).toBe(
+      `$${"{{"} github.event_name == 'push' && secrets.TAP_PUSH_TOKEN || '' }}`,
     );
   });
 });
