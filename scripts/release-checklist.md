@@ -27,6 +27,16 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
 
    The `app` job prints one `ok` line per smoke check (both `Info.plist` files, both signatures, the files beside the main process, sherpa-onnx-node loaded from the bundle, the Workers, the helper's `--from-wav` run). The artifacts are on the run page.
 
+5. Before a stable release (1.0.0 or later), on the reference Mac: the 8-hour soak, at real time, with a busy process on every core, through the Rust helper in file mode, which writes a real Opus file and opens no device (TS-24, [TRAPS](../docs/TRAPS.md) T3.8):
+
+   ```sh
+   cargo build --release --manifest-path native/akou-capture/Cargo.toml
+   bun scripts/soak.ts --speed 1 --minutes 480 --burner \
+     --helper native/akou-capture/target/release/akou-capture --out docs/gates/soak-0.1.0.json
+   ```
+
+   Every check prints `ok`. Commit the JSON with the release. A runner job cannot do this: its limit is 6 hours.
+
 ## The tag
 
 ```sh
@@ -45,6 +55,7 @@ The workflow checks the tag equals every version string, builds and checks every
    - The window shows the models card; the download completes and the card goes away.
    - The first recording asks for the microphone and for system audio, and the prompts name akou.
    - A 60-second call records both channels; the transcript appears live.
+   - The real harnesses answer through the packaged app (TS-27). With Claude Code logged in, `akou config set provider.kind harness`, `akou config set provider.harness claude`, then `akou ask "What was said in this call?" --call last --json` about the 60-second call: it prints `"answered": true` and Claude Code's answer. Then the same with Codex logged in and `provider.harness codex`. Put both settings back as they were. CI never runs this: it needs a logged-in subscription.
    - Install the previous release, grant, then update to this one: record 10 s and note whether macOS asked again (expected while builds are ad-hoc signed) and whether both channels have sound after allowing.
    - The Bluetooth probe-click listening test ([TRAPS](../docs/TRAPS.md) "Probe click in Bluetooth headphones").
    - The idle tray item shows its icon in a dark and a light menu bar (System Settings > Appearance). Save both screenshots under `docs/gates/` with the date, the macOS version and the akou version ([DESKTOP](../docs/ux/DESKTOP.md) DK-T1, [TRAPS](../docs/TRAPS.md) "An invisible tray").
@@ -55,7 +66,6 @@ The workflow checks the tag equals every version string, builds and checks every
    - On a Mac with no `akou` on PATH, akou menu > Install Command-Line Tool… installs it (a password is asked only if `/usr/local/bin` needs one); in a new terminal `akou --version` prints this release's version; a second run says it is already installed (DK-M6).
    - During a recording, switch to another app: the floating indicator shows the time and both levels, stays above the other app, and never takes its focus; drag it, stop the call, start another: it comes back where it was dragged. With the akou window in front it is hidden (DK-F1).
    - With the meeting app in front and the akou window behind it, speak and play call audio: both of the indicator's bars move with the sound, several times a second, as the window's Mic and Call meters do (DK-F1, W3.18). They move in steps of a quarter second, one per level the capture sends; they must never stand still or jump only once a second.
-   - The real harnesses answer through the packaged app (TS-27). With Claude Code logged in, `akou config set provider.kind harness`, `akou config set provider.harness claude`, then `akou ask "What was said in this call?" --call last --json` about the 60-second call: it prints `"answered": true` and Claude Code's answer. Then the same with Codex logged in and `provider.harness codex`. Put both settings back as they were. CI never runs this: it needs a logged-in subscription.
    - In a dark and a light appearance, look at the indicator while recording, muted (Unmute), paused, and past 10:00: the window ends at the pill's rounded edge, with no darker rectangle or edge to its right or around its corners, Stop is never cut off, and Stop stays where it is when Mute becomes Unmute (DK-F1).
    - With the window closed, `akou start -t "Check title"` shows one "Recording started" notification, "Started from the command line", and the title appears nowhere in it (DK-N1, DK-N4).
 3. `akou-cli-<version>-darwin-arm64`: `akou --version`, `akou doctor`, `akou start` against the installed app.
