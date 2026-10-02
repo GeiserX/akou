@@ -225,11 +225,13 @@ export const vocab: Command = {
           return EXIT.usage;
         }
         const r = await api(ctx, "POST", "/vocab/import", { body: { text, workspace: ws } });
-        return finish(
-          ctx,
-          r,
-          (b) =>
-            `Imported ${b.imported} into ${b.path}${b.skipped?.length ? `; skipped ${b.skipped.length}` : ""}`,
+        return finish(ctx, r, (b) =>
+          [
+            `Imported ${b.imported} into ${b.path}`,
+            ...(b.skipped ?? []).map(
+              (s: { line: number; reason: string }) => `  line ${s.line}: ${s.reason}`,
+            ),
+          ].join("\n"),
         );
       }
       case "pass": {
