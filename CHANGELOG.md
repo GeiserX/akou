@@ -2,6 +2,15 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## Unreleased
+
+### Server jobs
+- **The `fusion` preset is built.** A job with `preset: fusion` runs Qwen3-ASR, Whisper large-v3 and Parakeet over the same pieces of the file, one engine loaded at a time, and joins their words by confidence ROVER. On the benchmark this trio scored 7.97 pooled WER, against 8.63 for Qwen alone. The job's model reads `rover-conf(qwen3-asr-1.7b,whisper-large-v3,parakeet-tdt-0.6b-v3-fp32)`. A client can name such a list itself in `model`, and `server.default_model` can be `fusion`. `akou models pull fusion` fetches the three engines, the llama-server build and the speaker models.
+- **An engine that fails is left out, and the job goes on.** An engine that will not load, crashes or refuses a piece is dropped, for the whole job or for that piece. The job fails only when no engine is left. The result's `engine.fusion` lists the engines that ran, with their decode seconds, and the dropped ones with the reason.
+- **New settings:** `asr.final.engines` sets the preset's engines and their order (add `canary-1b-v2` for a fourth). `asr.fusion` is `rover-conf`, `rover-freq` or `first`. `asr.memoryBudgetMb` leaves out an engine whose estimated memory is over the budget. The fusers that ask a language model are not built yet.
+- `GET /v1/server` gives each preset's speaker model (`diarizer`) and how it joins its engines (`fusion`).
+- A recorded call's final pass still runs one engine, Parakeet or Qwen.
+
 ## 0.5.4 — Qwen writes the final transcript, and a Mac on Nemotron and Qwen needs no Parakeet
 
 On 0.5.3 the final transcript always came from Parakeet, whatever was downloaded, and every Mac needed Parakeet before it could record. A long final pass showed no progress until it ended. In 0.5.4 Qwen writes the final transcript whenever it is downloaded, and a Mac that runs Nemotron for the live lines and Qwen after the call keeps no Parakeet at all. The final pass says how far it is, in the window and in `akou status`, and the Models page lists the whole catalog.
