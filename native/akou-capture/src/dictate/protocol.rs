@@ -163,6 +163,12 @@ pub fn session_started(
     line("session.started", f)
 }
 
+/// The session `id` latched (tapped on, a chord let go before `HOLD_MS`, or `session.start`), so
+/// the app may end it after silence (DC-A3).
+pub fn latched(id: &str) -> String {
+    line("latched", vec![("id", Json::str(id))])
+}
+
 pub fn session_ended(id: &str, reason: &str) -> String {
     line(
         "session.ended",
@@ -869,6 +875,7 @@ mod tests {
             ),
             press(false, None),
             session_started("1", &t, 123_456_789_012_345_678, None),
+            latched("1"),
             level(0.25),
             key("Shift+Enter"),
             mic(true),

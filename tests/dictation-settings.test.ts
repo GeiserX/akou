@@ -100,6 +100,13 @@ describe("DC-A2: the dictation key", () => {
     expect(checkDictationHotkey("")).toBeNull();
   });
 
+  test("DC-A6: Mouse4 can be saved as the dictation key; the left button cannot", () => {
+    expect(validateSetting("dictation.hotkey", "Mouse4").ok).toBe(true);
+    expect(checkDictationHotkey("Mouse5")).toBeNull();
+    expect(validateSetting("dictation.hotkey", "Mouse1")).toMatchObject({ ok: false });
+    expect(checkDictationHotkey("Mouse2")).toContain("right button");
+  });
+
   test("Shift held first is fix last's form, not a dictation key", () => {
     expect(parseHotkey("Shift+RightCommand")).toEqual({
       kind: "modifier",
