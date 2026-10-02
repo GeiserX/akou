@@ -13,6 +13,7 @@ import { stereoWav } from "../fixtures/audio.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   seedCall,
   silentWav,
   standardCall,
@@ -312,7 +313,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         async (rig) => {
           await audio(rig, id, 12);
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const row = '#lines .row[data-id="l000003"] .text';
           const pick = async (label: string) => {
@@ -377,7 +378,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const back = () =>
             page.evaluate(() => {

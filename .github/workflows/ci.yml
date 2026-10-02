@@ -108,13 +108,27 @@ jobs:
 
   # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake
-  # provider. Only Chromium's headless shell is installed; nothing plays audio or opens a window.
+  # provider, once in Chromium's headless shell and once in Playwright's WebKit, the closest
+  # stand-in for the WKWebView and WebKitGTK the app ships (docs/TESTING.md TS-14), each engine
+  # with its own floor. Nothing plays audio or opens a window.
   ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            install: --only-shell chromium
+            floor: ui
+          - browser: webkit
+            install: webkit
+            floor: ui-webkit
+    name: ui (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
     env:
+      AKOU_UI_BROWSER: ${{ matrix.browser }}
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,10 +136,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The browser build pinned by playwright-core, headless shell only, with its system libraries.
-      - run: bunx playwright-core install --with-deps --only-shell chromium
+      # The browser build pinned by playwright-core, with its system libraries.
+      - run: bunx playwright-core install --with-deps ${{ matrix.install }}
       - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
-      - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+      - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
 
   # The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
   # release builds, then the app's capture trap scenarios against the real binary in file mode.
