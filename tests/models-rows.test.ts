@@ -25,6 +25,7 @@ import {
   afterCallHelp,
   allModelsText,
   autoHelp,
+  autoJobsHelp,
   bestHelp,
   catalogGroups,
   catalogLine,
@@ -188,6 +189,20 @@ describe("[SV-U6] the live transcript's Automatic row", () => {
     expect(autoHelp(view({ next: "parakeet" }), "this Mac")).toBe(
       "Uses Parakeet until Nemotron is on this Mac.",
     );
+  });
+});
+
+describe("[SV-U5] the Jobs section's Automatic row says what auto runs here and why", () => {
+  test("the server's verdict follows the line; with none, the line stands alone", () => {
+    expect(autoJobsHelp({ preset: "best", reason: "Qwen3-ASR is downloaded here." })).toBe(
+      "Chosen for each job by what this server has. Now Best: Qwen3-ASR is downloaded here.",
+    );
+    expect(
+      autoJobsHelp({ preset: "fast", reason: "Parakeet is downloaded here and Qwen3-ASR is not." }),
+    ).toBe(
+      "Chosen for each job by what this server has. Now Fast: Parakeet is downloaded here and Qwen3-ASR is not.",
+    );
+    expect(autoJobsHelp(null)).toBe("Chosen for each job by what this server has.");
   });
 });
 
