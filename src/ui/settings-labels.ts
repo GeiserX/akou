@@ -153,13 +153,13 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     choices: [
       ["rover-conf", "Confidence vote"],
       ["rover-freq", "Majority vote"],
-      ["first", "First engine only"],
+      ["first", "First engine, gaps filled from the others"],
     ],
   },
   "asr.memoryBudgetMb": {
     label: "Memory an engine may need",
     unit: "MB",
-    help: "0: no limit. An engine over it is left out of the fusion pass.",
+    help: "0: 60% of this machine's memory. An engine over it is left out of the fusion pass.",
   },
   "asr.diarizer": {
     label: "Who spoke",

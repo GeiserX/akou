@@ -2610,10 +2610,17 @@ export class AkouApp implements ApiApp {
       ended();
       if (this.qwenLine?.done === done) this.qwenLine = null;
     };
-    if (ahead) {
+    // An aborted job never waits; a job that waited drops its listener, so a signal that is
+    // never aborted does not keep one closure per job.
+    if (ahead && !signal.aborted) {
       this.log("info", `job ${id}: waits for the Qwen pass on ${ahead.call}`);
-      const aborted = new Promise<void>((r) => signal.addEventListener("abort", () => r()));
+      let onAbort = () => {};
+      const aborted = new Promise<void>((r) => {
+        onAbort = () => r();
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
       await Promise.race([ahead.done.catch(() => {}), aborted]);
+      signal.removeEventListener("abort", onAbort);
     }
     return release;
   }
