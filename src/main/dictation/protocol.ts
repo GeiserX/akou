@@ -192,7 +192,12 @@ function isTarget(v: unknown): v is Target {
   if (typeof v !== "object" || v === null) return false;
   const t = v as Record<string, unknown>;
   return (
-    isStr(t.app) && isNum(t.pid) && isStr(t.window) && isStr(t.field) && FIELDS.includes(t.field)
+    isStr(t.app) &&
+    (t.name === undefined || isStr(t.name)) &&
+    isNum(t.pid) &&
+    isStr(t.window) &&
+    isStr(t.field) &&
+    FIELDS.includes(t.field)
   );
 }
 

@@ -67,12 +67,32 @@ export type Hotkey =
   | { kind: "modifier"; key: string }
   | { kind: "chord"; mods: [Mod, Side][]; key: string };
 
+/** `Mouse1` to `Mouse5` as a button number; anything else is null. */
+function mouseButton(name: string): number | null {
+  const m = /^mouse([1-5])$/i.exec(name);
+  return m ? Number(m[1]) : null;
+}
+
+/** DC-A6: the left and right buttons would take every click from every app. */
+function refuseMouse(name: string): void {
+  const b = mouseButton(name);
+  if (b === 1 || b === 2)
+    throw new Error(
+      `Mouse${b} is the ${b === 1 ? "left" : "right"} button, which every app needs; use Mouse3, Mouse4 or Mouse5`,
+    );
+}
+
 /** Reads a binding the way the helper does; throws with the helper's reason. */
 export function parseBinding(s: string): Hotkey {
   const parts = s.split("+").map((p) => p.trim());
   if (parts.some((p) => p === "")) throw new Error(`"${s}" is not a key or a chord`);
   if (parts.length === 1) {
     const one = parts[0] as string;
+    refuseMouse(one);
+    const b = mouseButton(one);
+    // A button alone behaves as a chord with no modifier: it starts at button-down and is
+    // swallowed, so Mouse4 does not also go back a page (DC-A6).
+    if (b !== null) return { kind: "chord", mods: [], key: `Mouse${b}` };
     const m = modifier(one);
     if (m?.[0] === "Fn") return { kind: "modifier", key: "Fn" };
     if (m?.[1] === "Either") throw new Error(`${one} alone needs a side`);
@@ -81,6 +101,7 @@ export function parseBinding(s: string): Hotkey {
   }
   const key = parts.at(-1) as string;
   if (isModifier(key)) throw new Error(`the last key of ${s} must not be a modifier`);
+  refuseMouse(key);
   const mods: [Mod, Side][] = [];
   for (const p of parts.slice(0, -1)) {
     const m = modifier(p);
@@ -91,6 +112,9 @@ export function parseBinding(s: string): Hotkey {
   return { kind: "chord", mods, key };
 }
 
+/** A binding's side for a modifier (`Either` takes both) against the side of a held key. */
+const sideOk = (want: Side, held: Side): boolean => want === "Either" || held === want;
+
 function pressedBy(h: Hotkey, key: string, held: readonly string[]): boolean {
   if (h.kind === "modifier") return h.key === key;
   return (
@@ -98,7 +122,7 @@ function pressedBy(h: Hotkey, key: string, held: readonly string[]): boolean {
     h.mods.every(([m, side]) =>
       held.some((k) => {
         const hm = modifier(k);
-        return hm !== null && hm[0] === m && (side === "Either" || hm[1] === side);
+        return hm !== null && hm[0] === m && sideOk(side, hm[1]);
       }),
     )
   );
@@ -116,6 +140,11 @@ export type ActivationOut =
   /** A session starts; its audio begins at `at` less the ring. */
   | { type: "start"; at: number }
   | { type: "end"; reason: EndReason }
+  /**
+   * The session is latched now (tapped on, a chord released before `HOLD_MS`, or `session.start`),
+   * so the app may end it after silence (DC-A3). A held session never is.
+   */
+  | { type: "latched" }
   /** Report `key {name}` to the app. */
   | { type: "key"; name: string };
 
@@ -173,8 +202,15 @@ export class ActivationMachine {
   private enterName(name: string): string | null {
     if (name === "Escape") return "Escape";
     if (name === "Enter" || name === "Return" || name === "KeypadEnter") {
-      // A Shift other than the hotkey itself: a held `RightShift` hotkey is not Shift+Enter.
-      const shift = this.held.some((k) => modifier(k)?.[0] === "Shift" && k !== this.hotkey.key);
+      // A Shift other than the hotkey's own: a held `RightShift` hotkey, or the Shift of a chord
+      // such as `Control+Shift+Space` while its press is still down, is not Shift+Enter (DC-A1).
+      const h = this.hotkey;
+      const chordDown = h.kind === "chord" && this.state.s === "listening" && this.state.held;
+      const shift = this.held.some((k) => {
+        const km = modifier(k);
+        if (km?.[0] !== "Shift" || k === h.key) return false;
+        return !(chordDown && h.mods.some(([m, side]) => m === "Shift" && sideOk(side, km[1])));
+      });
       return shift ? "Shift+Enter" : "Enter";
     }
     return null;
@@ -247,6 +283,7 @@ export class ActivationMachine {
     const tap = at - st.down < HOLD_MS;
     if (this.activation === "toggle" || (this.activation === "hold-or-toggle" && tap)) {
       this.state = { s: "listening", down: st.down, held: false };
+      out.push({ type: "latched" });
     } else {
       out.push({ type: "end", reason: "release" });
       this.state = this.awaiting(at);
@@ -282,7 +319,7 @@ export class ActivationMachine {
   /** `session.start` from the app: a latched session, as if the key had been tapped. */
   start(at: number, out: ActivationOut[]): void {
     if (this.state.s !== "idle") return;
-    out.push({ type: "arm", at }, { type: "start", at });
+    out.push({ type: "arm", at }, { type: "start", at }, { type: "latched" });
     this.state = { s: "listening", down: at, held: false };
   }
 

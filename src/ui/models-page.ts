@@ -41,6 +41,7 @@ import {
   afterCallHelp,
   allModelsText,
   autoHelp,
+  autoJobsHelp,
   bestHelp,
   catalogGroups,
   catalogLine,
@@ -150,6 +151,8 @@ export class ModelsPage {
   /** What each number field held when drawn, so leaving saves only an edit. */
   private shownNumbers = new Map<string, string>();
   private platform = "";
+  /** Server mode: what `auto` runs for a job here and why (`GET /server` `auto`, SV-R2). */
+  private auto: { preset: string; reason: string } | null = null;
   /** The All models page is on screen instead of the page itself. */
   private sub = false;
   private readonly armed = new Map<string, number>();
@@ -200,7 +203,7 @@ export class ModelsPage {
       this.t.request<ModelsReply>("GET", "/models").catch(() => null),
       this.t.request<ConfigReply>("GET", "/config").catch(() => null),
       this.server
-        ? null
+        ? this.readAuto()
         : this.t.request<{ app?: { platform?: string } }>("GET", "/status").catch(() => null),
     ]);
     if (n !== this.shows || !this.shown) return;
@@ -267,13 +270,27 @@ export class ModelsPage {
     const n = ++this.polls;
     let r: { status: number; body: ModelsReply };
     try {
-      r = await this.t.request<ModelsReply>("GET", "/models");
+      // A finished download can change what `auto` runs, so the server's verdict is read again.
+      [r] = await Promise.all([
+        this.t.request<ModelsReply>("GET", "/models"),
+        this.server ? this.readAuto() : null,
+      ]);
     } catch {
       return;
     }
     if (n !== this.polls || r.status !== 200 || !this.shown || this.loading) return;
     this.take(r.body);
     this.drawModels();
+  }
+
+  /** Server mode: reads what `auto` runs here now into `auto`; null when the server cannot say. */
+  private async readAuto(): Promise<null> {
+    const r = await this.t
+      .request<{ auto?: { preset?: string; reason?: string } | null }>("GET", "/server")
+      .catch(() => null);
+    const a = r && r.status === 200 ? r.body?.auto : null;
+    this.auto = a?.preset && a.reason ? { preset: a.preset, reason: a.reason } : null;
+    return null;
   }
 
   private draw(): void {
@@ -764,7 +781,7 @@ export class ModelsPage {
           name: "models-jobs",
           value: "auto",
           label: "Automatic",
-          help: "Chosen for each job by what this server has.",
+          help: autoJobsHelp(this.auto),
           checked: value === "auto",
           isDefault: DEFAULTS[key] === "auto",
         }),

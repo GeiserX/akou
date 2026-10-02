@@ -626,6 +626,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           s.scrollTop -= 300;
         });
         await page.waitForSelector("#jump", { state: "visible" });
+        expect(await page.textContent("#jump")).toBe("↓ Back to live");
         const top = () =>
           page.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
         const held = await top();
@@ -686,7 +687,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "[W4.1] A saved call opens at its end, its last line at the bottom edge over the player bar and under the final note",
+    "[W4.1] A saved call opens at its end, its last line at the bottom edge over the player bar and under the final note, and Back to the end once scrolled up",
     async () => {
       const id = "01J8Z6Q4M2VX0K7B3D4E5FRUNN";
       await withRig(
@@ -733,6 +734,15 @@ describe("DESIGN 7 parity with hark-viewer", () => {
             3000,
             "last line at the bottom edge",
           );
+          // Scrolled up, a saved call offers the way back to its end, not to a live that is not
+          // there (principle 12).
+          await page.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            s.style.scrollBehavior = "auto";
+            s.scrollTop = 0;
+          });
+          await page.waitForSelector("#jump", { state: "visible" });
+          expect(await page.textContent("#jump")).toBe("↓ Back to the end");
         },
       );
     },

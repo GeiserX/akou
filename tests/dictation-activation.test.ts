@@ -35,7 +35,7 @@ function play(hotkey: string, mode: Activation, script: Script, untilMs: number)
 }
 
 const sessions = (acts: [number, ActivationOut][]) =>
-  acts.filter(([, a]) => a.type !== "key" && a.type !== "arm" && a.type !== "disarm");
+  acts.filter(([, a]) => a.type === "start" || a.type === "end");
 
 const RC = "RightCommand";
 
@@ -276,6 +276,53 @@ describe("DC-A4", () => {
     expect(acts).toContainEqual([800, { type: "key", name: "Enter" }]);
   });
 
+  test("the Shift of a held chord does not make Enter Shift+Enter; a Shift pressed again in a latched chord session does", () => {
+    const CSS = "Control+Shift+Space";
+    const held = play(
+      CSS,
+      "hold-or-toggle",
+      [
+        [0, true, "LeftControl"],
+        [10, true, "LeftShift"],
+        [20, true, "Space"],
+        [800, true, "Enter"],
+      ],
+      900,
+    );
+    expect(held.acts).toContainEqual([800, { type: "key", name: "Enter" }]);
+    expect(held.acts).toContainEqual([800, { type: "end", reason: "key" }]);
+    const latched = play(
+      CSS,
+      "hold-or-toggle",
+      [
+        [0, true, "LeftControl"],
+        [10, true, "LeftShift"],
+        [20, true, "Space"],
+        [100, false, "Space"],
+        [110, false, "LeftShift"],
+        [120, false, "LeftControl"],
+        [500, true, "LeftShift"],
+        [520, true, "Enter"],
+      ],
+      600,
+    );
+    expect(latched.acts).toContainEqual([520, { type: "key", name: "Shift+Enter" }]);
+    // A chord whose Shift has a side leaves the other Shift a Shift.
+    const sided = play(
+      "Control+RightShift+Space",
+      "hold-or-toggle",
+      [
+        [0, true, "LeftControl"],
+        [10, true, "RightShift"],
+        [20, true, "Space"],
+        [500, true, "LeftShift"],
+        [520, true, "Enter"],
+      ],
+      600,
+    );
+    expect(sided.acts).toContainEqual([520, { type: "key", name: "Shift+Enter" }]);
+  });
+
   test("positive control: with no session the same keys pass", () => {
     const { acts, swallowed } = play(
       RC,
@@ -326,6 +373,93 @@ describe("DC-A4", () => {
     expect(m.key({ at: 3, key: "Enter", down: false }, out)).toBe(true);
     m.settled();
     expect(m.key({ at: 4, key: "Enter", down: true }, out)).toBe(false);
+  });
+});
+
+describe("DC-A3: the helper says when a session latches", () => {
+  const latches = (acts: [number, ActivationOut][]) =>
+    acts.filter(([, a]) => a.type === "start" || a.type === "latched");
+  const tap: Script = [
+    [0, true, RC],
+    [120, false, RC],
+  ];
+
+  test("a tap says latched right after its start; a push-to-talk hold never does", () => {
+    expect(latches(play(RC, "hold-or-toggle", tap, 500).acts)).toEqual([
+      [120, { type: "start", at: 0 }],
+      [120, { type: "latched" }],
+    ]);
+    const held = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [800, false, RC],
+      ],
+      1000,
+    );
+    expect(held.acts.some(([, a]) => a.type === "latched")).toBe(false);
+    expect(play(RC, "hold", tap, 500).acts.some(([, a]) => a.type === "latched")).toBe(false);
+  });
+
+  test("toggle always latches, and a chord let go before HOLD_MS latches", () => {
+    const toggle = play(
+      RC,
+      "toggle",
+      [
+        [0, true, RC],
+        [900, false, RC],
+      ],
+      1000,
+    );
+    expect(toggle.acts).toContainEqual([900, { type: "latched" }]);
+    const chord = (up: number) =>
+      play(
+        "Control+Space",
+        "hold-or-toggle",
+        [
+          [0, true, "LeftControl"],
+          [10, true, "Space"],
+          [up, false, "Space"],
+        ],
+        1000,
+      ).acts;
+    expect(chord(100)).toContainEqual([100, { type: "latched" }]);
+    expect(chord(900).some(([, a]) => a.type === "latched")).toBe(false);
+  });
+});
+
+describe("DC-A6: mouse buttons 3 to 5 as the dictation key", () => {
+  test("Mouse3 to Mouse5 bind as a button alone; the left and right buttons are refused", () => {
+    expect(parseBinding("Mouse4")).toEqual({ kind: "chord", mods: [], key: "Mouse4" });
+    expect(parseBinding("mouse5")).toEqual({ kind: "chord", mods: [], key: "Mouse5" });
+    expect(parseBinding("Mouse3").kind).toBe("chord");
+    expect(() => parseBinding("Mouse1")).toThrow(/left button/);
+    expect(() => parseBinding("Mouse2")).toThrow(/right button/);
+    expect(() => parseBinding("Control+Mouse1")).toThrow(/left button/);
+    expect(parseBinding("Control+Mouse4")).toMatchObject({ kind: "chord", key: "Mouse4" });
+    expect(() => parseBinding("Mouse6")).toThrow(/every app/);
+    expect(() => parseBinding("WheelUp")).toThrow(/every app/);
+  });
+
+  test("a button held runs a session from its down to its up, and both are swallowed", () => {
+    const { acts, swallowed } = play(
+      "Mouse4",
+      "hold-or-toggle",
+      [
+        [0, true, "Mouse4"],
+        [900, false, "Mouse4"],
+      ],
+      1000,
+    );
+    expect(sessions(acts)).toEqual([
+      [0, { type: "start", at: 0 }],
+      [900, { type: "end", reason: "release" }],
+    ]);
+    expect(swallowed).toEqual([
+      [0, true, "Mouse4"],
+      [900, false, "Mouse4"],
+    ]);
   });
 });
 
@@ -394,9 +528,6 @@ describe("DC-O1: the press the pill's dot follows", () => {
     const m = new ActivationMachine(parseBinding(RC), "hold-or-toggle");
     const out: ActivationOut[] = [];
     m.start(5, out);
-    expect(out).toEqual([
-      { type: "arm", at: 5 },
-      { type: "start", at: 5 },
-    ]);
+    expect(out).toEqual([{ type: "arm", at: 5 }, { type: "start", at: 5 }, { type: "latched" }]);
   });
 });

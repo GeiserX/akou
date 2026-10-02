@@ -92,6 +92,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # ffmpeg on the Linux check, so the tests that read audio and subtitles through the real
+      # ffmpeg (SV-P6, SV-J5) run in CI instead of skipping; the floor's maxSkip counts on it.
+      - if: runner.os == 'Linux'
+        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
       # The pinned Bun, Biome, tsc twice, bun test, then the job's floor.
       - run: bun run check
       # A dispatch with `repeat` proves the flake fixes that live in the check: the capture traps

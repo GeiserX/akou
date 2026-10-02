@@ -23,7 +23,7 @@ Measured at `a8d92e5`: 54 Bun test files with 841 tests, 131 Rust tests, 43 UI t
 
 | Layer | What it proves | Runs with | Where | When | Today |
 |---|---|---|---|---|---|
-| L0 static | Types, lint, format, generated docs match the code | Biome, `tsc` twice, `cargo fmt`, `cargo clippy -D warnings` | `bun run check`, `ci.yml` | every PR, three OSes | has, except the generated references (TS-9, TS-12) |
+| L0 static | Types, lint, format, generated docs match the code | Biome, `tsc` twice, `cargo fmt`, `cargo clippy -D warnings` | `bun run check`, `ci.yml` | every PR, three OSes | has, except the generated MCP reference (TS-12) |
 | L1 unit | Pure logic: fold, clocks, BM25, packs, vocabulary, converter, aligner, config validation | fake clocks, generated events | `tests/*.test.ts`, `native/akou-capture` `cargo test` | every PR, three OSes | has |
 | L2 in-process integration | The call state machine, live and final pipelines, notes, hand-off, driven end to end inside one process | fake engine, fake recognizer, fake provider | `tests/call-machine.test.ts`, `asr-*.test.ts`, `notes*.test.ts`, `handoff-*.test.ts` | every PR | has |
 | L3 process e2e | The real app (`bun src/main/index.ts`, headless) through its three doors: CLI, HTTP `/v1`, MCP; the API guards | fake helper, fake ASR, fake harness | `tests/*.e2e.test.ts` | every PR | has |
@@ -105,7 +105,7 @@ akou promises one local API behind three doors: CLI, HTTP `/v1`, MCP ([DESIGN §
 
 | # | Item | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| TS-9 | Settings reference generated from the registry ([T1.39], [T1.40], [T1.41], [T3.42]) | P1 | TRAPS, DESIGN §10 | `bun scripts/surface.ts --check` regenerates `docs/reference/settings.md`, the CLI help text for `config` and `config show`'s labels from `src/main/config/schema.ts`, and fails on any difference. Positive control: adding a key without regenerating fails | missing |
+| TS-9 | Settings reference generated from the registry ([T1.39], [T1.40], [T1.41], [T3.42]) | P1 | TRAPS, DESIGN §10 | `bun scripts/surface.ts --check` regenerates `docs/reference/settings.md`, the CLI help text for `config` and `config show`'s labels from `src/main/config/schema.ts`, and fails on any difference. Positive control: adding a key without regenerating fails | has: the reference is `docs/configuration.md`, and `bun scripts/settings-doc.ts --check` fails when its tables differ from what the registry generates; `tests/settings-doc.test.ts` runs it in `bun run check` on three OSes (machine defaults are written as on macOS everywhere), with the positive controls that a key added without regenerating, or a row removed by hand, fails. The `config` help names no keys and `config show` reads the registry at run time, so neither can drift |
 | TS-10 | CLI reference and exit codes | with CLI-31 | audit (inconsistent flags and exit codes) | Owned by CLI-31 in [CLI.md](ux/CLI.md): the generated `docs/cli.md` with its drift check. Not a separate bead | missing |
 | TS-11 | HTTP contract | with PG-A2 | audit (no OpenAPI) | Owned by PG-A2 in [PROGRAMMABILITY.md](ux/PROGRAMMABILITY.md): the OpenAPI file generated from the route table, checked for drift in CI. Not a separate bead | has, with PG-A2 |
 | TS-12 | MCP contract | P1 | audit; Minutes ships a generated tools reference | `docs/reference/mcp.md` generated from the server's `tools/list` (names, input schemas, annotations once they exist), checked for drift in CI | partial: names and one field asserted in `tests/mcp.e2e.test.ts` |
