@@ -363,7 +363,10 @@ jobs:
           answer p1
           echo "{\"type\":\"insert\",\"id\":\"t1\",\"text\":\"typed é 😀\",\"method\":\"type\",\"send_key\":\"none\",\"target\":$target}" >&4
           answer t1
-          sleep 0.5
+          # The target writes its field to field.txt every 0.1 s, and the typed events land after
+          # the answer: wait for the text, with a deadline, rather than a fixed 0.5 s.
+          want=$(printf 'pasted by akou\ntyped é 😀')
+          for _ in $(seq 1 100); do [ "$(cat field.txt)" = "$want" ] && break; sleep 0.1; done
           echo '{"type":"stop"}' >&4
           exec 4>&-
           wait "$helper"
@@ -374,7 +377,7 @@ jobs:
           echo "clipboard: $(pbpaste)"
           grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
           grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
-          [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
+          [ "$field" = "$want" ] || { echo "the field holds the wrong text"; exit 1; }
           [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
       # DC-N2 on a real Mac: bound to Fn, the shipping helper sets the Globe key's action to Do
       # Nothing and gives the runner's value back on stop; killed while it owns the key, the next
