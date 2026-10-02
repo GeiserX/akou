@@ -7,7 +7,8 @@
  *   `asr.qwenIdleMinutes` pass with no dictation (0: never). A dictation while it is starting keeps
  *   its audio and is decoded once health answers.
  * - **One request per dictation**, greedy, with no context: learned words reach the recognizer
- *   only through DC-L7's measured gate, which is not built.
+ *   only through DC-L7's measured gate, which is not built. A dictation longer than
+ *   `QWEN_MAX_REQUEST_SECONDS` goes in pieces, which `QwenEngine` cuts at a pause.
  * - **The exit.** A request that fails (the server died, ran out of memory, never got healthy) or
  *   takes longer than `dictation.localTimeoutSeconds` plus 0.2 s per second of audio is decoded
  *   with `fast`; the item records `fallback_from: best` and the pill says `best failed, used fast`.

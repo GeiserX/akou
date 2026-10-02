@@ -6,16 +6,17 @@
  *
  *   bun tests/fixtures/fake-diarize.ts run --model FILE --mode live|final [--threads N]
  *     [--step S] [--look S] [--die-after S] [--garbage] [--no-ready] [--protocol P] [--hang]
- *     [--late-error]
+ *     [--late-error] [--exit-mark FILE]
  *
  * `--die-after S` exits 70 once S seconds of audio have arrived; `--garbage` writes a line that is
  * not the protocol after the first audio; `--no-ready` never says ready; `--protocol P` says ready
  * in protocol P; `--hang` never answers a flush. A model path that does not exist exits 66 with an
  * error line, as the real helper does; with `--late-error` the process has exited before the line
- * arrives (a child of its own writes it 0.3 s later on the same stdout and stderr).
+ * arrives (a child of its own writes it 0.3 s later on the same stdout and stderr), and with
+ * `--exit-mark FILE` it creates FILE just before it exits.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 
 const argv = process.argv.slice(2);
 const opt = (name: string) => {
@@ -50,6 +51,8 @@ if (!existsSync(model)) {
   }
   out({ type: "error", message: `cannot load ${model}: no such file` });
   process.stderr.write(`akou-diarize: cannot load ${model}: no such file\n`);
+  const mark = opt("--exit-mark");
+  if (mark) writeFileSync(mark, "");
   process.exit(66);
 }
 if (!argv.includes("--no-ready"))
