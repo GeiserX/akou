@@ -3930,8 +3930,11 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
   test(
     "with no list the field stays a text box with the reason: an app without the route, a refusal",
     async () => {
-      // Positive control for the picker: this app has no `GET /devices` yet, and answers 404.
-      const bare = await openPage({ settings: { "dictation.mic": "mic-usb" } });
+      // Positive control for the picker: an older akou has no `GET /devices`, and answers 404.
+      const bare = await openPage({
+        devices: { status: 404, message: "not found" },
+        settings: { "dictation.mic": "mic-usb" },
+      });
       expect(await bare.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
       expect(await bare.page.inputValue(mic)).toBe("mic-usb");
       expect(await text(bare.page, "#dictation-mic-note")).toBe(
