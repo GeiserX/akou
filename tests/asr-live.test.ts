@@ -178,6 +178,43 @@ describe("a channel the pipeline does not have", () => {
   });
 });
 
+describe("the second pass's review on the Worker", () => {
+  test("a cancel that arrives after its review answered leaves nothing behind; one in time still stops it", async () => {
+    const replies: FromWorker[] = [];
+    const side = new WorkerSide((m) => replies.push(m));
+    cleanups.push(() => side.close());
+    const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+    side.handle({ type: "init", models: spec, live: {} });
+    const word = concat(silence(0.3), speak(["hello"]), silence(0.5));
+    const pending = () => (side as unknown as { cancelled: Set<number> }).cancelled.size;
+    const settled = (token: number) =>
+      until(
+        () => replies.some((r) => "token" in r && r.token === token && r.type !== "loads"),
+        5000,
+        `review ${token}`,
+      );
+
+    // The race: the review answers, and the call ends before the host has read the answer.
+    side.handle({ type: "review", token: 5, parts: [word] });
+    await settled(5);
+    side.handle({ type: "review.cancel", token: 5 });
+    side.handle({ type: "flush", token: 6, call: "" });
+    await until(() => replies.some((r) => r.type === "flushed"), 5000, "the flush");
+    expect(replies.find((r) => "token" in r && r.token === 5)?.type).toBe("decoded");
+    expect(pending()).toBe(0);
+
+    // Positive control: a cancel while the review still has utterances to decode stops it there.
+    side.handle({ type: "review", token: 7, parts: [word, word, word] });
+    side.handle({ type: "review.cancel", token: 7 });
+    await settled(7);
+    expect(replies.find((r) => "token" in r && r.token === 7)).toMatchObject({
+      type: "decode.failed",
+      error: "the review was given up",
+    });
+    expect(pending()).toBe(0);
+  });
+});
+
 describe("[T1.9, T4.19] Short spans lose their words", () => {
   test("padding adds zeros after the speech up to 0.5 s and never touches the input", () => {
     const yes = speak(["yes"], { wordSeconds: 0.2, gapSeconds: 0 });
