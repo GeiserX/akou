@@ -21,6 +21,13 @@
 //!   session. Once it is a session, Escape, Enter and Shift+Enter are DC-A4's even while the
 //!   modifier is still held, so Enter during a push-to-talk hold ends it and sends instead of
 //!   reaching the app as Command+Enter; any other key is still the interrupt rule.
+//! - **The other keys** (DC-S3, DC-A5): the draft key presses exactly as the dictation key does,
+//!   and its session says so (`Draft` before `Start`), so its text goes to the draft box. Fix last
+//!   and paste last start no session: they are reported as `Shortcut`. Either may be a modifier
+//!   with the modifiers held before it (`Shift+RightCommand`, fix last's default), which counts at
+//!   its release under the interrupt rule and is never swallowed, or a chord, which counts at its
+//!   key-down and is swallowed. Before a press they win over the dictation key, so Shift held and
+//!   then Right Command is fix last, while Right Command and then Shift is the interrupt.
 
 use super::keys::{self, Hotkey};
 
@@ -68,6 +75,19 @@ pub enum Action {
     Latched,
     /// Report `key {name}` to the app.
     Key(String),
+    /// The session that starts next was pressed with the draft key (DC-S3).
+    Draft,
+    /// Fix last or paste last was pressed (DC-A5): `fixLast` or `pasteLast`.
+    Shortcut(&'static str),
+}
+
+/// What a key going down presses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Press {
+    No,
+    Dictate,
+    Draft,
+    Shortcut(&'static str),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,10 +106,22 @@ enum State {
     Awaiting {
         until_ns: u64,
     },
+    /// A shortcut whose key is a modifier is down and no other key went down yet (DC-A5).
+    Shortcut {
+        name: &'static str,
+    },
 }
 
 pub struct Activation {
     hotkey: Hotkey,
+    /// The draft key (DC-S3), when one is bound.
+    draft: Option<Hotkey>,
+    /// Fix last and paste last (DC-A5), each when bound.
+    shortcuts: Vec<(&'static str, Hotkey)>,
+    /// The binding of the press in progress: the dictation key's or the draft key's.
+    active: Hotkey,
+    /// The press in progress is the draft key's.
+    drafting: bool,
     mode: Mode,
     state: State,
     /// Keys down now, in the order they went down.
@@ -105,7 +137,11 @@ pub struct Activation {
 impl Activation {
     pub fn new(hotkey: Hotkey, mode: Mode) -> Activation {
         Activation {
+            active: hotkey.clone(),
             hotkey,
+            draft: None,
+            shortcuts: Vec::new(),
+            drafting: false,
             mode,
             state: State::Idle,
             held: Vec::new(),
@@ -126,8 +162,26 @@ impl Activation {
             self.state = State::Idle;
             out.push(Action::Disarm);
         }
+        if matches!(self.state, State::Shortcut { .. }) {
+            self.state = State::Idle;
+        }
+        // A running session ends on the key that started it.
+        if self.state == State::Idle {
+            self.active = hotkey.clone();
+            self.drafting = false;
+        }
         self.hotkey = hotkey;
         self.mode = mode;
+    }
+
+    /// The draft key and the shortcuts (DC-S3, DC-A5), each none when it is not bound. Sent with
+    /// every `rebind`, after it.
+    pub fn bind_more(&mut self, draft: Option<Hotkey>, shortcuts: Vec<(&'static str, Hotkey)>) {
+        if matches!(self.state, State::Shortcut { .. }) {
+            self.state = State::Idle;
+        }
+        self.draft = draft;
+        self.shortcuts = shortcuts;
     }
 
     pub fn hotkey(&self) -> &Hotkey {
@@ -147,12 +201,15 @@ impl Activation {
     /// A mouse button is the binding, or the recorder is open (DC-A6): only then does a backend
     /// need the mouse buttons, and the Windows one installs its mouse hook.
     pub fn wants_mouse(&self) -> bool {
-        self.record
-            || self
-                .hotkey
-                .trigger()
+        let mouse = |h: &Hotkey| {
+            h.trigger()
                 .get(..5)
                 .is_some_and(|p| p.eq_ignore_ascii_case("mouse"))
+        };
+        self.record
+            || mouse(&self.hotkey)
+            || self.draft.as_ref().is_some_and(mouse)
+            || self.shortcuts.iter().any(|(_, h)| mouse(h))
     }
 
     /// The keys down now, as the tap saw them.
@@ -178,7 +235,7 @@ impl Activation {
             // Auto-repeat: the first down already decided.
             return self.swallowed.iter().any(|k| keys::same(k, name));
         }
-        let press = self.hotkey.pressed_by(name, &self.held);
+        let press = self.pressed(name);
         self.held.push(name.to_string());
         if self.record {
             out.push(Action::Key(name.to_string()));
@@ -189,6 +246,35 @@ impl Activation {
             self.swallowed.push(name.to_string());
         }
         swallow
+    }
+
+    /// What `name` going down presses, with the keys already held. Before a press, a shortcut or
+    /// the draft key wins over the dictation key, since each may be that key with Shift held first.
+    fn pressed(&self, name: &str) -> Press {
+        let by = |h: &Hotkey| h.pressed_by(name, &self.held);
+        if self.state == State::Idle {
+            if let Some((n, _)) = self.shortcuts.iter().find(|(_, h)| by(h)) {
+                return Press::Shortcut(n);
+            }
+            if self.draft.as_ref().is_some_and(by) {
+                return Press::Draft;
+            }
+        }
+        if by(&self.hotkey) {
+            Press::Dictate
+        } else if self.draft.as_ref().is_some_and(by) {
+            Press::Draft
+        } else {
+            Press::No
+        }
+    }
+
+    /// The session starts, its audio from `t_ns`; the draft key's says so first.
+    fn start_at(&self, t_ns: u64, out: &mut Vec<Action>) {
+        if self.drafting {
+            out.push(Action::Draft);
+        }
+        out.push(Action::Start { t_ns });
     }
 
     /// Escape, Enter or Shift+Enter as DC-A4 names them, on a backend that can swallow them.
@@ -213,21 +299,50 @@ impl Activation {
         let chord_down = matches!(self.state, State::Listening { held: true, .. });
         self.held.iter().any(|k| {
             matches!(keys::modifier(k), Some((keys::Mod::Shift, _)))
-                && !keys::same(k, self.hotkey.trigger())
-                && !(chord_down && self.hotkey.holds(k))
+                && !keys::same(k, self.active.trigger())
+                && !(chord_down && self.active.holds(k))
         })
     }
 
-    fn key_down(&mut self, name: &str, press: bool, t_ns: u64, out: &mut Vec<Action>) -> bool {
-        let chord = !self.hotkey.is_modifier_only();
-        match self.state {
-            State::Idle => {
-                if !press {
-                    return false;
+    fn key_down(&mut self, name: &str, press: Press, t_ns: u64, out: &mut Vec<Action>) -> bool {
+        if self.state == State::Idle {
+            match press {
+                Press::No => return false,
+                Press::Shortcut(n) => {
+                    let modifier = self
+                        .shortcuts
+                        .iter()
+                        .any(|(m, h)| *m == n && keys::is_modifier(h.trigger()));
+                    if modifier {
+                        // Counted at its release, if no other key goes down first.
+                        self.state = State::Shortcut { name: n };
+                        return false;
+                    }
+                    out.push(Action::Shortcut(n));
+                    return true;
                 }
+                Press::Draft => {
+                    self.active = self.draft.clone().unwrap_or_else(|| self.hotkey.clone());
+                    self.drafting = true;
+                }
+                Press::Dictate => {
+                    self.active = self.hotkey.clone();
+                    self.drafting = false;
+                }
+            }
+        }
+        let chord = !self.active.is_modifier_only();
+        let press = press != Press::No;
+        match self.state {
+            State::Shortcut { .. } => {
+                // The interrupt rule: Shift + Right Command + 4 is a screenshot, not fix last.
+                self.state = State::Idle;
+                false
+            }
+            State::Idle => {
                 out.push(Action::Arm { t_ns });
                 if chord {
-                    out.push(Action::Start { t_ns });
+                    self.start_at(t_ns, out);
                     self.state = State::Listening {
                         down_ns: t_ns,
                         held: true,
@@ -279,7 +394,7 @@ impl Activation {
             State::Awaiting { .. } => {
                 if press {
                     // Still transcribing: refused, never queued; the app flashes the pill.
-                    out.push(Action::Key(self.hotkey.trigger().to_string()));
+                    out.push(Action::Key(self.active.trigger().to_string()));
                     return chord;
                 }
                 match self.enter_name(name) {
@@ -299,19 +414,30 @@ impl Activation {
     pub fn trigger(&mut self, down: bool, t_ns: u64, out: &mut Vec<Action>) -> bool {
         let name = self.hotkey.trigger().to_string();
         if down {
-            self.key_down(&name, true, t_ns, out)
+            self.key_down(&name, Press::Dictate, t_ns, out)
         } else {
             self.key_up(&name, t_ns, out)
         }
     }
 
     fn key_up(&mut self, name: &str, t_ns: u64, out: &mut Vec<Action>) -> bool {
-        if !keys::same(name, self.hotkey.trigger()) {
+        if let State::Shortcut { name: n } = self.state {
+            let mine = self
+                .shortcuts
+                .iter()
+                .any(|(m, h)| *m == n && keys::same(name, h.trigger()));
+            if mine {
+                out.push(Action::Shortcut(n));
+                self.state = State::Idle;
+            }
+            return false;
+        }
+        if !keys::same(name, self.active.trigger()) {
             return false;
         }
         match self.state {
             State::Pending { down_ns } => {
-                out.push(Action::Start { t_ns: down_ns });
+                self.start_at(down_ns, out);
                 let tap = t_ns.saturating_sub(down_ns) < HOLD_MS * MS;
                 match self.mode {
                     Mode::Toggle => self.latch(down_ns, out),
@@ -362,7 +488,7 @@ impl Activation {
             State::Pending { down_ns }
                 if self.mode != Mode::Toggle && t_ns.saturating_sub(down_ns) >= HOLD_MS * MS =>
             {
-                out.push(Action::Start { t_ns: down_ns });
+                self.start_at(down_ns, out);
                 self.state = State::Listening {
                     down_ns,
                     held: true,
@@ -388,6 +514,8 @@ impl Activation {
     /// `session.start` from the app: a latched session, as if the key had been tapped.
     pub fn start(&mut self, t_ns: u64, out: &mut Vec<Action>) {
         if self.state == State::Idle {
+            self.active = self.hotkey.clone();
+            self.drafting = false;
             out.push(Action::Arm { t_ns });
             out.push(Action::Start { t_ns });
             self.latch(t_ns, out);
@@ -424,7 +552,26 @@ mod tests {
         script: &[(u64, bool, &str)],
         until_ms: u64,
     ) -> (Vec<(u64, Action)>, Vec<KeyAt>) {
+        play_bound(hotkey, None, &[], mode, script, until_ms)
+    }
+
+    /// `play` with the draft key and the shortcuts bound (DC-S3, DC-A5).
+    fn play_bound(
+        hotkey: &str,
+        draft: Option<&str>,
+        shortcuts: &[(&'static str, &str)],
+        mode: Mode,
+        script: &[(u64, bool, &str)],
+        until_ms: u64,
+    ) -> (Vec<(u64, Action)>, Vec<KeyAt>) {
         let mut a = Activation::new(Hotkey::parse(hotkey).unwrap(), mode);
+        a.bind_more(
+            draft.map(|d| Hotkey::parse_extra(d).unwrap()),
+            shortcuts
+                .iter()
+                .map(|(n, k)| (*n, Hotkey::parse_extra(k).unwrap()))
+                .collect(),
+        );
         let mut acts = Vec::new();
         let mut swallowed = Vec::new();
         let mut i = 0;
@@ -1004,6 +1151,248 @@ mod tests {
         assert_eq!(
             out,
             vec![Action::Key("RightCommand".into()), Action::Key("Fn".into())]
+        );
+    }
+
+    /// The actions that are not Escape, Enter or the hotkey reported as a `key`.
+    fn presses(acts: &[(u64, Action)]) -> Vec<(u64, Action)> {
+        only(acts, |a| !matches!(a, Action::Key(_)))
+    }
+
+    const FIX: (&str, &str) = ("fixLast", "Shift+RightCommand");
+
+    /// DC-A5: Shift down, then Right Command down and up, is fix last at the release: no press,
+    /// no session, nothing swallowed, held short or long.
+    #[test]
+    fn dc_a5_shift_then_the_dictation_key_is_fix_last_and_starts_no_session() {
+        for up in [150, 900] {
+            let (acts, swallowed) = play_bound(
+                "RightCommand",
+                None,
+                &[FIX],
+                Mode::HoldOrToggle,
+                &[
+                    (0, true, "LeftShift"),
+                    (50, true, "RightCommand"),
+                    (up, false, "RightCommand"),
+                    (up + 50, false, "LeftShift"),
+                ],
+                1200,
+            );
+            assert_eq!(presses(&acts), vec![(up, Action::Shortcut("fixLast"))]);
+            assert!(swallowed.is_empty(), "{swallowed:?}");
+        }
+    }
+
+    /// DC-A5's positive controls: Right Command down and then Shift is the interrupt (no fix last,
+    /// no session), and Shift then Right Command with fix last unbound is a plain dictation.
+    #[test]
+    fn dc_a5_the_dictation_key_then_shift_is_the_interrupt() {
+        let (acts, _) = play_bound(
+            "RightCommand",
+            None,
+            &[FIX],
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "RightCommand"),
+                (50, true, "LeftShift"),
+                (150, false, "RightCommand"),
+                (200, false, "LeftShift"),
+            ],
+            1000,
+        );
+        assert_eq!(
+            presses(&acts),
+            vec![(0, Action::Arm { t_ns: 0 }), (50, Action::Disarm)]
+        );
+        let (acts, _) = play(
+            "RightCommand",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftShift"),
+                (50, true, "RightCommand"),
+                (150, false, "RightCommand"),
+            ],
+            1000,
+        );
+        assert_eq!(
+            sessions(&acts),
+            vec![(150, Action::Start { t_ns: 50 * MS })]
+        );
+    }
+
+    /// DC-A5: another key while fix last's modifier is down is a shortcut of the app's
+    /// (Shift + Right Command + 4), so fix last does not count.
+    #[test]
+    fn dc_a5_another_key_during_fix_last_is_the_interrupt() {
+        let (acts, swallowed) = play_bound(
+            "RightCommand",
+            None,
+            &[FIX],
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftShift"),
+                (50, true, "RightCommand"),
+                (100, true, "4"),
+                (120, false, "4"),
+                (150, false, "RightCommand"),
+            ],
+            1000,
+        );
+        assert_eq!(presses(&acts), vec![]);
+        assert!(swallowed.is_empty());
+    }
+
+    /// DC-A5: paste last bound to a chord counts at its key-down and is swallowed, so the app
+    /// never sees it; with paste last empty the same keys bind nothing and pass (the control).
+    #[test]
+    fn dc_a5_paste_last_is_a_swallowed_chord_and_unbound_passes() {
+        let script = [
+            (0, true, "LeftControl"),
+            (10, true, "LeftShift"),
+            (20, true, "V"),
+            (60, false, "V"),
+            (80, false, "LeftShift"),
+            (90, false, "LeftControl"),
+        ];
+        let (acts, swallowed) = play_bound(
+            "RightCommand",
+            None,
+            &[FIX, ("pasteLast", "Control+Shift+V")],
+            Mode::HoldOrToggle,
+            &script,
+            500,
+        );
+        assert_eq!(presses(&acts), vec![(20, Action::Shortcut("pasteLast"))]);
+        assert_eq!(
+            swallowed,
+            vec![(20, true, "V".into()), (60, false, "V".into())]
+        );
+        let (acts, swallowed) = play_bound(
+            "RightCommand",
+            None,
+            &[FIX],
+            Mode::HoldOrToggle,
+            &script,
+            500,
+        );
+        assert_eq!(presses(&acts), vec![]);
+        assert!(swallowed.is_empty());
+    }
+
+    /// DC-S3: the key pressed picks the mode. The draft key taps and holds exactly as the
+    /// dictation key does, and its session says `Draft` first; the dictation key's never does.
+    #[test]
+    fn dc_s3_the_draft_key_presses_like_the_dictation_key_and_says_draft() {
+        let tap = |key: &'static str| {
+            vec![
+                (0, true, key),
+                (120, false, key),
+                (3000, true, key),
+                (3080, false, key),
+            ]
+        };
+        let starts = |acts: &[(u64, Action)]| {
+            only(acts, |a| {
+                matches!(a, Action::Draft | Action::Start { .. } | Action::End { .. })
+            })
+        };
+        let (acts, _) = play_bound(
+            "RightCommand",
+            Some("RightOption"),
+            &[FIX],
+            Mode::HoldOrToggle,
+            &tap("RightOption"),
+            3200,
+        );
+        assert_eq!(
+            starts(&acts),
+            vec![
+                (120, Action::Draft),
+                (120, Action::Start { t_ns: 0 }),
+                (3000, Action::End { reason: "tap" })
+            ]
+        );
+        let (acts, _) = play_bound(
+            "RightCommand",
+            Some("RightOption"),
+            &[FIX],
+            Mode::HoldOrToggle,
+            &[(0, true, "RightOption"), (800, false, "RightOption")],
+            1000,
+        );
+        assert_eq!(
+            starts(&acts),
+            vec![
+                (300, Action::Draft),
+                (300, Action::Start { t_ns: 0 }),
+                (800, Action::End { reason: "release" })
+            ]
+        );
+        let (acts, _) = play_bound(
+            "RightCommand",
+            Some("RightOption"),
+            &[FIX],
+            Mode::HoldOrToggle,
+            &tap("RightCommand"),
+            3200,
+        );
+        assert_eq!(
+            starts(&acts),
+            vec![
+                (120, Action::Start { t_ns: 0 }),
+                (3000, Action::End { reason: "tap" })
+            ]
+        );
+        // A chord as the draft key starts at its key-down and is swallowed.
+        let (acts, swallowed) = play_bound(
+            "RightCommand",
+            Some("Control+Shift+D"),
+            &[FIX],
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftControl"),
+                (10, true, "LeftShift"),
+                (20, true, "D"),
+                (900, false, "D"),
+            ],
+            1000,
+        );
+        assert_eq!(
+            starts(&acts),
+            vec![
+                (20, Action::Draft),
+                (20, Action::Start { t_ns: 20 * MS }),
+                (900, Action::End { reason: "release" })
+            ]
+        );
+        assert_eq!(
+            swallowed,
+            vec![(20, true, "D".into()), (900, false, "D".into())]
+        );
+    }
+
+    #[test]
+    fn the_other_keys_parse_a_modifier_after_the_held_ones() {
+        assert_eq!(
+            Hotkey::parse_extra("Shift+RightCommand").unwrap(),
+            Hotkey::Chord {
+                mods: vec![(keys::Mod::Shift, keys::Side::Either)],
+                key: "RightCommand".into(),
+            }
+        );
+        assert!(
+            Hotkey::parse_extra("Shift+Command").is_err(),
+            "needs a side"
+        );
+        assert!(Hotkey::parse_extra("Shift+RightShift").is_err());
+        assert_eq!(
+            Hotkey::parse_extra("Control+Shift+Period").unwrap(),
+            Hotkey::parse("Control+Shift+Period").unwrap()
+        );
+        assert!(
+            Hotkey::parse("Shift+RightCommand").is_err(),
+            "not the dictation key"
         );
     }
 }

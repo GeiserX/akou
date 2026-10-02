@@ -74,6 +74,7 @@ export interface Timers {
 
 const realTimers: Timers = {
   set(fn, ms) {
+    // clock: the real timers behind the injected `Timers`; tests pass their own.
     const h = setTimeout(fn, ms);
     // A pending fsync must never keep the process alive on its own.
     (h as { unref?: () => void }).unref?.();
@@ -253,10 +254,12 @@ export function lockHeartbeat(
     const held = readLock(lockPath);
     if (held?.pid !== pid || held.id !== id) return;
     try {
+      // clock: the lock's heartbeat stamps the file's mtime with now, which another process reads as alive.
       const t = new Date();
       utimesSync(lockPath, t, t);
     } catch {}
   };
+  // clock: the lock's heartbeat, real time between processes.
   const timer = setInterval(beat, every);
   // A heartbeat must never keep the process alive on its own.
   (timer as { unref?: () => void }).unref?.();

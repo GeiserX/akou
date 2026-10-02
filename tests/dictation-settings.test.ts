@@ -249,6 +249,13 @@ describe("DC-U9: the apps setting type", () => {
     expect(validateApps([{ app: "x", language: "Spanish" }])).toMatchObject({ ok: false });
   });
 
+  test("a rule may carry the app's name to be shown by (akou-qx2), and nothing else of it", () => {
+    const named = { ...rule, name: "Example Chat" };
+    expect(validateApps([named])).toEqual({ ok: true, value: [named] });
+    expect(validateApps([{ ...rule, name: 7 }])).toMatchObject({ ok: false });
+    expect(validateApps([{ ...rule, name: "x".repeat(201) }])).toMatchObject({ ok: false });
+  });
+
   test("PATCH /config refuses a rule the validator refuses", () => {
     const r = patchConfig({}, { "dictation.apps": [{ ...rule, colour: "red" }] }, paths);
     expect(r).toMatchObject({ ok: false });

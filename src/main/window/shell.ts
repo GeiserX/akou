@@ -19,7 +19,10 @@
  * - **Single instance** is the app's own lock; `main.ts` asks a running app to show its window.
  * - **The tray always has an image** (DK-T1): the idle item has no text, so without one it is
  *   invisible on macOS. While a call records it is the mark with a red dot and no text (DK-T2).
- *   The files are drawn by `scripts/tray-icons.ts`.
+ *   The files are drawn by `scripts/tray-icons.ts`. On a Mac with no display the mark waits:
+ *   swapping it removes the status item and makes a new one, and the SDK crashed doing that with
+ *   no screen (`Array index out of range` on the main thread, akou-abh). It changes once a
+ *   display is back, at the next refresh.
  * - **The application menu** (DK-M1, macOS) carries the Edit roles: the webview gets copy, paste,
  *   undo and select all only through them.
  * - **Notifications** (DK-N1, DK-N2, DK-T5): `notify.ts` decides; the shell feeds it the app's
@@ -882,6 +885,7 @@ export class Shell implements WindowShell {
   private notify(e: NotifyEvent): void {
     const n = notifyFor(e, { windowFocused: this.focused, platform: this.o.platform });
     if (!n) return;
+    // clock: the default of the injected `now`; tests pass their own.
     const now = this.o.now?.() ?? Date.now();
     const last = this.shown.get(n.key);
     if (last !== undefined && now - last < DEDUP_MS) return;
@@ -1052,7 +1056,8 @@ export class Shell implements WindowShell {
     const dictation = this.app.dictation?.state();
     this.tray?.setTitle(trayTitle(s, dictation));
     const recording = trayRecording(s);
-    if (recording !== this.recordingMark) {
+    // No display, nobody sees the mark, and a new status item then crashes the SDK: leave it.
+    if (recording !== this.recordingMark && this.ui.workAreas().length > 0) {
       this.recordingMark = recording;
       this.tray?.setImage(trayImage(this.o.platform, recording));
     }
@@ -1240,6 +1245,7 @@ export class Shell implements WindowShell {
       platform: this.o.platform,
       hotkey: () => d.hotkey(),
       label: hotkeyLabel,
+      // clock: the default of the injected `now`; tests pass their own.
       now: () => this.o.now?.() ?? Date.now(),
       onVisible: (visible) => {
         if (visible) win?.showInactive();

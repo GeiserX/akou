@@ -1,10 +1,12 @@
 {"type":"ready","protocol":"akou-dictate/1","version":"@VERSION@","backend":"simulate","swallow_keys":true,"grants":{"mic":"granted","accessibility":"not-needed"}}
 {"type":"press","on":true,"frame":{"x":-1440,"y":120,"width":900,"height":700}}
 {"type":"press","on":false}
-{"type":"session.started","id":"1","target":{"app":"Slack","pid":7,"window":"w1","field":"editable"},"capture_ns":"123456789012345678"}
+{"type":"session.started","id":"1","target":{"app":"Slack","name":"Slack","pid":7,"window":"w1","field":"editable"},"capture_ns":"123456789012345678"}
 {"type":"latched","id":"1"}
+{"type":"session.started","id":"2","target":{"app":"Slack","name":"Slack","pid":7,"window":"w1","field":"editable"},"capture_ns":"123456789012345678","draft":true}
 {"type":"level","rms":0.25}
 {"type":"key","name":"Shift+Enter"}
+{"type":"hotkey","name":"fixLast","target":{"app":"Slack","name":"Slack","pid":7,"window":"w1","field":"editable"}}
 {"type":"mic","open":true}
 {"type":"session.ended","id":"1","reason":"release"}
 {"type":"session.ended","id":"1","reason":"tap"}

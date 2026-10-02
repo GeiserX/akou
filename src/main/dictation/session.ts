@@ -12,6 +12,11 @@
  * A session that will not be inserted (empty, failed, no model) is `settled` back to the helper at
  * once, so it stops holding Escape and Enter then rather than 8 s later (DC-A4).
  *
+ * The key pressed picks the mode (DC-S3): a session the draft key started (`draft` on
+ * `session.started`) goes to the draft box as Shift+Enter's does, unless a key during it asks
+ * otherwise. Fix last and paste last start no session (DC-A5): the helper reports them as
+ * `hotkey`, and `onHotkey` opens the last dictation in the draft box or inserts its text again.
+ *
  * The keys during a session (DC-A4, DC-S3): the helper swallows Escape, Enter and Shift+Enter from
  * the press until the insert settles and reports each as `key`, and this decides what they do to
  * the press. While listening, Enter asks for the text and then the send key (DC-S2) and Shift+Enter
@@ -90,6 +95,7 @@
  * (`chosenLanguage`), so the error's Retry decodes it in that language again.
  */
 
+import type { ShortcutName } from "../../core/dictation/activation.ts";
 import { isEcho } from "../../core/dictation/echo.ts";
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
@@ -100,6 +106,7 @@ import type { Decoded } from "../asr/live-worker.ts";
 import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
 import type { AppRule } from "../config/schema.ts";
 import { forcesLanguage } from "./engines.ts";
+import { loggable } from "./format.ts";
 import type {
   AppToHelper,
   Bindings,
@@ -327,6 +334,11 @@ export interface SessionOptions extends TextRules {
    */
   onPress?(on: boolean, frame: Frame | null): void;
   /**
+   * Fix last or paste last was pressed (DC-A5), with what had the keyboard then; no session
+   * started.
+   */
+  onHotkey?(name: ShortcutName, target: Target): void;
+  /**
    * `dictation.mic` (`default` when empty) and `dictation.preferBuiltInOverBluetooth`, sent as
    * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
    */
@@ -336,6 +348,12 @@ export interface SessionOptions extends TextRules {
    * helper started again while the page shows its meter keeps it moving.
    */
   metering?(): boolean;
+  /**
+   * Whether the Dictation page's key recorder is open (DC-U3): sent as `record_keys` after
+   * `ready`, so a helper started again while the recorder is open (a grant arriving) keeps
+   * reporting keys to it and starts no session.
+   */
+  recording?(): boolean;
 }
 
 /**
@@ -701,6 +719,30 @@ export class DictationSession {
   }
 
   /**
+   * Inserts `text` into `target`, which has the keyboard now (paste last, DC-A5), the way
+   * `dictation.insert` says, with no send key. Nothing is logged: the dictation already went in.
+   */
+  pasteText(text: string, target: Target): Promise<InsertOutcome> {
+    if (!this.ready)
+      return Promise.resolve({ ok: false, reason: "the dictation helper is not up" });
+    const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
+    const hid = `paste-${++this.explicitSeq}`;
+    const done = new Promise<InsertOutcome>((resolve) =>
+      this.explicit.set(hid, { id: null, resolve }),
+    );
+    this.o.send({
+      type: "insert",
+      id: hid,
+      text,
+      method: this.method(p.method, text, false),
+      send_key: "none",
+      target,
+      ...spacing(p),
+    });
+    return done;
+  }
+
+  /**
    * Puts `text` on the clipboard for the user to paste (the draft box's Copy), through the helper's
    * clipboard-only insert, which pastes nothing and restores nothing. Nothing is logged.
    */
@@ -730,6 +772,7 @@ export class DictationSession {
         void this.rebind();
         this.rebuildMic();
         if (this.o.metering?.()) this.meter(true);
+        if (this.o.recording?.()) this.recordKeys(true);
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });
@@ -740,6 +783,9 @@ export class DictationSession {
         return;
       case "press":
         this.o.onPress?.(m.on, m.frame ?? null);
+        return;
+      case "hotkey":
+        this.o.onHotkey?.(m.name, m.target);
         return;
       case "secure_input":
         if (m.on === this.secureInput) return;
@@ -792,7 +838,8 @@ export class DictationSession {
           secure: this.secureInput || m.target.field === "secure",
           hold: this.open(rule, chosen),
           end: null,
-          asked: "insert",
+          // The draft key's session goes to the draft box (DC-S3).
+          asked: m.draft === true ? "draft" : "insert",
           latched: door || this.o.bindings().activation === "toggle",
           stopping: null,
           warned: null,
@@ -826,6 +873,7 @@ export class DictationSession {
         if (!c || c.helperId !== m.id || c.end) return;
         // The helper ends the app's `session.stop` as a tap: the log says why the app asked.
         const reason = c.stopping && m.reason === "tap" ? c.stopping : m.reason;
+        // clock: the helper's last audio drains in real time.
         c.end = { reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }
@@ -1403,7 +1451,8 @@ async function formatted(
   try {
     return await (mode ? o.format(text, mode) : o.format(text));
   } catch (err) {
-    o.onLog?.("warn", `format.skipped: ${(err as Error).message}`);
+    // The log gets the error's kind only: a provider's message can quote the dictated words.
+    o.onLog?.("warn", `format.skipped: ${loggable(err)}`);
     return { text, skipped: (err as Error).message };
   }
 }

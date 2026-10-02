@@ -19,6 +19,13 @@
  *   interrupt rule. Once it is a session, Escape, Enter and Shift+Enter are DC-A4's even while the
  *   modifier is still held, so Enter during a push-to-talk hold ends it and sends instead of
  *   reaching the app as Command+Enter; any other key is still the interrupt rule.
+ * - **The other keys** (DC-S3, DC-A5): the draft key presses exactly as the dictation key does, and
+ *   its session says so (`draft` before `start`). Fix last and paste last start no session: they
+ *   come out as `shortcut`. Either may be a modifier with the modifiers held before it
+ *   (`Shift+RightCommand`), which counts at its release under the interrupt rule and is never
+ *   swallowed, or a chord, which counts at its key-down and is swallowed. Before a press they win
+ *   over the dictation key: Shift then Right Command is fix last, Right Command then Shift the
+ *   interrupt.
  */
 
 export const ACTIVATIONS = ["hold-or-toggle", "hold", "toggle"] as const;
@@ -112,6 +119,27 @@ export function parseBinding(s: string): Hotkey {
   return { kind: "chord", mods, key };
 }
 
+/**
+ * Reads fix last, paste last or the draft key (DC-A5, DC-S3): as `parseBinding`, and also a
+ * modifier with the modifiers held before it (`Shift+RightCommand`), which needs its side.
+ */
+export function parseExtraBinding(s: string): Hotkey {
+  const parts = s.split("+").map((p) => p.trim());
+  const key = parts.at(-1) as string;
+  const m = parts.length > 1 ? modifier(key) : null;
+  if (!m) return parseBinding(s);
+  if (m[0] !== "Fn" && m[1] === "Either") throw new Error(`${key} after the others needs a side`);
+  const mods: [Mod, Side][] = [];
+  for (const p of parts.slice(0, -1)) {
+    const h = modifier(p);
+    if (!h) throw new Error(`${p} is not a modifier`);
+    if (h[0] === m[0] || mods.some(([o]) => o === h[0]))
+      throw new Error(`${s} names ${h[0]} twice`);
+    mods.push(h);
+  }
+  return { kind: "chord", mods, key };
+}
+
 /** A binding's side for a modifier (`Either` takes both) against the side of a held key. */
 const sideOk = (want: Side, held: Side): boolean => want === "Either" || held === want;
 
@@ -146,7 +174,16 @@ export type ActivationOut =
    */
   | { type: "latched" }
   /** Report `key {name}` to the app. */
-  | { type: "key"; name: string };
+  | { type: "key"; name: string }
+  /** The session that starts next was pressed with the draft key (DC-S3). */
+  | { type: "draft" }
+  /** Fix last or paste last was pressed (DC-A5). */
+  | { type: "shortcut"; name: ShortcutName };
+
+export type ShortcutName = "fixLast" | "pasteLast";
+
+/** What a key going down presses. */
+type Press = "no" | "dictate" | "draft" | { shortcut: ShortcutName };
 
 type State =
   | { s: "idle" }
@@ -155,7 +192,9 @@ type State =
   /** A session runs; `held`: the press that started it is still down. */
   | { s: "listening"; down: number; held: boolean }
   /** The session ended; its text is not inserted yet. */
-  | { s: "awaiting"; until: number };
+  | { s: "awaiting"; until: number }
+  /** A shortcut whose key is a modifier is down and no other key went down yet (DC-A5). */
+  | { s: "shortcut"; name: ShortcutName };
 
 export interface KeyInput {
   /** Milliseconds on any clock that only moves forward. */
@@ -171,11 +210,20 @@ export class ActivationMachine {
   private readonly held: string[] = [];
   /** Keys whose down was swallowed, so their up is swallowed too. */
   private readonly swallowed: string[] = [];
+  /** The binding of the press in progress: the dictation key's or the draft key's. */
+  private active: Hotkey;
+  private drafting = false;
 
   constructor(
     private readonly hotkey: Hotkey,
     private readonly activation: Activation,
-  ) {}
+    /** The draft key (DC-S3), when bound. */
+    private readonly draft: Hotkey | null = null,
+    /** Fix last and paste last (DC-A5), each when bound. */
+    private readonly shortcuts: readonly [ShortcutName, Hotkey][] = [],
+  ) {
+    this.active = hotkey;
+  }
 
   get listening(): boolean {
     return this.state.s === "listening";
@@ -192,11 +240,29 @@ export class ActivationMachine {
     }
     // Auto-repeat: the first down already decided.
     if (this.held.includes(e.key)) return this.swallowed.includes(e.key);
-    const press = pressedBy(this.hotkey, e.key, this.held);
+    const press = this.pressed(e.key);
     this.held.push(e.key);
     const swallow = this.keyDown(e.key, press, e.at, out);
     if (swallow) this.swallowed.push(e.key);
     return swallow;
+  }
+
+  /** What `key` going down presses; before a press a shortcut or the draft key wins. */
+  private pressed(key: string): Press {
+    const by = (h: Hotkey | null) => h !== null && pressedBy(h, key, this.held);
+    if (this.state.s === "idle") {
+      const s = this.shortcuts.find(([, h]) => by(h));
+      if (s) return { shortcut: s[0] };
+      if (by(this.draft)) return "draft";
+    }
+    if (by(this.hotkey)) return "dictate";
+    return by(this.draft) ? "draft" : "no";
+  }
+
+  /** The session starts, its audio from `at`; the draft key's says so first. */
+  private startAt(at: number, out: ActivationOut[]): void {
+    if (this.drafting) out.push({ type: "draft" });
+    out.push({ type: "start", at });
   }
 
   private enterName(name: string): string | null {
@@ -204,7 +270,7 @@ export class ActivationMachine {
     if (name === "Enter" || name === "Return" || name === "KeypadEnter") {
       // A Shift other than the hotkey's own: a held `RightShift` hotkey, or the Shift of a chord
       // such as `Control+Shift+Space` while its press is still down, is not Shift+Enter (DC-A1).
-      const h = this.hotkey;
+      const h = this.active;
       const chordDown = h.kind === "chord" && this.state.s === "listening" && this.state.held;
       const shift = this.held.some((k) => {
         const km = modifier(k);
@@ -216,15 +282,34 @@ export class ActivationMachine {
     return null;
   }
 
-  private keyDown(name: string, press: boolean, at: number, out: ActivationOut[]): boolean {
-    const chord = this.hotkey.kind === "chord";
+  private keyDown(name: string, pressing: Press, at: number, out: ActivationOut[]): boolean {
+    if (this.state.s === "idle") {
+      if (pressing === "no") return false;
+      if (typeof pressing === "object") {
+        const h = this.shortcuts.find(([n]) => n === pressing.shortcut)?.[1];
+        if (h && isModifier(h.key)) {
+          // Counted at its release, if no other key goes down first.
+          this.state = { s: "shortcut", name: pressing.shortcut };
+          return false;
+        }
+        out.push({ type: "shortcut", name: pressing.shortcut });
+        return true;
+      }
+      this.drafting = pressing === "draft";
+      this.active = this.drafting && this.draft ? this.draft : this.hotkey;
+    }
+    const chord = this.active.kind === "chord";
+    const press = pressing !== "no";
     const st = this.state;
     switch (st.s) {
+      case "shortcut":
+        // The interrupt rule: Shift + Right Command + 4 is a screenshot, not fix last.
+        this.state = { s: "idle" };
+        return false;
       case "idle":
-        if (!press) return false;
         out.push({ type: "arm", at });
         if (chord) {
-          out.push({ type: "start", at });
+          this.startAt(at, out);
           this.state = { s: "listening", down: at, held: true };
           return true;
         }
@@ -264,7 +349,7 @@ export class ActivationMachine {
       case "awaiting": {
         if (press) {
           // Still transcribing: refused, never queued; the app flashes the pill.
-          out.push({ type: "key", name: this.hotkey.key });
+          out.push({ type: "key", name: this.active.key });
           return chord;
         }
         const k = this.enterName(name);
@@ -276,10 +361,18 @@ export class ActivationMachine {
   }
 
   private keyUp(name: string, at: number, out: ActivationOut[]): boolean {
-    if (name !== this.hotkey.key) return false;
+    const sc = this.state;
+    if (sc.s === "shortcut") {
+      if (this.shortcuts.some(([n, h]) => n === sc.name && h.key === name)) {
+        out.push({ type: "shortcut", name: sc.name });
+        this.state = { s: "idle" };
+      }
+      return false;
+    }
+    if (name !== this.active.key) return false;
     const st = this.state;
     if (st.s !== "pending" && !(st.s === "listening" && st.held)) return false;
-    if (st.s === "pending") out.push({ type: "start", at: st.down });
+    if (st.s === "pending") this.startAt(st.down, out);
     const tap = at - st.down < HOLD_MS;
     if (this.activation === "toggle" || (this.activation === "hold-or-toggle" && tap)) {
       this.state = { s: "listening", down: st.down, held: false };
@@ -302,7 +395,7 @@ export class ActivationMachine {
   tick(at: number, out: ActivationOut[]): void {
     const st = this.state;
     if (st.s === "pending" && this.activation !== "toggle" && at - st.down >= HOLD_MS) {
-      out.push({ type: "start", at: st.down });
+      this.startAt(st.down, out);
       this.state = { s: "listening", down: st.down, held: true };
     } else if (st.s === "awaiting" && at >= st.until) {
       this.state = { s: "idle" };
@@ -319,6 +412,8 @@ export class ActivationMachine {
   /** `session.start` from the app: a latched session, as if the key had been tapped. */
   start(at: number, out: ActivationOut[]): void {
     if (this.state.s !== "idle") return;
+    this.active = this.hotkey;
+    this.drafting = false;
     out.push({ type: "arm", at }, { type: "start", at }, { type: "latched" });
     this.state = { s: "listening", down: at, held: false };
   }
