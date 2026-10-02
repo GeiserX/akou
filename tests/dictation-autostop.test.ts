@@ -7,6 +7,8 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { DictationEvent } from "../src/core/dictation/events.ts";
 import { CAPTURE_RATE, type Packet } from "../src/main/capture/protocol.ts";
 import type { Activation, AppToHelper } from "../src/main/dictation/protocol.ts";
@@ -17,6 +19,7 @@ import {
   MAX_WARNING,
 } from "../src/main/dictation/session.ts";
 import { DictationLog } from "../src/main/dictation/store.ts";
+import { FAKE_HELPER } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -272,5 +275,70 @@ describe("a session.started with no end before it", () => {
     s.onMessage({ type: "session.ended", id: "1", reason: "release" });
     s.onMessage({ type: "session.started", id: "2", target: TARGET, capture_ns: "0" });
     expect(holds.map((h) => h.cancelled)).toEqual([0, 0]);
+  });
+});
+
+/**
+ * The fake helper's lines for scripted keys on `RightCommand` in hold-or-toggle: it plays them
+ * after the rebind, and is told `stop` once the session started.
+ */
+async function fakeHelperLines(
+  keys: [number, boolean][],
+): Promise<{ type: string; id?: string }[]> {
+  const t = tempDir("akou-dict-latched-");
+  cleanups.push(t.cleanup);
+  const file = join(t.dir, "keys.jsonl");
+  writeFileSync(
+    file,
+    keys.map(([at, down]) => JSON.stringify({ at, key: "RightCommand", down })).join("\n"),
+  );
+  const p = Bun.spawn([process.execPath, FAKE_HELPER, "dictate", "--keys", file], {
+    stdin: "pipe",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const reader = p.stderr.getReader();
+  const dec = new TextDecoder();
+  let err = "";
+  const read = async (until: (s: string) => boolean) => {
+    while (!until(err)) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      err += dec.decode(value, { stream: true });
+    }
+  };
+  p.stdin.write(
+    `${JSON.stringify({ type: "rebind", hotkey: "RightCommand", draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" })}\n`,
+  );
+  await p.stdin.flush();
+  await read((s) => s.includes('"type":"session.started"'));
+  await new Promise((res) => setTimeout(res, 100));
+  p.stdin.write(`${JSON.stringify({ type: "stop" })}\n`);
+  await p.stdin.flush();
+  p.stdin.end();
+  await read(() => false);
+  await p.exited;
+  return err
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as { type: string; id?: string })
+    .filter((m) => m.type !== "level" && m.type !== "press");
+}
+
+describe("DC-A3: the fake helper says latched as the real one does", () => {
+  test("a tap says latched with the session's id after session.started; a hold never does", async () => {
+    const tap = await fakeHelperLines([
+      [0, true],
+      [120, false],
+    ]);
+    const at = (lines: { type: string }[], type: string) => lines.findIndex((m) => m.type === type);
+    expect(tap[at(tap, "latched")]).toEqual({ type: "latched", id: "1" });
+    expect(at(tap, "latched")).toBe(at(tap, "session.started") + 1);
+    const hold = await fakeHelperLines([
+      [0, true],
+      [800, false],
+    ]);
+    expect(at(hold, "session.started")).toBeGreaterThan(0);
+    expect(at(hold, "latched")).toBe(-1);
   });
 });

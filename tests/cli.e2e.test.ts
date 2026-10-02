@@ -75,6 +75,10 @@ describe("exit codes", () => {
     expect(exitFor(400, "unknown_field")).toBe(64);
     expect(exitFor(400, "last_refused")).toBe(64);
     expect(exitFor(404, "not_found")).toBe(64);
+    // No call to act on: none at all for `last`, or a call id that does not exist (CLI-16).
+    expect(exitFor(404, "no_calls")).toBe(3);
+    expect(exitFor(404, "not_found", { call: "01JB7X" })).toBe(3);
+    expect(exitFor(404, "not_found", { model: "x" })).toBe(64);
     expect(exitFor(401, "unauthorized")).toBe(77);
     expect(exitFor(403, "permission")).toBe(77);
     expect(exitFor(501, "not_implemented")).toBe(69);
@@ -141,7 +145,7 @@ describe("starting and controlling", () => {
       ]);
       const ms = performance.now() - t0;
       expect(r.code).toBe(0);
-      expect(r.json).toMatchObject({ part: 1, url: `akou://call/${r.json.call}` });
+      expect(r.json).toMatchObject({ part: 1, url: null });
       // The design's target with the app running is 1 s.
       console.log(`akou start (app running): ${ms.toFixed(0)} ms`);
       expect(ms).toBeLessThan(1000);
@@ -183,7 +187,7 @@ describe("starting and controlling", () => {
       const first = await run(["start", "--attach", "-w", "work", "-t", "Standup", "--json"]);
       expect(first.code).toBe(0);
       expect(first.json.attached).toBeUndefined();
-      expect(first.json).toMatchObject({ part: 1, url: `akou://call/${first.json.call}` });
+      expect(first.json).toMatchObject({ part: 1, url: null });
       // A call records: --attach hands it back and starts nothing.
       const again = await run(["start", "--attach", "-t", "Other", "--json"]);
       expect(again.code).toBe(0);
@@ -194,7 +198,7 @@ describe("starting and controlling", () => {
         workspace: "work",
         state: "recording",
         part: 1,
-        url: `akou://call/${first.json.call}`,
+        url: null,
       });
       expect(typeof again.json.startedAt).toBe("number");
       expect(again.json.folder).toBe(first.json.folder);
@@ -369,10 +373,12 @@ describe("following and questioning", () => {
       expect((await run(["vocab", "remove", "Kubernetes", "-w", "work"])).code).toBe(0);
       expect((await run(["vocab", "check", "Hetzner"])).code).toBe(EXIT.unavailable);
       const imp = join(wavDir.dir, "glossary.txt");
-      writeFileSync(imp, "Anika\nVercel\n");
+      writeFileSync(imp, `Anika\nVercel\n${"x".repeat(101)}\n`);
       const imported = await run(["vocab", "import", imp, "-w", "work"]);
       expect(imported.code).toBe(0);
       expect(imported.out).toMatch(/^Imported 2 into /);
+      // Each line left out is named with its reason, not only counted.
+      expect(imported.out).toContain("\n  line 3: a term is at most 100 characters");
       expect((await run(["vocab"])).code).toBe(EXIT.usage);
       await stopAll();
     },

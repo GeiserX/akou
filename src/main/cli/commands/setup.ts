@@ -8,6 +8,7 @@
  */
 
 import { existsSync, statSync } from "node:fs";
+import { totalmem } from "node:os";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
@@ -29,7 +30,7 @@ import {
 } from "../../asr/models.ts";
 import { isPreset, PRESET_NAMES, presetModels } from "../../asr/presets.ts";
 import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
-import { touchUsage } from "../../server/model-store.ts";
+import { autoChoice, touchUsage } from "../../server/model-store.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import { api, type Body, type Command, type Ctx, callFlag, finish, notBuilt } from "../context.ts";
@@ -210,13 +211,25 @@ function pullPlan(
       settings["asr.accelerator"] as AcceleratorSetting,
       hostProbe(ctx.io.env),
     );
+    const runtime = llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
+      image: ctx.io.env.AKOU_LLAMA_SERVER,
+      detected,
+    });
+    // `auto` pulls what a job that names no model would run here (SV-R2, `autoChoice`).
+    const dir = settings["asr.modelsDir"];
+    const preset =
+      name === "auto"
+        ? autoChoice({
+            present: (id) => all.some((m) => m.id === id && quickState(dir, m) === "present"),
+            catalog: all.map((m) => m.id),
+            runtime,
+            machine: { gpu: detected.gpu !== null, memoryGb: totalmem() / 1024 ** 3 },
+          }).preset
+        : name;
     const p = presetModels(
-      name,
+      preset,
       reg.map((m) => m.id),
-      llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
-        image: ctx.io.env.AKOU_LLAMA_SERVER,
-        detected,
-      }),
+      runtime,
     );
     if ("unavailable" in p) {
       return {
@@ -227,7 +240,7 @@ function pullPlan(
     // `best` names on-demand entries (Qwen, a llama-server build) that the machine's list leaves out.
     return {
       ids: [...p.models],
-      registry: name === "best" ? all : reg,
+      registry: preset === "best" ? all : reg,
       preset: name,
       named: name,
     };
