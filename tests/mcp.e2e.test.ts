@@ -40,6 +40,8 @@ const DESIGN_TOOLS = [
   "akou_unmerge_speaker",
   "akou_add_note",
   "akou_get_notes",
+  "akou_edit_note",
+  "akou_delete_note",
   "akou_remember",
   "akou_forget",
   "akou_memo_get",
@@ -54,12 +56,24 @@ const DESIGN_TOOLS = [
   "akou_enhance_context",
   "akou_enhanced_put",
   "akou_enhance",
+  "akou_template_list",
+  "akou_template_get",
+  "akou_finalize",
   "akou_rename_call",
   "akou_list_calls",
   "akou_get_call",
   "akou_export",
+  "akou_share_status",
+  "akou_share_on",
+  "akou_share_off",
+  "akou_open_window",
+  "akou_config_get",
   "akou_dictation_list",
   "akou_dictation_get",
+  // SI-7: a server's file jobs, listed while the target's mode is not known.
+  "akou_transcribe",
+  "akou_job_get",
+  "akou_jobs_list",
 ];
 
 let rig: AppRig;

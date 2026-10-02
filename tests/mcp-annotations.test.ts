@@ -34,6 +34,8 @@ const DESTRUCTIVE: Hints = { ...WRITE, destructiveHint: true };
 const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
 /** Runs akou's configured provider, which may be a remote API. */
 const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
+/** Lets people outside this machine read the call. */
+const SHARES: Hints = { ...WRITE, openWorldHint: true };
 
 /** The one table: every tool akou lists, and its annotations. */
 const ANNOTATIONS: Record<string, Hints> = {
@@ -53,6 +55,8 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_merge_speakers: WRITE,
   akou_unmerge_speaker: WRITE,
   akou_add_note: WRITE,
+  akou_edit_note: IDEMPOTENT,
+  akou_delete_note: DESTRUCTIVE,
   akou_get_notes: READ,
   akou_remember: WRITE,
   akou_forget: WRITE,
@@ -68,12 +72,23 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_enhance_context: READ,
   akou_enhanced_put: WRITE,
   akou_enhance: PROVIDER,
+  akou_template_list: READ,
+  akou_template_get: READ,
+  akou_finalize: WRITE,
   akou_rename_call: IDEMPOTENT,
   akou_list_calls: READ,
   akou_get_call: READ,
   akou_export: WRITE,
+  akou_share_status: READ,
+  akou_share_on: SHARES,
+  akou_share_off: IDEMPOTENT,
+  akou_open_window: WRITE,
+  akou_config_get: READ,
   akou_dictation_list: READ,
   akou_dictation_get: READ,
+  akou_transcribe: WRITE,
+  akou_job_get: READ,
+  akou_jobs_list: READ,
 };
 
 /** What is wrong with a tool list against the table: one line per problem, empty when none. */
@@ -141,6 +156,7 @@ describe("[PG-M2] every MCP tool carries annotations and a title", () => {
       "vocab_suggest",
       "vocab_check",
       "enhance_context",
+      "config_get",
     ]) {
       expect([read, hint(`akou_${read}`)?.readOnlyHint]).toEqual([read, true]);
     }

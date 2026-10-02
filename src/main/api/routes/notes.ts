@@ -9,9 +9,18 @@
 import type { EventDraft } from "../../../core/log/events.ts";
 import { NoteError, noteDeleteDraft, noteDraft, noteEditDraft } from "../../notes/notepad.ts";
 import { memoDraft } from "../../query/memo.ts";
+import { errorsOf, type RouteErrors } from "../errors.ts";
 import { HttpError, json, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf, nextItemId } from "./common.ts";
+import {
+  CALL_ID,
+  CALL_REF_ERRORS,
+  callId,
+  callOf,
+  LIVE_REF_ERRORS,
+  nextItemId,
+  WRITE_ERRORS,
+} from "./common.ts";
 
 const SPEAKER = /^(you|[cs]\d{1,4})$/;
 const MAX_TEXT = 4000;
@@ -42,6 +51,11 @@ function checkText(text: string, what = "text"): string {
   return t;
 }
 
+/** What a write of this file refuses: resolving the call (`last` refused), its log, and `own`. */
+function writes(own: RouteErrors): RouteErrors {
+  return errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, own);
+}
+
 /** A route of this file: app mode, admin, on one call. */
 function doc(d: Omit<RouteDoc, "access" | "modes">): RouteDoc {
   return { access: "admin", modes: ["app"], ...d, params: { id: CALL_ID, ...d.params } };
@@ -56,6 +70,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Name a speaker of the call: `spk` is the speaker id (`you`, `c2`), `name` the name to show.",
       body: { spk: "string", name: "string" },
       ok: 200,
+      errors: writes({ 400: ["bad_field", "bad_speaker"] }),
     }),
     async (c) => {
       const b = await c.body<{ spk: string; name: string }>();
@@ -76,6 +91,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Merge speaker `from` into speaker `into`: one person the diarizer split in two.",
       body: { from: "string", into: "string" },
       ok: 200,
+      errors: writes({ 400: ["bad_field", "bad_speaker"] }),
     }),
     async (c) => {
       const b = await c.body<{ from: string; into: string }>();
@@ -97,6 +113,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Undo a merge: speaker `spk` is its own speaker again.",
       body: { spk: "string", "into?": "string" },
       ok: 200,
+      errors: writes({ 400: ["bad_speaker"], 409: ["not_merged"] }),
     }),
     async (c) => {
       const b = await c.body<{ spk: string; into?: string }>();
@@ -118,6 +135,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       id: "notes.list",
       doc: "The call's notepad lines, each with its time and author.",
       ok: 200,
+      errors: CALL_REF_ERRORS,
     }),
     async (c) => {
       const call = await callOf(c);
@@ -133,6 +151,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Add a line to the call's notepad, marked with its author. `w` is when the line was begun (epoch ms) and `afterSeq` the last transcript position seen then.",
       body: { text: "string", "w?": "integer", "afterSeq?": "integer" },
       ok: 201,
+      errors: writes({ 400: ["bad_field"] }),
     }),
     async (c) => {
       const b = await c.body<{ text: string; w?: number; afterSeq?: number }>();
@@ -170,6 +189,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       params: { nid: "The note id (`n0012`)." },
       body: { text: "string" },
       ok: 200,
+      errors: writes({ 400: ["bad_field"], 404: ["not_found"] }),
     }),
     async (c) => {
       const b = await c.body<{ text: string }>();
@@ -190,6 +210,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       params: { nid: "The note id (`n0012`)." },
       body: {},
       ok: 200,
+      errors: writes({ 404: ["not_found"] }),
     }),
     async (c) => {
       await c.body();
@@ -209,6 +230,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Keep a line of agent memory on the call, marked as the agent's.",
       body: { text: "string" },
       ok: 201,
+      errors: writes({ 400: ["bad_field"] }),
     }),
     async (c) => {
       const b = await c.body<{ text: string }>();
@@ -234,6 +256,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       params: { rid: "The memory id (`r0012`)." },
       body: {},
       ok: 200,
+      errors: writes({ 404: ["not_found"] }),
     }),
     async (c) => {
       await c.body();
@@ -254,6 +277,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       id: "memo.get",
       doc: "The call's running memo, the log position it covers, and the current cursor, so a reader can tell whether it is stale.",
       ok: 200,
+      errors: CALL_REF_ERRORS,
     }),
     async (c) => {
       const call = await callOf(c);
@@ -276,6 +300,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
       doc: "Write the call's running memo, covering the log up to `coversSeq`.",
       body: { text: "string", coversSeq: "integer" },
       ok: 200,
+      errors: writes({ 400: ["bad_memo"] }),
     }),
     async (c) => {
       const b = await c.body<{ text: string; coversSeq: number }>();

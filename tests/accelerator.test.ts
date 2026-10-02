@@ -672,6 +672,35 @@ describe("GET /v1/server reports the accelerator", () => {
     expect((await r.api("GET", "/server")).body.accelerator.setting).toBe("cpu");
   });
 
+  test("[akou-5an.94.1] a changed asr.accelerator asks the build again, though it is the same binary", async () => {
+    mkdirSync(t.dir, { recursive: true });
+    const bin = join(t.dir, `llama-asked-${rigs.length}.ts`);
+    writeFileSync(bin, `process.stdout.write(${JSON.stringify(LIST_UHD770)});\n`);
+    let asked = 0;
+    const r = await appRig({
+      accelerator: {
+        probe: renderNode("0x8086", {
+          env: { AKOU_ACCELERATORS: "vulkan,cpu", AKOU_LLAMA_SERVER: bin },
+        }),
+        run: (b) => {
+          asked++;
+          return listDevices([process.execPath, b]);
+        },
+      },
+    });
+    rigs.push(r);
+    await server(r);
+    expect(asked).toBe(1);
+    // Asked once per binary: the plan that GET /v1/server makes does not ask again.
+    await r.api("GET", "/server");
+    expect(asked).toBe(1);
+    // The image runs one binary for both choices; the new choice is asked about all the same.
+    expect((await r.api("PATCH", "/config", { "asr.accelerator": "cpu" })).status).toBe(200);
+    const b = await server(r);
+    expect(b.accelerator).toMatchObject({ setting: "cpu", active: "cpu", verified: true });
+    expect(asked).toBe(2);
+  });
+
   test("asr.accelerator cpu keeps the GPU out of it", async () => {
     const b = await server(await rig(LIST_UHD770, { settings: { "asr.accelerator": "cpu" } }));
     expect(b.gpu).toBeNull();
