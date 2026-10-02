@@ -78,6 +78,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | `server.max_upload_mb` | `512` | Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap. |
 | `server.max_audio_minutes` | `240` | Longest audio a file job transcribes, in minutes. A longer file fails as `too_long` before it is held in memory. |
 | `server.retain_days` | `7` | Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends. |
+| `server.model_idle_minutes` | `60` | Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. 0: let go as soon as no queued job needs it. |
 | `server.concurrency` | `1` | File jobs run at once. Each running job has its own Worker with its models loaded and `asr.threads` threads, so keep this times `asr.threads` under the cores, and the memory for that many copies of the model. |
 | `server.queue_max` | `1000` | File jobs queued or running at most, across keys. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit. |
 | `server.queue_max_per_key` | `500` | File jobs one key may have queued or running, so one client cannot fill the queue. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit. |

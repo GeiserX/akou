@@ -26,6 +26,7 @@ export const SERVER_GROUPS: Layout = [
     title: "Jobs and retention",
     items: [
       "server.concurrency",
+      "server.model_idle_minutes",
       "server.queue_max",
       "server.queue_max_per_key",
       "server.retain_days",
