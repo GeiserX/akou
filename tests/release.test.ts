@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -383,5 +384,31 @@ describe("the unsigned first open", () => {
       expect(doc).toMatch(/On macOS 14, Control-click akou in Applications, choose Open/);
       expect(doc).toMatch(/On macOS 15 and later,[^\n]*Privacy & Security[^\n]*Open Anyway/);
     }
+  });
+});
+
+describe("which releases are prereleases", () => {
+  /** The release step's own `case` line, run in sh for one version: the flag it sets, or "". */
+  function prereleaseFlag(caseLine: string, version: string): string {
+    const script = `version="$1"; prerelease=""; ${caseLine}; printf %s "$prerelease"`;
+    const run = spawnSync("sh", ["-c", script, "sh", version], { encoding: "utf8" });
+    expect(run.status).toBe(0);
+    return run.stdout;
+  }
+
+  test("only a version with a prerelease part is marked a prerelease; 0.x becomes the latest release", () => {
+    const wf = Bun.YAML.parse(
+      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+    ) as { jobs: { release: { steps: { name?: string; run?: string }[] } } };
+    const publish = wf.jobs.release.steps.find((s) => s.name?.startsWith("publish the release"));
+    const caseLine = publish?.run?.split("\n").find((l) => l.trim().startsWith('case "$version"'));
+    expect(caseLine).toBeDefined();
+    const line = caseLine?.trim() ?? "";
+    expect(prereleaseFlag(line, "0.5.5")).toBe("");
+    expect(prereleaseFlag(line, "1.2.0")).toBe("");
+    expect(prereleaseFlag(line, "0.6.0-rc.1")).toBe("--prerelease");
+    // Positive control: the old rule marked every 0.x a prerelease, and this check catches it.
+    const old = 'case "$version" in 0.*|*-*) prerelease="--prerelease" ;; esac';
+    expect(prereleaseFlag(old, "0.5.5")).toBe("--prerelease");
   });
 });
