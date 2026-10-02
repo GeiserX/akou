@@ -11,13 +11,26 @@ import {
   type ActivationOut,
   isModifier,
   parseBinding,
+  parseExtraBinding,
+  type ShortcutName,
 } from "../src/core/dictation/activation.ts";
 
 type Script = [number, boolean, string][];
 
 /** Plays `[ms, down, key]` with a tick every 10 ms: the actions with their time, and the swallowed keys. */
-function play(hotkey: string, mode: Activation, script: Script, untilMs: number) {
-  const m = new ActivationMachine(parseBinding(hotkey), mode);
+function play(
+  hotkey: string,
+  mode: Activation,
+  script: Script,
+  untilMs: number,
+  more: { draft?: string; shortcuts?: [ShortcutName, string][] } = {},
+) {
+  const m = new ActivationMachine(
+    parseBinding(hotkey),
+    mode,
+    more.draft ? parseExtraBinding(more.draft) : null,
+    (more.shortcuts ?? []).map(([n, k]) => [n, parseExtraBinding(k)]),
+  );
   const acts: [number, ActivationOut][] = [];
   const swallowed: Script = [];
   let i = 0;
@@ -529,5 +542,163 @@ describe("DC-O1: the press the pill's dot follows", () => {
     const out: ActivationOut[] = [];
     m.start(5, out);
     expect(out).toEqual([{ type: "arm", at: 5 }, { type: "start", at: 5 }, { type: "latched" }]);
+  });
+});
+
+/** The Rust tests' DC-A5 and DC-S3 tables, row for row. */
+describe("DC-A5 and DC-S3: the other keys", () => {
+  const FIX: [ShortcutName, string] = ["fixLast", "Shift+RightCommand"];
+  const presses = (acts: [number, ActivationOut][]) => acts.filter(([, a]) => a.type !== "key");
+
+  test("Shift then the dictation key is fix last at the release, held short or long", () => {
+    for (const up of [150, 900]) {
+      const { acts, swallowed } = play(
+        RC,
+        "hold-or-toggle",
+        [
+          [0, true, "LeftShift"],
+          [50, true, RC],
+          [up, false, RC],
+          [up + 50, false, "LeftShift"],
+        ],
+        1200,
+        { shortcuts: [FIX] },
+      );
+      expect(presses(acts)).toEqual([[up, { type: "shortcut", name: "fixLast" }]]);
+      expect(swallowed).toEqual([]);
+    }
+  });
+
+  test("the dictation key then Shift is the interrupt; unbound, Shift then the key dictates", () => {
+    const { acts } = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [50, true, "LeftShift"],
+        [150, false, RC],
+        [200, false, "LeftShift"],
+      ],
+      1000,
+      { shortcuts: [FIX] },
+    );
+    expect(presses(acts)).toEqual([
+      [0, { type: "arm", at: 0 }],
+      [50, { type: "disarm" }],
+    ]);
+    const control = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, "LeftShift"],
+        [50, true, RC],
+        [150, false, RC],
+      ],
+      1000,
+    );
+    expect(sessions(control.acts)).toEqual([[150, { type: "start", at: 50 }]]);
+  });
+
+  test("another key during fix last's press is the interrupt", () => {
+    const { acts, swallowed } = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, "LeftShift"],
+        [50, true, RC],
+        [100, true, "4"],
+        [120, false, "4"],
+        [150, false, RC],
+      ],
+      1000,
+      { shortcuts: [FIX] },
+    );
+    expect(presses(acts)).toEqual([]);
+    expect(swallowed).toEqual([]);
+  });
+
+  test("paste last as a chord counts at its key-down and is swallowed; unbound it passes", () => {
+    const script: Script = [
+      [0, true, "LeftControl"],
+      [10, true, "LeftShift"],
+      [20, true, "V"],
+      [60, false, "V"],
+      [80, false, "LeftShift"],
+      [90, false, "LeftControl"],
+    ];
+    const bound = play(RC, "hold-or-toggle", script, 500, {
+      shortcuts: [FIX, ["pasteLast", "Control+Shift+V"]],
+    });
+    expect(presses(bound.acts)).toEqual([[20, { type: "shortcut", name: "pasteLast" }]]);
+    expect(bound.swallowed).toEqual([
+      [20, true, "V"],
+      [60, false, "V"],
+    ]);
+    const unbound = play(RC, "hold-or-toggle", script, 500, { shortcuts: [FIX] });
+    expect(presses(unbound.acts)).toEqual([]);
+    expect(unbound.swallowed).toEqual([]);
+  });
+
+  test("the draft key presses like the dictation key and says draft first", () => {
+    const starts = (acts: [number, ActivationOut][]) =>
+      acts.filter(([, a]) => a.type === "draft" || a.type === "start" || a.type === "end");
+    const tap = (key: string): Script => [
+      [0, true, key],
+      [120, false, key],
+      [3000, true, key],
+      [3080, false, key],
+    ];
+    const more = { draft: "RightOption", shortcuts: [FIX] };
+    expect(starts(play(RC, "hold-or-toggle", tap("RightOption"), 3200, more).acts)).toEqual([
+      [120, { type: "draft" }],
+      [120, { type: "start", at: 0 }],
+      [3000, { type: "end", reason: "tap" }],
+    ]);
+    const hold: Script = [
+      [0, true, "RightOption"],
+      [800, false, "RightOption"],
+    ];
+    expect(starts(play(RC, "hold-or-toggle", hold, 1000, more).acts)).toEqual([
+      [300, { type: "draft" }],
+      [300, { type: "start", at: 0 }],
+      [800, { type: "end", reason: "release" }],
+    ]);
+    expect(starts(play(RC, "hold-or-toggle", tap(RC), 3200, more).acts)).toEqual([
+      [120, { type: "start", at: 0 }],
+      [3000, { type: "end", reason: "tap" }],
+    ]);
+    const chord = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, "LeftControl"],
+        [10, true, "LeftShift"],
+        [20, true, "D"],
+        [900, false, "D"],
+      ],
+      1000,
+      { draft: "Control+Shift+D", shortcuts: [FIX] },
+    );
+    expect(starts(chord.acts)).toEqual([
+      [20, { type: "draft" }],
+      [20, { type: "start", at: 20 }],
+      [900, { type: "end", reason: "release" }],
+    ]);
+    expect(chord.swallowed).toEqual([
+      [20, true, "D"],
+      [900, false, "D"],
+    ]);
+  });
+
+  test("the other keys read a modifier after the held ones; the dictation key does not", () => {
+    expect(parseExtraBinding("Shift+RightCommand")).toEqual({
+      kind: "chord",
+      mods: [["Shift", "Either"]],
+      key: "RightCommand",
+    });
+    expect(() => parseExtraBinding("Shift+Command")).toThrow();
+    expect(() => parseExtraBinding("Shift+RightShift")).toThrow();
+    expect(parseExtraBinding("Control+Shift+Period")).toEqual(parseBinding("Control+Shift+Period"));
+    expect(() => parseBinding("Shift+RightCommand")).toThrow();
   });
 });

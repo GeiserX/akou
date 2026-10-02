@@ -133,9 +133,12 @@ import {
   type Activation,
   ActivationMachine,
   type ActivationOut,
+  type Hotkey,
   isModifier,
   type KeyInput,
   parseBinding,
+  parseExtraBinding,
+  type ShortcutName,
 } from "../src/core/dictation/activation.ts";
 import { DeadCallMonitor } from "../src/main/capture/health.ts";
 import { CAPTURE_RATE, EXIT, encodePacket, type Packet } from "../src/main/capture/protocol.ts";
@@ -499,9 +502,14 @@ async function runDictate(): Promise<void> {
   let started: { at: number; real: number } | null = null;
   /** The key time the script has reached, ms. */
   let clock = 0;
+  /** The draft key pressed for the session starting next (DC-S3). */
+  let drafting = false;
   const act = async (outs: ActivationOut[]) => {
     for (const o of outs) {
       if (o.type === "key") say({ type: "key", name: o.name });
+      else if (o.type === "draft") drafting = true;
+      else if (o.type === "shortcut")
+        say({ type: "hotkey", name: o.name, target: targetAt(clock) });
       else if (o.type === "arm") say({ type: "press", on: true, ...(frame ? { frame } : {}) });
       else if (o.type === "disarm") say({ type: "press", on: false });
       else if (o.type === "latched") {
@@ -516,7 +524,9 @@ async function runDictate(): Promise<void> {
           id: open.id,
           target: targetAt(o.at),
           capture_ns: String(BigInt(Math.round(o.at)) * 1_000_000n),
+          ...(drafting ? { draft: true } : {}),
         });
+        drafting = false;
       } else if (open) {
         // A cancel or a stop ends at once; anything else runs the post-roll.
         const cut = o.reason === "cancel" || o.reason === "stop";
@@ -578,7 +588,28 @@ async function runDictate(): Promise<void> {
           if (flag("--bind-fail")) throw new Error("fake refusal");
           if (c.hotkey === opt("--refuse-hotkey"))
             throw new Error(`the fake cannot bind ${c.hotkey}`);
-          m = new ActivationMachine(parseBinding(c.hotkey), c.activation as Activation);
+          const extra = (what: string, k: string): Hotkey | null => {
+            if (k.trim() === "") return null;
+            try {
+              return parseExtraBinding(k.trim());
+            } catch (err) {
+              throw new Error(`${what}: ${(err as Error).message}`);
+            }
+          };
+          const shortcuts: [ShortcutName, Hotkey][] = [];
+          for (const [name, what, k] of [
+            ["fixLast", "fix last", c.fixLast],
+            ["pasteLast", "paste last", c.pasteLast],
+          ] as const) {
+            const h = extra(what, k);
+            if (h) shortcuts.push([name, h]);
+          }
+          m = new ActivationMachine(
+            parseBinding(c.hotkey),
+            c.activation as Activation,
+            extra("the draft key", c.draft),
+            shortcuts,
+          );
         } catch (err) {
           say({ type: "rebind.failed", hotkey: c.hotkey, reason: (err as Error).message });
           playNow();

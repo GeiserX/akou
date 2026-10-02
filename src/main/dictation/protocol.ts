@@ -15,7 +15,7 @@
  * keys and audio, and inserts what it is told to.
  */
 
-import type { Activation } from "../../core/dictation/activation.ts";
+import type { Activation, ShortcutName } from "../../core/dictation/activation.ts";
 import type { Target } from "../../core/dictation/events.ts";
 
 export const DICTATE_PROTOCOL = "akou-dictate/1";
@@ -94,7 +94,19 @@ export type HelperToApp =
   /** The answer to `rebind`; on a refusal the old binding stays (DC-A7). */
   | { type: "rebound"; hotkey: string }
   | { type: "rebind.failed"; hotkey: string; reason: string }
-  | { type: "session.started"; id: string; target: Target; capture_ns: string | number }
+  /** `draft`: the draft key started it, so its text goes to the draft box (DC-S3). */
+  | {
+      type: "session.started";
+      id: string;
+      target: Target;
+      capture_ns: string | number;
+      draft?: boolean;
+    }
+  /**
+   * Fix last or paste last was pressed, with what had the keyboard then; no session started
+   * (DC-A5).
+   */
+  | { type: "hotkey"; name: ShortcutName; target: Target }
   /**
    * The session `id` is latched now (tapped on, or a chord released before `HOLD_MS`), so the app
    * may end it after silence (DC-A3). A held session never gets one.
@@ -237,7 +249,16 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
     case "rebind.failed":
       return isStr(o.hotkey) && isStr(o.reason) ? null : "rebind.failed";
     case "session.started":
-      return isId(o.id) && isTarget(o.target) && isNs(o.capture_ns) ? null : "session.started";
+      return isId(o.id) &&
+        isTarget(o.target) &&
+        isNs(o.capture_ns) &&
+        (o.draft === undefined || isBool(o.draft))
+        ? null
+        : "session.started";
+    case "hotkey":
+      return (o.name === "fixLast" || o.name === "pasteLast") && isTarget(o.target)
+        ? null
+        : "hotkey";
     case "latched":
       return isId(o.id) ? null : "latched";
     case "level":
