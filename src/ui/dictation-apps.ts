@@ -1,8 +1,9 @@
 /**
  * The editor for per-app dictation rules, the `apps` setting type (docs/ux/DICTATION.md DC-U9):
  * one row per app, keyed by what the session captured as the app with the keyboard (a bundle id
- * on macOS, an executable name on Windows, a window class on Linux), saying its rule in a few
- * words and opening to its fields. Each field is a choice or "Like everywhere else", which leaves
+ * on macOS, an executable name on Windows, a window class on Linux) and named by the app's own
+ * name where the helper reported one (`Slack`, the rule's `name`), saying its rule in a few words
+ * and opening to its fields. Each field is a choice or "Like everywhere else", which leaves
  * it out of the rule so the global setting applies.
  *
  * The rules travel as one JSON list in a hidden input carrying the setting's `data-key`, so the
@@ -116,7 +117,7 @@ type Rule = Record<string, string>;
  * instead, and nothing more comes after either. `stop` gives up waiting.
  */
 export type NextApp = (
-  found: (app: string) => void,
+  found: (app: string, name?: string) => void,
   failed: (why: string) => void,
 ) => { stop(): void };
 
@@ -137,13 +138,13 @@ export const NEXT_APP_WAITING = "Waiting: dictate into the app you want a rule f
  */
 export function nextDictatedApp(
   t: Transport,
-  found: (app: string) => void,
+  found: (app: string, name?: string) => void,
   failed: (why: string) => void,
   every = NEXT_APP_POLL_MS,
 ): { stop(): void } {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  type Page = { items?: { at?: unknown; app?: unknown }[] };
+  type Page = { items?: { at?: unknown; app?: unknown; app_name?: unknown }[] };
   const read = async (query: string): Promise<Page["items"] | null> => {
     let r: Reply<Page>;
     try {
@@ -175,7 +176,8 @@ export function nextDictatedApp(
       const hit = [...items].reverse().find((d) => typeof d.app === "string" && d.app !== "");
       if (hit) {
         stopped = true;
-        found(hit.app as string);
+        const name = typeof hit.app_name === "string" && hit.app_name !== "" ? hit.app_name : "";
+        found(hit.app as string, name || undefined);
         return;
       }
       timer = setTimeout(() => void poll(), every);
@@ -226,7 +228,7 @@ export function appsEditor(
     const rule = readRule(el);
     const name = el.querySelector(".apps-name");
     const sum = el.querySelector(".apps-summary");
-    if (name) name.textContent = rule.app ?? "A new app";
+    if (name) name.textContent = rule.name || rule.app || "A new app";
     if (sum) sum.textContent = rule.app ? ruleSummary(rule) : "Name the app to save its rule";
   };
   const open = (el: HTMLElement, yes: boolean) => {
@@ -243,7 +245,19 @@ export function appsEditor(
       value: String(rule.app ?? ""),
       placeholder: "Such as com.example.chat",
       attrs: { "data-field": "app", "aria-label": "App" },
-      on: { change: changed },
+      on: {
+        change: () => {
+          // A name belongs to the app it came with: another id typed here drops it.
+          if (app.value.trim() !== String(rule.app ?? "")) named.value = "";
+          changed();
+        },
+      },
+    });
+    // The app's name for the row, kept with the rule; never typed, never matched.
+    const named = h("input", {
+      type: "hidden",
+      value: typeof rule.name === "string" ? rule.name : "",
+      attrs: { "data-field": "name" },
     });
     const fields = APP_RULE_FIELDS.map((f) => {
       const v = typeof rule[f.name] === "string" ? (rule[f.name] as string) : "";
@@ -314,6 +328,7 @@ export function appsEditor(
           help: "Use the app I dictate into next fills this in.",
         },
         app,
+        named,
       ),
       ...fields,
       row({ label: "" }, remove),
@@ -358,22 +373,23 @@ export function appsEditor(
     nextButton.textContent = NEXT_APP_LABEL;
     nextNote.textContent = note;
   };
-  /** A rule for `app`: the one there is, or a new one saved with the app alone. */
-  const take = (app: string) => {
+  /** A rule for `app`: the one there is, or a new one saved with the app and its name alone. */
+  const take = (app: string, name?: string) => {
     const known = [...list.querySelectorAll<HTMLInputElement>("[data-field='app']")].find(
       (el) => el.value.trim() === app,
     );
+    const called = name || app;
     if (known) {
-      nextNote.textContent = `${app} has a rule already.`;
+      nextNote.textContent = `${called} has a rule already.`;
       const el = known.closest<HTMLElement>(".apps-rule");
       if (el) open(el, true);
       el?.querySelector<HTMLElement>("select")?.focus();
       return;
     }
-    const el = ruleEl({ app }, true);
+    const el = ruleEl(name ? { app, name } : { app }, true);
     list.append(el);
     changed();
-    nextNote.textContent = `Added ${app}.`;
+    nextNote.textContent = `Added ${called}.`;
     el.querySelector<HTMLElement>("select")?.focus();
   };
   const nextButton = h(
@@ -392,10 +408,10 @@ export function appsEditor(
           // `next` may answer before it returns (a refusal it knows at once).
           let answered = false;
           const w = next(
-            (app) => {
+            (app, name) => {
               answered = true;
               idle("");
-              take(app);
+              take(app, name);
             },
             (why) => {
               answered = true;

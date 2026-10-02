@@ -77,6 +77,7 @@ function rig(
   keys: [number, string, boolean][],
   switches: string[] = [],
   extra: Partial<DictationServiceOptions> = {},
+  hotkey = RC,
 ): Rig {
   const t = tempDir("akou-dict-session-");
   cleanups.push(t.cleanup);
@@ -109,7 +110,7 @@ function rig(
       inserted,
       ...switches,
     ],
-    () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
+    () => ({ hotkey, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
   );
   return {
     dir: t.dir,
@@ -164,6 +165,27 @@ describe("DC-E4: a spoken dictation's language", () => {
     expect(auto.svc.log.items()[0]?.language_forced).toBeNull();
     // Two real-time runs of the fake helper: past bun's 5 s default on a slow Windows runner.
   }, 30_000);
+});
+
+describe("DC-A6 over the fake helper", () => {
+  test("Mouse4 as the dictation key: a button-down and button-up runs a session", async () => {
+    const r = rig(
+      [
+        [800, "Mouse4", true],
+        [1600, "Mouse4", false],
+      ],
+      [],
+      {},
+      "Mouse4",
+    );
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(r.svc.log.items()[0]).toMatchObject({ by: "user", text: "hello" });
+    // The button is the binding's key: swallowed down and up, so it is not also a page back.
+    expect(lines(r.tap)).toEqual([
+      { key: "Mouse4", down: true, swallowed: true },
+      { key: "Mouse4", down: false, swallowed: true },
+    ]);
+  });
 });
 
 describe("DC-A1 over the fake helper", () => {
