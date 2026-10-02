@@ -22,7 +22,8 @@
  *   `metadata.title` names the job while it runs, on the Jobs page and in `GET /v1/jobs` (SV-J10).
  * - `stream=true`: Server-Sent Events, `transcript.text.delta` per segment (or
  *   `transcript.text.segment` for `diarized_json`), then `transcript.text.done`.
- * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`, `languages[]`,
+ * - `languages[]`, as on `POST /v1/jobs`: the codes an `auto` language may come out as.
+ * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`,
  *   `known_speaker_names[]` and `known_speaker_references[]` (until diarization names speakers).
  */
 
@@ -43,6 +44,7 @@ import {
   keywordsOf,
   laneAsk,
   languageOf,
+  languagesOf,
   MAX_KEYWORDS,
   metadataOf,
   queueFullError,
@@ -285,7 +287,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     const language = languageOf(form, c.app.config().settings["server.default_language"]);
     const keywords = promptTerms(textField(form, "prompt"), keywordsOf(form));
     list(form, "include");
-    list(form, "languages");
+    const languages = languagesOf(form);
     list(form, "known_speaker_names");
     list(form, "known_speaker_references");
     textField(form, "chunking_strategy");
@@ -305,6 +307,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
       model_source: choice.source,
       language,
       keywords,
+      languages,
       diarize: format === "diarized_json",
       callback_url: null,
       metadata,
@@ -357,7 +360,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
       access: "jobs",
       modes: ["server"],
       door: "compat",

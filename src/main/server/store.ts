@@ -69,6 +69,8 @@ export interface Job {
   interactive: boolean;
   language: string;
   keywords: string[];
+  /** The ISO codes an `auto` language may come out as (`languages[]`); empty: `asr.languages`. */
+  languages: string[];
   diarize: boolean;
   callback_url: string | null;
   /** The client's JSON, echoed back untouched. */
@@ -105,6 +107,8 @@ export interface JobRequest {
   /** The `language` field, `auto` when the request sent none. */
   language: string;
   keywords: string[];
+  /** The `languages[]` field; absent on a job from before it existed, which compares as none. */
+  languages?: string[];
   /** The `diarize` field, or null when the request sent none. */
   diarize: boolean | null;
 }
@@ -199,7 +203,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   priority INTEGER NOT NULL DEFAULT 0,
   request TEXT,
   interactive INTEGER NOT NULL DEFAULT 0,
-  title TEXT
+  title TEXT,
+  languages TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -247,6 +252,7 @@ function jobOf(r: Row): Job {
     interactive: r.interactive === 1,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
+    languages: typeof r.languages === "string" ? JSON.parse(r.languages) : [],
     diarize: r.diarize === 1,
     callback_url: (r.callback_url as string | null) ?? null,
     metadata: JSON.parse(r.metadata as string),
@@ -306,6 +312,8 @@ export interface NewJob {
   interactive?: boolean;
   language: string;
   keywords: string[];
+  /** Default none: `asr.languages` bounds an `auto` language. */
+  languages?: string[];
   diarize: boolean;
   callback_url: string | null;
   metadata: unknown;
@@ -343,7 +351,8 @@ export class JobStore {
     const cols = new Set(
       (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
     );
-    // One from before job names gains the title column; its jobs have none.
+    // One from before job names gains the title column; its jobs have none. One from before
+    // `languages[]` gains that column; its jobs are bounded by `asr.languages`.
     for (const c of [
       "model",
       "model_source",
@@ -352,6 +361,7 @@ export class JobStore {
       "remote_job",
       "request",
       "title",
+      "languages",
     ]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
@@ -391,8 +401,8 @@ export class JobStore {
       this.db
         .query(
           `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive,
-            language, keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
-           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            language, keywords, languages, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
+           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -406,6 +416,7 @@ export class JobStore {
           j.interactive ? 1 : 0,
           j.language,
           JSON.stringify(j.keywords),
+          JSON.stringify(j.languages ?? []),
           j.diarize ? 1 : 0,
           j.callback_url,
           JSON.stringify(j.metadata ?? null),

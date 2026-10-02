@@ -19,6 +19,7 @@
  *   `Last-Event-ID`.
  */
 
+import { QWEN_LANGUAGE_CODES } from "../../asr/llama-catalog.ts";
 import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
@@ -151,6 +152,40 @@ export function keywordsOf(form: Form, extra: string[] = []): string[] {
   return out;
 }
 
+/** The ISO codes a job's `languages[]` may name: the ones the language-choosing engine (Qwen) has. */
+export const BOUND_LANGUAGES: readonly string[] = QWEN_LANGUAGE_CODES;
+
+/**
+ * `languages[]` (also `languages`, and a comma list): the ISO 639 codes an `auto` language may come
+ * out as, lower case, once each, in the order sent. A code no engine here can choose is refused with
+ * 422 `unsupported_language` naming it, never dropped: a job told "es or bg" that silently became
+ * "es" would hide that its Bulgarian notes come out wrong.
+ */
+export function languagesOf(form: Form): string[] {
+  const out: string[] = [];
+  for (const v of [...form.getAll("languages[]"), ...form.getAll("languages")]) {
+    if (typeof v !== "string") throw bad("languages[]", "languages are text");
+    for (const part of v.split(",")) {
+      const code = part.trim().toLowerCase();
+      if (code === "") continue;
+      if (!/^[a-z]{2,3}$/.test(code)) {
+        throw bad("languages[]", `"${part.trim()}" is not an ISO 639 code, such as en or es`);
+      }
+      if (!out.includes(code)) out.push(code);
+    }
+  }
+  const unsupported = out.filter((c) => !BOUND_LANGUAGES.includes(c));
+  if (unsupported.length > 0) {
+    throw new HttpError(
+      422,
+      "unsupported_language",
+      `no engine here can choose ${unsupported.join(", ")}; GET /v1/server lists the codes languages[] may name (bound_languages)`,
+      { field: "languages[]", codes: unsupported },
+    );
+  }
+  return out;
+}
+
 /**
  * The request's language; `auto` or none means no opinion, and `fallback` decides
  * (`server.default_language`, SV-S2).
@@ -217,6 +252,8 @@ const JOB_FIELDS = new Set([
   "language",
   "keywords[]",
   "keywords",
+  "languages[]",
+  "languages",
   "diarize",
   "callback_url",
   "metadata",
@@ -296,6 +333,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     const interactive = interactiveOf(jobs, form);
     const diarize = booleanOf(form, "diarize");
     const keywords = keywordsOf(form);
+    const languages = languagesOf(form);
     // The options as sent, before a server default fills a gap: what a repeated Idempotency-Key is
     // compared against (SV-J2), so a retry still matches after a default changes.
     const request: JobRequest = {
@@ -303,6 +341,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       model: model?.trim() || null,
       language: textField(form, "language")?.trim() || "auto",
       keywords,
+      languages,
       diarize,
     };
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
@@ -316,6 +355,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       // A request with no opinion gets the server's defaults (SV-S2).
       language: languageOf(form, settings["server.default_language"]),
       keywords,
+      languages,
       diarize: diarize ?? settings["server.default_diarize"],
       callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
       metadata: metadataOf(form),
@@ -399,7 +439,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
       ...JOB_ROUTE,
       body: {
         multipart: {
@@ -409,6 +449,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "model?": "string",
           "language?": "string",
           "keywords[]?": "string[]",
+          "languages[]?": "string[]",
           "diarize?": "boolean",
           "callback_url?": "string",
           "metadata?": "string",

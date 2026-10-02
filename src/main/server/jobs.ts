@@ -189,6 +189,7 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
     priority: j.priority,
     interactive: j.interactive,
     language: j.language,
+    languages: j.languages,
     diarize: j.diarize,
     metadata: j.metadata,
     ...(waiting ? { waiting_for: waiting } : {}),
@@ -989,6 +990,7 @@ export class JobService {
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
         language: job.language,
         glossary: job.keywords,
+        languages: job.languages,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
@@ -1101,6 +1103,7 @@ export class JobService {
       model: j.model ?? undefined,
       language: j.language,
       keywords: j.keywords,
+      languages: j.languages,
       diarize: j.diarize,
     };
   }
@@ -1229,19 +1232,22 @@ const REQUEST_FIELDS = [
   "model",
   "language",
   "keywords",
+  "languages",
   "diarize",
 ] as const satisfies readonly (keyof JobRequest)[];
 
 /**
- * The options as compared, not as stored: keywords in any order and a language tag in any case
- * (BCP-47 tags are case-insensitive) make the same transcript, so they are the same request. The
- * row keeps the options as sent, so a job stored before this compares the same way.
+ * The options as compared, not as stored: keywords and languages in any order and a language tag
+ * in any case (BCP-47 tags are case-insensitive) make the same transcript, so they are the same
+ * request. The row keeps the options as sent, so a job stored before this compares the same way;
+ * one stored before `languages[]` existed compares as a request with none.
  */
 function comparable(r: JobRequest): JobRequest {
   return {
     ...r,
     language: r.language.toLowerCase(),
     keywords: [...new Set(r.keywords)].sort(),
+    languages: [...new Set((r.languages ?? []).map((l) => l.toLowerCase()))].sort(),
   };
 }
 

@@ -1069,6 +1069,8 @@ export interface JobPassInput {
   language?: string;
   /** The job's keywords as a glossary, for an engine that takes one (Qwen's context). */
   glossary?: readonly string[];
+  /** The languages an `auto` decode may choose among (the job's `languages[]`), over the engine's. */
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 }
 
@@ -1127,7 +1129,11 @@ export async function runJobPass(
   const hw = engine ? null : models.prepare(input.decode);
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
   const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
-  const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
+  const unit = {
+    lang: input.language ?? "auto",
+    glossary: input.glossary ?? [],
+    allowed: input.languages,
+  };
   const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
   const vadS = (performance.now() - vadFrom) / 1000;
@@ -1211,6 +1217,7 @@ type ToJob = {
   diarize: boolean;
   language?: string;
   glossary?: readonly string[];
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 };
 
@@ -1264,6 +1271,7 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         decode: m.decode,
         language: m.language,
         glossary: m.glossary,
+        languages: m.languages,
         options: m.options,
       },
       models,
@@ -1347,6 +1355,7 @@ export class JobWorker {
         diarize: input.diarize,
         language: input.language,
         glossary: input.glossary,
+        languages: input.languages,
         options: input.options,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
