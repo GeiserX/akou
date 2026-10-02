@@ -6,7 +6,14 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { KeyInput } from "../src/core/dictation/activation.ts";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
@@ -239,6 +246,65 @@ describe("DC-O3: the system's player", () => {
     expect(readdirSync(dir).length).toBe(2);
     p.close();
     expect(existsSync(dir)).toBe(false);
+  });
+
+  test("the only player that fails once keeps playing the later cues, said once", async () => {
+    const t = tempDir("akou-cue-only-");
+    cleanups.push(t.cleanup);
+    for (const [platform, which] of [
+      ["darwin", () => null],
+      ["linux", (b: string) => (b === "pw-play" ? `/usr/bin/${b}` : null)],
+    ] as const) {
+      const spawned: string[] = [];
+      const said: string[] = [];
+      const p = new SystemCuePlayer({
+        env: {},
+        platform,
+        which,
+        dir: () => mkdtempSync(join(t.dir, `${platform}-`)),
+        // A transient error on the first play; the same player works after it.
+        spawn: async (argv) => {
+          spawned.push(argv[0] as string);
+          return spawned.length === 1 ? 1 : 0;
+        },
+        onLog: (_level, msg) => said.push(msg),
+      });
+      p.play(WAV, "start");
+      await until(() => said.length === 1, 2000, "the failed play said");
+      p.play(WAV, "stop");
+      p.play(WAV, "done");
+      await until(() => spawned.length === 3, 2000, `three plays on ${platform}`);
+      expect(new Set(spawned).size).toBe(1);
+      expect(said).toEqual([`dictation cue not played: ${spawned[0]} exited with 1`]);
+      p.close();
+    }
+  });
+
+  test("a next player that cannot start is said, never an unhandled rejection", async () => {
+    const t = tempDir("akou-cue-throw-");
+    cleanups.push(t.cleanup);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    cleanups.push(() => void process.off("unhandledRejection", onUnhandled));
+    const said: string[] = [];
+    const p = new SystemCuePlayer({
+      env: {},
+      platform: "linux",
+      which: (b) => (b === "pw-play" || b === "paplay" ? `/usr/bin/${b}` : null),
+      dir: () => t.dir,
+      // pw-play fails; paplay was removed between the lookup and the spawn.
+      spawn: (argv) => {
+        if (argv[0]?.endsWith("paplay")) throw new Error("paplay is gone");
+        return Promise.resolve(1);
+      },
+      onLog: (_level, msg) => said.push(msg),
+    });
+    p.play(WAV, "start");
+    await until(() => said.length === 1, 2000, "the failed play said");
+    await Bun.sleep(50);
+    expect(unhandled).toEqual([]);
+    expect(said).toEqual(["dictation cue not played: /usr/bin/pw-play exited with 1"]);
   });
 
   test("the player per OS, and none found is said once", () => {

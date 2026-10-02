@@ -79,7 +79,10 @@ export class SystemCuePlayer implements CuePlayer {
   private folder: string | null = null;
   private seq = 0;
   private warned = false;
-  /** Players that exited with an error are skipped from then on: how many of the list. */
+  /**
+   * Players that exited with an error are skipped from then on: how many of the list. The last
+   * one is never skipped, so one failed play does not silence every later cue.
+   */
   private failed = 0;
 
   constructor(private readonly o: SystemCuePlayerOptions = {}) {}
@@ -123,8 +126,13 @@ export class SystemCuePlayer implements CuePlayer {
       (code) => {
         if (code === 0) return;
         this.warn(`${argv[0]} exited with ${code}`);
+        if (!all[i + 1]) return;
         if (this.failed === i) this.failed = i + 1;
-        this.run(file, i + 1);
+        try {
+          this.run(file, i + 1);
+        } catch (err) {
+          this.warn((err as Error).message);
+        }
       },
       (err: Error) => this.warn(err.message),
     );
