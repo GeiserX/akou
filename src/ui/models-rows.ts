@@ -205,6 +205,14 @@ export function autoHelp(v: LiveView, here: string): string {
 }
 
 /** The After the call row's facts: what it does, its accuracy, and how fast. */
+/** The Automatic row of the Jobs section: what `auto` runs here now and why, when the server says. */
+export function autoJobsHelp(auto: { preset: string; reason: string } | null): string {
+  const base = "Chosen for each job by what this server has.";
+  if (!auto) return base;
+  const name = auto.preset.charAt(0).toUpperCase() + auto.preset.slice(1);
+  return `${base} Now ${name}: ${auto.reason}`;
+}
+
 export function afterCallHelp(r: ModelRow, here: string): string {
   return [
     "Writes the accurate transcript when a call ends.",

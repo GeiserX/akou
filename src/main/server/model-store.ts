@@ -5,7 +5,7 @@
  * desktop app both run one store; only server mode has jobs.
  *
  * - **Which model** (SV-S1): the request's `model`, then its `preset` when it is not `auto`, then
- *   `server.default_model`, then the hardware's choice (`fast` until SV-R2). `auto` anywhere means
+ *   `server.default_model`, then what `auto` runs here (SV-R2, `autoChoice`). `auto` anywhere means
  *   "no opinion". Only a recognizer of the catalog or a built preset can be named; a client can never
  *   name a URL.
  * - **Downloads** (SV-M1 to SV-M3): one download per model id however many jobs wait on it, every
@@ -36,7 +36,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { QWEN_MIN_MEMORY_GB } from "../asr/live-setups.ts";
+import { QWEN_ASR } from "../asr/llama-catalog.ts";
 import { FORMULAS, type Measure, type NotMeasured, score, scoresOf } from "../asr/model-scores.ts";
+import { intendedFinal, type ModelSetContext, type ModelSetSettings } from "../asr/model-set.ts";
 import { MODEL_TEXT } from "../asr/model-text.ts";
 import {
   type CatalogEntry,
@@ -46,6 +49,7 @@ import {
   type ModelSpecEntry,
   modelFile,
   NEMOTRON,
+  RECOGNIZER,
 } from "../asr/models.ts";
 import { PRESET_NAMES, PRESETS } from "./presets.ts";
 
@@ -108,12 +112,58 @@ export interface ResolveOptions {
   defaultModel: string;
   /** The OpenAI door: a name akou does not know (`whisper-1`) is no opinion, not an error. */
   unknownIsAuto?: boolean;
+  /** What `auto` runs here (`autoChoice`); absent, `fast`. */
+  auto?: () => { model: string; preset: string };
 }
 
-/** The hardware's choice for `auto`: `fast` until SV-R2 detects a GPU or a small board. */
+/** `fast`, what `auto` runs when nothing tells this server more (a recognizer given at start). */
 export function hardwareChoice(): { model: string; preset: string } {
   const fast = PRESETS.find((p) => p.name === "fast");
   return { model: fast?.engines[0] as string, preset: "fast" };
+}
+
+/** What `auto` runs on this server, and why, in a sentence a person reads (SV-R2, SV-U5). */
+export interface AutoChoice {
+  model: string;
+  preset: "best" | "fast";
+  reason: string;
+}
+
+/** What `autoChoice` reads: the models on disk, the catalog, Qwen's runtime and the machine. */
+export type AutoContext = Omit<ModelSetContext, "settings">;
+
+/** `intendedFinal` reads only `asr.final.model`; `auto` is the server's "no opinion". */
+const FINAL_AUTO = { "asr.final.model": "auto" } as unknown as ModelSetSettings;
+
+/**
+ * What `auto` runs here: the desktop's rule for the final pass (`intendedFinal`), so a server and
+ * the app pick alike. `best` (Qwen3-ASR) whenever Qwen and its llama-server are on disk, on any
+ * machine; else `fast` (Parakeet) when Parakeet is; with neither, `best` where Qwen has room to run
+ * well (a GPU and `QWEN_MIN_MEMORY_GB`) and `fast` elsewhere, each fetched on demand.
+ */
+export function autoChoice(c: AutoContext): AutoChoice {
+  const pick = intendedFinal({ ...c, settings: FINAL_AUTO });
+  const qwenHere =
+    c.catalog.includes(QWEN_ASR) &&
+    [QWEN_ASR, ...(c.runtime ? [c.runtime] : [])].every((id) => c.present(id));
+  const none = "No speech model is downloaded yet";
+  if (pick === "qwen")
+    return {
+      model: QWEN_ASR,
+      preset: "best",
+      reason: qwenHere
+        ? "Qwen3-ASR is downloaded here."
+        : `${none}, and this server has a GPU and the memory for Qwen3-ASR.`,
+    };
+  const m = c.machine;
+  const reason = !c.catalog.includes(QWEN_ASR)
+    ? "This version has no Qwen3-ASR for this server."
+    : c.present(RECOGNIZER)
+      ? "Parakeet is downloaded here and Qwen3-ASR is not."
+      : !m?.gpu
+        ? `${none}, and this server has no GPU for Qwen3-ASR.`
+        : `${none}, and this server has ${Math.round(m.memoryGb)} GB of memory; Qwen3-ASR needs ${QWEN_MIN_MEMORY_GB}.`;
+  return { ...hardwareChoice(), preset: "fast", reason };
 }
 
 /**
@@ -172,6 +222,11 @@ function pick(
   );
 }
 
+function hardwareOf(o: ResolveOptions): ModelChoice {
+  const { model, preset } = o.auto?.() ?? hardwareChoice();
+  return { model, preset, source: "hardware" };
+}
+
 /** The model a job runs, first match wins (SERVER.md 12.1). */
 export function resolveModel(
   ask: { model?: string; preset?: string },
@@ -180,10 +235,8 @@ export function resolveModel(
   return (
     pick(ask.model, "request", "model", o) ??
     pick(ask.preset, "request", "preset", o) ??
-    pick(o.defaultModel, "server_default", "server.default_model", o) ?? {
-      ...hardwareChoice(),
-      source: "hardware",
-    }
+    pick(o.defaultModel, "server_default", "server.default_model", o) ??
+    hardwareOf(o)
   );
 }
 
