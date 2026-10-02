@@ -53,6 +53,50 @@ Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That i
 `akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
 
 
+## A reverse proxy in front
+
+akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. There is no WebSocket to upgrade. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits.
+
+Caddy passes events on and holds long requests by default; it only needs the body limit:
+
+```caddyfile
+akou.example {
+	request_body {
+		max_size 512MiB
+	}
+	reverse_proxy 127.0.0.1:8476 {
+		flush_interval -1
+	}
+}
+```
+
+nginx needs each of them said:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name akou.example;
+    ssl_certificate     /etc/ssl/akou.example.crt;
+    ssl_certificate_key /etc/ssl/akou.example.key;
+
+    client_max_body_size 512m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8476;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
+If you raise `server.max_upload_mb`, raise `max_size` or `client_max_body_size` with it. Then `curl https://akou.example/v1/server` answers the server's description.
+
 ## A Mac as the server
 
 Docker on a Mac has no Metal, so on a Mac the server runs natively, from a source checkout at the release tag. The single-file `akou` CLI cannot transcribe, as above. You need [Bun](https://bun.sh) at the version in `.bun-version`, and ffmpeg for anything but a 16 kHz WAV (`brew install ffmpeg`):
@@ -65,7 +109,11 @@ bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-serve
 bun src/main/cli/cli.ts serve
 ```
 
-It keeps its settings, keys and jobs in `~/.config/akou` and the models in `~/Library/Application Support/akou/models`. To reach it from another machine, put a proxy with TLS in front of it (a `tailscale serve` of port 8476 on a tailnet works) and set `{ "api.bind": "127.0.0.1", "server.behind_proxy": true }` in `~/.config/akou/config.json`.
+It keeps its settings, keys and jobs in `~/.config/akou` and the models in `~/Library/Application Support/akou/models`.
+
+Two limits refuse long recordings by default. `server.max_upload_mb` is 512 MiB, which is less than a long meeting video, and `server.max_audio_minutes` is 240. For long meetings, raise both in `~/.config/akou/config.json`, for example `{ "server.max_upload_mb": 2048, "server.max_audio_minutes": 360 }`, and restart the server.
+
+Speaker labels need the `akou-diarize` helper, which only the app's release ships today; `models pull` does not fetch it. Without it, a job that asks for `diarize` finishes without labels. Take it from the release zip (`akou.app/Contents/Resources/app/bun/akou-diarize`), or build it from the checkout with Rust 1.88 or newer (`cargo build --locked --release --manifest-path native/akou-diarize/Cargo.toml`), and name it in the config: `{ "asr.diarizeHelper": ["/Users/YOU/akou/native/akou-diarize/target/release/akou-diarize"] }`. To reach it from another machine, put a proxy with TLS in front of it (a `tailscale serve` of port 8476 on a tailnet works) and set `{ "api.bind": "127.0.0.1", "server.behind_proxy": true }` in `~/.config/akou/config.json`.
 
 To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons/io.github.geiserx.akou.serve.plist` with your user name, the checkout's path and Bun's path filled in, then run `sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.geiserx.akou.serve.plist`:
 
@@ -95,7 +143,13 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 </plist>
 ```
 
-`KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good.
+`KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good. Started this way, with no one logged in, it still runs `best` on Metal: `GET /v1/server` shows `accelerator.active` as `metal`. After a reboot, check it came back with:
+
+```sh
+curl -s http://127.0.0.1:8476/healthz
+```
+
+which answers `{"ok":true,…,"models_ready":true}` once the models are loaded. If it answers nothing, the log is the `StandardErrorPath` file.
 
 ## Sending jobs to another akou
 
