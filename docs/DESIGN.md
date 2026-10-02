@@ -567,7 +567,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 `akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
-The table below is the design. What the binary accepts today, every command's help page, is the generated [cli.md](cli.md) (CLI-31), which CI keeps in step with the command registry.
+The table below is the design sketch and may lag behind the code. For what the binary accepts today, trust the generated [cli.md](cli.md) (CLI-31): every command's help page, which CI keeps in step with the command registry.
 
 | Command | Does |
 |---|---|

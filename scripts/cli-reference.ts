@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { COMMANDS } from "../src/main/cli/cli.ts";
+import { EXIT } from "../src/main/cli/client.ts";
 import type { Command } from "../src/main/cli/context.ts";
 import { commandHelp } from "../src/main/cli/help.ts";
 import { PARITY, type Row } from "../tests/contracts/parity.ts";
@@ -27,11 +28,29 @@ function door(c: Row["cli"] | Row["window"]): string {
   return [...new Set(names)].map(code).join(", ");
 }
 
-/** The page as the registry and the parity table generate it, byte for byte. */
+/** What each exit code means on the page; a code added to `EXIT` without a label fails tsc. */
+const EXIT_LABELS: Record<keyof typeof EXIT, string> = {
+  ok: "ok",
+  notLive: "nothing live",
+  usage: "usage",
+  badTerm: "bad vocabulary term",
+  unavailable: "unavailable",
+  software: "software",
+  alreadyRecording: "already recording",
+  permission: "permission",
+  config: "the settings refuse it",
+  timeout: "timed out",
+};
+
+/** The page as the registry, the parity table and the exit codes generate it, byte for byte. */
 export function renderCliReference(
   commands: readonly Command[] = COMMANDS,
   parity: readonly Row[] = PARITY,
+  exit: Record<keyof typeof EXIT, number> = EXIT,
 ): string {
+  const exits = (Object.keys(EXIT_LABELS) as (keyof typeof EXIT)[])
+    .map((k) => `${exit[k]} ${EXIT_LABELS[k]}`)
+    .join(", ");
   const pages = commands.map((c) => `## ${c.name}\n\n\`\`\`text\n${commandHelp(c)}\n\`\`\`\n`);
   const rows = parity.map(
     (r) =>
@@ -44,7 +63,7 @@ export function renderCliReference(
     "",
     "Every `akou` command with its help page, exactly as `akou help COMMAND` prints it, then the table of what each action is called through the command line, the HTTP API, MCP and the window. The page is generated from the code, and CI fails when it differs.",
     "",
-    "Exit codes: 0 ok, 3 nothing live, 64 usage, 65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission, 78 the settings refuse it, 124 timed out.",
+    `Exit codes: ${exits}.`,
     "",
     ...pages,
     "## Door parity",

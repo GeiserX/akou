@@ -13,6 +13,7 @@ import {
   renderCliReference,
 } from "../scripts/cli-reference.ts";
 import { COMMANDS } from "../src/main/cli/cli.ts";
+import { EXIT } from "../src/main/cli/client.ts";
 import { commandHelp } from "../src/main/cli/help.ts";
 import { PARITY } from "./contracts/parity.ts";
 
@@ -47,6 +48,13 @@ describe("CLI-31: docs/cli.md is generated and kept in sync", () => {
     if (!first) throw new Error("the parity table is empty");
     const changed = { ...first, mcp: { none: "a reason nobody regenerated" } };
     expect(cliReferenceDrifted(committed(), renderCliReference(COMMANDS, [changed, ...rest]))).toBe(
+      true,
+    );
+  });
+
+  test("positive control: an exit code renumbered without regenerating is drift", () => {
+    const renumbered = { ...EXIT, config: 79 };
+    expect(cliReferenceDrifted(committed(), renderCliReference(COMMANDS, PARITY, renumbered))).toBe(
       true,
     );
   });
