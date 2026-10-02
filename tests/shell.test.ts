@@ -9,7 +9,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
-import config, { MAIN_OUT, SHERPA_LIBS, sherpaCopies } from "../electrobun.config.ts";
+import config, {
+  MAIN_OUT,
+  SHERPA_LIBS,
+  sherpaCopies,
+  transcribeCppCopies,
+} from "../electrobun.config.ts";
 import { ICONSET, ICONSET_FILES } from "../scripts/app-icon.ts";
 import { MIN_MACOS } from "../scripts/build-app.ts";
 import { trayIconFiles } from "../scripts/tray-icons.ts";
@@ -675,6 +680,30 @@ describe("the ElectroBun build", () => {
       const linked = spawnSync("otool", ["-L", node]).stdout.toString();
       for (const lib of SHERPA_LIBS.darwin ?? []) expect(linked).toContain(`@rpath/${lib}`);
     }
+  });
+
+  test("[spike] Native libraries missing from the bundle: transcribe-cpp, koffi and both platform packages are in build.copy beside the main process", () => {
+    const copies = transcribeCppCopies("darwin", "arm64");
+    const nm = `${MAIN_OUT}/node_modules`;
+    expect(copies).toEqual({
+      "node_modules/transcribe-cpp": `${nm}/transcribe-cpp`,
+      "node_modules/koffi": `${nm}/koffi`,
+      "node_modules/@koromix/koffi-darwin-arm64": `${nm}/@koromix/koffi-darwin-arm64`,
+      "node_modules/@transcribe-cpp/darwin-arm64-metal": `${nm}/@transcribe-cpp/darwin-arm64-metal`,
+    });
+    // Every copied folder is where the install put it, on the machine that builds the app.
+    if (`${process.platform}-${process.arch}` === "darwin-arm64") {
+      for (const src of Object.keys(copies))
+        expect([src, existsSync(join(ROOT, src))]).toEqual([src, true]);
+      // The library the binding loads is in the platform package that is copied.
+      expect(
+        existsSync(
+          join(ROOT, "node_modules/@transcribe-cpp/darwin-arm64-metal/libtranscribe.dylib"),
+        ),
+      ).toBe(true);
+    }
+    // A platform with no app build copies nothing.
+    expect(transcribeCppCopies("linux", "x64")).toEqual({});
   });
 
   test("[spike] Info.plist cannot carry the system-audio usage string: the patch writes both keys", () => {
