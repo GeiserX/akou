@@ -159,7 +159,7 @@ const SUBS: Record<string, SubPage> = {
         title: "Live transcript",
         keys: ["asr.live.engine", "asr.parakeet.decoding", "asr.segmentPause", "asr.segmentWindow"],
       },
-      { title: "Final transcript", keys: ["asr.final.model"] },
+      { title: "Final transcript", keys: ["asr.final.model", "asr.final.engines"] },
       { title: "Engines", keys: ["asr.threads", "asr.modelsDir"] },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],

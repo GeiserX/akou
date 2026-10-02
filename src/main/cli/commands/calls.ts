@@ -27,7 +27,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--engines A,B] [--without-models] [--attach] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -55,6 +55,11 @@ const start: Command = {
       value: "S",
       desc: "how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)",
     },
+    engines: {
+      type: "string",
+      value: "A,B",
+      desc: "the final pass's models for this call, in order, their words combined: qwen, parakeet or model ids (default: asr.final.engines)",
+    },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
     "without-models": {
       type: "boolean",
@@ -70,6 +75,7 @@ const start: Command = {
     'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
     "akou start --live nemotron",
     "akou start --live nemotron --review qwen --review-every 120",
+    "akou start --engines qwen,parakeet",
     "akou start --attach --json",
   ],
   run: async (ctx, p) => {
@@ -87,6 +93,7 @@ const start: Command = {
         live: str(p, "live"),
         review: str(p, "review"),
         reviewEvery: int(p, "review-every", REVIEW_EVERY_MIN, REVIEW_EVERY_MAX),
+        engines: list(p, "engines"),
         attach: bool(p, "attach") || undefined,
       },
     });

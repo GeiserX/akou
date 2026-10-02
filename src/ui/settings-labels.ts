@@ -128,6 +128,15 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
     ],
   },
+  "asr.final.engines": {
+    label: "Several models after the call",
+    help: "Each one hears the whole call and their words are combined. Slower; first one breaks ties.",
+    empty: "One model",
+    choices: [
+      ["qwen3-asr-1.7b", "Qwen3-ASR"],
+      ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
+    ],
+  },
   "asr.parakeet.decoding": {
     label: "Parakeet decoding",
     help: "Beam also leans toward your words, but can drop whole stretches.",

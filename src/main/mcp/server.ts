@@ -430,6 +430,12 @@ export function createMcpServer(o: McpOptions): McpServer {
           .optional()
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
         vocab: z.array(z.string()).optional(),
+        engines: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'The final pass\'s models for this call, in order, their words combined: "qwen", "parakeet" or model ids. Omit for the setting',
+          ),
       }),
       outputSchema: OUT.start,
     },

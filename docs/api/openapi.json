@@ -432,7 +432,7 @@
         "tags": [
           "models"
         ],
-        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`) and `next` (the id the next pass runs, never one that is not downloaded; null when neither is).",
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`), `next` (the id the next pass runs, never one that is not downloaded; null when neither is; `rover-conf(<ids>)` when it fuses several) and `engines` (`asr.final.engines` as ids, empty for one model).",
         "responses": {
           "200": {
             "description": "OK",
@@ -642,7 +642,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. `engines` lists the models of this call's final pass, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`, or `qwen` and `parakeet`), instead of `asr.final.engines`; it is kept in the call's log, so a pass after a restart runs them too. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -682,6 +682,12 @@
                   },
                   "reviewEvery": {
                     "type": "number"
+                  },
+                  "engines": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   },
                   "attach": {
                     "type": "boolean"

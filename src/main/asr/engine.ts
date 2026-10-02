@@ -58,6 +58,11 @@ export interface FinalEngine {
     glossary: boolean;
     languageId: boolean;
   };
+  /**
+   * Memory it holds while loaded, MB, for the final pass's budget; absent for the measured
+   * figure by its id (final-model.ts).
+   */
+  readonly memoryMb?: number;
   load(): Promise<void>;
   unload(): Promise<void>;
   decode(unit: FinalUnit): Promise<Hypothesis>;
@@ -284,7 +289,14 @@ export type ModelSpec = (
       diarizeHelper?: readonly string[];
     }
   | { kind: "module"; path: string; model: string; options?: unknown }
-) & { final?: LlamaEngineSpec };
+) & {
+  final?: LlamaEngineSpec;
+  /**
+   * A final pass over several engines (`asr.final.engines`): their ids in order, each either
+   * `final`'s engine or the model set's recognizer. Absent: `final` alone, else the recognizer.
+   */
+  finals?: readonly string[];
+};
 
 export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
   if (spec.kind === "module") {

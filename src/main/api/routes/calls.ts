@@ -11,6 +11,12 @@
 
 import { formatWall } from "../../../core/log/clock.ts";
 import {
+  FINAL_MODELS,
+  type FinalModel,
+  finalModelId,
+  finalModelOf,
+} from "../../asr/final-model.ts";
+import {
   isLiveCallSetting,
   isReviewModel,
   LIVE_SETTINGS,
@@ -115,7 +121,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. `engines` lists the models of this call's final pass, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`, or `qwen` and `parakeet`), instead of `asr.final.engines`; it is kept in the call's log, so a pass after a restart runs them too. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -129,6 +135,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         "live?": "string",
         "review?": "string",
         "reviewEvery?": "number",
+        "engines?": "string[]",
         "attach?": "boolean",
       },
       ok: 201,
@@ -146,6 +153,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         live?: unknown;
         review?: unknown;
         reviewEvery?: unknown;
+        engines?: unknown;
         attach?: boolean;
       }>();
       if (b.live !== undefined && (typeof b.live !== "string" || !isLiveCallSetting(b.live))) {
@@ -173,6 +181,19 @@ export function callRoutes(r: Router<ApiApp>): void {
           { field: "reviewEvery" },
         );
       }
+      const engines = b.engines;
+      if (
+        engines !== undefined &&
+        (!Array.isArray(engines) ||
+          !engines.every((e) => typeof e === "string" && finalModelOf(e) !== null))
+      ) {
+        throw new HttpError(
+          422,
+          "bad_field",
+          `engines is a list of ${FINAL_MODELS.filter((m) => m !== "auto").join(", ")}, qwen or parakeet`,
+          { field: "engines" },
+        );
+      }
       const vocab = [];
       for (const term of b.vocab ?? []) {
         const bad = validateTerm(term);
@@ -191,6 +212,13 @@ export function callRoutes(r: Router<ApiApp>): void {
         live: b.live as string | undefined,
         review: b.review as string | undefined,
         reviewEvery: every as number | undefined,
+        ...(engines
+          ? {
+              engines: (engines as string[]).map((e) =>
+                finalModelId(finalModelOf(e) as FinalModel),
+              ),
+            }
+          : {}),
         attach: b.attach === true,
       });
       if (!res.ok) return outcome(res);

@@ -397,13 +397,13 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | `asr.review.model` | `none`, `qwen`, `parakeet` | `none`: the second pass is the user's choice only | Section 3.2's tables. Built (ASR-7) in `src/main/asr/live-worker.ts` and `upgrade.ts` |
 | `asr.review.everySeconds` | 30 to 600 | 60 | Section 3.2, one minute against two |
 | `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
-| `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
+| `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4. Built (ASR-6) with the default `[]`: one model, the one `asr.final.model` picks, as the owner's default is Qwen alone; the list is opt-in. It takes Qwen and Parakeet until ASR-8 adds engines |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
 | `asr.fusion.llm` | `none`, `pick`, `free` | `none` | Section 5 |
 | `asr.fusion.provider` | `workspace` (the workspace's `provider.kind`) or an explicit provider | `workspace` | Providers measured: harness (Opus), openai-compatible (gemma-4-12B) |
 | `asr.parakeet.decoding` | `greedy`, `beam` | `greedy` | The beam bug. The hotword boost becomes the constant 1.5 when beam is on |
 | `asr.accelerator` | `auto`, `cpu`, `metal`, `vulkan`, `cuda`, `sycl`, `rocm` | `auto` | Picks the llama-server and transcribe-cpp build to download. `auto` never picks `sycl` or `rocm`; built in `src/main/asr/accelerator.ts` |
-| `asr.memoryBudgetMb` | Integer | 60 % of physical RAM | The test machine's panic. The pass drops engines from the end of the list until the loaded set fits, and says so in `final.done` |
+| `asr.memoryBudgetMb` | Integer | 60 % of physical RAM | The test machine's panic. The pass drops engines from the end of the list until the loaded set fits, and says so in `final.done`. Built (ASR-6) as the fixed 60 %, no key yet (Qwen counts 3000 MB, Parakeet 2700, `src/main/asr/final-model.ts`) |
 | `asr.threads` (exists, `src/main/config/schema.ts:205-211`) | 1 to 32 | 2 today; **4** measured for the live engine (RTF 0.067 at 4, 0.091 at 2) | Latency table |
 
 Out of the box:

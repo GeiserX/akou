@@ -477,6 +477,12 @@ export const SETTINGS = {
     default: "auto",
     doc: "The model that writes the final transcript after a call: `auto`, or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same). `qwen`: Qwen3-ASR on its llama-server, the most accurate; it gives no word times, so each line keeps the times of the stretch it was cut from. While the pass runs it holds about 3 GB of memory and the GPU when there is one. Without a GPU it decodes on the processor, much slower, and a pass gets half the call's length plus 300 s before it is stopped as stuck, so on such a machine a long call can fail: set `parakeet` there. One Qwen pass runs at a time; another waits for it. `parakeet`: Parakeet, on the processor. `auto` picks `qwen` whenever its model and its llama-server are downloaded, else `parakeet`. A model that is not downloaded never runs: the setting falls back to the other model and says why in the log, and with neither downloaded no pass runs. On Qwen the pass does not need Parakeet on disk. Speaker labels are the same with either. A Qwen that cannot start, or fails twice in a row, fails the pass, and `akou finalize --force` runs it again. `akou finalize --model` sets it for one run, and is refused when that model is not downloaded; a pass stopped by a quit runs again at the next start on this setting's model. A change applies from the next pass.",
   },
+  "asr.final.engines": {
+    type: "string[]",
+    values: FINAL_MODELS.filter((m) => m !== "auto"),
+    default: [],
+    doc: "Several models for the final transcript, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): each one decodes every stretch of the call and their words are fused by confidence voting (ROVER), the first one breaking ties. Lines are named `rover-conf(<ids>)`. Empty, the default: one model, the one `asr.final.model` picks. A listed model that is not downloaded is left out, and so are models from the end of the list while together they need more than 60 % of this computer's memory; one that fails during the pass is dropped and the pass goes on with the rest. `final.done` names the models that ran and the ones left out, with why. `akou finalize --model` runs one model for one run whatever this says. A change applies from the next pass.",
+  },
   "asr.review.everySeconds": {
     type: "integer",
     min: REVIEW_EVERY_MIN,
@@ -1207,12 +1213,21 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
  * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
  * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
  * `asr.review.model` `qwen` (unless it names its own). And short names read as the ids they name:
- * `asr.final.model` `qwen` and `parakeet`.
+ * `asr.final.model` `qwen` and `parakeet`, in it and in `asr.final.engines`.
  */
 export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
   const short = values["asr.final.model"];
   if (short === "qwen" || short === "parakeet") {
     values = { ...values, "asr.final.model": finalModelId(short) };
+  }
+  const list = values["asr.final.engines"];
+  if (Array.isArray(list) && list.some((v) => v === "qwen" || v === "parakeet")) {
+    values = {
+      ...values,
+      "asr.final.engines": list.map((v) =>
+        v === "qwen" || v === "parakeet" ? finalModelId(v) : v,
+      ),
+    };
   }
   if (values["asr.live"] !== "upgrade") return values;
   return {

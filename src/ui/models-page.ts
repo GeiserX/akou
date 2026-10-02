@@ -94,8 +94,10 @@ import { wordsFor } from "./settings-labels.ts";
 interface FinalView {
   setting: string;
   named: string | null;
-  /** Null when no final model is downloaded. */
+  /** Null when no final model is downloaded; `rover-conf(<ids>)` when the pass fuses several. */
   next: string | null;
+  /** `asr.final.engines` as ids; empty for one model. Absent from an older app. */
+  engines?: string[];
 }
 type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView; final?: FinalView };
 
@@ -674,11 +676,13 @@ export class ModelsPage {
   }
 
   /**
-   * The model After the call shows: the one `asr.final.model` names, else the one the next pass
-   * runs (`auto`), else Parakeet where the app says neither.
+   * The model After the call shows: the first of `asr.final.engines`, else the one
+   * `asr.final.model` names, else the one the next pass runs (`auto`), else Parakeet where the app
+   * says neither.
    */
   private afterCallId(): string {
-    return this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
+    // Several models after the call: the row shows the first, which breaks their ties.
+    return this.final?.engines?.[0] ?? this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
   }
 
   /**
@@ -697,8 +701,9 @@ export class ModelsPage {
         ? this.rowsOf(this.live?.slots.review.find((e) => e.id === QWEN_ID)?.models ?? [QWEN_ID])
         : [r];
     const next = this.final?.next;
+    // A fused pass (`rover-conf(<ids>)`) is no one model to wait for.
     const until =
-      next && next !== r.id
+      next && next !== r.id && !next.startsWith("rover-")
         ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
         : "";
     const s = section(
