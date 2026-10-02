@@ -289,8 +289,9 @@ export function previousStable(
 /** The `## <version>` section of a changelog, its heading through the line before the next `## `. */
 export function changelogSection(md: string, version: string): string | null {
   const lines = md.split("\n");
-  const head = new RegExp(`^## ${version.replace(/[.+]/g, "\\$&")}(\\s|$)`);
-  const at = lines.findIndex((l) => head.test(l));
+  const head = `## ${version}`;
+  // The heading, then a space or nothing: 0.1 is not 0.1.0.
+  const at = lines.findIndex((l) => l.startsWith(head) && /^(\s|$)/.test(l.slice(head.length)));
   if (at === -1) return null;
   const end = lines.findIndex((l, i) => i > at && l.startsWith("## "));
   return lines
