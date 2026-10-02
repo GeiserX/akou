@@ -12,12 +12,12 @@ import { join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
 import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
-import { asKey, type Key, newKey, SERVER, submit } from "./server-helpers.ts";
+import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helpers.ts";
 
 setDefaultTimeout(60_000);
 
@@ -96,6 +96,17 @@ describe("akou-5an.93: preset best", () => {
     expect(res.text).toBe("hello world ok great");
     expect(res.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
     expect(res.metadata).toEqual({ chat: 1 });
+    // akou-5an.24.1: SV-J4's shape, with Qwen's words: a confidence each, no times.
+    expect(RESULT.safeParse(res).error?.issues ?? []).toEqual([]);
+    expect(res.words.map((w: { w: string }) => w.w)).toEqual(["hello", "world", "ok", "great"]);
+    for (const w of res.words) {
+      expect(w.c).toBeGreaterThan(0);
+      expect(w.c).toBeLessThanOrEqual(1);
+      expect([w.s, w.e]).toEqual([null, null]);
+    }
+    expect(res.confidence).toBeGreaterThan(0);
+    expect(res.confidence).toBeLessThanOrEqual(1);
+    expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
   });
 
   test("a Spanish note: the language is forced, and comes back as es", async () => {
@@ -198,6 +209,72 @@ describe("akou-5an.93: best is listed available only when a job on it can run", 
       reg.install(models, catalog[3] as (typeof catalog)[number]);
       reg.install(models, catalog[4] as (typeof catalog)[number]);
       expect(pick(await best(), "best")).toBe(true);
+    } finally {
+      await r.close();
+      reg.stop();
+      t.cleanup();
+    }
+  });
+});
+
+describe("[SV-R2] auto runs best wherever Qwen is on disk, else fast", () => {
+  test("Parakeet only: auto is fast and says why; once Qwen is there, a job that names nothing runs it", async () => {
+    const reg = modelRegistry();
+    const catalog = [
+      reg.entry(RECOGNIZER, ["a.onnx"]),
+      reg.entry("silero-vad", ["vad.onnx"]),
+      reg.entry(NEMOTRON, ["diar.onnx"]),
+      reg.entry(QWEN_ASR, ["q.gguf", "p.gguf"]),
+    ];
+    const t = tempDir("akou-best-auto-");
+    const models = join(t.dir, "models");
+    for (const e of catalog.slice(0, 3)) reg.install(models, e);
+    // An own llama-server (the fake), as an image has: Qwen's own files are all `best` needs.
+    const r = await appRig({
+      modelRegistry: catalog,
+      models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+      settings: {
+        ...SERVER,
+        "asr.modelsDir": models,
+        "server.auto_download": false,
+        "asr.llamaServer": [process.execPath, FAKE_LLAMA],
+      },
+      jobs: { modelStore: { freeBytes: () => 1e12 } },
+    });
+    const auto = async () => (await r.api("GET", "/server")).body.auto;
+    try {
+      const k = await newKey(r, "archive");
+      const run = async () => {
+        const s = await submit(r, k.key, DIALOGUE, { preset: "auto", language: "auto" });
+        expect(s.status).toBe(202);
+        const j = await asKey(r, k.key, "GET", `/jobs/${s.body.id}?wait=30`);
+        expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+        const res = (await asKey(r, k.key, "GET", `/jobs/${s.body.id}/result`)).body;
+        return { job: j.body, res };
+      };
+      expect(await auto()).toEqual({
+        model: RECOGNIZER,
+        preset: "fast",
+        reason: "Parakeet is downloaded here and Qwen3-ASR is not.",
+      });
+      const fast = await run();
+      expect(fast.job).toMatchObject({
+        model: RECOGNIZER,
+        preset: "fast",
+        model_source: "hardware",
+      });
+
+      reg.install(models, catalog[3] as (typeof catalog)[number]);
+      expect(await auto()).toEqual({
+        model: QWEN_ASR,
+        preset: "best",
+        reason: "Qwen3-ASR is downloaded here.",
+      });
+      const best = await run();
+      expect(best.job).toMatchObject({ model: QWEN_ASR, preset: "best", model_source: "hardware" });
+      expect(best.res.engine.models[0]).toBe(QWEN_ASR);
+      // Qwen names the language it heard, which Parakeet never does.
+      expect(best.res.language).toBe("en");
     } finally {
       await r.close();
       reg.stop();

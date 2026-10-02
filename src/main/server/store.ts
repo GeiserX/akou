@@ -5,7 +5,8 @@
  * - `jobs`: one row per job, from submit until the client deletes it or retention does. The
  *   uploaded audio is a file beside the database, named in the row, deleted when the job ends.
  * - `events`: the per-key feed (SV-E1), one row per outcome, in the order they happened. A deleted
- *   job keeps its events with the job id and the final state only.
+ *   job keeps its events with the job id and the final state only, except a cancelled event, which
+ *   keeps the job's metadata until retention removes it.
  * - `outbox`: one row per webhook delivery (SV-E5), written in the same transaction as its event,
  *   so the delivery and its attempt count are on disk before the first try.
  *
@@ -67,6 +68,11 @@ export interface Job {
    * arrival order, and never counted against the queue's limits.
    */
   interactive: boolean;
+  /**
+   * A synchronous call (`POST /v1/audio/transcriptions`): its caller gets the answer in the
+   * response and akou removes the job after it, so it writes nothing to the feed (SV-E1).
+   */
+  quiet: boolean;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -199,7 +205,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   priority INTEGER NOT NULL DEFAULT 0,
   request TEXT,
   interactive INTEGER NOT NULL DEFAULT 0,
-  title TEXT
+  title TEXT,
+  quiet INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -245,6 +252,7 @@ function jobOf(r: Row): Job {
     remote_job: (r.remote_job as string | null) ?? null,
     priority: (r.priority as number | null) ?? 0,
     interactive: r.interactive === 1,
+    quiet: r.quiet === 1,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     diarize: r.diarize === 1,
@@ -304,6 +312,8 @@ export interface NewJob {
   priority?: number;
   /** A dictation in the reserved lane (DC-R2). Default false. */
   interactive?: boolean;
+  /** A synchronous call, which writes no feed event. Default false. */
+  quiet?: boolean;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -326,6 +336,12 @@ export interface Outcome {
 
 export class JobStore {
   readonly db: Database;
+  /**
+   * The feed's id (SV-E1), made once when the file is created and kept in its header
+   * (`user_version`), not in a table: a reset or replaced jobs.db starts its cursors at 0 again
+   * under a new id, so a client holding a cursor of the old feed can tell and start over.
+   */
+  readonly feedId: string;
 
   constructor(
     readonly path: string,
@@ -337,6 +353,14 @@ export class JobStore {
     this.db.run("PRAGMA synchronous = FULL");
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run(SCHEMA);
+    let feed = (this.db.query("PRAGMA user_version").get() as { user_version: number })
+      .user_version;
+    if (feed === 0) {
+      // A positive 31-bit number: user_version is a signed 32-bit integer, and 0 means unset.
+      feed = randomBytes(4).readUInt32BE() & 0x7fffffff || 1;
+      this.db.run(`PRAGMA user_version = ${feed}`);
+    }
+    this.feedId = `feed_${feed.toString(16).padStart(8, "0")}`;
     // A jobs.db from before SV-S1 gains the model columns; its jobs run the server's default.
     // One from before remote dispatch gains the route columns; its jobs run here. One from before
     // the request column keeps comparing a repeated idempotency key by file only (SV-J2).
@@ -362,6 +386,10 @@ export class JobStore {
     // One from before DC-R2 gains the interactive column; its jobs are ordinary ones.
     if (!cols.has("interactive")) {
       this.db.run("ALTER TABLE jobs ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0");
+    }
+    // One from before quiet jobs gains the column; its jobs write their events.
+    if (!cols.has("quiet")) {
+      this.db.run("ALTER TABLE jobs ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0");
     }
     // The queue's order, after the column exists on an older file.
     this.db.run("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, priority DESC, seq)");
@@ -390,9 +418,9 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive,
+          `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive, quiet,
             language, keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
-           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -404,6 +432,7 @@ export class JobStore {
           j.route ?? null,
           j.priority ?? 0,
           j.interactive ? 1 : 0,
+          j.quiet ? 1 : 0,
           j.language,
           JSON.stringify(j.keywords),
           j.diarize ? 1 : 0,
@@ -539,9 +568,9 @@ export class JobStore {
   }
 
   /**
-   * A running job's end, its feed event and its delivery, in one transaction. False when the job
-   * is no longer running (a delete got there first), and nothing is written. A queued job can only
-   * fail, when the model it waits for cannot be had (SV-M3).
+   * A running job's end, its feed event and its delivery, in one transaction; a quiet job's end
+   * has no event. Null when the job is no longer running (a delete got there first), and nothing
+   * is written. A queued job can only fail, when the model it waits for cannot be had (SV-M3).
    */
   finish(
     id: string,
@@ -549,7 +578,7 @@ export class JobStore {
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError },
     outcome: Outcome,
-  ): FeedEvent | null {
+  ): { event: FeedEvent | null } | null {
     return this.db.transaction(() => {
       const now = this.now();
       const changed =
@@ -566,14 +595,16 @@ export class JobStore {
               .run(now, JSON.stringify(end.error), id).changes;
       if (changed === 0) return null;
       const job = this.job(id) as Job;
-      return this.append(job, outcome, now);
+      return { event: this.append(job, outcome, now) };
     })();
   }
 
   /**
    * Removes a job (SV-J6). A job still queued or running first gets its `transcription.cancelled`
-   * event; every event of the job then keeps its id and final state only, marked deleted. Returns
-   * the job as it was, and its state after (`cancelled` for one that had not ended).
+   * event, which carries the job's metadata as a failed one does (SV-E3) so the client can match
+   * it, and never a result; every other event of the job then keeps its id and final state only,
+   * marked deleted. Returns the job as it was, and its state after (`cancelled` for one that had
+   * not ended).
    */
   remove(id: string): { job: Job; final: JobStatus } | null {
     return this.db.transaction(() => {
@@ -585,12 +616,17 @@ export class JobStore {
         final = "cancelled";
         this.append(
           { ...job, status: "cancelled", cancelled_at: now },
-          { type: "transcription.cancelled", data: { job_id: id, status: "cancelled" } },
+          {
+            type: "transcription.cancelled",
+            data: { job_id: id, status: "cancelled", metadata: job.metadata },
+          },
           now,
         );
       }
       this.db.query("DELETE FROM jobs WHERE id = ?").run(id);
-      for (const e of this.db.query("SELECT * FROM events WHERE job_id = ?").all(id) as Row[]) {
+      for (const e of this.db
+        .query("SELECT * FROM events WHERE job_id = ? AND type != 'transcription.cancelled'")
+        .all(id) as Row[]) {
         const status = (JSON.parse(e.data as string) as { status?: string }).status ?? final;
         this.db
           .query("UPDATE events SET data = ? WHERE seq = ?")
@@ -604,6 +640,19 @@ export class JobStore {
         .run(id);
       return { job, final };
     })();
+  }
+
+  /**
+   * Cancelled events from before `t` lose their metadata, keeping the job id and the state, marked
+   * deleted: retention holds no client data past `server.retain_days` (SV-J6). Returns how many.
+   */
+  scrubCancelled(t: number): number {
+    return this.db
+      .query(
+        `UPDATE events SET data = json_object('job_id', job_id, 'status', 'cancelled', 'deleted', json('true'))
+         WHERE type = 'transcription.cancelled' AND at < ? AND json_extract(data, '$.deleted') IS NULL`,
+      )
+      .run(t).changes;
   }
 
   /**
@@ -667,7 +716,9 @@ export class JobStore {
   // -------------------------------------------------------------------------
   // The feed
 
-  private append(job: Job, o: Outcome, now: number): FeedEvent {
+  /** The job's event and its delivery; none for a quiet job. */
+  private append(job: Job, o: Outcome, now: number): FeedEvent | null {
+    if (job.quiet) return null;
     const id = `msg_${ulid(now)}`;
     const r = this.db
       .query(
