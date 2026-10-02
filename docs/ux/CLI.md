@@ -405,8 +405,8 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | sidebar | none |
 | Rename a call | `calls rename` | `PATCH /calls/{id}` | `akou_rename_call` | the title in the call header | none |
 | List and add workspaces | `workspaces`, `workspace add` | `GET /workspaces`, `POST /workspaces` | none | the workspace menu in the Record row, New workspace in the sidebar | MCP: `akou_start` names the workspace and makes its folder |
-| Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | all missing (CLI-26) |
-| Edit a line | `edit` | PG-A5 | none yet | inline edit | all missing (CLI-29) |
+| Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | API done; CLI, MCP and window missing (CLI-26) |
+| Edit a line | `edit` | PG-A5 | none yet | inline edit | API done (speaker; text through `fix`); CLI and window missing (CLI-29) |
 | Share | `share` | `/share` | none | share pill | MCP (PG-M4) |
 | Templates | `templates` | `GET /templates` | none | none: the window always uses the automatic choice | CLI and MCP (PG-F3); the window on purpose |
 | Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | MCP read (PG-M4) |

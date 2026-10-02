@@ -297,6 +297,8 @@ export const REEXPORT_DEBOUNCE_MS = 1_500;
 
 /** Events after which an exported call is exported again (DESIGN 8.2): names and corrections. */
 const REEXPORT_ON: ReadonlySet<string> = new Set([
+  // The export file takes the new title's name (PG-A4).
+  "call.renamed",
   "speaker.name",
   "speaker.merge",
   "speaker.unmerge",
@@ -1518,6 +1520,48 @@ export class AkouApp implements ApiApp {
       }
       return { ok: true, ...(await this.exportTo(id, root)) };
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Move, trash and restore (PROGRAMMABILITY PG-A4), each after the call's hand-off work
+
+  async moveCall(
+    id: string,
+    workspace: string,
+    by: string,
+  ): Promise<Outcome<{ workspace: string; seq: number | null }>> {
+    return this.serial(id, async () => {
+      const r = await this.manager.move(id, workspace);
+      if (!r.ok) return r;
+      const to = this.manager.summary(id)?.workspace ?? workspace;
+      if (r.dir === r.from) return { ok: true, workspace: to, seq: null };
+      const e = await this.write(id, (c) => ({
+        type: "call.moved",
+        rev: c.view.workspaceRev + 1,
+        workspace: to,
+        by,
+      }));
+      return { ok: true, workspace: to, seq: e.seq };
+    });
+  }
+
+  async trashCall(id: string): Promise<Outcome<{ dir: string }>> {
+    return this.serial(id, async () => {
+      if (this.manager.live()?.id === id) {
+        return fail(409, "live_call", "the call is recording; stop it first", { call: id });
+      }
+      // A link to a call that is gone would show nothing: it stops first.
+      await this.stopShare(id);
+      const t = this.reexports.get(id);
+      if (t) clearTimeout(t);
+      this.reexports.delete(id);
+      const r = await this.manager.trash(id);
+      return r.ok ? { ok: true, dir: r.dir } : r;
+    });
+  }
+
+  restoreCall(id: string): Promise<Outcome<{ dir: string; workspace: string }>> {
+    return this.manager.restore(id);
   }
 
   /** The hooks of one stage, in order, each recorded as `hook.done`. */

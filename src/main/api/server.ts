@@ -178,6 +178,16 @@ export interface ApiApp {
   } | null;
   /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
   exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
+  /** `PATCH /calls/{id} {workspace}`: the folder moves, then a `call.moved` (PG-A4). */
+  moveCall(
+    id: string,
+    workspace: string,
+    by: string,
+  ): Promise<Outcome<{ workspace: string; seq: number | null }>>;
+  /** `DELETE /calls/{id}`: the call's folder goes to the trash, kept 30 days (PG-A4). */
+  trashCall(id: string): Promise<Outcome<{ dir: string }>>;
+  /** `POST /calls/{id}/restore`: a trashed call back where it was, unchanged (PG-A4). */
+  restoreCall(id: string): Promise<Outcome<{ dir: string; workspace: string }>>;
   /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */
   runHooks(id: string, stages?: readonly HookStage[]): Promise<Outcome<{ runs: HookReport[] }>>;
   /** `POST /import/hark-viewer`: predecessor call folders into calls. */
