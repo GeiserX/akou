@@ -362,7 +362,7 @@ Folder names are unique by construction. akou never writes into an existing call
 | `call.ended` | `reason: stop \| interrupted \| abandoned` | `abandoned`: an `interrupted` call with no resume for 24 h, closed at the next app start |
 | `call.failed` | `stage`, `error` | A start that never captured; this is the only event for that outcome. The folder and any audio are kept and listed as failed |
 | `part.started` | `part`, `file`, `wallStart`, `monoStart`, `mic`, `call`, `capture` | The (wall, monotonic) anchor pair |
-| `part.ended` | `part`, `reason: stop \| restart \| helper-exit \| killed \| crashed \| cancelled`, `fileSeconds` | |
+| `part.ended` | `part`, `reason: stop \| restart \| helper-exit \| killed \| crashed \| cancelled \| low-disk`, `fileSeconds` | `low-disk` is designed, not built: the protective stop below a free-space floor ([COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md) REC-02) |
 | `pause` / `resume` | `part`, `a`, `wall`, `mono` | Time with no audio. Resume re-anchors |
 | `mute` / `unmute` | `part`, `a` | The timeline continues; mic is zeros |
 | `gap` | `part`, `a`, `wallFrom`, `wallTo`, `reason: sleep` | Detected from a monotonic jump |
@@ -442,7 +442,7 @@ The window does not show enhanced notes or Enhance. Enhance stays in the CLI (`a
 
 **Enhance** runs after `final.done`, and on demand during the call ("Enhance so far"). The input is built by the same context builder as questions: the template, every user note verbatim with the transcript from 90 s before to 30 s after it, the memo, agent `remember` lines, and the whole transcript if it fits 20k tokens. Past that, a map step summarises 15-minute chunks (cached as `chunk.summary` events so a re-run does not pay twice; the pack and `akou_memo_get` never read them) and one reduce step follows.
 
-Output rules: the user's own lines are kept word for word and marked as theirs; every added bullet cites at least one segment id. A deterministic check drops any bullet whose cited ids do not exist or share no content word with the cited lines, and it applies to every provider including the harness. The result is stored as `enhanced {rev}`, so re-enhancing with another template keeps both. If the enhancement came from the live layer and the final layer lands later, akou re-enhances automatically unless the user edited the enhanced notes; then `akou enhance` runs it again on request, since the window does not offer Enhance.
+Output rules: the user's own lines are kept word for word and marked as theirs; every added bullet cites at least one segment id. A deterministic check drops any bullet whose cited ids do not exist or share no content word with the cited lines, and it applies to every provider including the harness. The result is stored as `enhanced {rev}`, so re-enhancing with another template keeps both. If the enhancement came from the live layer and the final layer lands later, akou re-enhances automatically, except with the harness provider ([providers.md](providers.md)) or when the user edited the enhanced notes; then `akou enhance` runs it again on request, since the window does not offer Enhance.
 
 ### 5.3 The provider: the user's own harness by default
 
@@ -588,12 +588,13 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
 | `akou share on\|off\|status [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | Read-only live link |
-| `akou doctor [--grant]` | Permissions, models, devices, a 3 s capture test, API security self-test, harness discovery |
-| `akou devices` · `akou apps` · `akou models list\|pull\|import` · `akou config show\|set\|unset` · `akou token path\|rotate` | Setup |
+| `akou doctor [--grant]` | Permissions, models, the capture helper, API security self-test, harness discovery. Planned: a 3 s capture test per channel, `--capture-test` ([DESKTOP.md](ux/DESKTOP.md) DK-O1) |
+| `akou models list\|pull\|import` · `akou config show\|set\|unset` · `akou token path\|rotate` | Setup |
+| `akou devices` · `akou apps` | Planned ([CLI.md](ux/CLI.md) CLI-07): both exit 69 until the capture helper's device and app query exists |
 | `akou import hark-viewer DIR… [-w WORKSPACE]` | Converts predecessor call folders (all parts) into event logs |
 | `akou skill install [--harness claude\|codex] [--dir DIR]` | Installs `SKILL.md` into the harness's skills folder; refuses a skill whose version differs from the app's |
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
-| `akou self-update` | CLI tarball only (M4): replaces the binary after verifying its cosign signature |
+| `akou self-update` | Planned, CLI tarball only (M4): replaces the binary after verifying its cosign signature. Exits 69 until then |
 
 Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission, 124 `akou wait` timed out.
 
@@ -689,7 +690,7 @@ Tool descriptions carry the rules: cite wall time, never quote a draft line as f
 
 ## 7. The window
 
-One webview (WKWebView, WebView2, WebKitGTK), plain TypeScript with CSS variables, no framework. Updates arrive as RPC pushes from the main process, not polling. A read-only share viewer is built from the same bundle.
+One webview (WKWebView, WebView2, WebKitGTK), plain TypeScript with CSS variables, no framework. Updates arrive as RPC pushes from the main process. A few pages also poll the API, where the push does not carry what they show yet: the Models page asks `GET /models` once a second while a model downloads, and the live models menu and the setup's models step do the same while one downloads or is copied in ([DESKTOP.md](ux/DESKTOP.md) DK-E2 moves the Models page onto the push); the welcome's download polls only after the status push has been quiet for 3 s (WINDOW W10.6); the setup and the Dictation setup read the grants once a second, so a grant given in System Settings shows without a click; and server mode's Jobs page reads `GET /v1/jobs` twice a second while it shows, because the event feed carries outcomes only. A read-only share viewer is built from the same bundle.
 
 The page keeps its own fold of the call it shows. It reads the log once, as the backlog of its stream, applies each event after that once and in `seq` order, and redraws only the lines the fold's change feed names. The page has no vocabulary files and no word lists, so its fold applies call-scoped pairs only; for the lines the app's vocabulary corrects it shows the text the stream's `read` event carries, for as long as that text belongs to the line's current revision. It recovers from a dropped stream, sleep or a frozen webview by following again from the last `seq` it applied, never by trusting the old connection. Every text from a transcript, note, name or answer is drawn as text, never as markup. The same page runs in a browser over the page server (section 6.3 rule 8), which is how the headless app and the UI tests show it.
 
@@ -713,7 +714,9 @@ Everything hark-viewer did is kept:
 | Relabel command | Replaced by whole-call diarization plus click-to-rename |
 | Third-party comparison transcript lane | Dropped; nothing read it |
 
-New: the notepad pane with time gutter; the ask box at the top of the right column with presets in a menu ("Catch me up", "Was my name mentioned?", "Decisions so far", "Action items", "What did <speaker> say?"), evidence cards within 300 ms, a streamed answer, clickable citations that scroll and play; the Notes pane under the ask box, with no Enhanced tab (Enhance is hidden, section 5.2); inline edit of a line (writes `seg rev+1 by:user`); playback from any line of a saved call with mic/call balance, from a player bar that exists only when the call has a recording (a call that is recording cannot be played until it is saved); level meters for both channels; Fix on a line (the line's text in one field; the words it changes apply to the whole call, a term is learned into the call's and the workspace's vocabulary, a rewording is noted, with Undo; section 5.4); a "Words to review" badge for proposals; the decode list in force as the tooltip of the call header's line; a red **Shared live · N viewers** pill with Stop; hand-off status (export path, hook results, webhook); Settings (root folder, export folder, hooks, webhook, provider per workspace, harness path, models, the vocabulary panel with entries, sources, check verdicts and file paths, your name, hotkey, default template, share defaults); onboarding with a 3 s capture test per channel and the model download; and, on Stop while the meeting app still holds the microphone, an inline "Call audio was active 12 s ago. Stop anyway?" with a 10 s undo (M2).
+Built beyond hark-viewer: the notepad pane with time gutter; the ask box at the top of the right column with presets in a menu ("Catch me up", "Was my name mentioned?", "Decisions so far", "Action items", "What did <speaker> say?"), evidence cards within 300 ms, a streamed answer, clickable citations that scroll and play; the Notes pane under the ask box, with no Enhanced tab (Enhance is hidden, section 5.2); playback from any line of a saved call with mic/call balance, from a player bar that exists only when the call has a recording (a call that is recording cannot be played until it is saved); level meters for both channels; Fix on a line (the line's text in one field; the words it changes apply to the whole call, a term is learned into the call's and the workspace's vocabulary, a rewording is noted, with Undo; section 5.4), which a double-click on a word also opens (WINDOW W4.9); a "Words to review" badge for proposals; the decode list in force as the tooltip of the call header's line; a red **Shared live · N viewers** pill with Stop; hand-off status (export path, hook results, webhook); Settings (root folder, export folder, hooks, webhook, the provider, harness path, models, your name, hotkey) with the vocabulary as the Words page (WINDOW W9.2, W11.14); and onboarding with the model download (WINDOW W10.1, W10.2).
+
+Designed, not built yet: inline edit of a line's text that writes `seg rev+1 by:user` (a double-click opens the Fix instead, WINDOW W4.9); the provider per workspace, a default template and share defaults in Settings ([DESKTOP.md](ux/DESKTOP.md) DK-S6; the window has no template picker, WINDOW W3.21); the vocabulary's sources, check verdicts and file paths in that panel (WINDOW W9.2); a 3 s capture test per channel in onboarding (DESKTOP DK-O1, DK-O2); and, on Stop while the meeting app still holds the microphone, an inline "Call audio was active 12 s ago. Stop anyway?" with a 10 s undo (M2, WINDOW W2.4).
 
 ## 8. Sharing and the knowledge hand-off
 
@@ -781,7 +784,7 @@ type ShareOptions = {
 
 Every transport reads the same `follow(afterSeq)` as the window, filtered and rendered (names and vocabulary applied, echo removed). Raw audio is never shareable in v1.
 
-**v1, `local-link` (M4).** A second GET-only listener on one chosen interface: the tailnet address when present (encrypted by the tailnet), or a LAN address with a warning that plain HTTP on a LAN is visible to that network. Never `0.0.0.0` unless typed. URL `http://<addr>:8477/s/<128-bit token>/`, serving the read-only viewer fed by SSE. It expires at call end plus a grace period or on `akou share off`, never survives an app restart, and while on: a red pill in the header, a changed tray icon, `share.started`/`share.stopped` in the log and `shared: true` in the export.
+**v1, `local-link` (M4).** A second GET-only listener on one chosen interface: the tailnet address when present (encrypted by the tailnet), or a LAN address with a warning that plain HTTP on a LAN is visible to that network. Never `0.0.0.0` unless typed. URL `http://<addr>:8477/s/<128-bit token>/`, serving the read-only viewer fed by SSE. It expires at call end plus a grace period or on `akou share off`, never survives an app restart, and while on: a red pill in the header, the tray's title reading `● shared` (a changed tray icon is [DESKTOP.md](ux/DESKTOP.md) DK-P1, not built yet), `share.started`/`share.stopped` in the log and `shared: true` in the export.
 
 **v2, `hub`** (only on real demand). A small self-hosted sync backend with an idempotent `appendEvents(callId, events[])` keyed on `seq`; viewers subscribe to it and load the same viewer bundle. No akou cloud.
 

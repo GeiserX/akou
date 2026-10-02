@@ -202,15 +202,9 @@ Each row is one bead labelled `docs-lag`, closed by the PR that fixes the doc.
 | DESIGN §9, ROADMAP M1 | Signing and notarization in M1 | Builds are unsigned for now; signing moves to a later milestone |
 | ROADMAP | No UX milestone; shipped work not marked | Add an M-UX milestone whose exit criteria are the P0 and P1 ids, and a "status on main" line per milestone (the share link, templates, memo, vocab pass and webhook are built) |
 | REQUIREMENTS F1.42, F0.19, F0.26, F2.49, F2.54, F4.7 to F4.11, F4.17, I1.6 | Marked carried in M1, not built (copy transcript, `devices`, `doctor --grant`, `akou://`, cask, signing, legal doc, demo, the env var list) | Status "designed", naming the owning id |
-| DESIGN §6.1 | "Install command-line tool" menu, `doctor` capture test, `devices` and `apps` | Marked planned, pointing at DK-M6, DK-O1, CLI-07; later a pointer to the generated `docs/cli.md` |
-| DESIGN §7 "New:" paragraph | Lists inline edit, capture test and several settings as built | Split into built and designed |
-| DESIGN §7 | Says the window never polls; the models card polls `GET /models` every second | Say so, or move download progress onto the status push (DK-O3) |
-| DESIGN §8.3 | A changed tray icon while shared | Points at DK-P1 |
 | DESIGN §1.2, §10, ROADMAP M0 | `scripts/soak.ts`, which does not exist | Points at TS-24 |
 | DESIGN §9, §10 | Three CI descriptions and a list of docs that do not exist | §9 points at [CI-CD.md](../CI-CD.md), §10 at [index.md](../index.md); either write the privacy-and-consent doc the consent reminder cites or drop the claim |
 | DESIGN §1.5 | Hotkey default | Matches DK-K4 |
-| DESIGN §4.3 | No low-disk stop | `part.ended {reason: low-disk}` (REC-02 in the matrix) |
-| DESIGN §5.2 vs providers.md | Re-enhance after the final layer is automatic in one and never automatic with the harness in the other | DESIGN 5.2 adds "except with the harness provider" |
 | [TRAPS.md](../TRAPS.md) "The boost is a slider" | Names `akou vocab check --boost`, which does not exist | Rewritten against the per-entry `decode` field; CLI-17's scan covers TRAPS.md |
 | [getting-started.md](../getting-started.md) | No MCP registration step | The manual `claude mcp add` and `codex mcp add` lines until PG-M1 lands |
 
