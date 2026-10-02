@@ -22,13 +22,14 @@
  * that carries call text holds the same quoted block as the text, never the raw words.
  */
 
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
 import { type LearnedItem, learnedNote } from "../../core/vocab/learned.ts";
 import { APP_VERSION } from "../app-info.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
+import { listPresets, usesSpeaker } from "../notes/presets.ts";
 import { estimateTokens, type PackState, packState, quoteCallText } from "../query/render.ts";
 import { capAnswer, type ToolResult } from "./bound.ts";
 
@@ -96,6 +97,37 @@ function errorText(t: string): ToolResult {
 function withNotes(r: ToolResult, notes: readonly string[]): ToolResult {
   if (notes.length === 0) return r;
   return { ...r, content: [{ type: "text", text: notes.join("\n") }, ...r.content] };
+}
+
+/**
+ * While a long request runs, a progress message now and every 2 s to a client that sent a
+ * progress token (PG-M6), so it can show the tool is working. Returns the function that stops them.
+ */
+function progressBeat(
+  ctx: {
+    mcpReq?: { _meta?: { progressToken?: string | number }; notify(n: object): Promise<void> };
+  },
+  message: string,
+): () => void {
+  const token = ctx?.mcpReq?._meta?.progressToken;
+  const req = ctx?.mcpReq;
+  if (token === undefined || !req) return () => {};
+  const t0 = Date.now();
+  let last = -1;
+  const send = () => {
+    // Progress only ever grows: whole seconds since the start, never the same twice.
+    const progress = Math.max(last + 1, Math.floor((Date.now() - t0) / 1000));
+    last = progress;
+    void req
+      .notify({
+        method: "notifications/progress",
+        params: { progressToken: token, progress, message: `${message} (${progress} s)` },
+      })
+      .catch(() => {});
+  };
+  send();
+  const timer = setInterval(send, 2000);
+  return () => clearInterval(timer);
 }
 
 function result(a: Answer): ToolResult {
@@ -1031,8 +1063,14 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ template: z.string().optional() }),
       outputSchema: OUT.enhance,
     },
-    async (a) => {
-      const r = await req("POST", "/calls/last/enhance", { body: a, timeoutMs: 60 * 60_000 });
+    async (a, ctx) => {
+      const stop = progressBeat(ctx, "Writing the enhanced notes");
+      let r: ApiResponse;
+      try {
+        r = await req("POST", "/calls/last/enhance", { body: a, timeoutMs: 60 * 60_000 });
+      } finally {
+        stop();
+      }
       return asResult(r, (b) => {
         const block = quoteCallText(b.markdown);
         return {
@@ -1273,6 +1311,68 @@ export function createMcpServer(o: McpOptions): McpServer {
       );
     },
   );
+
+  // --- the ask presets as prompts (PG-M7) ------------------------------------------------------
+  // One prompt per preset file, read from the folder on every list, so a new file shows at once;
+  // Claude Code offers each as a slash command. Getting one fills it in for one call through the
+  // app, and the message names that call: no prompt spans more than one.
+
+  server.server.registerCapabilities({ prompts: {} });
+  server.server.setRequestHandler("prompts/list", async () => ({
+    prompts: listPresets(o.client.configDir).map((p) => ({
+      name: p.name,
+      title: p.label.replaceAll("{speaker}", "a speaker"),
+      description: `Ask about one call: ${p.question}`,
+      arguments: [
+        ...(usesSpeaker(p)
+          ? [
+              {
+                name: "speaker",
+                description: "The speaker to ask about, as the transcript names them.",
+                required: true,
+              },
+            ]
+          : []),
+        {
+          name: "call",
+          description: 'Which call: "live" (the default), "last" or a call id.',
+          required: false,
+        },
+      ],
+    })),
+  }));
+  server.server.setRequestHandler("prompts/get", async (request) => {
+    const name = request.params.name;
+    const args: Record<string, string> = request.params.arguments ?? {};
+    const ref = args.call?.trim() || "live";
+    const speaker = args.speaker?.trim() || undefined;
+    const r = await req("GET", "/presets", { query: { call: ref, speaker } });
+    if (r.status !== 200) {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, describeError(r));
+    }
+    const mine = (r.body.presets as Body[]).filter((x) => x.name === name);
+    const p = mine.length === 1 ? mine[0] : undefined;
+    if (!p) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
+        mine.length > 1 || listPresets(o.client.configDir).some((x) => x.name === name)
+          ? `the preset ${name} asks about one speaker: pass \`speaker\``
+          : `no preset ${name}`,
+      );
+    }
+    return {
+      description: String(p.label),
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: `${p.question}\n\nAnswer from call ${r.body.call ?? ref} only: call akou_context with call "${ref}" and this question. ${RULES}`,
+          },
+        },
+      ],
+    };
+  });
 
   // --- akou_ask visibility ----------------------------------------------------------------------
 

@@ -203,6 +203,7 @@ import {
   reEnhanceState,
   storeEnhanced,
 } from "./notes/enhance.ts";
+import { listPresets, type Preset } from "./notes/presets.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
 import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
@@ -1189,6 +1190,12 @@ export class AkouApp implements ApiApp {
   templates(): Template[] {
     return listTemplates(this.configDir, {
       onError: (msg) => this.log("warn", `template: ${msg}`),
+    });
+  }
+
+  presets(): Preset[] {
+    return listPresets(this.configDir, {
+      onError: (msg) => this.log("warn", `preset: ${msg}`),
     });
   }
 

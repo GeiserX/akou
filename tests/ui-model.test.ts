@@ -24,7 +24,6 @@ import {
   languages,
   playingLine,
   positionText,
-  presets,
   QUIET_AFTER_MS,
   RATES,
   REOPEN_AFTER_MS,
@@ -480,17 +479,6 @@ describe("citations", () => {
     expect(resolveTimeCitation(v, minute, "Nobody", [])).toBeNull();
     // The answer's own ids win even when the speaker was renamed since.
     expect(resolveTimeCitation(v, minute, "Old name", ["l000001"])).toBe("l000001");
-  });
-
-  test("the presets, with one per named speaker", () => {
-    const p = presets(["Ben"]).map((x) => x.label);
-    expect(p).toEqual([
-      "Catch me up",
-      "Was my name mentioned?",
-      "Decisions so far",
-      "Action items",
-      "What did Ben say?",
-    ]);
   });
 });
 

@@ -9,9 +9,11 @@
  * shows one question and its answer card: the last one asked here, or, until one is, the call's
  * last answered question from the log.
  *
- * Presets, in a small menu on the input: "Catch me up", "Was my name mentioned?", "Decisions so
- * far", "Action items", and "What did <speaker> say?" for each named speaker. Everything shown is
- * text, never markup.
+ * Presets, in a small menu on the input, come from `GET /presets` (PROGRAMMABILITY PG-F2): the
+ * shipped files ("Catch me up", "Was my name mentioned?", "Decisions so far", "Action items", and
+ * "What did <speaker> say?" for each named speaker) and the user's own. They are asked again each
+ * time the menu opens, so a new file shows without a restart. Everything shown is text, never
+ * markup.
  *
  * With no assistant (`provider.kind` none) the box is a search of the call: it reads "Search this
  * call", has no suggested questions, and shows only the lines that match, labelled as excerpts,
@@ -24,7 +26,7 @@ import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { parseNaming } from "../main/query/classify.ts";
 import { byId, h, replace, toast } from "./dom.ts";
-import { presets, resolveTimeCitation, splitCitations } from "./model.ts";
+import { resolveTimeCitation, splitCitations } from "./model.ts";
 import type { AskAnswer, Transport } from "./protocol.ts";
 
 export interface AskDeps {
@@ -156,6 +158,7 @@ export class AskPane {
   }
 
   private menu(open: boolean): void {
+    if (open) this.renderPresets();
     this.presetsBox.hidden = !open;
     this.menuButton.setAttribute("aria-expanded", String(open));
     if (open) this.presetsBox.querySelector<HTMLButtonElement>("button")?.focus();
@@ -170,18 +173,33 @@ export class AskPane {
     this.renderPresets();
   }
 
-  /** The presets, with one "What did X say?" per named speaker. */
+  /**
+   * The presets filled in for the open call, with one "What did X say?" per named speaker. The
+   * menu is redrawn only when they changed, so focus inside an open menu stays put.
+   */
   renderPresets(): void {
-    const v = this.d.view();
-    const names = (v?.roster() ?? [])
-      .filter((s) => s.spk !== "you" && !s.mergedInto && s.name)
-      .map((s) => s.label);
-    const k = names.join("\n");
-    if (k === this.presetKey && this.presetsBox.childElementCount > 0) return;
+    const call = this.d.call();
+    if (!call) return;
+    void this.d.t
+      .request<{ presets: { label: string; question: string }[] }>(
+        "GET",
+        `/presets?call=${encodeURIComponent(call)}`,
+      )
+      .then(
+        (r) => {
+          if (r.status === 200 && this.d.call() === call) this.drawPresets(call, r.body.presets);
+        },
+        () => {},
+      );
+  }
+
+  private drawPresets(call: string, list: readonly { label: string; question: string }[]): void {
+    const k = JSON.stringify([call, list.map((p) => [p.label, p.question])]);
+    if (k === this.presetKey) return;
     this.presetKey = k;
     replace(
       this.presetsBox,
-      ...presets(names).map((p) =>
+      ...list.map((p) =>
         h(
           "button",
           {

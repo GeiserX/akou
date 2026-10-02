@@ -18,6 +18,7 @@ import type { ExportResult } from "../handoff/export.ts";
 import type { HookReport } from "../handoff/hooks.ts";
 import type { ImportResult } from "../import/hark-viewer.ts";
 import type { Provider } from "../llm/provider.ts";
+import type { Preset } from "../notes/presets.ts";
 import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
@@ -87,6 +88,8 @@ export interface ApiApp {
   askSessions?(): SessionStore | undefined;
   /** The shipped templates, replaced or added to by the user's folder. */
   templates(): Template[];
+  /** The shipped ask presets, replaced or added to by the user's folder, read on every call. */
+  presets(): Preset[];
   /** The speech models on disk, or the download in progress (`GET /models`). */
   models(): ModelsStatus;
   /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
