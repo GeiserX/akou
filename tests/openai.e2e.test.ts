@@ -259,7 +259,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
       preset: "fast",
       source: "request",
     });
-    // Qwen is best's engine; Canary belongs to fusion, which is not built.
+    // Qwen is best's engine; Canary runs only inside the fusion preset.
     expect(resolveModel({ model: "qwen3-asr-1.7b" }, o)).toMatchObject({
       model: "qwen3-asr-1.7b",
       preset: "best",
@@ -271,7 +271,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
   });
 
   test("a preset that is not built is refused with 409 preset_unavailable", async () => {
-    const r = await post([["model", "fusion"]]);
+    const r = await post([["model", "lite"]]);
     expect(r.status).toBe(409);
     expect(JSON.parse(r.text).error).toBe("preset_unavailable");
   });
@@ -311,7 +311,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const dir = join(rig.app.configDir, "jobs", "audio");
     const uploads = () => readdirSync(dir).filter((f) => f.endsWith(".upload"));
     const before = uploads();
-    expect((await post([["model", "fusion"]])).status).toBe(409);
+    expect((await post([["model", "lite"]])).status).toBe(409);
     expect((await post([["response_format", "nope"]])).status).toBe(422);
     expect(uploads()).toEqual(before);
     expect((await post([["response_format", "json"]])).status).toBe(200);

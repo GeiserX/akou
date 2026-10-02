@@ -7,11 +7,15 @@
  * only once all of them are there, the speaker models included, so a smaller set would leave a
  * server that never transcribes. `best` is Qwen3-ASR-1.7B, the llama-server build that runs it on
  * this machine (none when `asr.llamaServer` names an own one), and the same VAD and speaker models,
- * without Parakeet. `lite` and `fusion` wait for their engines and say so instead of pulling
- * something else. `auto` resolves to `fast` until hardware detection (SV-R2) can pick `best` on a
- * GPU or `lite` on a small arm64 board.
+ * without Parakeet. `fusion` is every engine of its list (`asr.final.engines`, else Qwen3-ASR,
+ * Whisper large-v3 and Parakeet), the llama-server build when Qwen is among them, and the same VAD
+ * and speaker models; transcribe-cpp, which runs Whisper and Canary, ships with akou and is never a
+ * download. `lite` waits for its engines and says so instead of pulling something else. `auto`
+ * resolves to `fast` until hardware detection (SV-R2) can pick `best` on a GPU or `lite` on a small
+ * arm64 board.
  */
 
+import { FUSION_DEFAULT } from "./fusion.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
 import { RECOGNIZER } from "./models.ts";
 
@@ -31,12 +35,14 @@ const WAITS_FOR_ENGINES = "its engines wait for the engine design";
 
 /**
  * `machine` is the ids of every model this machine's settings need, as `modelsFor` lists them;
- * `runtime` is the llama-server build `best` runs on here, or null for an own llama-server.
+ * `runtime` is the llama-server build `best` runs on here, or null for an own llama-server;
+ * `fusion` is the `fusion` preset's engines as the settings make them (`fusionChoice`).
  */
 export function presetModels(
   preset: Preset,
   machine: readonly string[],
   runtime: string | null = null,
+  fusion: readonly string[] = FUSION_DEFAULT,
 ): PresetModels {
   switch (preset) {
     case "fast":
@@ -53,8 +59,18 @@ export function presetModels(
           ]),
         ],
       };
-    case "lite":
     case "fusion":
+      return {
+        preset,
+        models: [
+          ...new Set([
+            ...fusion,
+            ...(runtime && fusion.includes(QWEN_ASR) ? [runtime] : []),
+            ...machine.filter((id) => id !== RECOGNIZER || fusion.includes(RECOGNIZER)),
+          ]),
+        ],
+      };
+    case "lite":
       return { preset, unavailable: WAITS_FOR_ENGINES };
   }
 }

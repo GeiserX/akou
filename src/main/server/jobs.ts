@@ -30,6 +30,7 @@ import type { Identity } from "../api/access.ts";
 import { DecodeError } from "../asr/decode.ts";
 import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
 import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
+import { engineIds } from "../asr/fusion.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
@@ -139,6 +140,8 @@ export interface JobServiceOptions {
   shelf: ModelStore;
   /** `server.default_model`, as the settings hold it now. */
   defaultModel(): string;
+  /** The `fusion` preset as the settings make it now (`fusionChoice`); absent: the preset's own. */
+  fusion?(): { fuser: string; engines: readonly string[] };
   diarizer(): DiarizerKind;
   /** A key's webhook secrets (SV-E2); none for the app's token or an admin session. */
   secrets(keyId: string): string[];
@@ -233,9 +236,12 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
   };
 }
 
-/** The model ids a job ran, as the engine registry names them (SV-J4). */
+/**
+ * The model ids a job ran, as the engine registry names them (SV-J4): a fused model's engines that
+ * decoded (`rover-conf(a,b)` is `a` and `b`), else the recognizer, then the helpers.
+ */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
-  const out = [recognizer, "silero-vad"];
+  const out = [...engineIds(recognizer), "silero-vad"];
   if (diarize) {
     out.push(
       ...(diarizer === "nemotron" ? [NEMOTRON] : ["pyannote-segmentation-3.0", "titanet-small"]),
@@ -266,7 +272,14 @@ export function jobResult(
     // Parakeet gives word times; Qwen gives none, so its words' `s` and `e` are null.
     words: pass.words,
     segments: pass.segments,
-    engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
+    engine: {
+      name: "akou",
+      version: engine.version,
+      preset: job.preset,
+      models: engine.models,
+      // The N-engine pass: which engines decoded, which were left out and why (ASR-6).
+      ...(pass.fusion ? { fusion: pass.fusion } : {}),
+    },
     confidence: pass.confidence,
     skipped: pass.skipped,
     speakers: pass.speakers,
@@ -514,6 +527,7 @@ export class JobService {
     return resolveModel(ask, {
       catalog: this.o.shelf.catalog(),
       defaultModel: this.o.defaultModel(),
+      fusion: this.o.fusion?.(),
       unknownIsAuto,
     });
   }
@@ -1026,8 +1040,12 @@ export class JobService {
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
-      // time, without the model loads or the speaker labels.
-      if (pass.decode_s !== undefined) this.o.shelf.recordRun(model, audioS, pass.decode_s);
+      // time, without the model loads or the speaker labels. A fused job times each engine.
+      if (pass.fusion) {
+        for (const e of pass.fusion.engines) this.o.shelf.recordRun(e.id, audioS, e.decode_s);
+      } else if (pass.decode_s !== undefined) {
+        this.o.shelf.recordRun(model, audioS, pass.decode_s);
+      }
       end = {
         status: "done",
         result: jobResult(job, pass, {

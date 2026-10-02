@@ -86,6 +86,14 @@ import {
 } from "./asr/final-model.ts";
 import type { FinalStep } from "./asr/final-text.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import {
+  fusionChoice,
+  fusionModelId,
+  fusionParts,
+  fusionSpec,
+  isBuiltFuser,
+  memoryBudgetMb,
+} from "./asr/fusion.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
   chooseLiveSetup,
@@ -2735,6 +2743,8 @@ export class AkouApp implements ApiApp {
    * the recognizer the job names.
    */
   private jobModels(recognizer: string): ModelSpec | null {
+    const fused = fusionParts(recognizer);
+    if (fused) return this.fusionModels(fused.fuser, fused.engines);
     const given = this.o.models;
     const llama = this.runsOnLlama(recognizer);
     if (given !== undefined) {
@@ -2752,6 +2762,37 @@ export class AkouApp implements ApiApp {
       });
     }
     return this.finalSherpaSpec();
+  }
+
+  /**
+   * The N-engine pass a fused job runs (ASR-6): the model set for the VAD, the speaker labels and
+   * Parakeet, and each engine of the list on its own runtime, with its memory estimate and the
+   * budget (`asr.memoryBudgetMb`). A test's module model set stands in for the transcribe-cpp
+   * engines (its `createEngine`).
+   */
+  private fusionModels(fuser: string, ids: readonly string[]): ModelSpec | null {
+    const given = this.o.models;
+    if (given === null) return null;
+    if (!isBuiltFuser(fuser)) {
+      throw Object.assign(new Error(`${fuser} is not built in this version; use rover-conf`), {
+        code: "unknown_model",
+      });
+    }
+    const base: ModelSpec =
+      given === undefined
+        ? this.finalSherpaSpec()
+        : given.kind === "module" && this.o.modelRegistry
+          ? { ...given, model: RECOGNIZER }
+          : given;
+    const s = this.cfg.settings;
+    return fusionSpec(base, fuser, ids, {
+      catalog: this.o.modelRegistry ?? MODELS,
+      modelsDir: s["asr.modelsDir"],
+      languages: s["asr.languages"],
+      llama: (id) => this.llamaSpec(id),
+      ...(given?.kind === "module" ? { module: { path: given.path, options: given.options } } : {}),
+      budgetMb: memoryBudgetMb(s["asr.memoryBudgetMb"], totalmem()),
+    });
   }
 
   /** A recognizer that runs on llama-server (Qwen3-ASR), as the real catalog says. */
@@ -2826,13 +2867,20 @@ export class AkouApp implements ApiApp {
 
   /**
    * Whether a job on a preset can run now, for `GET /v1/server`: `best` when Qwen, its runtime and
-   * the helpers are on disk or may be fetched (`server.auto_download`). Undefined for the others,
-   * and outside server mode, where the route's own rule stands.
+   * the helpers are on disk or may be fetched (`server.auto_download`), `fusion` the same for every
+   * engine of its list. Undefined for the others, and outside server mode, where the route's own
+   * rule stands.
    */
   presetAvailable(name: string): boolean | undefined {
     const jobs = this.jobService;
-    if (name !== "best" || !jobs) return undefined;
-    return jobs.obtainable(QWEN_ASR);
+    if (!jobs) return undefined;
+    if (name === "best") return jobs.obtainable(QWEN_ASR);
+    // `fusion`: every engine of its list, what each runs on and the helpers (ASR-6).
+    if (name === "fusion") {
+      const f = fusionChoice(this.cfg.settings);
+      return jobs.obtainable(fusionModelId(f.fuser, f.engines));
+    }
+    return undefined;
   }
 
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
@@ -3533,6 +3581,7 @@ export class AkouApp implements ApiApp {
         models: (recognizer) => this.jobModels(recognizer),
         shelf,
         defaultModel: () => s()["server.default_model"],
+        fusion: () => fusionChoice(s()),
         diarizer: () => this.runningDiarizer(),
         secrets: (id) => {
           const secret = keys?.secretOf(id);
