@@ -2413,14 +2413,31 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       expect(await page.$$(rows)).toHaveLength(1);
       expect(f.patches).toHaveLength(0);
 
-      f.history.unshift(dictationRow(0, { id: "chat", at: base + 3000, app: "com.example.chat" }));
+      // The app comes with its name as people know it (akou-qx2): the rule is called by it.
+      f.history.unshift(
+        dictationRow(0, {
+          id: "chat",
+          at: base + 3000,
+          app: "com.example.chat",
+          app_name: "Example Chat",
+        }),
+      );
       await until(() => f.patches.length === 1, 5000, "the rule saved");
       expect(f.patches[0]).toEqual({
-        "dictation.apps": [{ app: "com.example.term" }, { app: "com.example.chat" }],
+        "dictation.apps": [
+          { app: "com.example.term" },
+          { app: "com.example.chat", name: "Example Chat" },
+        ],
       });
       expect(await page.inputValue(cell(2, "app"))).toBe("com.example.chat");
       expect(await text(page, next)).toBe(NEXT_APP_LABEL);
-      expect(await text(page, note)).toBe("Added com.example.chat.");
+      expect(await text(page, note)).toBe("Added Example Chat.");
+      // A rule with a name is called by it; one with none (the control) by its id.
+      expect(
+        await page.$$eval("#page-dictation .apps-rule .apps-name", (n) =>
+          n.map((x) => x.textContent),
+        ),
+      ).toEqual(["com.example.term", "Example Chat"]);
       // Its fields are next: the first one has the keyboard.
       expect(await page.evaluate(() => document.activeElement?.getAttribute("data-field"))).toBe(
         "mode",
@@ -2531,6 +2548,8 @@ describe("DC-U9 on the real app: the app of the next dictation", () => {
         "2",
         "--target-app",
         "com.example.chat",
+        "--target-name",
+        "Example Chat",
         "--inserter-log",
         join(t.dir, "inserted.jsonl"),
       ],
@@ -2548,7 +2567,7 @@ describe("DC-U9 on the real app: the app of the next dictation", () => {
   });
 
   test(
-    "pressing the button, then dictating, writes a rule for that app to the config file",
+    "pressing the button, then dictating, writes a rule for that app, by its name, to the config file",
     async () => {
       const page = await rig.open();
       await page.click("#dictation-open");
@@ -2571,7 +2590,11 @@ describe("DC-U9 on the real app: the app of the next dictation", () => {
         5000,
         "the rule in the config",
       );
-      expect(rig.app.config().settings["dictation.apps"]).toEqual([{ app: "com.example.chat" }]);
+      // The helper's name for the app went through the log and the dictations route to the rule.
+      expect(rig.app.config().settings["dictation.apps"]).toEqual([
+        { app: "com.example.chat", name: "Example Chat" },
+      ]);
+      expect(await text(page, "#page-dictation .apps-rule .apps-name")).toBe("Example Chat");
     },
     UI_TIMEOUT,
   );
@@ -3043,7 +3066,12 @@ describe("DC-H1: the History page", () => {
           language: "es",
         }),
         dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
-        dictationRow(4, { state: "drafted", engine: "fast", fallback_from: "best" }),
+        dictationRow(4, {
+          state: "drafted",
+          engine: "fast",
+          fallback_from: "best",
+          app_name: "Example Chat",
+        }),
       ]);
       expect(
         await page.$$eval("#dictation-history-list li", (l) => l.map((x) => x.dataset.id)),
@@ -3053,8 +3081,10 @@ describe("DC-H1: the History page", () => {
       // A dictation the engine chosen could not hear says which one did, and one left in the
       // draft box says so.
       expect(await text(page, `${row("d004")} .meta`)).toMatch(
-        /^[^·]+ · [^·]+ · Fast instead of Best · Left in the draft box$/,
+        /^[^·]+ · Example Chat · Fast instead of Best · Left in the draft box$/,
       );
+      // With no name from the helper, the app's id (the control).
+      expect(await text(page, `${row("d001")} .meta`)).toMatch(/ · com\.example\.chat$/);
       expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
       const meta = await text(page, `${row("d002")} .meta`);
       expect(meta).toMatch(/^[^·]+ · No app · Spanish · Cancelled$/);
@@ -3344,6 +3374,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     rig.app.dictation()?.draft.attach({
       open: (d) => draftOpens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });
@@ -3491,7 +3522,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
         [id, "example.com", true],
       ]);
 
-      const audio = d.audio.path(id);
+      const audio = (await d.audio.file(id))?.path as string;
       expect(existsSync(audio)).toBe(true);
       await page.click(`${row} .hist-more`);
       await page.click(`${row} button.delete`);
@@ -3928,10 +3959,27 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
   );
 
   test(
+    "[PG-A8] with no fixture the picker reads the app's own GET /devices, the capture helper's inputs",
+    async () => {
+      const { page } = await openPage({});
+      expect(await page.$eval(mic, (e) => e.tagName)).toBe("SELECT");
+      expect(await options(page)).toEqual([
+        ["", "System default, Fake Microphone"],
+        ["fake-mic-1", "Fake Microphone"],
+        ["fake-usb-2", "Fake USB Microphone"],
+      ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "with no list the field stays a text box with the reason: an app without the route, a refusal",
     async () => {
-      // Positive control for the picker: this app has no `GET /devices` yet, and answers 404.
-      const bare = await openPage({ settings: { "dictation.mic": "mic-usb" } });
+      // Positive control for the picker: an akou without `GET /devices` answers 404.
+      const bare = await openPage({
+        devices: { status: 404, message: "no route /v1/devices" },
+        settings: { "dictation.mic": "mic-usb" },
+      });
       expect(await bare.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
       expect(await bare.page.inputValue(mic)).toBe("mic-usb");
       expect(await text(bare.page, "#dictation-mic-note")).toBe(

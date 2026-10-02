@@ -831,6 +831,7 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
                 })
                 .collect();
             Ok(Endpoints {
+                apps: Err("capturing one app is not available on Linux; use --call system".into()),
                 backend: "pulse",
                 inputs,
                 outputs,

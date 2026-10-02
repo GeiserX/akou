@@ -216,6 +216,7 @@ class HttpTransport implements Transport {
           }
         } catch {}
         if (ctl.signal.aborted) return;
+        // clock: the reconnect backoff.
         await new Promise((res) => setTimeout(res, wait));
         wait = Math.min(wait * 2, 5000);
       }

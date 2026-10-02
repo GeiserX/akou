@@ -296,6 +296,7 @@ describe("what the bundle carries beside the main process", () => {
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });
     expect(config.build?.copy?.["src/main/notes/templates"]).toBe(`${MAIN_OUT}/templates`);
+    expect(config.build?.copy?.["src/main/notes/presets"]).toBe(`${MAIN_OUT}/presets`);
     expect(config.scripts?.postBuild).toBe("./scripts/post-build.ts");
   });
 

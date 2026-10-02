@@ -145,6 +145,7 @@ export interface RemoteJob {
   model?: string;
   language: string;
   keywords: readonly string[];
+  languages: readonly string[];
   diarize: boolean;
 }
 
@@ -388,6 +389,8 @@ export class Remotes {
     if (j.model) form.append("model", j.model);
     form.append("language", j.language);
     for (const k of j.keywords) form.append("keywords[]", k);
+    // Sent only when set, so a remote from before the field still takes every other job.
+    for (const l of j.languages) form.append("languages[]", l);
     form.append("diarize", j.diarize ? "true" : "false");
     const res = await this.request(r, "/jobs", {
       method: "POST",
@@ -413,7 +416,10 @@ export class Remotes {
     if (res.status === 401 || res.status === 403) {
       return new RemoteError("refused", message, res.status, code);
     }
-    if (res.status === 404) return new RemoteError("lost", message, res.status, code);
+    // 410: the remote once had the job and has deleted it or let it expire.
+    if (res.status === 404 || res.status === 410) {
+      return new RemoteError("lost", message, res.status, code);
+    }
     if (res.status === 408 || res.status === 429 || res.status >= 500) {
       return new RemoteError("down", message, res.status, code);
     }
