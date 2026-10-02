@@ -12,7 +12,9 @@ name: nightly
 #   clips, and memory flat over 150 requests with the default prompt cache as the failing control).
 #   Dictation's biasing gate (docs/ux/DICTATION.md DC-L7) on the same Qwen: hits, false insertions,
 #   WER and echo rate with the learned terms as context against none, with its positive control.
-#   The committed result in docs/gates/dictation-biasing.json comes from a real machine.
+#   It decodes 90 clips four times (about two hours on the macOS runner, past this job's timeout
+#   with the rest), so it runs by hand only (`only: biasing`); the committed result in
+#   docs/gates/dictation-biasing.json comes from a real machine.
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
 #   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
@@ -24,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Stages to run, comma separated (fleurs, ami, replay, qwen, biasing); empty runs them all"
+        description: "Stages to run, comma separated (fleurs, ami, replay, qwen, biasing); empty runs all but biasing"
         required: false
         default: ""
 

@@ -26,8 +26,10 @@
  *   that keeps its default prompt cache are the failing control: its memory must pass the bound.
  * - Dictation biasing (DC-L7, `scripts/eval/dictation-biasing.ts`): Qwen3-ASR given the learned
  *   terms as context against none, on FLEURS clips, silence and noise: hits, false insertions, WER
- *   and echo rate per list size, with an overweighted positive control that must insert. With
- *   `--biasing-out` written as `docs/gates/dictation-biasing.json`.
+ *   and echo rate per list size, with an overweighted positive control that must insert. It runs
+ *   only when `--only` names it (360 decodes, too long for the scheduled night). With
+ *   `--biasing-out` written as `docs/gates/dictation-biasing.json`; run `bunx biome format --write`
+ *   on that file before committing it, or CI's biome check fails on JSON.stringify's layout.
  *
  * Every download is pinned by revision and checked by SHA-256: the published hash where the host
  * has one, and otherwise the hash of the file as first fetched (the AMI audio).
@@ -671,7 +673,8 @@ async function main(argv: string[]): Promise<number> {
   };
   const modelsDir = flag("--models");
   const dataDir = flag("--data");
-  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen,biasing").split(","));
+  // `biasing` runs only when named: its 360 Qwen decodes would take the scheduled night past its timeout.
+  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen").split(","));
   if (!modelsDir || !dataDir) {
     console.error(
       "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,biasing] [--out results.json] [--biasing-out <json>]",

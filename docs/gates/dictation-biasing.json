@@ -1,5 +1,5 @@
 {
-  "_about": "Dictation's biasing gate (docs/ux/DICTATION.md DC-L7), by `bun scripts/eval/nightly.ts --only biasing --biasing-out <this file>`: Qwen3-ASR decoding FLEURS clips, silence and noise with no context (`none`), with each clip's list of learned terms wrapped as `Technical terms: A, B, C.` at 10 and 24 terms, and with the positive control (`control`, the 24 terms said to be in the audio, three times). A hit is a clip's own term written; an insertion is a listed term written where the reference does not hold it. The answer scored is the one the app inserts: one that echoes its context is decoded again with none (`echoes`). The ship rule at 24: more hits than `none` and no more insertions; the control must insert more than `none`.",
+  "_about": "Dictation's biasing gate (docs/ux/DICTATION.md DC-L7), by `bun scripts/eval/nightly.ts --only biasing --biasing-out <this file>`: Qwen3-ASR decoding FLEURS clips, silence and noise with no context (`none`), with each clip's list of learned terms wrapped as `Technical terms: A, B, C.` at 10 and 24 terms, and with the positive control (`control`: the 24 terms said to be in the audio, three times, then the clip's own sentence with its sound-alike names in place of the words they sound like). A hit is a clip's own term written; an insertion is a listed term written where the reference does not hold it. The answer scored is the one the app inserts: one that echoes its context is decoded again with none (`echoes`). The ship rule at 24: more hits than `none` and no more insertions; the control must insert more than `none`.",
   "measured": "2026-10-02, an Apple M4 Mac mini with 16 GB, idle",
   "clips": {
     "speech": 80,
@@ -14,9 +14,7 @@
       "insertions": 1,
       "soundAlikeInsertions": 1,
       "noiseInsertions": 0,
-      "inserted": [
-        "17737260257548671107: Duval"
-      ],
+      "inserted": ["17737260257548671107: Duval"],
       "echoes": 0,
       "answers": 90,
       "wer": 2.7863777089783284,
@@ -28,10 +26,7 @@
       "insertions": 2,
       "soundAlikeInsertions": 2,
       "noiseInsertions": 0,
-      "inserted": [
-        "17737260257548671107: Duval",
-        "7946428658017781691: Handamiaje"
-      ],
+      "inserted": ["17737260257548671107: Duval", "7946428658017781691: Handamiaje"],
       "echoes": 0,
       "answers": 90,
       "wer": 3.0443756449948403,
@@ -43,9 +38,7 @@
       "insertions": 1,
       "soundAlikeInsertions": 1,
       "noiseInsertions": 0,
-      "inserted": [
-        "17737260257548671107: Duval"
-      ],
+      "inserted": ["17737260257548671107: Duval"],
       "echoes": 0,
       "answers": 90,
       "wer": 3.0443756449948403,
@@ -102,8 +95,6 @@
   "verdict": {
     "pass": false,
     "controlBreaks": true,
-    "reasons": [
-      "insertions rose: 2 against the baseline's 1"
-    ]
+    "reasons": ["insertions rose: 2 against the baseline's 1"]
   }
 }

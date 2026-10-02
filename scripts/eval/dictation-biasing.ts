@@ -17,10 +17,12 @@
  * Generated silence and noise clips get distractors only. A listed term the answer writes that the
  * reference does not hold is a false insertion. The answer scored is the one the app inserts: one
  * that echoes the context (DC-E6) is decoded again with none. The ship rule at 24: more hits than
- * the baseline, and no more insertions. The control, the list said to be in the audio and repeated,
- * must break the insertion ceiling, or the gate cannot see an insertion and fails.
+ * the baseline, and no more insertions. The control, the list said to be in the audio and repeated
+ * with the clip's sentence carrying its sound-alike names, must break the insertion ceiling, or the
+ * gate cannot see an insertion and fails.
  */
 
+import { CONTEXT_WRAPPER } from "../../src/core/dictation/echo.ts";
 import { englishKey, spanishKey } from "../../src/core/dictation/learn.ts";
 import { normalizeText } from "./score.ts";
 
@@ -313,7 +315,7 @@ export function biasClip(
 
 /** The context the app sends Qwen (DC-L7): the list wrapped, as one system turn. */
 export function wrapped(list: readonly string[]): string[] {
-  return list.length === 0 ? [] : [`Technical terms: ${list.join(", ")}.`];
+  return list.length === 0 ? [] : [`${CONTEXT_WRAPPER} ${list.join(", ")}.`];
 }
 
 /**
@@ -342,4 +344,4 @@ function soundsAs(w: string, name: string, lang: "en" | "es"): boolean {
 }
 
 export const BIASING_ABOUT =
-  "Dictation's biasing gate (docs/ux/DICTATION.md DC-L7), by `bun scripts/eval/nightly.ts --only biasing --biasing-out <this file>`: Qwen3-ASR decoding FLEURS clips, silence and noise with no context (`none`), with each clip's list of learned terms wrapped as `Technical terms: A, B, C.` at 10 and 24 terms, and with the positive control (`control`, the 24 terms said to be in the audio, three times). A hit is a clip's own term written; an insertion is a listed term written where the reference does not hold it. The answer scored is the one the app inserts: one that echoes its context is decoded again with none (`echoes`). The ship rule at 24: more hits than `none` and no more insertions; the control must insert more than `none`.";
+  "Dictation's biasing gate (docs/ux/DICTATION.md DC-L7), by `bun scripts/eval/nightly.ts --only biasing --biasing-out <this file>`: Qwen3-ASR decoding FLEURS clips, silence and noise with no context (`none`), with each clip's list of learned terms wrapped as `Technical terms: A, B, C.` at 10 and 24 terms, and with the positive control (`control`: the 24 terms said to be in the audio, three times, then the clip's own sentence with its sound-alike names in place of the words they sound like). A hit is a clip's own term written; an insertion is a listed term written where the reference does not hold it. The answer scored is the one the app inserts: one that echoes its context is decoded again with none (`echoes`). The ship rule at 24: more hits than `none` and no more insertions; the control must insert more than `none`.";

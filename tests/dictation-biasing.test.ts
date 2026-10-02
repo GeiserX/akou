@@ -87,14 +87,17 @@ describe("DC-L7: the score and the ship rule", () => {
       soundAlikes: ["Phlew"],
     },
     { id: "n", lang: "en", ref: "", terms: [], soundAlikes: [] },
+    // Another clip's term that this clip's reference holds: said, so written, and no insertion.
+    { id: "r", lang: "en", ref: "Lima is far", terms: [], soundAlikes: [] },
   ];
-  const listed = [
-    ["Ada", "Oslo", "Phlew", "Lima"],
-    ["Lima", "Kyiv"],
-  ];
+  const listed = [["Ada", "Oslo", "Phlew", "Lima"], ["Lima", "Kyiv"], ["Lima"]];
 
   test("a hit is an own term written; an insertion is a listed term written that was not said", () => {
-    const s = score(clips, ["Ada phlew to Lima", "Kyiv"], listed, [false, true]);
+    const s = score(clips, ["Ada phlew to Lima", "Kyiv", "Lima is far"], listed, [
+      false,
+      true,
+      false,
+    ]);
     expect(s).toEqual({
       hits: 1,
       terms: 2,
@@ -102,7 +105,7 @@ describe("DC-L7: the score and the ship rule", () => {
       soundAlikeInsertions: 1,
       noiseInsertions: 1,
       echoes: 1,
-      answers: 2,
+      answers: 3,
       inserted: ["s: Phlew", "s: Lima", "n: Kyiv"],
     });
   });
