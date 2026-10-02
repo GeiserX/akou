@@ -144,6 +144,23 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "asr.segmentWindow": { label: "Longest live line", unit: "seconds" },
   "asr.modelsDir": { label: "Models folder" },
+  "asr.final.engines": {
+    label: "Fusion engines",
+    help: "The fusion preset's engines, in the order ties are broken. Empty: the preset's own three.",
+  },
+  "asr.fusion": {
+    label: "How fusion picks each word",
+    choices: [
+      ["rover-conf", "Confidence vote"],
+      ["rover-freq", "Majority vote"],
+      ["first", "First engine only"],
+    ],
+  },
+  "asr.memoryBudgetMb": {
+    label: "Memory an engine may need",
+    unit: "MB",
+    help: "0: no limit. An engine over it is left out of the fusion pass.",
+  },
   "asr.diarizer": {
     label: "Who spoke",
     help: "Takes effect at the next start.",
