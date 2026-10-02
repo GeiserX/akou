@@ -37,7 +37,14 @@ import {
   PLATFORMS,
   RECOGNIZER,
 } from "../src/main/asr/models.ts";
-import { parseAnswer, QWEN_LANGUAGES, QwenEngine, wavBytes } from "../src/main/asr/qwen.ts";
+import {
+  parseAnswer,
+  QWEN_LANGUAGES,
+  QWEN_MAX_REQUEST_SECONDS,
+  QwenEngine,
+  qwenPieces,
+  wavBytes,
+} from "../src/main/asr/qwen.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -87,6 +94,20 @@ function bodies(log: Record<string, unknown>[]): { messages: unknown[] }[] {
 
 function unit(words: string[], lang = "auto", glossary: string[] = []): FinalUnit {
   return { samples: concat(silence(0.3), speak(words), silence(0.3)), lang, glossary };
+}
+
+/** The audio each request of a fake's log carried, seconds (16-bit mono WAV, 44-byte header). */
+function requestSeconds(log: Record<string, unknown>[]): number[] {
+  return bodies(log).map((b) => {
+    const user = b.messages.find((m) => (m as { role: string }).role === "user") as {
+      content: { input_audio?: { data: string } }[];
+    };
+    const chars = Number.parseInt(
+      user.content.find((p) => p.input_audio)?.input_audio?.data ?? "0",
+      10,
+    );
+    return (Math.floor((chars * 3) / 4) - 44) / 2 / ASR_RATE;
+  });
 }
 
 function alive(pid: number): boolean {
@@ -559,6 +580,59 @@ describe("the Qwen engine's protocol", () => {
     expect(h.words).toEqual([]);
     // One request: a None answer is not re-decoded in a forced language.
     expect(log().filter((l) => l.body)).toHaveLength(1);
+  });
+
+  test("a unit past the request limit goes in pieces cut at a pause, and every word comes back", async () => {
+    const { server, log } = fakeServer();
+    const samples = concat(
+      speak(["hello", "world"]),
+      silence(1.5),
+      speak(["world", "hello"]),
+      silence(1.5),
+      speak(["hello"]),
+    );
+    const h = await new QwenEngine({ id: QWEN_ASR, server, maxSeconds: 3 }).decode({
+      samples,
+      lang: "auto",
+      glossary: [],
+    });
+    expect(h.text).toBe("hello world world hello hello");
+    expect(h.lang).toBe("en");
+    const sent = requestSeconds(log());
+    expect(sent).toHaveLength(2);
+    for (const sec of sent) expect(sec).toBeLessThanOrEqual(3);
+    expect(sent.reduce((a, b) => a + b, 0)).toBeCloseTo(samples.length / ASR_RATE, 2);
+  });
+
+  test("a whole dictation longer than the limit is never one request (the context fills and the rest is lost)", async () => {
+    const { server, log } = fakeServer();
+    const samples = concat(
+      speak(["hello"]),
+      silence(QWEN_MAX_REQUEST_SECONDS + 20),
+      speak(["world"]),
+    );
+    const h = await new QwenEngine({ id: QWEN_ASR, server }).decode({
+      samples,
+      lang: "auto",
+      glossary: [],
+    });
+    expect(h.text).toBe("hello world");
+    const sent = requestSeconds(log());
+    expect(sent.length).toBeGreaterThan(1);
+    for (const sec of sent) expect(sec).toBeLessThanOrEqual(QWEN_MAX_REQUEST_SECONDS);
+  });
+
+  test("the pieces cover the unit in order, each within the limit, the cut on the quietest window", () => {
+    const x = concat(speak(["hello", "world"]), silence(0.5), speak(["hello", "world", "hello"]));
+    const pieces = qwenPieces(x, 1.2);
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const p of pieces) expect(p.length).toBeLessThanOrEqual(1.2 * ASR_RATE);
+    expect(concat(...pieces)).toEqual(x);
+    // The first cut falls in the half second of silence after the second word.
+    const first = (pieces[0] as Float32Array).length / ASR_RATE;
+    expect(first).toBeGreaterThan(0.74);
+    expect(first).toBeLessThan(1.24);
+    expect(qwenPieces(x, 60)).toEqual([x]);
   });
 
   test("lidc: a language outside the allowed ones is replaced by the better-scoring forced decode", async () => {
