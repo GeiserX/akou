@@ -5,6 +5,7 @@
  *
  *   bun scripts/eval/nightly.ts --models <dir> --data <dir> --diarize <akou-diarize> --nemotron <onnx>
  *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen] [--out results.json]
+ *                               [--accelerator cpu|vulkan|cuda|metal]
  *
  * What it measures, per OS:
  *
@@ -19,7 +20,8 @@
  *   0.25 s collar, overlap scored). Gated at or below the baseline.
  * - The replay recall of the query engine on five generated three-hour calls, with its 85 % floor.
  * - Qwen3-ASR-1.7B through the pinned llama-server, on macOS and Linux (ASR-5's acceptance,
- *   docs/research/asr-architecture.md section 9; Windows waits for its own gate, ASR-12): WER on
+ *   docs/research/asr-architecture.md section 9; on Windows only with `--accelerator`, the way the
+ *   Windows gate ASR-12 runs it by hand, docs/gates/asr-12-windows.md): WER on
  *   30 FLEURS clips per language within +0.5 of the benchmark, no words on 25 silent AMI
  *   stretches, and llama-server's memory flat over 150 requests. The same requests on a server
  *   that keeps its default prompt cache are the failing control: its memory must pass the bound.
@@ -186,14 +188,17 @@ export function readWav(b: Uint8Array): Float32Array {
 
 // --- FLEURS ------------------------------------------------------------------------------------
 
-interface Utterance {
+export interface Utterance {
   id: string;
   ref: string;
   wav: string;
 }
 
 /** The pinned FLEURS utterances of one language, extracted into `dir` once and cached there. */
-async function fleurs(lang: keyof typeof FLEURS.sets, dataDir: string): Promise<Utterance[]> {
+export async function fleurs(
+  lang: keyof typeof FLEURS.sets,
+  dataDir: string,
+): Promise<Utterance[]> {
   const set = FLEURS.sets[lang];
   const dir = join(dataDir, "fleurs", set.config);
   mkdirSync(dir, { recursive: true });
@@ -349,10 +354,20 @@ async function silence(dataDir: string): Promise<Float32Array[]> {
 /**
  * A process's memory in MB, counting what the system compressed or swapped out: macOS's
  * `footprint` (which also counts the Metal buffers the process owns), Linux's resident plus
- * swapped size. `ps`'s resident size alone misses compressed memory, so a growing cache can read
- * flat.
+ * swapped size, Windows' private bytes (its commit, resident or paged out). `ps`'s resident size
+ * alone misses compressed memory, so a growing cache can read flat.
  */
 export function memoryMb(pid: number, platform = process.platform): number {
+  if (platform === "win32") {
+    const r = Bun.spawnSync(
+      ["powershell", "-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`],
+      { stderr: "pipe" },
+    );
+    const bytes = Number(r.stdout.toString().trim());
+    if (!(bytes > 0))
+      throw new Error(`powershell: no private bytes for pid ${pid}: ${r.stderr.toString()}`);
+    return bytes / 2 ** 20;
+  }
   if (platform === "darwin") {
     const r = Bun.spawnSync(["footprint", "-f", "bytes", "-p", String(pid)], { stderr: "pipe" });
     const m = /Footprint:\s*(\d+)\s*B/.exec(r.stdout.toString());
@@ -374,8 +389,10 @@ export function memoryMb(pid: number, platform = process.platform): number {
 async function qwenServers(
   dir: string,
   platform: string,
+  setting = "auto",
 ): Promise<{ make(promptCache: boolean): LlamaServer; accelerator: string }> {
-  const { accelerator } = resolveAccelerator("auto", platform);
+  const { accelerator, note } = resolveAccelerator(setting, platform);
+  if (note) throw new Error(note);
   const buildId = llamaBuildId(platform, accelerator);
   const build = MODELS.find((m) => m.id === buildId);
   if (!build) throw new Error(`no llama-server build for ${platform}`);
@@ -428,8 +445,9 @@ async function qwenStage(
   platform: string,
   measures: Measure[],
   notes: string[],
+  setting = "auto",
 ): Promise<void> {
-  const { make, accelerator } = await qwenServers(modelsDir, platform);
+  const { make, accelerator } = await qwenServers(modelsDir, platform, setting);
   const load = (u: Utterance, lang: string) => ({
     samples: readWav(new Uint8Array(readFileSync(u.wav))),
     lang,
@@ -645,9 +663,21 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (only.has("qwen")) {
-    if (platform.startsWith("win32"))
-      notes.push("Qwen3-ASR: not run on Windows until its own gate (ASR-12)");
-    else await qwenStage(flag("--qwen-models") ?? modelsDir, dataDir, platform, measures, notes);
+    const accelerator = flag("--accelerator");
+    // Windows runs Qwen by hand only, with its backend named (the gate, ASR-12), not each night.
+    if (platform.startsWith("win32") && !accelerator)
+      notes.push(
+        "Qwen3-ASR: not run on Windows each night; the Windows gate (ASR-12) runs it by hand with --accelerator",
+      );
+    else
+      await qwenStage(
+        flag("--qwen-models") ?? modelsDir,
+        dataDir,
+        platform,
+        measures,
+        notes,
+        accelerator ?? "auto",
+      );
   }
 
   notes.push(
