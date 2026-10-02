@@ -543,6 +543,12 @@ export class ApiClient {
   /** The recovery itself: `answering` runs one at a time per client. */
   private async heal(rt: Runtime, launch: boolean, t0: number): Promise<Runtime> {
     const rows = await processTable();
+    // A list that cannot be read may hide a recording helper: nothing is stopped.
+    if (rows === null) {
+      throw new Hung(
+        `akou is not answering, and the processes below it could not be listed (ps failed), so nothing was stopped; kill -KILL ${rt.pid} restarts it by hand, then run the command again`,
+      );
+    }
     const rec = await recordingBelow(rows, rt.pid);
     if (rec) throw new Hung(recordingMessage(rt.pid, rec));
     await sampleHung(rt.pid, join(this.configDir, HANGS_DIR));
