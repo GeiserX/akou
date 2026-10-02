@@ -1083,6 +1083,117 @@ describe("SV-D1: transcribing a file is a product feature", () => {
     }
   });
 
+  test("--keyword, --keywords-file and --priority: the server takes them, and its refusals print as it words them", async () => {
+    const f = noteFile();
+    const t = tempDir("akou-transcribe-keywords-");
+    const env = { ...process.env, ...server.env };
+    const terms = (lines: string[]) => {
+      const path = join(t.dir, `terms-${lines.length}-${lines[0]?.length}.txt`);
+      writeFileSync(path, `${lines.join("\n")}\n`);
+      return path;
+    };
+    try {
+      const ok = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        terms(["Hetzner", "", "Kubernetes"]),
+        "--keyword",
+        "Terraform",
+        "--priority",
+        "5",
+      ]);
+      expect(`${ok.code} ${ok.out}`).toBe("0 hello world");
+      // 25 keywords, a keyword of 101 characters, priority 11: each refused by the server (exit
+      // 64, nothing on stdout) in the server's words, which the CLI does not repeat on its own.
+      const many = Array.from({ length: 25 }, (_, i) => `term${i}`);
+      const refusals: [string[], string][] = [
+        [["--keywords-file", terms(many)], "at most 24 keywords"],
+        [["--keyword", "x".repeat(101)], "a keyword is at most 100 characters"],
+        [["--priority", "11"], "priority is a whole number from -10 to 10"],
+      ];
+      for (const [args, words] of refusals) {
+        const r = await cli(env, ["transcribe", f.path, ...args]);
+        expect([r.code, r.out, r.err]).toEqual([64, "", `akou: ${words}`]);
+      }
+      // Positive control: 24 keywords, the most there may be, are taken.
+      const most = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        terms(many.slice(0, 24)),
+      ]);
+      expect(`${most.code} ${most.out}`).toBe("0 hello world");
+      const missing = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        join(t.dir, "nope"),
+      ]);
+      expect(missing.code).toBe(64);
+    } finally {
+      f.cleanup();
+      t.cleanup();
+    }
+  });
+
+  test("--keyword, --keywords-file and --priority send the fields the HTTP door reads: keywords[] and priority", async () => {
+    const f = noteFile();
+    const t = tempDir("akou-transcribe-form-");
+    const sent: { keywords: unknown[]; priority: unknown[] }[] = [];
+    // A stand-in for the server that keeps each submitted form; the real route reads these
+    // fields in the test above.
+    const fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (req) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/v1/server") return Response.json({ capabilities: { jobs: true } });
+        if (req.method === "POST" && path === "/v1/jobs") {
+          const form = await req.formData();
+          sent.push({ keywords: form.getAll("keywords[]"), priority: form.getAll("priority") });
+          return Response.json({ id: "job_1", status: "done" }, { status: 202 });
+        }
+        if (path === "/v1/jobs/job_1/result") return Response.json({ text: "hello world" });
+        return new Response(null, { status: 204 });
+      },
+    });
+    try {
+      const terms = join(t.dir, "terms.txt");
+      writeFileSync(terms, "Hetzner\r\n\n  Kubernetes  \n");
+      const env = {
+        ...process.env,
+        AKOU_HOME: t.dir,
+        AKOU_URL: `http://127.0.0.1:${fake.port}`,
+        AKOU_API_KEY: "ak_transcribe-form-test",
+      };
+      const r = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keyword",
+        "Terraform",
+        "--keywords-file",
+        terms,
+        "--keyword",
+        "Ceph",
+        "--priority",
+        "-3",
+      ]);
+      expect(`${r.code} ${r.out} ${r.err}`).toBe("0 hello world ");
+      expect(sent[0]).toEqual({
+        keywords: ["Terraform", "Ceph", "Hetzner", "Kubernetes"],
+        priority: ["-3"],
+      });
+      // Without the flags, neither field is sent, so the server's defaults apply.
+      await cli(env, ["transcribe", f.path]);
+      expect(sent[1]).toEqual({ keywords: [], priority: [] });
+    } finally {
+      fake.stop(true);
+      f.cleanup();
+      t.cleanup();
+    }
+  });
+
   test("the desktop app has no file jobs: exit 69, naming the setting", async () => {
     const f = noteFile();
     try {
