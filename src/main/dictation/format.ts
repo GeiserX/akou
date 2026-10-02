@@ -147,7 +147,7 @@ const DEADLINE = /^no answer within \d+ (?:s|ms)$/;
  * or name. The message itself stays out: it can be the model's reply on an errored turn, the
  * harness's stderr or an API's error text, any of which could quote the dictated words.
  */
-function loggable(err: unknown): string {
+export function loggable(err: unknown): string {
   if (err instanceof ProviderError) {
     return DEADLINE.test(err.message) ? err.message : `provider error (${err.kind})`;
   }

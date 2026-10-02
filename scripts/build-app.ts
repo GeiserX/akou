@@ -17,8 +17,10 @@
  *    Hutch then signs both bundles with `ELECTROBUN_DEVELOPER_ID`, which is `-` (ad-hoc) unless a
  *    Developer ID is given, and notarizes only with a real one and Apple credentials.
  * 5. The DMG Hutch makes (the app and an Applications link) and a zip of the same app are copied
- *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, and the update feed Hutch makes
- *    (`stable-macos-arm64-update.json` and the bundle it names) beside them, under its own names.
+ *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, the update feed Hutch makes
+ *    (`stable-macos-arm64-update.json` and the bundle it names) beside them, under its own names,
+ *    and the diarization helper alone to `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`,
+ *    for a source checkout.
  *
  * Nothing here opens the app. `scripts/smoke-app.ts` checks what was built.
  */
@@ -26,7 +28,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BUILT } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
@@ -59,6 +61,11 @@ export const RELEASE_DIR = join(ROOT, "dist", "release");
 
 export function releaseName(version: string): string {
   return `akou-${version}-${PLATFORM}`;
+}
+
+/** The release file holding the diarization helper alone. */
+export function diarizeArchive(version: string): string {
+  return `akou-diarize-${version}-darwin-arm64.tar.gz`;
 }
 
 /** `PAIRED_HUTCH_VERSION` in the installed `electrobun` npm bootstrap, or null. */
@@ -218,6 +225,17 @@ async function main(argv: string[]): Promise<void> {
   const bundle = bundleName(JSON.parse(readFileSync(feedManifest, "utf8"))) as string;
   copyFileSync(feedManifest, join(RELEASE_DIR, MANIFEST));
   copyFileSync(join(ROOT, "artifacts", bundle), join(RELEASE_DIR, bundle));
+  // The diarization helper on its own, the binary at the archive's top: a server run from a source
+  // checkout has no app to carry it (akou-5an.110). No AppleDouble files beside it.
+  const helper = join(ROOT, "native", "akou-diarize", "target", "release", "akou-diarize");
+  if (existsSync(helper)) {
+    const tgz = join(RELEASE_DIR, diarizeArchive(version));
+    rmSync(tgz, { force: true });
+    run(["tar", "-czf", tgz, "-C", dirname(helper), "akou-diarize"], {
+      ...process.env,
+      COPYFILE_DISABLE: "1",
+    });
+  }
   const id = hutchEnv(process.env).ELECTROBUN_DEVELOPER_ID;
   const signed = id === "-" ? "ad-hoc signed, not notarized" : `signed by ${id}`;
   console.log(

@@ -95,14 +95,18 @@ export interface Clock {
   now(): number;
   /** Monotonic clock, nanoseconds. Only differences are meaningful. */
   mono(): bigint;
+  // clock: a member of the injected clock, not a call.
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
 }
 
 export const realClock: Clock = {
+  // clock: the real clock behind the injected `Clock`; tests pass their own.
   now: () => Date.now(),
   mono: () => process.hrtime.bigint(),
+  // clock: the real clock behind the injected `Clock`; tests pass their own.
   setTimeout(fn, ms) {
+    // clock: the real clock behind the injected `Clock`; tests pass their own.
     return setTimeout(fn, ms);
   },
   clearTimeout(h) {

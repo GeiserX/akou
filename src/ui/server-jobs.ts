@@ -2,7 +2,7 @@
  * The Jobs page of server mode (docs/ux/SERVER.md SV-U4), the page the server opens on: queued and
  * running jobs with their elapsed time, done and failed ones with their error, filtered by key and
  * state; open one to read its fields and its transcript; cancel or delete one. A job is shown by
- * its title with its id dim beside it, and the search keeps the jobs whose title, id or state
+ * its title with its id dim under it, and the search keeps the jobs whose title, id or state
  * holds the text (SV-J10), as the server's `q` finds them, so it reaches past the rows shown.
  *
  * It reads `GET /v1/jobs` twice a second while it is shown, so a job submitted from outside shows
@@ -51,7 +51,7 @@ function errorText(e: JobView["error"]): string {
   return [e.code, e.message].filter(Boolean).join(": ");
 }
 
-/** The job's name cell: its title with the id dim beside it, or the id alone. */
+/** The job's name cell: its title with the id dim under it, or the id alone. */
 function nameOf(j: JobView): (HTMLElement | string)[] {
   if (!j.title) return [j.id];
   return [h("span", { class: "job-title" }, j.title), " ", h("span", { class: "job-id" }, j.id)];
@@ -108,7 +108,8 @@ export class JobsPage implements ServerScreen {
   private inFlight = false;
   /** A filter changed while a read was out: read again when it answers. */
   private again = false;
-  private selected: { id: string; status: string } | null = null;
+  /** The open job, with what its panel shows: a new state or a rename draws it again. */
+  private selected: { id: string; status: string; title: string | null } | null = null;
 
   constructor(private readonly t: Transport) {
     this.root = section(
@@ -150,18 +151,14 @@ export class JobsPage implements ServerScreen {
     );
     this.status.addEventListener("change", () => void this.read());
     this.key.addEventListener("change", () => void this.read());
+    // Escape empties the field by itself in Chromium and WebKit (a search field does there).
     this.search.addEventListener("input", () => void this.read());
-    this.search.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || !this.search.value) return;
-      e.preventDefault();
-      this.search.value = "";
-      void this.read();
-    });
   }
 
   show(): void {
     void this.readKeys();
     void this.read();
+    // clock: polls the job list while the page shows it.
     this.timer ??= setInterval(() => void this.read(), POLL_MS);
   }
 
@@ -254,7 +251,8 @@ export class JobsPage implements ServerScreen {
     const sel = this.selected;
     if (sel) {
       const now = jobs.find((j) => j.id === sel.id);
-      if (now && now.status !== sel.status) void this.open(now.id);
+      if (now && (now.status !== sel.status || (now.title ?? null) !== sel.title))
+        void this.open(now.id);
     }
   }
 
@@ -265,7 +263,8 @@ export class JobsPage implements ServerScreen {
       started === null
         ? ""
         : j.status === "running"
-          ? took(Date.now() - started)
+          ? // clock: a running job's elapsed time on screen.
+            took(Date.now() - started)
           : took((ended ?? started) - started);
     const waiting = j.waiting_for
       ? ` (downloading ${j.waiting_for.model}: ${j.waiting_for.total > 0 ? Math.floor((100 * j.waiting_for.bytes) / j.waiting_for.total) : 0} %)`
@@ -320,7 +319,7 @@ export class JobsPage implements ServerScreen {
       return;
     }
     const j = r.body;
-    this.selected = { id: j.id, status: j.status };
+    this.selected = { id: j.id, status: j.status, title: j.title ?? null };
     let transcript: HTMLElement | null = null;
     if (j.status === "done") {
       const res = await this.t.request<{ text?: string; engine?: { models?: string[] } }>(
