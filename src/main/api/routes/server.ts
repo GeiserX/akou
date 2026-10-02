@@ -28,6 +28,7 @@ import { PRESETS } from "../../server/presets.ts";
 import { caller } from "../caller.ts";
 import { json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
+import { BOUND_LANGUAGES } from "./jobs.ts";
 
 /** The job queue's numbers (SV-Q4), or null where there is no queue (the desktop app). */
 function queueOf(app: ApiApp): QueueStats | null {
@@ -74,7 +75,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -138,9 +139,13 @@ export function serverRoutes(r: Router<ApiApp>): void {
           openai: has("POST", "/audio/transcriptions"),
           // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.
           interactive: has("POST", "/audio/transcriptions") && (dictation?.slots ?? 0) > 0,
+          // A job's `languages[]` bounds its `auto` language (`bound_languages` are the codes).
+          languages_bound: has("POST", "/jobs"),
           wyoming: false,
           bazarr: false,
         },
+        // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
+        bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],
         // SV-C4: where this API's description is, once the route serving it exists.
         links: has("GET", "/openapi.json") ? { openapi: "/v1/openapi.json" } : {},
       });

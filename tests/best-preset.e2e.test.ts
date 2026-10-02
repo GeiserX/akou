@@ -315,3 +315,142 @@ describe("lidc on the server: asr.languages", () => {
     }
   });
 });
+
+describe("akou-5an.106: lidc per job, languages[]", () => {
+  // The fake hears Chinese on auto; forced, Spanish scores better than English.
+  const CHINESE = [
+    process.execPath,
+    FAKE_LLAMA,
+    "--fake-lang",
+    "Chinese",
+    "--fake-lp",
+    "Spanish=-0.1",
+    "--fake-lp",
+    "English=-2",
+  ];
+  let r: AppRig;
+  let k: Key;
+
+  beforeAll(async () => {
+    r = await appRig({ settings: { ...SERVER, "asr.llamaServer": CHINESE } });
+    k = await newKey(r, "archive");
+  });
+
+  afterAll(async () => {
+    await r?.close();
+  });
+
+  async function languageOf(fields: Record<string, string>) {
+    const s = await submit(r, k.key, DIALOGUE, { preset: "best", ...fields });
+    expect(s.status).toBe(202);
+    const j = await asKey(r, k.key, "GET", `/jobs/${s.body.id}?wait=30`);
+    expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+    return {
+      job: j.body,
+      language: (await asKey(r, k.key, "GET", `/jobs/${s.body.id}/result`)).body.language,
+    };
+  }
+
+  test("a clip Qwen names Chinese comes back in a listed language, and the job echoes the list", async () => {
+    const bound = await languageOf({ "languages[]": "es,EN" });
+    // Spanish: the forced decode among the listed ones that scores higher.
+    expect(bound.language).toBe("es");
+    expect(bound.job.languages).toEqual(["es", "en"]);
+    // Positive control: no list and asr.languages empty, so whatever the model names stands.
+    const free = await languageOf({});
+    expect(free.language).toBe("zh");
+    expect(free.job.languages).toEqual([]);
+  });
+
+  test("the request's list wins over asr.languages; with none, asr.languages bounds it", async () => {
+    const admin = await newKey(r, "admin", "admin");
+    expect(
+      (await asKey(r, admin.key, "PATCH", "/config", { "asr.languages": ["en"] })).status,
+    ).toBe(200);
+    try {
+      expect((await languageOf({})).language).toBe("en");
+      expect((await languageOf({ "languages[]": "es" })).language).toBe("es");
+    } finally {
+      await asKey(r, admin.key, "PATCH", "/config", { "asr.languages": [] });
+    }
+  });
+
+  test("a code no engine here can choose is refused with 422, never dropped", async () => {
+    const s = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "es,bg" });
+    expect(s.status).toBe(422);
+    expect(s.body).toMatchObject({ error: "unsupported_language", codes: ["bg"] });
+    const bad = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "spanish" });
+    expect(bad.status).toBe(422);
+    expect(bad.body).toMatchObject({ error: "bad_field", field: "languages[]" });
+    // The OpenAI door refuses it the same way.
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+    form.append("model", "best");
+    form.append("languages[]", "bg");
+    const o = await fetch(`http://127.0.0.1:${r.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(o.status).toBe(422);
+    expect(((await o.json()) as { error: string }).error).toBe("unsupported_language");
+  });
+
+  test("the OpenAI door bounds auto with languages[] too", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+    form.append("model", "best");
+    form.append("response_format", "verbose_json");
+    form.append("languages[]", "es");
+    form.append("languages[]", "en");
+    const o = await fetch(`http://127.0.0.1:${r.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(o.status).toBe(200);
+    expect(((await o.json()) as { language: string }).language).toBe("es");
+  });
+
+  test("languages[] is in the Idempotency-Key fingerprint, in any order and case", async () => {
+    const send = async (languages: string) => {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+      form.append("preset", "best");
+      form.append("languages[]", languages);
+      const res = await fetch(`http://127.0.0.1:${r.port}/v1/jobs`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${k.key}`, "idempotency-key": "lang-fp-1" },
+        body: form,
+      });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    const first = await send("es,en");
+    expect(first.status).toBe(202);
+    const same = await send("EN, es");
+    expect(same.status).toBe(200);
+    expect(same.body.id).toBe(first.body.id);
+    const other = await send("es");
+    expect(other.status).toBe(422);
+    expect(other.body).toMatchObject({
+      error: "idempotency_conflict",
+      id: first.body.id,
+      fields: ["languages"],
+    });
+    // Without a key, two submits differing only in languages are two jobs.
+    const a = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "es" });
+    const b = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "en" });
+    expect(a.body.id).not.toBe(b.body.id);
+    for (const id of [first.body.id, a.body.id, b.body.id]) {
+      await asKey(r, k.key, "GET", `/jobs/${id}?wait=30`);
+    }
+  });
+
+  test("GET /v1/server says jobs take languages[], and which codes", async () => {
+    const s = (await asKey(r, k.key, "GET", "/server")).body;
+    expect(s.capabilities.languages_bound).toBe(true);
+    expect(s.bound_languages).toContain("es");
+    expect(s.bound_languages).toContain("yue");
+    expect(s.bound_languages).not.toContain("bg");
+  });
+});
