@@ -441,7 +441,7 @@ class App {
           if (e.type === "ask" || e.type === "answer") asked = true;
         }
         if (notes) this.notepad.render();
-        if (speakers) this.askPane.renderPresets();
+        if (speakers) this.askPane.speakersChanged();
         if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
         const lines = c.events.some((e) => e.type === "seg" || e.type.startsWith("final."));

@@ -174,6 +174,14 @@ export class AskPane {
   }
 
   /**
+   * A speaker was named or merged: an open menu asks for its presets again; a closed one asks when
+   * it opens, so a rename sends nothing more while the menu is shut.
+   */
+  speakersChanged(): void {
+    if (!this.presetsBox.hidden) this.renderPresets();
+  }
+
+  /**
    * The presets filled in for the open call, with one "What did X say?" per named speaker. The
    * menu is redrawn only when they changed, so focus inside an open menu stays put.
    */
