@@ -103,6 +103,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-check-${{ runner.os }}
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
           path: |
             .junit-check.xml
             coverage/lcov.info
@@ -144,6 +146,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-ui
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
           path: .junit-ui.xml
           if-no-files-found: ignore
           retention-days: 14
@@ -800,6 +804,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-capture-e2e-${{ runner.os }}
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
           path: .junit-capture-e2e.xml
           if-no-files-found: ignore
           retention-days: 14

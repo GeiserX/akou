@@ -188,4 +188,21 @@ describe("[TS-6] every reached trap has a test that ran and asserted", () => {
     expect(r.out).toContain("without a test that ran and asserted");
     t.cleanup();
   });
+
+  test("every JUnit file the traps job reads is uploaded, dotfile and all", () => {
+    // upload-artifact leaves dotfiles out unless told: the first run uploaded no `.junit-*.xml`
+    // and the traps job, given no file, failed on its usage line.
+    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const uploads = yaml
+      .split(/\n(?= {6}- )/)
+      .filter((step) => step.includes("actions/upload-artifact@") && step.includes(".junit-"));
+    expect(uploads.length).toBe(3);
+    for (const step of uploads) {
+      const name = step.match(/name: (\S+)/)?.[1];
+      expect({ name, hidden: /\n {10}include-hidden-files: true\n/.test(step) }).toEqual({
+        name,
+        hidden: true,
+      });
+    }
+  });
 });
