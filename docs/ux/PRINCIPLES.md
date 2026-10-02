@@ -201,7 +201,7 @@ Each row is one bead labelled `docs-lag`, closed by the PR that fixes the doc.
 | ROADMAP M0 | "Nothing else starts until every gate has a result" | Gates block the stable release, not development. A non-prerelease release fails without a recorded pass for every M0 gate in `docs/gates/`; G3 and G4 stay blockers |
 | DESIGN §9, ROADMAP M1 | Signing and notarization in M1 | Builds are unsigned for now; signing moves to a later milestone |
 | ROADMAP | No UX milestone; shipped work not marked | Add an M-UX milestone whose exit criteria are the P0 and P1 ids, and a "status on main" line per milestone (the share link, templates, memo, vocab pass and webhook are built) |
-| REQUIREMENTS F1.42, F0.19, F0.26, F2.49, F2.54, F4.7 to F4.11, F4.17, I1.6 | Marked carried in M1, not built (copy transcript, `devices`, `doctor --grant`, `akou://`, cask, signing, legal doc, demo, the env var list) | Status "designed", naming the owning id |
+| REQUIREMENTS F1.42, F0.26, F2.49, F2.54, F4.7 to F4.11, F4.17, I1.6 | Marked carried in M1, not built (copy transcript, `doctor --grant`, `akou://`, cask, signing, legal doc, demo, the env var list) | Status "designed", naming the owning id |
 | DESIGN §6.1 | "Install command-line tool" menu, `doctor` capture test, `devices` and `apps` | Marked planned, pointing at DK-M6, DK-O1, CLI-07; later a pointer to the generated `docs/cli.md` |
 | DESIGN §7 "New:" paragraph | Lists inline edit, capture test and several settings as built | Split into built and designed |
 | DESIGN §7 | Says the window never polls; the models card polls `GET /models` every second | Say so, or move download progress onto the status push (DK-O3) |

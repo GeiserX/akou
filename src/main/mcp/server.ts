@@ -437,6 +437,7 @@ export function createMcpServer(o: McpOptions): McpServer {
           .string()
           .optional()
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
+        mic: z.string().optional().describe("The microphone: an input id from akou_devices"),
         vocab: z.array(z.string()).optional(),
       }),
       outputSchema: OUT.start,

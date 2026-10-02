@@ -15,6 +15,7 @@ import { type CaptureDevices, queryDevices } from "../src/main/capture/devices.t
 import { EXIT } from "../src/main/cli/client.ts";
 import { type AppRig, appRig, FAKE_HELPER } from "./api-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
+import { fakeApi, mcpClient } from "./mcp-helpers.ts";
 
 let rig: AppRig;
 
@@ -96,14 +97,17 @@ describe("[PG-A8] GET /devices and GET /apps", () => {
     const run = rigCli(rig);
     const devices = await run(["devices"]);
     expect(devices.code).toBe(0);
-    expect(devices.out).toContain("* Fake Microphone  fake-mic-1");
-    expect(devices.out).toContain("  Fake USB Microphone  fake-usb-2");
-    expect(devices.out).toContain("Fake Speakers  fake-out-1");
+    expect(devices.out).toContain("* fake-mic-1  Fake Microphone");
+    expect(devices.out).toContain("  fake-usb-2  Fake USB Microphone");
+    expect(devices.out).toContain("fake-out-1  Fake Speakers");
     const json = await run(["devices", "--json"]);
     expect(json.json.inputs).toEqual((await rig.api("GET", "/devices")).body.inputs);
     const apps = await run(["apps"]);
     expect(apps.code).toBe(0);
-    expect(apps.out).toContain("Example Call  com.example.call  pid 4242");
+    // The id comes first (CLI-07); a name that is only the id (macOS) is printed once.
+    expect(apps.out).toContain("  com.example.call  Example Call  pid 4242");
+    expect(apps.out).toContain("  com.example.music  pid 4343");
+    expect(apps.out).not.toContain("com.example.music  com.example.music");
     expect((await run(["apps", "--json"])).json.apps.length).toBe(2);
     const refused = await fileOnly(() => run(["devices"]));
     expect(refused.code).toBe(EXIT.unavailable);
@@ -138,5 +142,55 @@ describe("[PG-A8] where one app cannot be captured", () => {
     expect((await get("/devices", d)).status).toBe(200);
     const listed = await get("/apps", { ...d, apps: [], appsUnavailable: null });
     expect([listed.status, listed.body.apps]).toEqual([200, []]);
+  });
+});
+
+describe("[PG-A8] akou_devices and the ids akou_start takes", () => {
+  const DEVICES = {
+    backend: "fake",
+    inputs: [{ id: "mic-2", name: "Desk Mic", default: false }],
+    outputs: [],
+  };
+
+  test("where GET /apps answers 501, apps is null and the reason is given", async () => {
+    const api = fakeApi(
+      (_m, p) =>
+        p === "/apps"
+          ? { error: "apps_unavailable", message: "capturing one app is not available here" }
+          : DEVICES,
+      undefined,
+      (_m, p) => (p === "/apps" ? 501 : 200),
+    );
+    const c = await mcpClient(api);
+    try {
+      const r = await c.call("akou_devices");
+      expect(r.isError).toBe(false);
+      expect(r.structured.inputs).toEqual(DEVICES.inputs);
+      expect(r.structured.apps).toBeNull();
+      expect(r.structured.appsUnavailable).toContain("apps_unavailable");
+      expect(r.structured.appsUnavailable).toContain("capturing one app is not available here");
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("an input id from akou_devices reaches POST /calls as mic", async () => {
+    const sent: unknown[] = [];
+    const api = fakeApi((m, p, o) => {
+      if (m === "POST" && p === "/calls") {
+        sent.push(o.body);
+        return { call: "c1", folder: "/rec/c1", part: 1, firstAudioMs: 5, url: null };
+      }
+      return p === "/apps" ? { backend: "fake", apps: [] } : DEVICES;
+    });
+    const c = await mcpClient(api);
+    try {
+      const mic = (await c.call("akou_devices")).structured.inputs[0].id;
+      const r = await c.call("akou_start", { title: "Sync", mic });
+      expect(r.isError).toBe(false);
+      expect(sent).toEqual([{ title: "Sync", mic: "mic-2", attach: true }]);
+    } finally {
+      await c.close();
+    }
   });
 });

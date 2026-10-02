@@ -312,6 +312,7 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
                 pid: p.pid.max(0) as u32,
             })
             .collect(),
+        true,
     );
     Ok(Endpoints {
         backend: "coreaudio",

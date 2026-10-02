@@ -204,7 +204,8 @@ const FAKE_DEVICES = {
   outputs: [{ id: "fake-out-1", name: "Fake Speakers", default: true }],
   apps: [
     { id: "com.example.call", name: "Example Call", pid: 4242 },
-    { id: "com.example.music", name: "Example Music", pid: 4343 },
+    // macOS names an app by its bundle id.
+    { id: "com.example.music", name: "com.example.music", pid: 4343 },
   ],
 };
 

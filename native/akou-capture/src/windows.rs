@@ -880,6 +880,7 @@ fn session_apps(en: &DeviceEnumerator) -> Result<Vec<AudioApp>, String> {
                 pid: p.pid,
             })
             .collect(),
+        false,
     ))
 }
 

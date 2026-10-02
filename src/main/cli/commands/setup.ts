@@ -495,9 +495,15 @@ function unbuilt(
   };
 }
 
-/** One device line: `* Name  id`, the default marked. */
+/** One device line: `* id  Name`, the default marked. */
 function deviceLine(d: Body): string {
-  return `${d.default ? "*" : " "} ${d.name}  ${d.id}`;
+  return `${d.default ? "*" : " "} ${d.id}  ${d.name}`;
+}
+
+/** One app line: `id  Name  pid N`; macOS names an app by its bundle id, printed once. */
+function appLine(a: Body): string {
+  const name = String(a.name).toLowerCase() === String(a.id).toLowerCase() ? "" : `  ${a.name}`;
+  return `  ${a.id}${name}  pid ${a.pid}`;
 }
 
 const devices: Command = {
@@ -532,10 +538,7 @@ const apps: Command = {
     return finish(ctx, r, (b) =>
       (b.apps as Body[]).length === 0
         ? "No app has audio open."
-        : [
-            "Apps with audio (start --call app:ID):",
-            ...(b.apps as Body[]).map((a) => `  ${a.name}  ${a.id}  pid ${a.pid}`),
-          ].join("\n"),
+        : ["Apps with audio (start --call app:ID):", ...(b.apps as Body[]).map(appLine)].join("\n"),
     );
   },
 };

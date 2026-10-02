@@ -51,7 +51,7 @@ export function deviceRoutes(r: Router<ApiApp>): void {
     "/apps",
     {
       id: "devices.apps",
-      doc: 'The apps with audio the capture helper sees, each with `id`, `name` and `pid`. An app\'s `id` is what calls.start takes as `call: "app:<id>"` to record that app alone. 501 `apps_unavailable` where one app cannot be captured (Linux, an older Windows), with the reason; 503 `devices_unavailable` when the helper cannot list at all.',
+      doc: 'The apps with audio the capture helper sees, each with `id`, `name` and `pid`; on macOS `name` is the bundle id, the same as `id`. An app\'s `id` is what calls.start takes as `call: "app:<id>"` to record that app alone. 501 `apps_unavailable` where one app cannot be captured (Linux, an older Windows), with the reason; 503 `devices_unavailable` when the helper cannot list at all.',
       access: "admin",
       modes: ["app"],
       ok: 200,
