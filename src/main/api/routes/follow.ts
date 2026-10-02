@@ -27,9 +27,10 @@ import type { Line, View } from "../../../core/log/fold.ts";
 import { learnedItem } from "../../../core/vocab/learned.ts";
 import { renderTranscriptSection } from "../../handoff/export.ts";
 import { estimateTokens, renderLine } from "../../query/render.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Query, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf } from "./common.ts";
+import { CALL_ID, CALL_REF_ERRORS, callId, callOf } from "./common.ts";
 
 /** Longest a long poll waits, seconds. */
 export const MAX_WAIT_SECONDS = 30;
@@ -339,6 +340,7 @@ export function followRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       query: { after: AFTER, wait: WAIT },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const id = callId(c);
@@ -370,6 +372,7 @@ export function followRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       query: { after: AFTER },
       ok: 200,
+      errors: CALL_REF_ERRORS,
       type: "sse",
     },
     async (c) => {
@@ -437,6 +440,7 @@ export function followRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 409: ["cursor_stale"] }),
     },
     async (c) => {
       const call = await callOf(c);

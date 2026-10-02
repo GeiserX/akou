@@ -19,7 +19,7 @@ function when(iso: unknown): string {
 
 export const jobsCommand: Command = {
   name: "jobs",
-  summary: "The server's transcription jobs your key can see",
+  summary: "The transcription jobs your key can see",
   usage: `akou jobs list [--status ${STATES.join("|")}]   [--json]`,
   flags: {
     status: {
@@ -37,10 +37,11 @@ export const jobsCommand: Command = {
       return usage(ctx, `--status is one of ${STATES.join(", ")}`);
     }
     const r = await api(ctx, "GET", "/jobs", { query: { status } });
-    // The desktop app has no job routes: that is not a usage error, it is the wrong kind of akou.
+    // An akou from before the desktop app took jobs has no job routes: that is not a usage error,
+    // it is the wrong version of akou.
     if (r.status === 404 && !ctx.io.env.AKOU_URL?.trim()) {
       const message =
-        "jobs exist only on an akou server, and the akou on this machine is the desktop app; run `akou serve`, or set AKOU_URL to a server";
+        "the akou on this machine takes no file jobs; update it, or set AKOU_URL to an akou that does";
       if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_server", message }));
       else ctx.io.err(`akou: ${message}`);
       return EXIT.unavailable;

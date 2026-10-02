@@ -41,6 +41,7 @@ import {
   afterCallHelp,
   allModelsText,
   autoHelp,
+  autoJobsHelp,
   bestHelp,
   catalogGroups,
   catalogLine,
@@ -94,8 +95,10 @@ import { wordsFor } from "./settings-labels.ts";
 interface FinalView {
   setting: string;
   named: string | null;
-  /** Null when no final model is downloaded. */
+  /** Null when no final model is downloaded; `rover-conf(<ids>)` when the pass fuses several. */
   next: string | null;
+  /** `asr.final.engines` as ids; empty for one model. Absent from an older app. */
+  engines?: string[];
 }
 type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView; final?: FinalView };
 
@@ -150,6 +153,8 @@ export class ModelsPage {
   /** What each number field held when drawn, so leaving saves only an edit. */
   private shownNumbers = new Map<string, string>();
   private platform = "";
+  /** Server mode: what `auto` runs for a job here and why (`GET /server` `auto`, SV-R2). */
+  private auto: { preset: string; reason: string } | null = null;
   /** The All models page is on screen instead of the page itself. */
   private sub = false;
   private readonly armed = new Map<string, number>();
@@ -200,7 +205,7 @@ export class ModelsPage {
       this.t.request<ModelsReply>("GET", "/models").catch(() => null),
       this.t.request<ConfigReply>("GET", "/config").catch(() => null),
       this.server
-        ? null
+        ? this.readAuto()
         : this.t.request<{ app?: { platform?: string } }>("GET", "/status").catch(() => null),
     ]);
     if (n !== this.shows || !this.shown) return;
@@ -267,13 +272,27 @@ export class ModelsPage {
     const n = ++this.polls;
     let r: { status: number; body: ModelsReply };
     try {
-      r = await this.t.request<ModelsReply>("GET", "/models");
+      // A finished download can change what `auto` runs, so the server's verdict is read again.
+      [r] = await Promise.all([
+        this.t.request<ModelsReply>("GET", "/models"),
+        this.server ? this.readAuto() : null,
+      ]);
     } catch {
       return;
     }
     if (n !== this.polls || r.status !== 200 || !this.shown || this.loading) return;
     this.take(r.body);
     this.drawModels();
+  }
+
+  /** Server mode: reads what `auto` runs here now into `auto`; null when the server cannot say. */
+  private async readAuto(): Promise<null> {
+    const r = await this.t
+      .request<{ auto?: { preset?: string; reason?: string } | null }>("GET", "/server")
+      .catch(() => null);
+    const a = r && r.status === 200 ? r.body?.auto : null;
+    this.auto = a?.preset && a.reason ? { preset: a.preset, reason: a.reason } : null;
+    return null;
   }
 
   private draw(): void {
@@ -674,11 +693,13 @@ export class ModelsPage {
   }
 
   /**
-   * The model After the call shows: the one `asr.final.model` names, else the one the next pass
-   * runs (`auto`), else Parakeet where the app says neither.
+   * The model After the call shows: the first of `asr.final.engines`, else the one
+   * `asr.final.model` names, else the one the next pass runs (`auto`), else Parakeet where the app
+   * says neither.
    */
   private afterCallId(): string {
-    return this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
+    // Several models after the call: the row shows the first, which breaks their ties.
+    return this.final?.engines?.[0] ?? this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
   }
 
   /**
@@ -697,8 +718,9 @@ export class ModelsPage {
         ? this.rowsOf(this.live?.slots.review.find((e) => e.id === QWEN_ID)?.models ?? [QWEN_ID])
         : [r];
     const next = this.final?.next;
+    // A fused pass (`rover-conf(<ids>)`) is no one model to wait for.
     const until =
-      next && next !== r.id
+      next && next !== r.id && !next.startsWith("rover-")
         ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
         : "";
     const s = section(
@@ -764,7 +786,7 @@ export class ModelsPage {
           name: "models-jobs",
           value: "auto",
           label: "Automatic",
-          help: "Chosen for each job by what this server has.",
+          help: autoJobsHelp(this.auto),
           checked: value === "auto",
           isDefault: DEFAULTS[key] === "auto",
         }),
