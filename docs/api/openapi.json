@@ -4414,6 +4414,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4499,6 +4500,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4550,6 +4552,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4606,6 +4609,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4643,6 +4647,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4682,6 +4687,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4748,6 +4754,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"

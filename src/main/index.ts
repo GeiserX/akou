@@ -385,7 +385,7 @@ export interface AppOptions {
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
   /**
-   * Test-only: the file jobs' upload decoder, webhook network and clock (server mode), and the
+   * Test-only: the file jobs' upload decoder, webhook network and clock, and the
    * model store's clock, retry waits and free-space probe (both modes).
    */
   jobs?: Pick<
@@ -652,7 +652,10 @@ export class AkouApp implements ApiApp {
   private readonly runMode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
-  /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
+  /**
+   * File jobs (docs/ux/SERVER.md section 5), in both modes: in app mode the one token submits
+   * them (`akou transcribe`) and owns every job, as the key id `app`.
+   */
   private jobService: JobService | null = null;
   /**
    * The models on disk, their per-model downloads, last use, measured speed and the unused-days
@@ -2583,6 +2586,31 @@ export class AkouApp implements ApiApp {
   }
 
   /**
+   * A file job's turn on the one Qwen line (app mode): it waits behind the Qwen pass ahead of it,
+   * a call's final pass or another job, and holds the line until it calls the function returned,
+   * so a final pass that starts meanwhile waits for it in turn. A second llama-server on Metal
+   * would stop the first, which is how a job would end a call's final pass halfway.
+   */
+  private async qwenTurn(id: string, signal: AbortSignal): Promise<() => void> {
+    const ahead = this.qwenLine;
+    let ended = () => {};
+    const done = new Promise<void>((r) => {
+      ended = r;
+    });
+    this.qwenLine = { call: id, done };
+    const release = () => {
+      ended();
+      if (this.qwenLine?.done === done) this.qwenLine = null;
+    };
+    if (ahead) {
+      this.log("info", `job ${id}: waits for the Qwen pass on ${ahead.call}`);
+      const aborted = new Promise<void>((r) => signal.addEventListener("abort", () => r()));
+      await Promise.race([ahead.done.catch(() => {}), aborted]);
+    }
+    return release;
+  }
+
+  /**
    * A running pass moved: kept for `GET /status`, and the status pushed to the window at most
    * every `FINAL_PUSH_MS`, so its note moves without a log event per piece.
    */
@@ -3377,14 +3405,19 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * What neither the sweep nor a delete may touch. Server mode: the job service's (the default
-   * model's set, every queued or running job's, the worker's). The app: the set its settings name
-   * and the set the running recognizer holds.
+   * What neither the sweep nor a delete may touch: the job service's (every queued or running
+   * job's and the worker's, with the default model's set in a server, and in the app the app's own
+   * set in its place: `appHeld`, handed to the service as `ownerHeld`).
    */
   private modelsHeld(): Held {
-    const jobs = this.jobService;
-    if (jobs) return jobs.held();
-    if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
+    return this.jobService?.held() ?? this.appHeld();
+  }
+
+  /** The app's own set: what its settings name and what the running recognizer holds. */
+  private appHeld(): Held {
+    if (this.runMode === "server" || this.givenRecognizer()) {
+      return { defaults: new Set(), inUse: new Set() };
+    }
     const ctx = this.liveContext();
     const next = chooseLiveSetup(ctx);
     const live = [
@@ -3465,8 +3498,9 @@ export class AkouApp implements ApiApp {
 
   /**
    * Deletes the models unused for `server.models_unused_days` (0: never), in both modes: never
-   * the default's set, one in use, or one downloading. Server mode sweeps through its job service,
-   * which also knows the queue; the app runs this at start and hourly.
+   * the default's set, one in use, or one downloading. Both modes sweep through the job service,
+   * which also knows the queue; an app whose job queue could not start sweeps alone, at start and
+   * hourly.
    */
   sweepModels(): void {
     const jobs = this.jobService;
@@ -3478,45 +3512,72 @@ export class AkouApp implements ApiApp {
     this.shelf?.sweep(new Set([...held.defaults, ...held.inUse]));
   }
 
-  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
+  /**
+   * The job queue, in `<config>/jobs`, started behind the API in both modes (SV-J1); its hourly
+   * sweep deletes old jobs and unused models. The desktop app's queue serves this machine's own
+   * user: no key signs a callback, no job goes to a remote, no Worker is reserved for dictation
+   * (the app dictates through its own engine), and an idle Worker is closed rather than kept warm,
+   * so a file transcribed once does not hold its model in memory afterwards. A queue the app
+   * cannot open is logged and left out: recording never depends on it.
+   */
   private startJobs(): void {
     const shelf = this.startShelf();
     const keys = this.keyStore;
-    if (this.runMode !== "server" || !keys) {
-      this.sweepModels();
-      // clock: the hourly sweep of SV-M5, as server mode's job service runs it.
-      this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
-      this.modelSweep.unref?.();
-      return;
-    }
+    const server = this.runMode === "server" && keys !== null;
     const { modelStore: _store, ...jobSeams } = this.o.jobs ?? {};
     const s = () => this.cfg.settings;
-    this.jobService = new JobService({
-      dir: join(this.configDir, "jobs"),
-      version: this.version,
-      models: (recognizer) => this.jobModels(recognizer),
-      shelf,
-      defaultModel: () => s()["server.default_model"],
-      diarizer: () => this.runningDiarizer(),
-      secrets: (id) => {
-        const s = keys.secretOf(id);
-        return s ? [s] : [];
-      },
-      hostListed: (id, host) =>
-        keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
-      retainDays: () => this.cfg.settings["server.retain_days"],
-      maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
-      remotes: () => this.cfg.settings["server.remotes"],
-      env: this.o.env ?? process.env,
-      concurrency: () => this.cfg.settings["server.concurrency"],
-      queueMax: () => this.cfg.settings["server.queue_max"],
-      queueMaxPerKey: () => this.cfg.settings["server.queue_max_per_key"],
-      dictationSlots: () => this.cfg.settings["server.dictation_slots"],
-      dictationEngine: () => this.cfg.settings["server.dictation_engine"],
-      ...jobSeams,
-      log: (level, msg) => this.log(level, msg),
-    });
-    this.jobService.start();
+    const make = () =>
+      new JobService({
+        dir: join(this.configDir, "jobs"),
+        version: this.version,
+        models: (recognizer) => this.jobModels(recognizer),
+        shelf,
+        defaultModel: () => s()["server.default_model"],
+        diarizer: () => this.runningDiarizer(),
+        secrets: (id) => {
+          const secret = keys?.secretOf(id);
+          return secret ? [secret] : [];
+        },
+        hostListed: (id, host) =>
+          keys?.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())) ??
+          false,
+        retainDays: () => s()["server.retain_days"],
+        maxAudioMinutes: () => s()["server.max_audio_minutes"],
+        remotes: () => (server ? s()["server.remotes"] : []),
+        env: this.o.env ?? process.env,
+        concurrency: () => s()["server.concurrency"],
+        queueMax: () => s()["server.queue_max"],
+        queueMaxPerKey: () => s()["server.queue_max_per_key"],
+        dictationSlots: () => (server ? s()["server.dictation_slots"] : 0),
+        dictationEngine: () => s()["server.dictation_engine"],
+        keepIdleWorkers: () => server,
+        ...(server ? {} : { ownerHeld: () => this.appHeld() }),
+        ...(server
+          ? {}
+          : { gpuTurn: (id: string, signal: AbortSignal) => this.qwenTurn(id, signal) }),
+        ...jobSeams,
+        log: (level, msg) => this.log(level, msg),
+      });
+    if (server) {
+      this.jobService = make();
+      this.jobService.start();
+      return;
+    }
+    try {
+      this.jobService = make();
+      this.jobService.start();
+    } catch (err) {
+      this.jobService?.close();
+      this.jobService = null;
+      this.log(
+        "error",
+        `file jobs are off: the job queue did not start: ${(err as Error).message}`,
+      );
+      this.sweepModels();
+      // clock: the hourly sweep of SV-M5, as the job service would run it.
+      this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
+      this.modelSweep.unref?.();
+    }
   }
 
   recognizer(): "loading" | "ready" | "unavailable" {

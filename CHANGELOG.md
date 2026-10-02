@@ -2,6 +2,17 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## Unreleased
+
+### Files
+- **`akou transcribe FILE` works on the desktop app.** Up to 0.5.4 it exited 69 with `not_server` unless akou ran in server mode, so a recording on your own Mac had to be copied to a server first. The desktop app now takes file jobs with its own token, on the same queue, presets and models as a server: long audio is cut at its pauses, `--diarize` labels the speakers, and the command prints the transcript and exits 0. The app keeps the job, so `akou jobs list` shows it until `server.retain_days` deletes it; a server still deletes it once the text is printed. Server mode keeps its one meaning: keyed access for other programs over the network. The app binds loopback as before, reads no keys, signs no callbacks, sends no job to `server.remotes`, and still answers 404 on `/v1/keys` and the OpenAI-compatible route.
+- **A `best` file job waits its turn behind a call's final pass on Qwen**, and a final pass that starts meanwhile waits for the job: only one llama-server fits on Metal, and starting a second stops the first. A server's jobs do not wait.
+- **The app closes a job's Worker once the queue is empty**, so a file transcribed once does not keep its model in memory. A server keeps its default model loaded, as before.
+- **The app finds Homebrew's ffmpeg.** A Mac app opened from the Finder runs with a short PATH, so M4A, MP3 and Ogg files failed with "ffmpeg is not installed" although `brew install ffmpeg` had put one in `/opt/homebrew/bin`. akou now looks there and in `/usr/local/bin` when PATH has none.
+- **No message sends anyone to server mode for a local file.** `akou help transcribe` says the desktop app runs the job, names `AKOU_URL`, `AKOU_API_KEY` and `AKOU_API_KEY_FILE` for a server, and lists the exit codes. An akou with no job routes now answers `no_jobs` (it was `not_server`), and `akou jobs list` no longer suggests `akou serve`. [docs/agents.md](docs/agents.md), [docs/usage.md](docs/usage.md#transcribing-a-file), [docs/server.md](docs/server.md) and the [akou skill](skills/akou/SKILL.md) say the same.
+
+The HTTP API: the job routes and `GET /v1/events` answer in the desktop app too, and `GET /v1/server` there has `capabilities.jobs` and `events` true and a `queue` object; `webhooks`, `openai` and `interactive` stay false, and `dictation` stays null.
+
 ## 0.5.4 — Qwen writes the final transcript, and a Mac on Nemotron and Qwen needs no Parakeet
 
 On 0.5.3 the final transcript always came from Parakeet, whatever was downloaded, and every Mac needed Parakeet before it could record. A long final pass showed no progress until it ended. In 0.5.4 Qwen writes the final transcript whenever it is downloaded, and a Mac that runs Nemotron for the live lines and Qwen after the call keeps no Parakeet at all. The final pass says how far it is, in the window and in `akou status`, and the Models page lists the whole catalog.
