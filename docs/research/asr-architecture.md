@@ -398,7 +398,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | `asr.review.everySeconds` | 30 to 600 | 60 | Section 3.2, one minute against two |
 | `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4. Built (ASR-6) with the default `[]`: one model, the one `asr.final.model` picks, as the owner's default is Qwen alone; the list is opt-in. It takes Qwen and Parakeet until ASR-8 adds engines |
-| `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
+| `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5. Built (ASR-6) as the fixed `rover-conf`, no key: it is the only fuser, and the LLM fusers are dropped (ASR-9, akou-chp.9) |
 | `asr.fusion.llm` | `none`, `pick`, `free` | `none` | Section 5 |
 | `asr.fusion.provider` | `workspace` (the workspace's `provider.kind`) or an explicit provider | `workspace` | Providers measured: harness (Opus), openai-compatible (gemma-4-12B) |
 | `asr.parakeet.decoding` | `greedy`, `beam` | `greedy` | The beam bug. The hotword boost becomes the constant 1.5 when beam is on |

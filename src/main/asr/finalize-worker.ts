@@ -958,7 +958,7 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
     const listed =
       finals && finals.length > 1
         ? finals.map((id) =>
-            engine && id === engine.id ? engine : new RecognizerEngine(set as ModelSet),
+            engine && id === engine.id ? engine : new RecognizerEngine(set as ModelSet, m.decode),
           )
         : engine;
     const langs = llama?.languages ?? [];
@@ -1070,13 +1070,14 @@ export const FINAL_MIN_BUDGET_MS = 60_000;
 export const FINAL_LLAMA_START_MS = 300_000;
 
 /**
- * How long a final pass may take: half the call's recorded length (DESIGN 3.3 targets 10 to 25 %),
- * and never under a minute. A pass past it is stuck, not slow.
+ * How long a final pass may take: half the call's recorded length (DESIGN 3.3 targets 10 to 25 %)
+ * for each engine, since each one decodes every piece, and never under a minute. A pass past it is
+ * stuck, not slow.
  */
-export function finalBudgetMs(events: readonly LogEvent[]): number {
+export function finalBudgetMs(events: readonly LogEvent[], engines = 1): number {
   let seconds = 0;
   for (const e of events) if (e.type === "part.ended") seconds += e.fileSeconds;
-  return Math.max(FINAL_MIN_BUDGET_MS, Math.round(seconds * 500));
+  return Math.max(FINAL_MIN_BUDGET_MS, Math.round(seconds * 500 * Math.max(1, engines)));
 }
 
 /**
@@ -1136,7 +1137,8 @@ export async function finalizeCall(
     };
     const clock = o.clock ?? realClock;
     const budget =
-      o.budgetMs ?? finalBudgetMs(events) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
+      o.budgetMs ??
+      finalBudgetMs(events, o.models.finals?.length) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
