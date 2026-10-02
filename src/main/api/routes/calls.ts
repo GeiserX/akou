@@ -21,9 +21,17 @@ import {
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
+import { type ErrorCode, errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callOf, resolveRef } from "./common.ts";
+import {
+  CALL_ID,
+  CALL_REF_ERRORS,
+  callOf,
+  LIVE_REF_ERRORS,
+  resolveRef,
+  WRITE_ERRORS,
+} from "./common.ts";
 
 /** Header, parts, roster, health and final state of one call. */
 export function callDetail(c: CallController, app: ApiApp, now: number) {
@@ -109,6 +117,15 @@ const CONTROL_DOCS: Record<(typeof LIVE_CONTROLS)[number], string> = {
   unmute: "Unmute the microphone channel.",
 };
 
+/** What each live control refuses besides resolving the call: the call is not in a state for it. */
+const CONTROL_REFUSALS: Record<(typeof LIVE_CONTROLS)[number], ErrorCode[]> = {
+  stop: ["not_live"],
+  pause: ["not_live", "not_recording"],
+  resume: ["not_live", "not_paused"],
+  mute: ["not_live", "not_recording"],
+  unmute: ["not_live", "not_recording"],
+};
+
 export function callRoutes(r: Router<ApiApp>): void {
   r.add(
     "POST",
@@ -146,6 +163,13 @@ export function callRoutes(r: Router<ApiApp>): void {
           },
         },
         required: ["call", "folder", "part", "url"],
+      },
+      errors: {
+        400: ["bad_term", "bad_workspace"],
+        403: ["permission"],
+        409: ["already_recording", "cancelled"],
+        422: ["bad_field"],
+        503: ["capture_failed", "models_missing", "quitting"],
       },
     },
     async (c) => {
@@ -275,6 +299,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: CALL_ID },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const call = await callOf(c);
@@ -293,6 +318,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { title: "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field"] }),
     },
     async (c) => {
       const b = await c.body<{ title: string }>();
@@ -320,6 +346,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         params: { id: CALL_ID },
         body: {},
         ok: 200,
+        errors: errorsOf(LIVE_REF_ERRORS, { 409: CONTROL_REFUSALS[name] }),
       },
       async (c) => {
         await c.body();
@@ -343,6 +370,18 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "force?": "boolean" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, {
+        403: ["permission"],
+        409: [
+          "already_recording",
+          "cancelled",
+          "locked",
+          "not_restartable",
+          "restart_in_progress",
+          "stale_restart",
+        ],
+        503: ["capture_failed"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ force?: boolean }>();

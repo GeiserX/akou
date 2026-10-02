@@ -3,6 +3,7 @@
  * any `ApiClient`, real (a rig's app) or a stand-in that answers from a function.
  */
 
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import type { ApiClient, ApiResponse, RequestOptions } from "../src/main/cli/client.ts";
@@ -39,8 +40,8 @@ export interface ToolAnswer {
 }
 
 /** An MCP client named `name`, connected in process to a fresh akou MCP server over `api`. */
-export async function mcpClient(api: ApiClient, name = "claude-code") {
-  const server = createMcpServer({ client: api });
+export async function mcpClient(api: ApiClient, name = "claude-code", mode?: "app" | "server") {
+  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}) });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b);
   const client = new Client({ name, version: "1.0.0" });
@@ -104,6 +105,9 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_config_get: {},
   akou_dictation_list: {},
   akou_dictation_get: { id: "d1" },
+  akou_transcribe: { path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 },
+  akou_job_get: { id: "job_1", wait: 0 },
+  akou_jobs_list: {},
 };
 
 /**
@@ -293,6 +297,24 @@ export function sampleApi(n = 3): ApiClient {
       return { items: Array.from({ length: n }, (_, i) => dictation(i)), next_cursor: null };
     }
     if (path.startsWith("/dictations/")) return dictation(1);
+    // File jobs of a server (SI-7): a done job and its transcript, and the key's list.
+    const job = (i: number) => ({
+      id: `job_${i}`,
+      title: null,
+      status: "done",
+      preset: "fast",
+      model: "fake",
+      created_at: "2026-10-02T10:00:00.000Z",
+      finished_at: "2026-10-02T10:00:03.000Z",
+    });
+    const transcript = { job_id: "job_1", status: "done", text: say(0), segments: [] };
+    if (path === "/jobs" && method === "POST") return { ...job(1), result: transcript };
+    if (path === "/jobs") {
+      const limit = Number(o.query?.limit ?? 50);
+      return { jobs: Array.from({ length: Math.min(n, limit) }, (_, i) => job(i)), cursor: null };
+    }
+    if (path.endsWith("/result")) return transcript;
+    if (path.startsWith("/jobs/")) return job(1);
     return {};
   };
   // A new vocabulary entry answers 201, as the real route does.

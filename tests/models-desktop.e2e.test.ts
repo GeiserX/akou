@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { DAY_MS } from "../src/main/server/model-store.ts";
@@ -224,6 +224,48 @@ describe("[DK-E2, SV-M6] the desktop app lists, pulls and deletes one model at a
     expect(refused.code).not.toBe(0);
     expect(refused.err).toContain("default model's set");
   });
+});
+
+describe("[SV-M6] the download card and the Models page pulling one model write one file", () => {
+  let rig: Rig;
+  // Nemotron is in the app's own set and missing: both the card and its row offer Download.
+  beforeAll(async () => {
+    rig = await desktopRig([RECOGNIZER, "silero-vad", PYANNOTE]);
+  });
+  afterAll(async () => rig.done());
+
+  const pulls = {
+    card: () => rig.api("POST", "/models/pull"),
+    page: () => rig.api("POST", "/models/pull", { model: NEMOTRON }),
+  };
+  const downloading = async () =>
+    (await listed(rig))[NEMOTRON].state === "downloading" ||
+    ((await rig.api("GET", "/models")).body as Body).state === "downloading";
+
+  for (const [first, second] of [
+    ["card", "page"],
+    ["page", "card"],
+  ] as const) {
+    test(`the ${first} first, then the ${second}: one request for the file and no checksum retry`, async () => {
+      rmSync(join(rig.models, NEMOTRON), { recursive: true, force: true });
+      const before = reg.hits.get("diar.onnx") ?? 0;
+      const release = reg.hold("diar.onnx", 1024);
+      try {
+        expect((await pulls[first]()).status).toBe(202);
+        await until(() => (reg.hits.get("diar.onnx") ?? 0) > before, 5000, "the first request");
+        expect((await pulls[second]()).status).toBe(202);
+        // Time for the second pull to reach the file while the first holds it open.
+        await Bun.sleep(300);
+      } finally {
+        release();
+      }
+      await until(async () => !(await downloading()), 10_000, "both pulls to end");
+      expect(reg.hits.get("diar.onnx")).toBe(before + 1);
+      expect((await listed(rig))[NEMOTRON].state).toBe("ready");
+      expect(((await rig.api("GET", "/models")).body as Body).state).toBe("ready");
+      expect(rig.logs.filter((l) => / failed/.test(l.msg)).map((l) => l.msg)).toEqual([]);
+    });
+  }
 });
 
 describe("[DK-E2, SV-M5] the unused-days sweep runs in the desktop app too", () => {

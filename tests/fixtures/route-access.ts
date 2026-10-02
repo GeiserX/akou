@@ -100,6 +100,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   // Keys over HTTP, for the web UI's Keys page (SV-K7): admin only.
   "GET /v1/keys": "admin",
   "POST /v1/keys": "admin",
+  "PATCH /v1/keys/{id}": "admin",
   "DELETE /v1/keys/{id}": "admin",
   // Server mode's jobs, events and the OpenAI door: any key, each seeing its own (SV-K3).
   "POST /v1/jobs": "jobs",

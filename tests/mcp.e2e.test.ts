@@ -70,6 +70,10 @@ const DESIGN_TOOLS = [
   "akou_config_get",
   "akou_dictation_list",
   "akou_dictation_get",
+  // SI-7: a server's file jobs, listed while the target's mode is not known.
+  "akou_transcribe",
+  "akou_job_get",
+  "akou_jobs_list",
 ];
 
 let rig: AppRig;

@@ -20,6 +20,7 @@ import {
   QWEN_MODEL_FILE,
 } from "../src/main/asr/llama-catalog.ts";
 import {
+  createLlamaServer,
   extractBuild,
   LlamaServer,
   llamaArgs,
@@ -37,7 +38,14 @@ import {
   PLATFORMS,
   RECOGNIZER,
 } from "../src/main/asr/models.ts";
-import { parseAnswer, QWEN_LANGUAGES, QwenEngine, wavBytes } from "../src/main/asr/qwen.ts";
+import {
+  parseAnswer,
+  QWEN_LANGUAGES,
+  QWEN_MAX_REQUEST_SECONDS,
+  QwenEngine,
+  qwenPieces,
+  wavBytes,
+} from "../src/main/asr/qwen.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -87,6 +95,20 @@ function bodies(log: Record<string, unknown>[]): { messages: unknown[] }[] {
 
 function unit(words: string[], lang = "auto", glossary: string[] = []): FinalUnit {
   return { samples: concat(silence(0.3), speak(words), silence(0.3)), lang, glossary };
+}
+
+/** The audio each request of a fake's log carried, seconds (16-bit mono WAV, 44-byte header). */
+function requestSeconds(log: Record<string, unknown>[]): number[] {
+  return bodies(log).map((b) => {
+    const user = b.messages.find((m) => (m as { role: string }).role === "user") as {
+      content: { input_audio?: { data: string } }[];
+    };
+    const chars = Number.parseInt(
+      user.content.find((p) => p.input_audio)?.input_audio?.data ?? "0",
+      10,
+    );
+    return (Math.floor((chars * 3) / 4) - 44) / 2 / ASR_RATE;
+  });
 }
 
 function alive(pid: number): boolean {
@@ -259,6 +281,90 @@ describe("where Qwen's llama-server comes from (akou-5an.94)", () => {
   });
 });
 
+/**
+ * A pinned build as the best preset downloads it: one archive whose llama-server runs the fake,
+ * whose `--list-devices` prints `devices`. A shell script, so POSIX only.
+ */
+function fakeBuild(devices: string): {
+  build: { dir: string; archives: string[]; platform: string };
+  log: string;
+} {
+  const dir = scratch();
+  const log = join(dir, "fake.log");
+  const src = join(dir, "src", "llama-b1");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(
+    join(src, "llama-server"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} --fake-log ${JSON.stringify(log)} --fake-devices ${JSON.stringify(devices)} "$@"\n`,
+  );
+  chmodSync(join(src, "llama-server"), 0o755);
+  expect(
+    Bun.spawnSync(["tar", "-czf", "build.tar.gz", "-C", "src", "llama-b1"], { cwd: dir }).exitCode,
+  ).toBe(0);
+  mkdirSync(join(dir, "build"));
+  return {
+    build: {
+      dir: join(dir, "build"),
+      archives: [join(dir, "build.tar.gz")],
+      platform: "linux-x64",
+    },
+    log,
+  };
+}
+
+describe.skipIf(process.platform === "win32")(
+  "[akou-5an.94.1] a pinned GPU build is asked what it opens once unpacked, before its first start (POSIX shell; skipped on Windows)",
+  () => {
+    const started = (log: string) =>
+      readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => (JSON.parse(l) as { argv: string[] }).argv);
+    const ngl = (argv: string[]) => argv[argv.indexOf("-ngl") + 1];
+
+    test("a build that lists no Vulkan device runs its first start on the CPU, and says why", async () => {
+      const { build, log } = fakeBuild("");
+      const said: string[] = [];
+      const server = createLlamaServer(
+        {
+          kind: "llama-server",
+          engine: QWEN_ASR,
+          model: "m",
+          mmproj: "p",
+          accelerator: "vulkan",
+          build,
+        },
+        { log: (_l, m) => said.push(m) },
+      );
+      cleanups.push(() => server.stop());
+      await server.url();
+      const [argv] = started(log);
+      expect(ngl(argv as string[])).toBe("0");
+      expect(argv).toContain("--device");
+      expect(said.some((m) => m.includes("lists no vulkan device"))).toBe(true);
+    });
+
+    test("positive control: a build that lists the GPU runs every layer on it", async () => {
+      const { build, log } = fakeBuild(
+        "  Vulkan0: Intel(R) UHD Graphics 770 (RPL-S) (16384 MiB, 16000 MiB free)",
+      );
+      const server = createLlamaServer({
+        kind: "llama-server",
+        engine: QWEN_ASR,
+        model: "m",
+        mmproj: "p",
+        accelerator: "vulkan",
+        build,
+      });
+      cleanups.push(() => server.stop());
+      await server.url();
+      const [argv] = started(log);
+      expect(ngl(argv as string[])).toBe("999");
+      expect(argv).not.toContain("--device");
+    });
+  },
+);
+
 describe("the pinned build is unpacked once", () => {
   test("the archive's llama-server is found and made executable; a second call unpacks nothing", async () => {
     const dir = scratch();
@@ -374,6 +480,10 @@ describe("the supervisor", () => {
     const gpu = llamaArgs({ ...base, accelerator: "vulkan" }, 1);
     expect(gpu.slice(gpu.indexOf("-ngl"), gpu.indexOf("-ngl") + 2)).toEqual(["-ngl", "999"]);
     expect(gpu).not.toContain("--device");
+    // An own build on asr.accelerator cpu gets --device none too, as asr.llamaServer's doc says.
+    const own = llamaPlan({ setting: "cpu", own: ["mine"], platform: "linux-x64" });
+    expect(own.gpuLayers).toBeUndefined();
+    expect(llamaArgs({ ...base, ...own, command: own.command ?? [] }, 1)).toContain("--device");
     // An own build given its own layer count picks its own devices.
     expect(llamaArgs({ ...base, accelerator: "cpu", gpuLayers: 999 }, 1)).not.toContain("--device");
   });
@@ -561,6 +671,59 @@ describe("the Qwen engine's protocol", () => {
     expect(log().filter((l) => l.body)).toHaveLength(1);
   });
 
+  test("a unit past the request limit goes in pieces cut at a pause, and every word comes back", async () => {
+    const { server, log } = fakeServer();
+    const samples = concat(
+      speak(["hello", "world"]),
+      silence(1.5),
+      speak(["world", "hello"]),
+      silence(1.5),
+      speak(["hello"]),
+    );
+    const h = await new QwenEngine({ id: QWEN_ASR, server, maxSeconds: 3 }).decode({
+      samples,
+      lang: "auto",
+      glossary: [],
+    });
+    expect(h.text).toBe("hello world world hello hello");
+    expect(h.lang).toBe("en");
+    const sent = requestSeconds(log());
+    expect(sent).toHaveLength(2);
+    for (const sec of sent) expect(sec).toBeLessThanOrEqual(3);
+    expect(sent.reduce((a, b) => a + b, 0)).toBeCloseTo(samples.length / ASR_RATE, 2);
+  });
+
+  test("a whole dictation longer than the limit is never one request (the context fills and the rest is lost)", async () => {
+    const { server, log } = fakeServer();
+    const samples = concat(
+      speak(["hello"]),
+      silence(QWEN_MAX_REQUEST_SECONDS + 20),
+      speak(["world"]),
+    );
+    const h = await new QwenEngine({ id: QWEN_ASR, server }).decode({
+      samples,
+      lang: "auto",
+      glossary: [],
+    });
+    expect(h.text).toBe("hello world");
+    const sent = requestSeconds(log());
+    expect(sent.length).toBeGreaterThan(1);
+    for (const sec of sent) expect(sec).toBeLessThanOrEqual(QWEN_MAX_REQUEST_SECONDS);
+  });
+
+  test("the pieces cover the unit in order, each within the limit, the cut on the quietest window", () => {
+    const x = concat(speak(["hello", "world"]), silence(0.5), speak(["hello", "world", "hello"]));
+    const pieces = qwenPieces(x, 1.2);
+    expect(pieces.length).toBeGreaterThan(1);
+    for (const p of pieces) expect(p.length).toBeLessThanOrEqual(1.2 * ASR_RATE);
+    expect(concat(...pieces)).toEqual(x);
+    // The first cut falls in the half second of silence after the second word.
+    const first = (pieces[0] as Float32Array).length / ASR_RATE;
+    expect(first).toBeGreaterThan(0.74);
+    expect(first).toBeLessThan(1.24);
+    expect(qwenPieces(x, 60)).toEqual([x]);
+  });
+
   test("lidc: a language outside the allowed ones is replaced by the better-scoring forced decode", async () => {
     const { server, log } = fakeServer([
       "--fake-lang",
@@ -587,6 +750,38 @@ describe("the Qwen engine's protocol", () => {
     const free = fakeServer(["--fake-lang", "Chinese"]);
     const h3 = await new QwenEngine({ id: QWEN_ASR, server: free.server }).decode(unit(["hello"]));
     expect(h3.lang).toBe("zh");
+  });
+
+  test("lidc: a unit's own list (a job's languages[]) wins over the engine's", async () => {
+    const lps = [
+      "--fake-lang",
+      "Chinese",
+      "--fake-lp",
+      "English=-0.2",
+      "--fake-lp",
+      "Spanish=-0.9",
+    ];
+    // The engine's list says English; the unit's says Spanish only, so Spanish it is.
+    const a = fakeServer(lps);
+    const h = await new QwenEngine({ id: QWEN_ASR, server: a.server, allowed: ["en"] }).decode({
+      ...unit(["hello"]),
+      allowed: ["es"],
+    });
+    expect(h.lang).toBe("es");
+    // With no engine list, the unit's bounds it alone.
+    const b = fakeServer(lps);
+    const h2 = await new QwenEngine({ id: QWEN_ASR, server: b.server }).decode({
+      ...unit(["hello"]),
+      allowed: ["en", "es"],
+    });
+    expect(h2.lang).toBe("en");
+    // An empty unit list is none: the engine's applies.
+    const c = fakeServer(lps);
+    const h3 = await new QwenEngine({ id: QWEN_ASR, server: c.server, allowed: ["es"] }).decode({
+      ...unit(["hello"]),
+      allowed: [],
+    });
+    expect(h3.lang).toBe("es");
   });
 
   test("the unit is sent as a 16 kHz 16-bit mono WAV", () => {

@@ -1,6 +1,7 @@
 /**
- * The player bar (docs/ux/WINDOW.md section 5): play and pause (W5.2), the position as a wall time
- * with a scrubber over the part being played (W5.3), the speed, 0.75x to 2x with `[` and `]` and
+ * The player bar (docs/ux/WINDOW.md section 5): play and pause (W5.2), the position and the part's
+ * end as one wall-time readout with a scrubber over the part being played and the notes taken in
+ * it marked on it (W5.3), the speed, 0.75x to 2x with `[` and `]` and
  * kept across visits (W5.4), 5 s back or forward with `Shift+←` and `Shift+→` (W5.5), and the
  * mic and call balance. On every move it names the line being played, so the transcript can light
  * it and keep it in view (W5.6).
@@ -14,6 +15,7 @@
 import type { CallView } from "../core/log/fold.ts";
 import { byId, h, replace } from "./dom.ts";
 import {
+  noteMarks,
   playingLine,
   positionText,
   RATES,
@@ -50,6 +52,7 @@ export class Player {
   private readonly scrub = byId<HTMLInputElement>("scrub");
   private readonly speed = byId<HTMLSelectElement>("speed");
   private mix: { mic: GainNode; call: GainNode } | null = null;
+  private marksKey = "";
 
   constructor(private readonly d: PlayerDeps) {
     const p = this.el;
@@ -183,6 +186,8 @@ export class Player {
       this.scrub.removeAttribute("aria-valuetext");
       pos.textContent = "";
       end.textContent = "";
+      byId("pos-sep").textContent = "";
+      this.marks();
       this.d.stopped();
       return;
     }
@@ -195,14 +200,43 @@ export class Player {
     pos.textContent = at;
     this.scrub.setAttribute("aria-valuetext", at);
     end.textContent = known ? positionText(v, part, d) : "";
+    byId("pos-sep").textContent = end.textContent ? " / " : "";
+    this.marks();
     this.d.playing(playingLine(v.lines("best"), part, p.currentTime), !p.paused);
   }
 
+  /**
+   * The notes taken during the part being played, as marks on the scrubber (b2). Drawn again when
+   * the part, its length or the notes change; the transcript calls it when a note lands.
+   */
+  marks(): void {
+    const v = this.d.view();
+    const d = this.duration();
+    const at =
+      v && this.part !== null && this.el.src && Number.isFinite(d)
+        ? noteMarks(v, this.part, d)
+        : [];
+    const key = at.join(",");
+    if (key === this.marksKey) return;
+    this.marksKey = key;
+    // Placed through the style object: the page's policy refuses a style attribute.
+    replace(
+      byId("marks"),
+      ...at.map((f) => {
+        const mk = h("i", { class: "mk" });
+        mk.style.left = `${(f * 100).toFixed(2)}%`;
+        return mk;
+      }),
+    );
+  }
+
+  /** An icon, round, as b2 draws it: its name says Play or Pause. */
   private drawPlay(): void {
     const p = this.el;
     const btn = byId<HTMLButtonElement>("play");
     btn.disabled = !p.src;
-    btn.textContent = p.paused ? "▶ Play" : "❚❚ Pause";
+    btn.classList.toggle("playing", !p.paused);
+    btn.setAttribute("aria-label", p.paused ? "Play" : "Pause");
   }
 
   /** Mic and call balance: the file keeps them on the left and the right channel. */

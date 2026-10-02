@@ -152,6 +152,35 @@ impl Hotkey {
         })
     }
 
+    /// A key that starts no session or presses as the dictation key does (fix last, paste last
+    /// and the draft key, DC-A5, DC-S3): as `parse`, and also a modifier with the modifiers held
+    /// before it (`Shift+RightCommand`, fix last's default), which needs its side.
+    pub fn parse_extra(s: &str) -> Result<Hotkey, String> {
+        let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+        let held_first = match parts.split_last() {
+            Some((key, mods)) if !mods.is_empty() => modifier(key).map(|k| (k, *key, mods)),
+            _ => None,
+        };
+        let Some(((m, side), key, mods)) = held_first else {
+            return Hotkey::parse(s);
+        };
+        if m != Mod::Fn && side == Side::Either {
+            return Err(format!("{key} after {} needs a side", mods.join("+")));
+        }
+        let mut out: Vec<(Mod, Side)> = Vec::new();
+        for h in mods {
+            let held = modifier(h).ok_or_else(|| format!("{h} is not a modifier"))?;
+            if held.0 == m || out.iter().any(|(o, _)| *o == held.0) {
+                return Err(format!("{s} names {:?} twice", held.0));
+            }
+            out.push(held);
+        }
+        Ok(Hotkey::Chord {
+            mods: out,
+            key: key.to_string(),
+        })
+    }
+
     /// The key whose going down and up is the press.
     pub fn trigger(&self) -> &str {
         match self {
@@ -162,6 +191,18 @@ impl Hotkey {
 
     pub fn is_modifier_only(&self) -> bool {
         matches!(self, Hotkey::Modifier(_))
+    }
+
+    /// Whether `key` is one of the modifiers this chord holds: `LeftShift` is for
+    /// `Control+Shift+Space` and for `LeftShift+K`, not for `RightShift+K`.
+    pub fn holds(&self, key: &str) -> bool {
+        let Hotkey::Chord { mods, .. } = self else {
+            return false;
+        };
+        modifier(key).is_some_and(|(hm, hs)| {
+            mods.iter()
+                .any(|(m, side)| hm == *m && (*side == Side::Either || hs == *side))
+        })
     }
 
     /// Whether `key` going down, with `held` already down, is this binding's press.

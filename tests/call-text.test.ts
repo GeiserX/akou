@@ -215,6 +215,12 @@ function hostileApi(pack: string): ApiClient {
     const dictation = { id: "d1", at: 1, state: "inserted", app: null, text: INJECT, raw: INJECT };
     if (path === "/dictations") return { items: [dictation], next_cursor: null };
     if (path.startsWith("/dictations/")) return dictation;
+    // A file job's transcript is heard speech too, and may say anything (SI-7).
+    const heard = { job_id: "job_1", status: "done", text: INJECT, segments: [] };
+    if (path === "/jobs" && method === "POST")
+      return { id: "job_1", status: "done", result: heard };
+    if (path.endsWith("/result")) return heard;
+    if (path.startsWith("/jobs/")) return { id: "job_1", status: "done" };
     if (path.endsWith("/vocab")) {
       return {
         call: "c1",
@@ -253,6 +259,8 @@ const CALL_TEXT_TOOLS: Record<string, Record<string, unknown>[]> = {
   akou_vocab_suggest: [{ call: "live" }],
   akou_dictation_list: [{}],
   akou_dictation_get: [{ id: "d1" }],
+  akou_transcribe: [{ path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 }],
+  akou_job_get: [{ id: "job_1", wait: 0 }],
 };
 
 /** Every other tool, and why its answer carries no call text. */
@@ -291,6 +299,7 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_share_off: "how many links stopped",
   akou_open_window: "whether the window showed, or its address",
   akou_config_get: "settings, secrets redacted",
+  akou_jobs_list: "ids, titles, states and times, no transcript",
 };
 
 describe("[PG-Z1] every MCP answer that carries call text quotes it", () => {

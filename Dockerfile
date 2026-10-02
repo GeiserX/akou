@@ -15,7 +15,7 @@
 #
 # One Dockerfile, three variants by ACCELERATOR (akou-5an.94, docs/getting-started.md "A GPU"): each carries
 # the pinned llama-server build for its backend in /opt/llama, fetched and checked against its
-# SHA-256 by akou's own table (src/main/asr/llama-builds.ts), and falls back to the CPU with it.
+# SHA-256 by akou's own table (src/main/asr/llama-catalog.ts), and falls back to the CPU with it.
 #   cpu     drumsergio/akou:<version>          no GPU
 #   vulkan  drumsergio/akou:<version>-vulkan   Intel and AMD GPUs through Mesa: --device /dev/dri
 #                                              --group-add $(stat -c %g /dev/dri/renderD128)

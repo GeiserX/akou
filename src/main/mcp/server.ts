@@ -16,12 +16,18 @@
  * (state, cursor, counts) outside the block; the tools that answer with JSON quote their whole
  * body, their `cursor` and ids included.
  *
+ * The job tools (SI-7) upload a file on this machine to a server's `POST /v1/jobs` and read the jobs
+ * back. With `AKOU_URL` set, `tools/list` holds only what the target's mode serves (`GET /v1/server`
+ * `mode`): a server lists the job tools and no call tool, an app the call tools and no job tool.
+ *
  * Every tool lists an `outputSchema` and answers with `structuredContent` beside the text (PG-M3):
  * the facts akou states (cursor, state, memoStale, ids, counts) as typed fields, so an agent never
  * reads a cursor out of text where the call itself could have said "cursor: 3". A structured field
  * that carries call text holds the same quoted block as the text, never the raw words.
  */
 
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { basename } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
@@ -186,6 +192,11 @@ const OUT = {
     url: z.string().nullable(),
   }),
   control: z.looseObject({ call: z.string(), state: STATE }),
+  job: z.object({
+    id: z.string(),
+    status: z.string().describe("queued, running, done, failed or cancelled"),
+    callText: CALL_TEXT,
+  }),
   restart: z.looseObject({ call: z.string(), part: INT }),
   body: z.looseObject({}),
   context: z.object({
@@ -383,11 +394,88 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_config_get: { title: "Read the settings", hints: READ },
   akou_dictation_list: { title: "List past dictations", hints: READ, less: "a smaller `limit`" },
   akou_dictation_get: { title: "Read a dictation", hints: READ },
+  akou_transcribe: { title: "Transcribe a file on a server", hints: WRITE },
+  akou_job_get: { title: "Read a transcription job", hints: READ },
+  akou_jobs_list: { title: "List transcription jobs", hints: READ },
 };
+
+/** The tools of a server's file jobs (SI-7); every other tool works on calls in the app. */
+export const JOB_TOOLS: ReadonlySet<string> = new Set([
+  "akou_transcribe",
+  "akou_job_get",
+  "akou_jobs_list",
+]);
+
+/** `wait` of the job tools: under the 60 s an MCP client may allow a call. */
+export const MAX_TOOL_WAIT = 50;
+
+/**
+ * Whether the first bytes are an audio or video container ffmpeg reads: WAV, AIFF, CAF, Ogg
+ * (Opus, Vorbis), FLAC, MP3 (with an ID3 tag or a frame sync), AAC (ADTS), MP4, M4A, MOV and 3GP
+ * (`ftyp`), Matroska and WebM, ASF (WMA, WMV) and AMR. Anything else (a text file, a key file)
+ * is refused before it is sent.
+ */
+export function isMediaHead(b: Uint8Array): boolean {
+  const ascii = (at: number, s: string) =>
+    b.length >= at + s.length && [...s].every((ch, i) => b[at + i] === ch.charCodeAt(0));
+  const bytes = (at: number, xs: number[]) =>
+    b.length >= at + xs.length && xs.every((x, i) => b[at + i] === x);
+  if (ascii(0, "RIFF") && (ascii(8, "WAVE") || ascii(8, "AVI "))) return true;
+  if (ascii(0, "FORM") && (ascii(8, "AIFF") || ascii(8, "AIFC"))) return true;
+  if (ascii(0, "caff") || ascii(0, "OggS") || ascii(0, "fLaC") || ascii(0, "ID3")) return true;
+  if (ascii(4, "ftyp") || ascii(0, "#!AMR")) return true;
+  if (bytes(0, [0x1a, 0x45, 0xdf, 0xa3])) return true;
+  if (bytes(0, [0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11])) return true;
+  // An MPEG audio frame or an ADTS header: eleven set bits of frame sync.
+  return b.length >= 2 && b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0;
+}
+
+/** A file to upload, or why not: missing, not a file, or not audio or video. */
+function readMedia(path: string): { bytes: Uint8Array } | { error: string } {
+  let size: number;
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) return { error: `${path} is not a file` };
+    size = st.size;
+  } catch {
+    return { error: `no file at ${path}` };
+  }
+  const head = new Uint8Array(Math.min(size, 16));
+  try {
+    const fd = openSync(path, "r");
+    try {
+      readSync(fd, head, 0, head.length, 0);
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    return { error: `cannot read ${path}: ${(err as Error).message}` };
+  }
+  if (!isMediaHead(head)) {
+    return { error: `${path} is not an audio or video file; nothing was sent` };
+  }
+  return { bytes: readFileSync(path) };
+}
+
+/** What `GET /v1/server` says the target is, `app` or `server`, or null when it cannot say. */
+export async function targetMode(client: ApiClient): Promise<"app" | "server" | null> {
+  try {
+    const r = await client.request("GET", "/server", { launch: false });
+    const mode = r.status === 200 ? r.body?.mode : null;
+    return mode === "app" || mode === "server" ? mode : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface McpOptions {
   client: ApiClient;
   version?: string;
+  /**
+   * The target's mode, read from `GET /v1/server` when `AKOU_URL` is set: only the tools it serves
+   * are listed. Absent or null, every tool is.
+   */
+  mode?: "app" | "server" | null;
 }
 
 export function createMcpServer(o: McpOptions): McpServer {
@@ -417,6 +505,8 @@ export function createMcpServer(o: McpOptions): McpServer {
   const req = (method: string, path: string, ro: RequestOptions = {}) =>
     call(method, path, { ...ro, client: tag() });
   const id = (c: string) => encodeURIComponent(c);
+  /** Every tool registered, by name, so the ones the target does not serve can be hidden. */
+  const registered: Record<string, { disable(): void }> = {};
   /**
    * `registerTool` with the tool's title and annotations from `TOOLS`, and every answer held to
    * the 8,000-token ceiling (`capAnswer`).
@@ -424,7 +514,7 @@ export function createMcpServer(o: McpOptions): McpServer {
   const tool = ((name: string, config: object, cb: (...a: unknown[]) => Promise<ToolResult>) => {
     const row = TOOLS[name];
     if (!row) throw new Error(`akou mcp: ${name} has no row in TOOLS`);
-    return server.registerTool(
+    const t = server.registerTool(
       name,
       { ...config, title: row.title, annotations: row.hints } as never,
       (async (...a: unknown[]) =>
@@ -433,6 +523,8 @@ export function createMcpServer(o: McpOptions): McpServer {
           o.client.takeNotes?.() ?? [],
         )) as never,
     );
+    registered[name] = t;
+    return t;
   }) as typeof server.registerTool;
 
   // --- starting and controlling -----------------------------------------------------------------
@@ -1466,10 +1558,112 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
+  // --- file jobs on a server (SI-7) -------------------------------------------------------------
+
+  const JOB_WAIT = z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_TOOL_WAIT)
+    .default(MAX_TOOL_WAIT)
+    .describe(
+      `Seconds to wait for the job to end, up to ${MAX_TOOL_WAIT}: a short voice note comes back done in the same call.`,
+    );
+  /** The job and, once done, its transcript: quoted whole, since the transcript is heard text. */
+  const jobAnswer = quotedWith((b) => ({ id: String(b.id), status: String(b.status) }));
+
+  tool(
+    "akou_transcribe",
+    {
+      description:
+        "Transcribe an audio or video file on this machine as a job on the akou server (`AKOU_URL`, server mode): uploads the file once and waits up to `wait` seconds. A job that ends in time comes back done with its transcript in `result`; one still queued or running comes back with its `id` for akou_job_get. A path that is missing or not an audio or video file is refused and nothing is sent.",
+      inputSchema: z.object({
+        path: z.string().min(1).describe("The file's path on this machine."),
+        preset: z
+          .enum(["lite", "fast", "best", "fusion", "auto"])
+          .optional()
+          .describe("How much accuracy matters; auto lets the server choose."),
+        language: z.string().optional().describe("A BCP-47 tag such as en or es, or auto."),
+        diarize: z.boolean().optional().describe("Label the speakers."),
+        wait: JOB_WAIT,
+      }),
+      outputSchema: OUT.job,
+    },
+    async (a) => {
+      const file = readMedia(a.path);
+      if ("error" in file) return errorText(file.error);
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(file.bytes)]), basename(a.path));
+      if (a.preset) form.append("preset", a.preset);
+      if (a.language) form.append("language", a.language);
+      if (a.diarize !== undefined) form.append("diarize", String(a.diarize));
+      const r = await req("POST", "/jobs", {
+        form,
+        query: { wait: a.wait },
+        timeoutMs: 600_000 + a.wait * 1000,
+      });
+      return asResult(r, jobAnswer);
+    },
+  );
+
+  tool(
+    "akou_job_get",
+    {
+      description:
+        "One transcription job by id, waiting up to `wait` seconds for it to end; a done job comes with its transcript in `result`. Read-only.",
+      inputSchema: z.object({ id: z.string().min(1), wait: JOB_WAIT }),
+      outputSchema: OUT.job,
+    },
+    async (a) => {
+      const r = await req("GET", `/jobs/${id(a.id)}`, {
+        query: { wait: a.wait },
+        timeoutMs: (a.wait + 15) * 1000,
+      });
+      if (r.status !== 200 || r.body?.status !== "done") return asResult(r, jobAnswer);
+      const result = await req("GET", `/jobs/${id(a.id)}/result`);
+      return asResult(result, (b) => jobAnswer({ ...r.body, result: b }));
+    },
+  );
+
+  tool(
+    "akou_jobs_list",
+    {
+      description:
+        "The 20 newest transcription jobs this key submitted, newest first: id, title, state, preset, model and times, no transcript. `status` keeps one state. Read-only.",
+      inputSchema: z.object({
+        status: z.enum(["queued", "running", "done", "failed", "cancelled"]).optional(),
+      }),
+      outputSchema: OUT.body,
+    },
+    async (a) => {
+      const r = await req("GET", "/jobs", { query: { status: a.status, limit: 20 } });
+      return asResult(r, (b) => {
+        const jobs = ((b.jobs ?? []) as Body[]).map((j) => ({
+          id: j.id,
+          title: j.title ?? null,
+          status: j.status,
+          preset: j.preset,
+          model: j.model ?? null,
+          created_at: j.created_at,
+          finished_at: j.finished_at ?? null,
+        }));
+        const out = { jobs, cursor: b.cursor ?? null };
+        return { text: linedJson(out), data: out };
+      });
+    },
+  );
+
+  // --- what the target serves ---------------------------------------------------------------------
+
+  // A server has no calls, and an app no jobs: with the mode known, only what it serves is listed.
+  const served = (name: string) =>
+    !o.mode || (o.mode === "server" ? JOB_TOOLS.has(name) : !JOB_TOOLS.has(name));
+  for (const [name, t] of Object.entries(registered)) if (!served(name)) t.disable();
+
   // --- akou_ask visibility ----------------------------------------------------------------------
 
   const applyProvider = (provider: Body) => {
-    const want = askListed(provider, server.server.getClientVersion()?.name);
+    const want = served("akou_ask") && askListed(provider, server.server.getClientVersion()?.name);
     if (want !== ask.enabled) {
       if (want) ask.enable();
       else ask.disable();
@@ -1488,8 +1682,10 @@ export function createMcpServer(o: McpOptions): McpServer {
 }
 
 /** Serves MCP on stdin and stdout until the client closes stdin. */
-export async function runMcpStdio(o: McpOptions): Promise<void> {
-  const server = createMcpServer(o);
+export async function runMcpStdio(o: McpOptions & { remote?: boolean }): Promise<void> {
+  // A remote target (`AKOU_URL`) is asked once what it is, before the tools are listed.
+  const mode = o.mode ?? (o.remote ? await targetMode(o.client) : null);
+  const server = createMcpServer({ ...o, mode });
   const closed = new Promise<void>((resolve) => {
     server.server.onclose = () => resolve();
   });

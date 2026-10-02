@@ -14,6 +14,8 @@ export type FieldKind = "editable" | "not-editable" | "unknown" | "secure";
 export interface Target {
   /** Bundle id (macOS), executable name (Windows) or window class (Linux). */
   app: string;
+  /** The app's name as people know it (`Slack`); absent or empty where the helper gives none. */
+  name?: string;
   pid: number;
   /** An opaque window id, compared at insert time. */
   window: string;
@@ -150,6 +152,7 @@ function isTarget(v: unknown): boolean {
   const t = v as Record<string, unknown>;
   return (
     isStr(t.app) &&
+    (t.name === undefined || isStr(t.name)) &&
     isNum(t.pid) &&
     isStr(t.window) &&
     ["editable", "not-editable", "unknown", "secure"].includes(t.field as string)

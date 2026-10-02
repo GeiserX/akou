@@ -5,6 +5,7 @@
 
 import type { Outcome } from "../call/state.ts";
 import type { Identity, RouteMeta } from "./access.ts";
+import type { RouteErrors } from "./errors.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
 export class HttpError extends Error {
@@ -312,6 +313,11 @@ export interface RouteDoc extends RouteMeta {
   type?: "json" | "sse" | "text" | "markdown" | "audio" | "wav";
   /** The JSON schema of a `json` success, where a field's type must be stated; default `object`. */
   reply?: Readonly<Record<string, unknown>>;
+  /**
+   * The refusals the route answers itself, by status (PG-A7). The ones every route of its kind may
+   * answer (the guard's, a declared body's or query's) are added by the OpenAPI file, not here.
+   */
+  errors?: RouteErrors;
 }
 
 /** The query parameters of one request, read through the route's declared `query`. */

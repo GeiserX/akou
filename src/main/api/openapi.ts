@@ -12,6 +12,7 @@
  */
 
 import { type Access, SCOPES, type Scope } from "./access.ts";
+import { ERROR_CODES, type ErrorCode, errorsOf, type RouteErrors } from "./errors.ts";
 import {
   type BodySpec,
   type FieldType,
@@ -70,6 +71,92 @@ const STATUS_TEXT: Record<number, string> = {
   202: "Accepted",
   204: "No content",
 };
+
+const ERROR_STATUS_TEXT: Record<number, string> = {
+  400: "Bad request",
+  401: "Unauthorized",
+  403: "Forbidden",
+  404: "Not found",
+  409: "Conflict",
+  413: "Body too large",
+  415: "Unsupported media type",
+  416: "Range not satisfiable",
+  422: "Unprocessable",
+  429: "Too many requests",
+  499: "Cancelled",
+  500: "Internal error",
+  501: "Not implemented",
+  503: "Unavailable",
+};
+
+/**
+ * The refusals any route of its kind may answer before or around its handler: the guard's (Host,
+ * browser headers, the key and its scope, the body's type and size), the declared body's and
+ * query's parsing, and an unexpected failure.
+ */
+export function sharedErrors(method: string, d: RouteDoc): RouteErrors {
+  const own: Partial<Record<number, ErrorCode[]>> = {
+    403: ["bad_host", "browser_request"],
+    413: ["body_too_large"],
+    500: ["internal"],
+  };
+  const add = (status: number, ...codes: ErrorCode[]) => {
+    own[status] = [...(own[status] ?? []), ...codes];
+  };
+  if (d.access !== "open") {
+    add(401, "unauthorized");
+    add(403, "forbidden");
+  }
+  const changes = method !== "GET" && method !== "HEAD";
+  const multipart = d.body !== undefined && isMultipart(d.body);
+  if (changes) add(415, multipart ? "multipart_required" : "json_required");
+  if (changes && d.body) {
+    if (multipart) add(400, "bad_multipart");
+    else {
+      const fields = Object.keys(d.body);
+      add(400, "bad_json");
+      if (d.body !== OPEN_BODY) add(400, "unknown_field");
+      if (fields.some((k) => !k.endsWith("?"))) add(400, "missing_field");
+      if (fields.length > 0) add(400, "bad_field");
+    }
+  }
+  const checked = Object.values(d.query ?? {}).some(
+    (p) => p.type === "integer" || (p.type === "string" && p.values !== undefined),
+  );
+  if (checked) add(400, "bad_param");
+  return own;
+}
+
+/**
+ * Each refusal status of an operation, as a reference to the shared response that lists the codes
+ * it answers under that status. Many operations refuse alike, so each set is one component,
+ * named `<status>.<code>.<code>`, and `into` collects them.
+ */
+function errorResponses(
+  method: string,
+  d: RouteDoc,
+  into: Record<string, Json>,
+): Record<string, Json> {
+  const out: Record<string, Json> = {};
+  for (const [status, codes] of Object.entries(errorsOf(sharedErrors(method, d), d.errors))) {
+    const name = [status, ...(codes ?? [])].join(".");
+    into[name] ??= {
+      description: ERROR_STATUS_TEXT[Number(status)] ?? "Error",
+      content: {
+        "application/json": {
+          schema: {
+            allOf: [
+              { $ref: "#/components/schemas/Error" },
+              { properties: { error: { enum: [...(codes ?? [])] } } },
+            ],
+          },
+        },
+      },
+    };
+    out[status] = { $ref: `#/components/responses/${name}` };
+  }
+  return out;
+}
 
 const MEDIA: Record<NonNullable<RouteDoc["type"]>, [string, Json]> = {
   json: ["application/json", { type: "object" }],
@@ -152,7 +239,12 @@ function queryParameter(name: string, p: QueryParam): Json {
   return { name, in: "query", required, description: p.doc, schema };
 }
 
-function operation(method: string, path: string, d: RouteDoc): OpenApiOperation {
+function operation(
+  method: string,
+  path: string,
+  d: RouteDoc,
+  refusals: Record<string, Json>,
+): OpenApiOperation {
   const m = OPERATION_ID.exec(d.id);
   const parameters: Json[] = [];
   for (const name of path.match(/:([A-Za-z0-9_]+)/g) ?? []) {
@@ -183,6 +275,7 @@ function operation(method: string, path: string, d: RouteDoc): OpenApiOperation 
           { description: STATUS_TEXT[status] ?? "Success", content: { [media]: { schema } } },
         ]),
       ),
+      ...errorResponses(method, d, refusals),
       default: { $ref: "#/components/responses/Error" },
     },
     // An anonymous route overrides the file's one security requirement with none.
@@ -201,9 +294,10 @@ export function buildOpenApi(
 ): OpenApiDoc {
   const paths: OpenApiDoc["paths"] = {};
   const tags: string[] = [];
+  const refusals: Record<string, Json> = {};
   for (const r of routes) {
     const p = openApiPath(r.path);
-    const op = operation(r.method, r.path, r.doc);
+    const op = operation(r.method, r.path, r.doc, refusals);
     const byMethod = paths[p] ?? {};
     // The router serves the first match, so a second route would be described and never run.
     if (byMethod[r.method.toLowerCase()]) {
@@ -240,16 +334,26 @@ export function buildOpenApi(
           description: "An error, in the one error shape.",
           content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
         },
+        ...Object.fromEntries(Object.entries(refusals).sort(([a], [b]) => a.localeCompare(b))),
       },
       schemas: {
         Error: {
           type: "object",
           required: ["error", "message"],
           properties: {
-            error: { type: "string", description: "A stable code, such as `not_found`." },
+            error: { $ref: "#/components/schemas/ErrorCode" },
             message: { type: "string", description: "What went wrong, for a person." },
           },
           additionalProperties: true,
+        },
+        ErrorCode: {
+          type: "string",
+          description:
+            "A stable code: clients may keep it, so it is never renamed. Each operation lists the codes it answers under each status.",
+          oneOf: Object.entries(ERROR_CODES).map(([code, description]) => ({
+            const: code,
+            description,
+          })),
         },
       },
     },
@@ -317,6 +421,72 @@ export function operations(
     for (const [method, op] of Object.entries(byMethod ?? {})) out.push({ method, path, op });
   }
   return out;
+}
+
+/** A response, or the component response its `$ref` names; null when the file has no such one. */
+export function resolveResponse(doc: OpenApiDoc, r: Json): Json | null {
+  const ref = r.$ref;
+  if (typeof ref !== "string") return r;
+  const prefix = "#/components/responses/";
+  if (!ref.startsWith(prefix)) return null;
+  return doc.components?.responses?.[ref.slice(prefix.length)] ?? null;
+}
+
+/** The codes a refusal's schema names under `error`: its own `enum`, or its `allOf` parts'. */
+function refusalCodes(schema: Json | undefined): unknown[] | null {
+  if (!schema) return null;
+  const parts = [schema, ...((schema.allOf as Json[] | undefined) ?? [])];
+  let found: unknown[] | null = null;
+  for (const s of parts) {
+    const e = ((s.properties as Json | undefined)?.error as Json | undefined)?.enum;
+    if (Array.isArray(e)) found = [...(found ?? []), ...e];
+  }
+  return found;
+}
+
+/**
+ * PG-A7, as a list of what breaks it: the file lists its codes in `ErrorCode`, and every refusal
+ * an operation documents (a 4xx or 5xx response) is the one error shape and names its codes, each
+ * one listed.
+ */
+export function errorProblems(doc: OpenApiDoc): string[] {
+  const problems: string[] = [];
+  const listed = new Set(
+    (((doc.components?.schemas?.ErrorCode as Json | undefined)?.oneOf as Json[] | undefined) ?? [])
+      .map((o) => o.const)
+      .filter((c): c is string => typeof c === "string"),
+  );
+  if (listed.size === 0) problems.push("components.schemas.ErrorCode lists no code");
+  for (const { method, path, op } of operations(doc)) {
+    const where = `${method.toUpperCase()} ${path}`;
+    for (const [status, given] of Object.entries(op.responses ?? {})) {
+      if (!/^[45]\d\d$/.test(status)) continue;
+      const r = resolveResponse(doc, given);
+      if (!r) {
+        problems.push(`${where} ${status}: ${JSON.stringify(given.$ref)} is not in the file`);
+        continue;
+      }
+      const schema = ((r.content as Json | undefined)?.["application/json"] as Json | undefined)
+        ?.schema as Json | undefined;
+      const shaped =
+        schema?.$ref === "#/components/schemas/Error" ||
+        ((schema?.allOf as Json[] | undefined) ?? []).some(
+          (s) => s.$ref === "#/components/schemas/Error",
+        );
+      if (!shaped) problems.push(`${where} ${status}: not the one error shape`);
+      const codes = refusalCodes(schema);
+      if (!codes || codes.length === 0) {
+        problems.push(`${where} ${status}: names no error code`);
+        continue;
+      }
+      for (const c of codes) {
+        if (typeof c !== "string" || !listed.has(c)) {
+          problems.push(`${where} ${status}: error code ${JSON.stringify(c)} is not listed`);
+        }
+      }
+    }
+  }
+  return problems;
 }
 
 /**
