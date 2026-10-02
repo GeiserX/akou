@@ -496,6 +496,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "idempotency_conflict",
           "missing_field",
           "unknown_model",
+          "unsupported_language",
         ],
         429: ["queue_full"],
       },
