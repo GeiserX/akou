@@ -4710,7 +4710,7 @@
         "tags": [
           "events"
         ],
-        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more, feed_id}`; `wait` holds the request until one arrives. `feed_id` is made once when the job store is created: when it changes, the store was reset and its cursors started again at 0, so read again from `after=0`. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
         "parameters": [
           {
             "name": "after",

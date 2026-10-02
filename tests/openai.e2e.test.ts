@@ -314,6 +314,33 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     expect(((await jobs.json()) as { jobs: unknown[] }).jobs).toEqual([]);
   });
 
+  test("[SV-E1] a synchronous call adds nothing to the key's job feed", async () => {
+    const auth = { authorization: `Bearer ${key}` };
+    const feed = async () =>
+      (await (await fetch(`http://127.0.0.1:${rig.port}/v1/events`, { headers: auth })).json()) as {
+        events: { job_id: string }[];
+      };
+    const before = (await feed()).events.length;
+    expect((await post([["response_format", "json"]])).status).toBe(200);
+    expect((await feed()).events.length).toBe(before);
+    // Positive control: a job of the same key through POST /v1/jobs does reach the feed.
+    const form = new FormData();
+    form.append("file", new Blob([NOTE], { type: "audio/wav" }), "note.wav");
+    const job = (await (
+      await fetch(`http://127.0.0.1:${rig.port}/v1/jobs`, {
+        method: "POST",
+        headers: auth,
+        body: form,
+      })
+    ).json()) as { id: string };
+    await fetch(`http://127.0.0.1:${rig.port}/v1/jobs/${job.id}?wait=60`, { headers: auth });
+    expect((await feed()).events.map((e) => e.job_id)).toContain(job.id);
+    await fetch(`http://127.0.0.1:${rig.port}/v1/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: { ...auth, "content-type": "application/json" },
+    });
+  });
+
   test("[SV-D3] a refused request leaves no upload on disk, and neither does an answered one", async () => {
     const dir = join(rig.app.configDir, "jobs", "audio");
     const uploads = () => readdirSync(dir).filter((f) => f.endsWith(".upload"));
