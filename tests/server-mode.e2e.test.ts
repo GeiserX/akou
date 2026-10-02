@@ -836,6 +836,17 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     expect(empty.status).toBe(422);
     expect(empty.body).toMatchObject({ error: "bad_field", field: "title" });
     expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    // [akou-dzm.12] A control character (ESC, NUL) is refused too: the CLI prints titles raw on a
+    // terminal, where `a\x1b[2Jb` would clear the screen. A tab is only whitespace and folds.
+    for (const bad of ["a\x1b[2Jb", "a\u0000b"]) {
+      const r = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: bad });
+      expect(r.status).toBe(422);
+      expect(r.body).toMatchObject({ error: "bad_field", field: "title" });
+    }
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    const tab = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro\tTwo" });
+    expect(tab.body.title).toBe("Retro Two");
+    await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro" });
 
     // Another key cannot see the job, so it cannot name it; an unknown id is 404 too.
     const other = await writeKey(named, "other");
@@ -874,6 +885,27 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     open();
     expect((await answer).status).toBe(200);
   }, 30_000);
+
+  test("[akou-dzm.12] the OpenAI door refuses a bad metadata.title as the metadata field, which that request has", async () => {
+    const k = await writeKey(named, "openai-long");
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([new Uint8Array(clip(["hello"], 2))], { type: "audio/wav" }),
+      "note.wav",
+    );
+    form.append("metadata", JSON.stringify({ title: "x".repeat(201) }));
+    const r = await fetch(`http://127.0.0.1:${named.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(r.status).toBe(422);
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(JSON.stringify(body)).toContain("metadata.title");
+    expect(JSON.stringify(body)).toContain('"metadata"');
+    expect(JSON.stringify(body)).not.toContain('"title"');
+  });
 });
 
 describe("SV-J10: the jobs store's search", () => {

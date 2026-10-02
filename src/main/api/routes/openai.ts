@@ -232,11 +232,20 @@ function streamOpenAI(r: Rendered, diarized: boolean): Response {
   });
 }
 
-/** The job's name from `metadata.title`, when that is a string that is not blank. */
+/**
+ * The job's name from `metadata.title`, when that is a string that is not blank. A bad one is
+ * refused as the `metadata` field: this request has no `title` field to name.
+ */
 function titleIn(metadata: unknown): string | null {
   if (typeof metadata !== "object" || metadata === null) return null;
   const t = (metadata as { title?: unknown }).title;
-  return typeof t === "string" && t.trim() !== "" ? checkTitle(t) : null;
+  if (typeof t !== "string" || t.trim() === "") return null;
+  try {
+    return checkTitle(t);
+  } catch (err) {
+    if (err instanceof HttpError) throw bad("metadata", `metadata.title: ${err.message}`);
+    throw err;
+  }
 }
 
 /** Does `model` name a preset or recognizer this server knows (not `whisper-1` or empty)? */

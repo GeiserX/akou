@@ -87,11 +87,19 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
 /** The longest title a rename takes. */
 const MAX_TITLE = 200;
 
-/** A new title: one line, trimmed; empty or too long is refused with 422 and changes nothing. */
+/**
+ * A new title: one line, trimmed; empty, too long, or holding a control character (ESC, NUL), which
+ * the CLI would print raw on a terminal, is refused with 422 and changes nothing.
+ */
 export function checkTitle(raw: string): string {
   const title = raw.replace(/\s+/g, " ").trim();
   if (title === "") {
     throw new HttpError(422, "bad_field", "the title is empty", { field: "title" });
+  }
+  if (/\p{Cc}/u.test(title)) {
+    throw new HttpError(422, "bad_field", "the title holds a control character", {
+      field: "title",
+    });
   }
   if (title.length > MAX_TITLE) {
     throw new HttpError(422, "bad_field", `the title is over ${MAX_TITLE} characters`, {
