@@ -12,10 +12,11 @@
  * - `GET /v1/jobs?status=&q=&cursor=&limit=`: the key's jobs, newest first; `q` finds them by
  *   title, id or state (SV-J10).
  * - `PATCH /v1/jobs/{id}` `{title}` (SV-J10): names or renames a job, in any state.
- * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
+ * - `GET /v1/jobs/{id}/result?format=` (SV-J4, SV-J5): the result of a done job, as JSON, the
+ *   OpenAI shape, text, SRT or WebVTT.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
  * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
- *   first, as JSON `{events, cursor, has_more}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
+ *   first, as JSON `{events, cursor, has_more, feed_id}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
  *   `Last-Event-ID`.
  */
 
@@ -39,6 +40,7 @@ import { readMultipart, type SpooledFile, type StreamedForm } from "../multipart
 import type { ApiApp } from "../server.ts";
 import { checkTitle } from "./calls.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
+import { RESULT_FORMATS, type ResultFormat, renderResult } from "./openai.ts";
 
 export const MAX_WAIT_SECONDS = 60;
 export const MAX_KEYWORDS = 24;
@@ -520,21 +522,30 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/result",
     {
       id: "jobs.result",
-      doc: "The transcript of a done job: text, segments with speakers and times, and the engines that made it. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. 409 `not_done` before the job is done.",
+      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
+      query: {
+        format: {
+          type: "string",
+          values: RESULT_FORMATS,
+          default: "json",
+          doc: "The result's format: json, verbose_json, text, srt or vtt.",
+        },
+      },
       ok: 200,
     },
     (c) => {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
       if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      const format = c.query.oneOf<ResultFormat>("format");
       if (j.status !== "done" || !j.result) {
         throw new HttpError(409, "not_done", `the job is ${j.status}`, {
           status: j.status,
           ...(j.error ? { job_error: j.error } : {}),
         });
       }
-      return json(200, j.result);
+      return renderResult(j, format);
     },
   );
 
@@ -560,7 +571,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/events",
     {
       id: "events.list",
-      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more, feed_id}`; `wait` holds the request until one arrives. `feed_id` is made once when the job store is created: when it changes, the store was reset and its cursors started again at 0, so read again from `after=0`. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
       ...JOB_ROUTE,
       query: {
         after: {
@@ -610,6 +621,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         events: events.map(eventView),
         cursor,
         has_more: jobs.hasEventsAfter(who, cursor),
+        feed_id: jobs.feedId,
       });
     },
   );

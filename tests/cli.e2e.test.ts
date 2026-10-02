@@ -75,6 +75,10 @@ describe("exit codes", () => {
     expect(exitFor(400, "unknown_field")).toBe(64);
     expect(exitFor(400, "last_refused")).toBe(64);
     expect(exitFor(404, "not_found")).toBe(64);
+    // No call to act on: none at all for `last`, or a call id that does not exist (CLI-16).
+    expect(exitFor(404, "no_calls")).toBe(3);
+    expect(exitFor(404, "not_found", { call: "01JB7X" })).toBe(3);
+    expect(exitFor(404, "not_found", { model: "x" })).toBe(64);
     expect(exitFor(401, "unauthorized")).toBe(77);
     expect(exitFor(403, "permission")).toBe(77);
     expect(exitFor(501, "not_implemented")).toBe(69);
