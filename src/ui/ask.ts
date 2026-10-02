@@ -1,8 +1,8 @@
 /**
  * The ask box (docs/DESIGN.md sections 5.3, 5.4 and 7): a question about the call, answered by the
  * user's own provider. The matching excerpts come first, as evidence cards, before any model runs;
- * the answer streams in token by token; its wall-clock citations (`[15:41 Ben]`) are buttons that
- * scroll to the line and play it. When no model can answer, the excerpts stay, the reason is said
+ * the answer streams in token by token; its wall-clock citations (`[15:41 Ben]`) are chips that
+ * show the time, name the speaker in their label, and scroll to the line and play it. When no model can answer, the excerpts stay, the reason is said
  * plainly, and "Copy context for my agent" hands the pack to the user's own agent.
  *
  * The box is the top of the side column, always there (WINDOW section 6.2). Under it the column
@@ -24,7 +24,7 @@ import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { parseNaming } from "../main/query/classify.ts";
 import { byId, h, replace, toast } from "./dom.ts";
-import { presets, resolveTimeCitation, splitCitations } from "./model.ts";
+import { askUnavailable, presets, resolveTimeCitation, splitCitations } from "./model.ts";
 import type { AskAnswer, Transport } from "./protocol.ts";
 
 export interface AskDeps {
@@ -51,13 +51,18 @@ export function citedText(
     }
     const id =
       p.kind === "seg" ? p.id : view ? resolveTimeCitation(view, p.time, p.speaker, cites) : null;
+    // The chip shows the time alone, as b2 draws it; its label names the speaker too.
     let label = p.text;
+    let time = p.kind === "time" ? p.time : p.text;
     if (p.kind === "seg" && view) {
       const l = view.resolve(p.id);
-      if (l) label = `[${formatWall(l.w0, tz, { seconds: false })} ${l.speaker}]`;
-    }
+      if (l) {
+        time = formatWall(l.w0, tz, { seconds: false });
+        label = `${time} ${l.speaker}`;
+      }
+    } else if (p.kind === "time") label = `${p.time} ${p.speaker}`;
     if (!id) {
-      out.push(h("span", { class: "cite missing" }, label));
+      out.push(h("span", { class: "cite missing" }, p.text));
       continue;
     }
     out.push(
@@ -66,10 +71,10 @@ export function citedText(
         {
           class: "cite",
           type: "button",
-          attrs: { "data-line": id, "aria-label": `Show and play ${label}` },
+          attrs: { "data-line": id, "aria-label": `Show and play ${label}`, title: label },
           on: { click: () => cite(id) },
         },
-        label,
+        time,
       ),
     );
   }
@@ -219,6 +224,7 @@ export class AskPane {
     block.status.textContent = [by, last.answer.model ? `answered by ${last.answer.model}` : ""]
       .filter(Boolean)
       .join(" · ");
+    block.status.title = block.status.textContent;
     replace(
       block.answer,
       ...citedText(last.answer.text, v ?? null, last.answer.cites, this.d.cite),
@@ -317,14 +323,9 @@ export class AskPane {
           return;
         }
         status.textContent = "No answer";
+        const why = askUnavailable(a.reason, a.errorKind);
         answer.replaceChildren(
-          h(
-            "span",
-            {},
-            a.reason
-              ? `${a.reason}. The excerpts below are what matched.`
-              : "The excerpts below are what matched.",
-          ),
+          h("span", {}, `${why ? `${why} ` : ""}The excerpts below are what matched.`),
         );
         if (a.context) answer.append(this.copyContext(a.context));
       },

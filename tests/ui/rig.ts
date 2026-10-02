@@ -24,7 +24,13 @@ import {
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import { tokenize } from "../../src/core/vocab/correct.ts";
-import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type {
+  Availability,
+  CompleteRequest,
+  CompleteResult,
+  Provider,
+  ProviderErrorKind,
+} from "../../src/main/llm/provider.ts";
 import { Bridge } from "../../src/main/window/bridge.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
@@ -86,8 +92,10 @@ export class FakeProvider implements Provider {
   answer: (req: CompleteRequest) => string = () => "fine";
   delayMs = 0;
   readonly requests: CompleteRequest[] = [];
-  async available() {
-    return { ok: true as const, detail: "fake" };
+  /** Set, the provider is unavailable for this reason (not installed, signed out). */
+  unavailable: { kind: ProviderErrorKind; reason: string } | null = null;
+  async available(): Promise<Availability> {
+    return this.unavailable ? { ok: false, ...this.unavailable } : { ok: true, detail: "fake" };
   }
   async complete(
     req: CompleteRequest,

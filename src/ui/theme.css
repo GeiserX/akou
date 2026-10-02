@@ -1189,7 +1189,7 @@ button.icon.on {
    --size, not the root font), so a larger transcript font never squeezes the transcript itself. */
 body.shell:not(.server) {
   display: grid;
-  grid-template-columns: 13.75rem minmax(0, 1fr) 24rem;
+  grid-template-columns: 13.75rem minmax(0, 1fr) 21.25rem;
   grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) auto;
 }
 body.shell:not(.server) > * {
@@ -1268,7 +1268,7 @@ body.shell:not(.server) > #pages {
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24rem;
+  grid-template-columns: minmax(0, 1fr) 21.25rem;
   min-height: 0;
 }
 /* Below 1248 px the full side columns would leave the transcript less than half the window. */
@@ -2147,8 +2147,13 @@ main {
 .a-card .lbl::before {
   content: "✦";
 }
+/* "asked by agent X · answered by Y" stays on one line, cut short with an ellipsis. */
 .a-card .ask-status {
   margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-weight: 400;
   color: var(--faint);
 }
@@ -2267,9 +2272,19 @@ button.cite:hover {
 .note:focus-within {
   background: var(--raised);
 }
-.note .note-text {
+.note .note-body {
   flex: 1;
   min-width: 0;
+}
+.note .note-text {
+  display: block;
+}
+/* "Action" or "Open question" under the note (b2). */
+.note .tag {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--faint);
 }
 .note .gutter {
   flex: none;
