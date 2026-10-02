@@ -47,7 +47,11 @@ const mcp: Command = {
   run: async (ctx) => {
     // Loaded only here, so the SDK never slows down the other commands.
     const { runMcpStdio } = await import("../mcp/server.ts");
-    await runMcpStdio({ client: ctx.client, version: ctx.version });
+    await runMcpStdio({
+      client: ctx.client,
+      version: ctx.version,
+      remote: !!ctx.io.env.AKOU_URL?.trim(),
+    });
     return EXIT.ok;
   },
 };

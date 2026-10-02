@@ -8,6 +8,8 @@
  *   422 `idempotency_conflict` for the same key with another file or options, 429 `queue_full`
  *   with `Retry-After` past a queue limit (SV-Q3), answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
  *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
+ * - `POST /v1/jobs?wait=0..60` (SI-5): the same, holding the answer until the job ends: 200 with the
+ *   job and its `result`, or the submit's own answer when the wait runs out first.
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
  * - `GET /v1/jobs?status=&q=&cursor=&limit=`: the key's jobs, newest first; `q` finds them by
  *   title, id or state (SV-J10).
@@ -307,9 +309,10 @@ export function metadataOf(form: Form): unknown {
   }
 }
 
-async function submit(c: RouteContext<ApiApp>): Promise<Response> {
+async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
+  const wait = waitParam(c);
   const idem = c.req.headers.get("idempotency-key");
   if (idem !== null && !IDEMPOTENCY.test(idem)) {
     throw new HttpError(400, "bad_header", "Idempotency-Key is 1 to 255 printable characters");
@@ -396,10 +399,32 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     const r = jobs.submit({ ...job, file_sha256: file.sha256, audio: file.path });
     // A repeated submit's file is deleted by `submit` itself.
     kept = file;
-    return answerSubmit(jobs, r);
+    const answer = answerSubmit(jobs, r);
+    return wait > 0 && "job" in r ? await waitForEnd(c, jobs, r.job.id, wait, answer) : answer;
   } finally {
     await form.discard(kept);
   }
+}
+
+/**
+ * `wait` on a submit (SI-5): the job once it ends inside the wait, 200, with its `result` when it is
+ * done; else the submit's own answer (202 for a new job), the job as it is now.
+ */
+async function waitForEnd(
+  c: RoutedContext<ApiApp>,
+  jobs: JobService,
+  id: string,
+  wait: number,
+  answer: Response,
+): Promise<Response> {
+  const who = caller(c);
+  const j = await jobs.wait(who, id, wait * 1000, c.req.signal);
+  if (!j || !("seq" in j)) return answer;
+  if (j.status === "queued" || j.status === "running") return json(answer.status, jobs.view(j));
+  return json(200, {
+    ...jobs.view(j),
+    ...(j.status === "done" && j.result ? { result: j.result } : {}),
+  });
 }
 
 function answerSubmit(jobs: JobService, r: ReturnType<JobService["submit"]>): Response {
@@ -441,8 +466,9 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
       ...JOB_ROUTE,
+      query: { wait: WAIT },
       body: {
         multipart: {
           file: "file",

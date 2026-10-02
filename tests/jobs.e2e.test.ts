@@ -611,6 +611,51 @@ describe("SV-J3: states and the long-poll", () => {
   });
 });
 
+describe("SI-5: wait on POST /v1/jobs", () => {
+  /** A submit holding its answer `wait` seconds. */
+  async function submitWaiting(rig: AppRig, key: string, file: Uint8Array, wait: number) {
+    const form = new FormData();
+    form.append("file", new Blob([file], { type: "audio/wav" }), "note.wav");
+    const res = await fetch(`http://127.0.0.1:${rig.port}/v1/jobs?wait=${wait}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}` },
+      body: form,
+    });
+    return answer(res);
+  }
+
+  test("a 5 s clip with wait=55 answers 200, done, with its result in the one answer", async () => {
+    const k = await newKey(server, "si5-done");
+    const r = await submitWaiting(server, k.key, clip(["hello", "world"], 5), 55);
+    expect([r.status, r.body.status]).toEqual([200, "done"]);
+    expect(r.body.result.text).toBe("hello world");
+    expect(r.body.result.job_id).toBe(r.body.id);
+    expect(RESULT.safeParse(r.body.result).success).toBe(true);
+    // Positive control: with no wait the same submit is SV-J1's 202, queued, with no result.
+    const plain = await submit(server, k.key, clip(["hello", "world"], 5));
+    expect(plain.status).toBe(202);
+    expect(plain.body.result).toBeUndefined();
+  });
+
+  test("wait=1 on a busy queue answers 202 queued after one second; wait=61 is refused", async () => {
+    const g = gate();
+    const rig = await appRig({ settings: SERVER, jobs: { decode: g.decode } });
+    try {
+      const k = await newKey(rig, "si5-busy");
+      await submit(rig, k.key, NOTE);
+      const t0 = performance.now();
+      const r = await submitWaiting(rig, k.key, OTHER_NOTE, 1);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(1000);
+      expect([r.status, r.body.status]).toEqual([202, "queued"]);
+      expect(r.body.result).toBeUndefined();
+      expect((await submitWaiting(rig, k.key, OTHER_NOTE, 61)).status).toBe(400);
+    } finally {
+      g.open();
+      await rig.close();
+    }
+  });
+});
+
 describe("SV-J4: the result shape", () => {
   for (const preset of ["fast", "auto"]) {
     test(`the result of the ${preset} preset matches the schema`, async () => {

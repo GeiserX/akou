@@ -6101,7 +6101,21 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6174,7 +6188,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/400.bad_header.bad_multipart.unknown_field"
+            "$ref": "#/components/responses/400.bad_header.bad_multipart.bad_param.unknown_field"
           },
           "401": {
             "$ref": "#/components/responses/401.unauthorized"
@@ -7562,7 +7576,7 @@
           }
         }
       },
-      "400.bad_header.bad_multipart.unknown_field": {
+      "400.bad_header.bad_multipart.bad_param.unknown_field": {
         "description": "Bad request",
         "content": {
           "application/json": {
@@ -7577,6 +7591,7 @@
                       "enum": [
                         "bad_header",
                         "bad_multipart",
+                        "bad_param",
                         "unknown_field"
                       ]
                     }
