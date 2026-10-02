@@ -58,11 +58,15 @@ describe("[TS-12] the MCP tool reference is generated from tools/list", () => {
       description: "Quoted as one <call-text> block; `<call-text>` in code.",
       inputSchema: {
         type: "object",
-        properties: { a: { type: "string", description: "a <b> | c \\ d" } },
+        properties: {
+          a: { type: "string", description: "a <b> | c \\ d" },
+          b: { enum: ["x|y", "a\\b"] },
+        },
       },
     } as Tool;
     const page = renderMcpReference([tool]);
     expect(page).toContain("Quoted as one &lt;call-text&gt; block; `<call-text>` in code.");
     expect(page).toContain("| a &lt;b&gt; \\| c \\\\ d |");
+    expect(page).toContain('| `b` | `"x\\|y" or "a\\\\\\\\b"` | no |  |');
   });
 });
