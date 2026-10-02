@@ -757,7 +757,8 @@ describe("a connection that breaks after the request went out", () => {
       await expect(
         a.client.request("POST", "/calls/live/notes", { body: { text: "x" } }),
       ).rejects.toThrow();
-      expect(a.seen).toEqual(["POST /v1/calls/live/notes"]);
+      // The probe that the app answers at all (DK-M8) is a read before it, never the write.
+      expect(a.seen.filter((l) => l !== "GET /healthz")).toEqual(["POST /v1/calls/live/notes"]);
     } finally {
       a.close();
     }

@@ -89,6 +89,15 @@ function errorText(t: string): ToolResult {
   return { content: [{ type: "text", text: t }], isError: true };
 }
 
+/**
+ * What the client did on its own while answering, first in the answer: a hung app it restarted
+ * (DK-M8), so the agent knows the app is a new one.
+ */
+function withNotes(r: ToolResult, notes: readonly string[]): ToolResult {
+  if (notes.length === 0) return r;
+  return { ...r, content: [{ type: "text", text: notes.join("\n") }, ...r.content] };
+}
+
 function result(a: Answer): ToolResult {
   return { content: [{ type: "text", text: a.text }], structuredContent: a.data };
 }
@@ -397,7 +406,11 @@ export function createMcpServer(o: McpOptions): McpServer {
     return server.registerTool(
       name,
       { ...config, title: row.title, annotations: row.hints } as never,
-      (async (...a: unknown[]) => capAnswer(await cb(...a), undefined, row.less)) as never,
+      (async (...a: unknown[]) =>
+        withNotes(
+          capAnswer(await cb(...a), undefined, row.less),
+          o.client.takeNotes?.() ?? [],
+        )) as never,
     );
   }) as typeof server.registerTool;
 

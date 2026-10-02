@@ -62,6 +62,8 @@ Every command takes `--json` and then prints one JSON answer, errors included. `
 
 A command that needs the app opens it in the background when it is not running. The exit codes are fixed: 0 ok, 3 nothing live, 64 usage, 69 unavailable, 70 software, 75 already recording, 77 permission, 124 timed out.
 
+When the app takes the connection but answers nothing for 3 s, the command looks closer. A command that changes something, `akou start` among them, gives it up to 10 s in all; if it is still silent, the command restarts akou and runs, within about 15 s, and prints `akou was not answering; restarted it (N s)` on stderr. A command that only reads exits 69 saying akou is not answering; `--restart`, which every command takes, restarts it first. A call that is recording is never stopped this way: the command exits 69 and says how to restart akou by hand. A restart does stop a final pass in progress, which runs again at the next start, and a dictation in progress. `akou mcp` uses the same client, so an agent's tool call that changes something restarts a hung app too; the line goes to the MCP server's stderr, and the tool's answer starts with it, so the agent knows the app is a new one. See [akou does not answer](troubleshooting.md#akou-does-not-answer).
+
 ## The local API
 
 The app serves a local API on `http://127.0.0.1:8476/v1`, on this machine's loopback only. Every request carries a bearer token from the file `akou token path` names; `akou token rotate` replaces it. The routes are in [docs/api/openapi.json](https://github.com/GeiserX/akou/blob/main/docs/api/openapi.json). The window, the command line and MCP are all clients of this API, so every action has the same effect whichever door it came through.

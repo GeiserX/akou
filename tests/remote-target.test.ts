@@ -274,7 +274,8 @@ describe("[SI-1] a remote target for the CLI and akou mcp", () => {
     const before = decoySeen.length;
     const r = await cli(env({}), ["jobs", "list", "--json"], { launch });
     expect(r.code).toBe(EXIT.ok);
-    expect(decoySeen.length).toBe(before + 1);
+    // The probe that the app answers at all comes first (DK-M8), then the request.
+    expect(decoySeen.slice(before).map((s) => s.path)).toEqual(["/healthz", "/v1/jobs"]);
     expect(decoySeen.at(-1)).toEqual({ method: "GET", path: "/v1/jobs", auth: `Bearer ${KEY}` });
   });
 });
