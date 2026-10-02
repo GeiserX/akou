@@ -42,6 +42,8 @@ export interface DraftTransport {
 export interface DraftSink {
   open(d: DraftOpen): void;
   chip(c: Chip): void;
+  /** A dictation made while the box had the keyboard: at the end of the field, a space between. */
+  append(text: string): void;
 }
 
 /** An underlined span of the field: where it is now, and what the other engine heard. */
@@ -281,6 +283,9 @@ export function mountDraft(t: DraftTransport): DraftSink {
       marks = lowMarks(text, next.words);
       const scored = (next.words ?? []).some((w) => typeof w.c === "number");
       el("draft-noconf").hidden = scored;
+      // The AI tidy changed what was heard (DC-U6): both show, the tidied text in the field.
+      el("draft-heard").hidden = !next.heard;
+      el("draft-heard").textContent = next.heard ? `As heard: ${next.heard}` : "";
       alts.hidden = true;
       el("draft-to").hidden = !next.to;
       el("draft-app").textContent = next.to ?? "";
@@ -311,5 +316,13 @@ export function mountDraft(t: DraftTransport): DraftSink {
       }
     },
     chip: (c) => chip.show(c),
+    append: (more) => {
+      if (!d || done || more.trim() === "") return;
+      const glue = field.value === "" || /\s$/.test(field.value) ? "" : " ";
+      field.value = `${field.value}${glue}${more.trim()}`;
+      field.dispatchEvent(new Event("input"));
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    },
   };
 }

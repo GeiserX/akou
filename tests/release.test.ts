@@ -14,11 +14,22 @@ import config, {
   helperCopies,
   MAIN_OUT,
   signing,
+  UPDATE_FEED,
 } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { hutchEnv, PINS, pairedHutch } from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
-import { drift, main, readAll, stamp, tagVersion } from "../scripts/stamp-version.ts";
+import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
+import { verdict } from "../scripts/ci/tested-commit.ts";
+import {
+  changelogSection,
+  drift,
+  main,
+  readAll,
+  releaseNotes,
+  stamp,
+  tagVersion,
+} from "../scripts/stamp-version.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { siblingModule } from "../src/main/asr/sibling.ts";
 import { HELPER_NAME } from "../src/main/capture/helper.ts";
@@ -43,6 +54,11 @@ function repoCopy(): { dir: string; cleanup(): void } {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
   }
+  // The tests below also release a 0.1.0, which needs its changelog section (CI-20).
+  writeFileSync(
+    join(t.dir, "CHANGELOG.md"),
+    `${readFileSync(join(ROOT, "CHANGELOG.md"), "utf8")}\n## 0.1.0\n\n- a change\n`,
+  );
   mkdirSync(join(t.dir, "native", "akou-capture"), { recursive: true });
   writeFileSync(
     join(t.dir, "native", "akou-capture", "Cargo.toml"),
@@ -282,6 +298,7 @@ describe("what the bundle carries beside the main process", () => {
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });
     expect(config.build?.copy?.["src/main/notes/templates"]).toBe(`${MAIN_OUT}/templates`);
+    expect(config.build?.copy?.["src/main/notes/presets"]).toBe(`${MAIN_OUT}/presets`);
     expect(config.scripts?.postBuild).toBe("./scripts/post-build.ts");
   });
 
@@ -383,5 +400,238 @@ describe("the unsigned first open", () => {
       expect(doc).toMatch(/On macOS 14, Control-click akou in Applications, choose Open/);
       expect(doc).toMatch(/On macOS 15 and later,[^\n]*Privacy & Security[^\n]*Open Anyway/);
     }
+  });
+});
+
+/** The release workflow, parsed. */
+function releaseWorkflow(): {
+  jobs: Record<
+    string,
+    {
+      permissions?: Record<string, string>;
+      steps?: {
+        name?: string;
+        uses?: string;
+        if?: string;
+        run?: string;
+        with?: Record<string, string>;
+      }[];
+    }
+  >;
+} {
+  return Bun.YAML.parse(
+    readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+  ) as never;
+}
+
+describe("[CI-19] a release publishes only a commit whose ci-ok is green", () => {
+  const sha = "0".repeat(40);
+  const run = (status: string, conclusion: string | null) => ({
+    id: 1,
+    status,
+    conclusion,
+    html_url: "https://example.invalid/run/1",
+  });
+  const job = (conclusion: string | null) => ({ name: "ci-ok", status: "completed", conclusion });
+
+  test("green only when the newest CI run finished and its ci-ok passed", () => {
+    expect(verdict(sha, run("completed", "success"), job("success"))).toEqual({ state: "green" });
+    // Still running, including a rerun of the failed legs: wait for it.
+    expect(verdict(sha, run("in_progress", null), null).state).toBe("wait");
+    expect(verdict(sha, run("queued", null), job("failure")).state).toBe("wait");
+  });
+
+  test("positive control: a red, cancelled, missing or never-run ci-ok stops the release", () => {
+    const red = verdict(sha, run("completed", "failure"), job("failure"));
+    expect(red).toMatchObject({ state: "stop" });
+    expect(red.state !== "green" && red.why).toContain("ci-ok is failure");
+    expect(verdict(sha, run("completed", "cancelled"), job("cancelled")).state).toBe("stop");
+    expect(verdict(sha, run("completed", "success"), null).state).toBe("stop");
+    const never = verdict(sha, null, null);
+    expect(never.state !== "green" && never.why).toContain("never ran");
+  });
+
+  test("the tag looks up ci-ok instead of running check again", () => {
+    const version = releaseWorkflow().jobs.version;
+    const runs = (version?.steps ?? []).map((s) => s.run ?? "");
+    expect(runs.some((r) => r.includes("bun run check"))).toBe(false);
+    const gate = version?.steps?.find((s) => s.run?.includes("scripts/ci/tested-commit.ts"));
+    expect(gate?.if).toBe("github.ref_type == 'tag'");
+    expect(gate?.run).toContain('"$SHA"');
+    expect(version?.permissions).toEqual({ contents: "read", actions: "read" });
+  });
+});
+
+describe("[CI-20] every release has a changelog section", () => {
+  const md =
+    "# Changelog\n\n## 0.2.0 — two\n\nSee [the docs](docs/a.md), [x](https://x.test/) and [y](#y).\n\n## 0.1.0\n\n- one\n";
+
+  test("the section runs from its heading to the next version's", () => {
+    expect(changelogSection(md, "0.2.0")).toBe(
+      "## 0.2.0 — two\n\nSee [the docs](docs/a.md), [x](https://x.test/) and [y](#y).",
+    );
+    expect(changelogSection(md, "0.1.0")).toBe("## 0.1.0\n\n- one");
+    // A prefix is not a match: 0.1 is not 0.1.0, and 0.1.0 is not 0.1.01.
+    expect(changelogSection(md, "0.1")).toBeNull();
+    expect(changelogSection(md.replace("## 0.1.0", "## 0.1.01"), "0.1.0")).toBeNull();
+  });
+
+  test("the notes point relative links at the tagged tree and leave the rest", () => {
+    expect(releaseNotes(md, "0.2.0", "o/r")).toBe(
+      "## 0.2.0 — two\n\nSee [the docs](https://github.com/o/r/blob/v0.2.0/docs/a.md), [x](https://x.test/) and [y](#y).",
+    );
+    expect(releaseNotes(md, "0.3.0", "o/r")).toBeNull();
+  });
+
+  test("this version has its section", () => {
+    expect(
+      changelogSection(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), pkg.version),
+    ).not.toBeNull();
+  });
+
+  test("positive control: --check fails without the version's section, and --notes prints it", () => {
+    const t = repoCopy();
+    try {
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--notes", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--set", "0.1.1", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(1);
+      expect(quiet(() => main(["--notes", "--root", t.dir]))).toBe(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("the release notes start with the section the version job wrote", () => {
+    const wf = releaseWorkflow();
+    const write = wf.jobs.version?.steps?.find((s) => s.run?.includes("--notes"));
+    expect(write?.run).toContain("> notes/changelog.md");
+    const publish = wf.jobs.release?.steps?.find((s) => s.run?.includes("gh release create"));
+    const body = publish?.run ?? "";
+    expect(body).toMatch(/\{ cat \.\.\/notes\/changelog\.md; echo; \} > notes\.md\n/);
+    expect(body.indexOf("> notes.md")).toBeLessThan(body.indexOf(">> notes.md"));
+    expect(body).toContain("--generate-notes");
+  });
+});
+
+describe("[CI-21] every release asset carries a build attestation", () => {
+  test("the release job attests every file SHA256SUMS lists and verifies each before publishing", () => {
+    const wf = releaseWorkflow();
+    const steps = wf.jobs.release?.steps ?? [];
+    const attest = steps.findIndex((s) => s.uses?.startsWith("actions/attest-build-provenance@"));
+    const verify = steps.findIndex((s) => s.run?.includes("gh attestation verify"));
+    const publish = steps.findIndex((s) => s.run?.includes("gh release create"));
+    expect(steps[attest]?.uses).toMatch(/@[0-9a-f]{40}$/);
+    expect(steps[attest]?.with).toEqual({ "subject-checksums": "dist/SHA256SUMS" });
+    expect(steps[verify]?.run).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(attest).toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(attest);
+    expect(publish).toBeGreaterThan(verify);
+  });
+
+  test("only the release job may mint an identity token or write attestations", () => {
+    const wf = releaseWorkflow();
+    expect(wf.jobs.release?.permissions).toEqual({
+      contents: "write",
+      "id-token": "write",
+      attestations: "write",
+    });
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      if (name === "release") continue;
+      expect(job.permissions?.["id-token"]).toBeUndefined();
+      expect(job.permissions?.attestations).toBeUndefined();
+    }
+  });
+});
+
+describe("[CI-23] releases publish the update feed the app reads", () => {
+  const bundle = "stable-macos-arm64-akou.app.tar.zst";
+  const manifest = (version: string, over: Record<string, unknown> = {}) => ({
+    schemaVersion: 1,
+    identifier: "io.github.geiserx.akou",
+    channel: "stable",
+    version,
+    hash: "abc123",
+    platform: "macos",
+    arch: "arm64",
+    artifact: { file: bundle },
+    ...over,
+  });
+
+  test("the app's updater reads the fixed update-feed release, which a prerelease can fill", () => {
+    expect(UPDATE_FEED).toBe("https://github.com/GeiserX/akou/releases/download/update-feed");
+    expect(config.release).toEqual({ baseUrl: UPDATE_FEED, generatePatch: false });
+  });
+
+  test("a manifest for this app, channel and version passes; positive control: any other fails", () => {
+    expect(manifestProblems(manifest("0.6.0"), "0.6.0")).toEqual([]);
+    expect(manifestProblems(manifest("0.5.4"), "0.6.0")).toEqual([
+      'version is "0.5.4", expected "0.6.0"',
+    ]);
+    expect(manifestProblems(manifest("0.6.0", { identifier: "x" }), "0.6.0")).toHaveLength(1);
+    expect(manifestProblems(manifest("0.6.0", { channel: "canary" }), "0.6.0")).toHaveLength(1);
+    expect(
+      manifestProblems(manifest("0.6.0", { artifact: { file: "akou.app.tar.zst" } }), "0.6.0"),
+    ).toHaveLength(1);
+    expect(manifestProblems(null, "0.6.0")).toHaveLength(1);
+  });
+
+  test("the build's feed folder needs the manifest and the bundle it names", () => {
+    const t = tempDir();
+    try {
+      expect(checkDir(t.dir, "0.6.0")[0]).toContain(`no ${MANIFEST}`);
+      writeFileSync(join(t.dir, MANIFEST), JSON.stringify(manifest("0.6.0")));
+      expect(checkDir(t.dir, "0.6.0")).toEqual([`the bundle ${bundle} is not in ${t.dir}`]);
+      writeFileSync(join(t.dir, bundle), "x");
+      expect(checkDir(t.dir, "0.6.0")).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("the smoke test fetches the published manifest and the bundle's first byte, as the updater does", async () => {
+    const base = "https://feed.invalid";
+    const seen: string[] = [];
+    const feed =
+      (version: string, bundleStatus = 206) =>
+      async (url: string, init?: RequestInit) => {
+        seen.push(`${url.split("?")[0]} ${new Headers(init?.headers).get("range") ?? ""}`);
+        if (url.startsWith(`${base}/${MANIFEST}?`)) return Response.json(manifest(version));
+        if (url.startsWith(`${base}/${bundle}?cache=`))
+          return new Response("x", { status: bundleStatus });
+        return new Response("", { status: 404 });
+      };
+    expect(await checkUrl(base, "0.6.0", feed("0.6.0"))).toEqual([]);
+    expect(seen).toEqual([`${base}/${MANIFEST} `, `${base}/${bundle} bytes=0-0`]);
+    // Positive controls: a feed still on the previous version, a missing bundle, no feed at all.
+    expect(await checkUrl(base, "0.6.0", feed("0.5.4"))).toEqual([
+      'version is "0.5.4", expected "0.6.0"',
+    ]);
+    expect((await checkUrl(base, "0.6.0", feed("0.6.0", 404)))[0]).toContain("HTTP 404");
+    expect((await checkUrl("https://none.invalid", "0.6.0", feed("0.6.0")))[0]).toContain(
+      "HTTP 404",
+    );
+  });
+
+  test("the release replaces the feed, bundle before manifest, then fetches it; the build checks it first", () => {
+    const wf = releaseWorkflow();
+    const app = (wf.jobs.app?.steps ?? []).map((s) => s.run ?? "");
+    expect(app.findIndex((r) => r.includes("check-feed.ts --dir dist/release"))).toBeGreaterThan(
+      app.findIndex((r) => r.includes("scripts/build-app.ts")),
+    );
+    const steps = wf.jobs.release?.steps ?? [];
+    const versioned = steps.findIndex((s) => s.run?.includes('gh release create "$TAG"'));
+    const feed = steps.findIndex((s) => s.run?.includes("gh release upload update-feed"));
+    const smoke = steps.findIndex((s) => s.run === "bun scripts/check-feed.ts --url");
+    expect(steps[versioned]?.run).toContain("-- akou-* stable-* SHA256SUMS");
+    expect(feed).toBeGreaterThan(versioned);
+    expect(smoke).toBeGreaterThan(feed);
+    const upload = steps[feed]?.run ?? "";
+    expect(upload).toContain("gh release create update-feed");
+    expect(upload).toContain("--latest=false");
+    expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeGreaterThan(-1);
+    expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeLessThan(
+      upload.indexOf("--clobber -- stable-*-update.json"),
+    );
   });
 });

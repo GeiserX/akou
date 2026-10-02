@@ -83,7 +83,7 @@ import { DEFAULT_FINAL, timelinePieces } from "./finalize-worker.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveChoice, streamLanguage } from "./live-engines.ts";
 import { CausalGain, StreamChannel, type StreamLine } from "./live-stream.ts";
 import { RECOGNIZER } from "./models.ts";
-import { prepareSpan } from "./pad.ts";
+import { gainFor, prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
 import {
   highestLabel,
@@ -347,6 +347,7 @@ export class LivePipeline {
     private readonly models: ModelSet,
     opts: Partial<LiveOptions>,
     private readonly emit: (o: LiveOut) => void,
+    // clock: the default of an injected clock; tests pass their own.
     private readonly now: () => number = () => Date.now(),
   ) {
     this.o = { ...DEFAULT_LIVE, ...opts };
@@ -479,10 +480,15 @@ export class LivePipeline {
   /**
    * A dictation buffer cut at pauses into spans of at most `DICTATION_SPAN_SECONDS`, with the final
    * pass's rule (`timelinePieces`), judged by a VAD of its own so a call's channels keep theirs.
+   * The cut is judged on a copy gained as each span is decoded (`gainFor`, +20 dB at most): on the
+   * raw signal of a quiet microphone the rule's -50 dBFS trim takes the ends of words, and a clip
+   * whose peak is under it gives no span at all. The spans index the buffer as it was.
    */
   dictationSpans(samples: Float32Array): { from: number; to: number }[] {
-    const { speech, window } = this.dictationSpeech(samples);
-    return timelinePieces(samples, speech, window, {
+    const g = gainFor(samples);
+    const gained = g === 1 ? samples : samples.map((v) => v * g);
+    const { speech, window } = this.dictationSpeech(gained);
+    return timelinePieces(gained, speech, window, {
       ...DEFAULT_FINAL,
       maxSpanSeconds: DICTATION_SPAN_SECONDS,
     });
@@ -1020,6 +1026,7 @@ export class LivePipeline {
         await Promise.race([
           s.d.flush(),
           new Promise<void>((_, reject) => {
+            // clock: a deadline on an engine's flush, which runs in real time.
             timer = setTimeout(
               () => reject(new Error(`no answer in ${STREAM_FLUSH_MS} ms`)),
               STREAM_FLUSH_MS,
@@ -1228,6 +1235,8 @@ export class WorkerSide {
   private queue: Promise<void> = Promise.resolve();
   /** Reviews given up (`review.cancel`): their next utterance is not decoded. */
   private readonly cancelled = new Set<number>();
+  /** Reviews still decoding: a cancel for any other token came after its answer and is dropped. */
+  private readonly reviewing = new Set<number>();
   private callId = "";
 
   constructor(private readonly reply: (m: FromWorker) => void) {}
@@ -1264,7 +1273,7 @@ export class WorkerSide {
           this.review(p, m);
           break;
         case "review.cancel":
-          this.cancelled.add(m.token);
+          if (this.reviewing.has(m.token)) this.cancelled.add(m.token);
           break;
         case "speech":
           this.reply({
@@ -1358,10 +1367,16 @@ export class WorkerSide {
     let ms = 0;
     let slowest = 0;
     let model = p.recognizerModel;
+    this.reviewing.add(m.token);
+    const reply = (r: FromWorker): void => {
+      this.reviewing.delete(m.token);
+      this.cancelled.delete(m.token);
+      this.reply(r);
+    };
     const step = (i: number) => (): void => {
       try {
-        if (this.cancelled.delete(m.token)) {
-          this.reply({ type: "decode.failed", token: m.token, error: "the review was given up" });
+        if (this.cancelled.has(m.token)) {
+          reply({ type: "decode.failed", token: m.token, error: "the review was given up" });
           return;
         }
         const part = m.parts[i];
@@ -1371,12 +1386,13 @@ export class WorkerSide {
           slowest = Math.max(slowest, r.ms);
           model = r.model;
           if (r.text !== "") texts.push(r.text);
+          // clock: yields to the event loop between decodes, no deadline.
           setTimeout(() => {
             this.queue = this.queue.then(step(i + 1));
           }, 0);
           return;
         }
-        this.reply({
+        reply({
           type: "decoded",
           token: m.token,
           text: texts.join(" "),
@@ -1388,7 +1404,7 @@ export class WorkerSide {
           slowest: Math.round(slowest),
         });
       } catch (err) {
-        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
+        reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
       }
     };
     step(0)();
@@ -1418,6 +1434,7 @@ export class WorkerSide {
           if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
           if (r.text !== "") texts.push(r.text);
           words.push(...r.words);
+          // clock: yields to the event loop between decodes, no deadline.
           setTimeout(() => {
             this.queue = this.queue.then(step(i + 1));
           }, 0);

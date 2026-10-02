@@ -611,6 +611,9 @@ describe("the notepad (DESIGN 5.1)", () => {
           expect(await page.locator("#notes li.note.action").count()).toBe(1);
           // The marker is drawn as a glyph, not as text; an edit starts from the whole line.
           expect(await text(page, "#notes li.note.action .note-text")).toBe("move the build");
+          // [akou-dzm.9] The gutter is HH:MM, and an action says so under its text.
+          expect(await text(page, "#notes li.note.action .gutter")).toMatch(/^\d{2}:\d{2}$/);
+          expect(await text(page, "#notes li.note.action .tag")).toBe("Action");
           await page.click("#notes li.note.action .edit");
           expect(await page.inputValue("#notes li.note.action .note-edit")).toBe(
             "[] move the build",
@@ -634,6 +637,8 @@ describe("the notepad (DESIGN 5.1)", () => {
           );
           await page.keyboard.type(" now");
           await page.keyboard.press("Enter");
+          await page.waitForSelector("#notes li.note.question .tag");
+          expect(await text(page, "#notes li.note.question .tag")).toBe("Open question");
           await until(
             async () =>
               (await events(rig, id)).some(
@@ -942,6 +947,9 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           await page.waitForSelector("#ask-out .answer button.cite");
           const cite = page.locator("#ask-out .answer button.cite").first();
           expect(await cite.getAttribute("data-line")).toBe("l000002");
+          // [akou-dzm.9] The chip shows the time alone; its label names the speaker.
+          expect(await cite.textContent()).toBe(minute);
+          expect(await cite.getAttribute("aria-label")).toBe(`Show and play ${minute} Ben`);
           await cite.click();
           await page.waitForSelector('#lines .row.flash[data-id="l000002"]');
           await until(
@@ -1004,6 +1012,13 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           expect(await text(page, "#ask-out .ask-status")).toBe(
             "asked by agent codex · answered by fake/1.0",
           );
+          // [akou-dzm.9] It stays on one line, cut short with an ellipsis, never wrapped.
+          expect(
+            await page.$eval("#ask-out .ask-status", (el) => {
+              const c = getComputedStyle(el);
+              return `${c.whiteSpace} ${c.textOverflow} ${c.overflow}`;
+            }),
+          ).toBe("nowrap ellipsis hidden");
           await page.click("#ask-out .answer button.cite");
           await page.waitForSelector('#lines .row.flash[data-id="l000002"]');
           // A question asked here is the one on screen, and one is all the column holds.
@@ -1017,6 +1032,56 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           );
           expect(await page.locator("#ask-out .qa").count()).toBe(1);
           expect(await text(page, "#ask-out .question")).toBe("who spoke first, again?");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[akou-dzm.19] an assistant that is missing or signed out is said in plain words that point at Settings, never a setting's key",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            id = seedCall(home, standardCall).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const ask = async (q: string) => {
+            await page.fill("#ask-input", q);
+            await page.keyboard.press("Enter");
+            await until(
+              async () => (await text(page, "#ask-out .ask-status")) === "No answer",
+              5000,
+              "no answer",
+            );
+            await page.waitForSelector("#ask-out .copy-context");
+            return (await text(page, "#ask-out .answer")) ?? "";
+          };
+          provider.unavailable = {
+            kind: "missing",
+            reason:
+              "no harness found (claude-code or codex) on PATH or through the login shell; install one, pin its path in provider.harnessPath, or choose another provider",
+          };
+          const missing = await ask("the build?");
+          expect(missing).toContain(
+            "Claude Code or Codex was not found. Install one, or choose another assistant in Settings.",
+          );
+          expect(missing).toContain("The excerpts below are what matched.");
+          expect(missing).not.toContain("provider.");
+          provider.unavailable = { kind: "auth", reason: "provider.apiKey is not set" };
+          const auth = await ask("the build, again?");
+          expect(auth).toContain("The assistant has no API key. Add one in Settings");
+          expect(auth).not.toContain("provider.");
+          // The API door keeps the provider's own words: the key names are right there.
+          const r = await rig.api("POST", `/calls/${id}/ask`, { question: "and now?" });
+          expect(r.body.reason).toBe("provider.apiKey is not set");
         },
       );
     },
@@ -1140,6 +1205,22 @@ describe("the side column (WINDOW section 6)", () => {
         expect(await page.locator("[role=tab]").count()).toBe(0);
         expect(await page.locator("#ask-input").isVisible()).toBe(true);
         expect(await page.locator("#note-input").isVisible()).toBe(true);
+        // [akou-dzm.9] The side column is b2's 340 px.
+        expect((await page.locator("#side").boundingBox())?.width).toBe(340);
+        // [akou-dzm.9] An agent's question asked mid-call lands in the column when nothing was
+        // asked here...
+        const agent = { "x-akou-client": "codex" };
+        provider.answer = () => "The agent's answer.";
+        await rig.api("POST", `/calls/${id}/ask`, { question: "what did the agent ask?" }, agent);
+        await until(
+          async () => (await text(page, "#ask-out .question")) === "what did the agent ask?",
+          5000,
+          "the agent's question",
+        );
+        expect(await text(page, "#ask-out .ask-status")).toBe(
+          "asked by agent codex · answered by fake/1.0",
+        );
+        expect(await text(page, "#ask-out .answer")).toBe("The agent's answer.");
         // A note from the foot lands in the Notes count.
         await page.click("#note-input");
         await page.keyboard.type("- budget first");
@@ -1154,6 +1235,12 @@ describe("the side column (WINDOW section 6)", () => {
           5000,
           "the answer during the call",
         );
+        // ...and never replaces a question asked here.
+        provider.answer = () => "Another agent answer.";
+        await rig.api("POST", `/calls/${id}/ask`, { question: "agent again?" }, agent);
+        await Bun.sleep(1000);
+        expect(await text(page, "#ask-out .question")).toBe("what did they say?");
+        expect(await text(page, "#ask-out .a-card .answer")).toBe("Move the build.");
         // ...and after it.
         await rig.api("POST", "/calls/live/stop");
         await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
@@ -1168,6 +1255,90 @@ describe("the side column (WINDOW section 6)", () => {
         expect(await hiddenOffenders(page)).toEqual([]);
       });
       t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the sidebar at 1024 px wide", () => {
+  test(
+    "a long call title ends in an ellipsis inside its row, and a page gives the sidebar its full width",
+    async () => {
+      const title = "Quarterly planning with the platform and identity teams about the rollout";
+      let id = "";
+      await withRig(
+        {
+          seed: (home) => {
+            id = seedCall(home, (b) => b.created({ title }, T0)).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1024, height: 700 });
+          await page.waitForSelector("#calls li .what");
+          expect(await page.$eval("body", (b) => b.className)).not.toContain("welcoming");
+          const titleFit = () =>
+            page.$eval("#calls li .what", (el) => {
+              const row = (el.closest("button") as HTMLElement).getBoundingClientRect();
+              const r = el.getBoundingClientRect();
+              return {
+                inside: r.right <= row.right,
+                clipped: el.scrollWidth > el.clientWidth,
+                ellipsis: getComputedStyle(el).textOverflow,
+              };
+            });
+          // On a call the side pane is there and the sidebar is narrow: the title is cut with an
+          // ellipsis at the row's edge, never drawn past it.
+          expect(await titleFit()).toEqual({ inside: true, clipped: true, ellipsis: "ellipsis" });
+          const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+          const rem = await page.evaluate(() =>
+            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+          );
+          expect(await width()).toBe(10 * rem);
+          // A page has no side pane: the sidebar keeps the width it has in a wide window.
+          await page.click("#settings-open");
+          await page.waitForSelector("body.paged");
+          expect(await width()).toBe(13.75 * rem);
+          expect((await titleFit()).inside).toBe(true);
+          // Under 900 px the page itself needs the room, so the sidebar narrows again.
+          await page.setViewportSize({ width: 899, height: 700 });
+          expect(await width()).toBe(10 * rem);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a page opened over the welcome, with the speech models missing, gives the sidebar its full width too",
+    async () => {
+      // One model file that is not on disk: the welcome shows its models step.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      await withRig({ modelRegistry }, async (rig) => {
+        const page = await rig.open(undefined, { before: setupDone });
+        await page.setViewportSize({ width: 1024, height: 700 });
+        await page.waitForSelector("#welcome:not([hidden])");
+        const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+        const rem = await page.evaluate(() =>
+          Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        );
+        expect(await width()).toBe(10 * rem);
+        await page.click("#models-open");
+        await page.waitForSelector("body.paged");
+        // The welcome's class stays on the body under the page; the page's width wins.
+        expect(await page.$eval("body", (b) => b.className)).toContain("welcoming");
+        expect(await width()).toBe(13.75 * rem);
+      });
     },
     UI_TIMEOUT,
   );
@@ -1642,13 +1813,13 @@ describe("playback and Fix this line", () => {
           await page.hover('#lines .row[data-id="l000003"]');
           await page.click('#lines .row[data-id="l000003"] .play');
           await until(async () => (await player()).at > 0.3, 8000, "the line playing");
-          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Pause");
           // Space, with focus still on the row's Play button, pauses: it does not restart the line.
           await page.keyboard.press("Space");
           const paused = await player();
           expect(paused.paused).toBe(true);
           expect(paused.at).toBeGreaterThan(0.3);
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           await page.waitForTimeout(400);
           expect((await player()).at).toBe(paused.at);
           await page.keyboard.press("Space");
@@ -1713,7 +1884,7 @@ describe("playback and Fix this line", () => {
             5000,
             "the player cleared",
           );
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
           await page.click("#scroller");
           await page.keyboard.press("Space");
@@ -2099,7 +2270,7 @@ describe("copy the transcript so far (W12.2)", () => {
 
 describe("the share viewer (DESIGN 8.3)", () => {
   test(
-    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to live, + and -, the offset tooltip",
+    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to the end, + and -, the offset tooltip",
     async () => {
       let id = "";
       await withRig(
@@ -2124,6 +2295,8 @@ describe("the share viewer (DESIGN 8.3)", () => {
             s.scrollTop = 0;
           });
           await viewer.waitForSelector("#jump", { state: "visible" });
+          // The shared call has ended: nothing is live, so the button does not say so.
+          expect(await viewer.textContent("#jump")).toBe("↓ Back to the end");
           const top = () =>
             viewer.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
           await rig.write(id, seg("l000061", "a brand new line", { w0: T0 + 61 * 4000 }));
@@ -2141,7 +2314,7 @@ describe("the share viewer (DESIGN 8.3)", () => {
           );
           await Bun.sleep(300);
           expect(await top()).toBeLessThan(10);
-          // Back to live, then pinned again.
+          // Back to the end, then pinned again.
           await viewer.click("#jump");
           await until(async () => (await gapOf(viewer)) < 2, 3000, "back at the bottom");
           await viewer.waitForSelector("#jump", { state: "hidden" });

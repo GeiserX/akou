@@ -12,7 +12,7 @@
 
 import { h, replace } from "./dom.ts";
 import { HueBook } from "./model.ts";
-import { FontKeys, fillRow, intoTheCall, rowElement, ScrollPin } from "./transcript.ts";
+import { FontKeys, fillRow, intoTheCall, jumpText, rowElement, ScrollPin } from "./transcript.ts";
 
 interface SharedLine {
   id: string;
@@ -106,6 +106,7 @@ function state(s: { state: string; live: boolean; start?: number | null }): void
   document.body.classList.toggle("recording", s.live);
   document.body.classList.toggle("saved", !s.live);
   $("state").textContent = s.live ? "live" : s.state === "ended" ? "ended" : s.state;
+  $("jump").textContent = jumpText(s.live);
 }
 
 const es = new EventSource("stream");

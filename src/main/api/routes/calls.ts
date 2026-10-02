@@ -13,6 +13,12 @@
 
 import { formatWall } from "../../../core/log/clock.ts";
 import {
+  FINAL_MODELS,
+  type FinalModel,
+  finalModelId,
+  finalModelOf,
+} from "../../asr/final-model.ts";
+import {
   isLiveCallSetting,
   isReviewModel,
   LIVE_SETTINGS,
@@ -23,9 +29,17 @@ import {
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
+import { type ErrorCode, errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callOf, resolveRef } from "./common.ts";
+import {
+  CALL_ID,
+  CALL_REF_ERRORS,
+  callOf,
+  LIVE_REF_ERRORS,
+  resolveRef,
+  WRITE_ERRORS,
+} from "./common.ts";
 
 /**
  * Where an indexer's page starts (PG-A6): after a `cursor` (`<updatedAt>.<id>`), else after
@@ -111,11 +125,19 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
 /** The longest title a rename takes. */
 const MAX_TITLE = 200;
 
-/** A new title: one line, trimmed; empty or too long is refused with 422 and changes nothing. */
+/**
+ * A new title: one line, trimmed; empty, too long, or holding a control character (ESC, NUL), which
+ * the CLI would print raw on a terminal, is refused with 422 and changes nothing.
+ */
 export function checkTitle(raw: string): string {
   const title = raw.replace(/\s+/g, " ").trim();
   if (title === "") {
     throw new HttpError(422, "bad_field", "the title is empty", { field: "title" });
+  }
+  if (/\p{Cc}/u.test(title)) {
+    throw new HttpError(422, "bad_field", "the title holds a control character", {
+      field: "title",
+    });
   }
   if (title.length > MAX_TITLE) {
     throw new HttpError(422, "bad_field", `the title is over ${MAX_TITLE} characters`, {
@@ -133,13 +155,22 @@ const CONTROL_DOCS: Record<(typeof LIVE_CONTROLS)[number], string> = {
   unmute: "Unmute the microphone channel.",
 };
 
+/** What each live control refuses besides resolving the call: the call is not in a state for it. */
+const CONTROL_REFUSALS: Record<(typeof LIVE_CONTROLS)[number], ErrorCode[]> = {
+  stop: ["not_live"],
+  pause: ["not_live", "not_recording"],
+  resume: ["not_live", "not_paused"],
+  mute: ["not_live", "not_recording"],
+  unmute: ["not_live", "not_recording"],
+};
+
 export function callRoutes(r: Router<ApiApp>): void {
   r.add(
     "POST",
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. `engines` lists the models of this call's final pass, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`, or `qwen` and `parakeet`), instead of `asr.final.engines`; it is kept in the call's log, so a pass after a restart runs them too. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -153,10 +184,32 @@ export function callRoutes(r: Router<ApiApp>): void {
         "live?": "string",
         "review?": "string",
         "reviewEvery?": "number",
+        "engines?": "string[]",
         "attach?": "boolean",
       },
       ok: 201,
       alsoOk: [200],
+      reply: {
+        type: "object",
+        properties: {
+          call: { type: "string" },
+          folder: { type: "string" },
+          part: { type: "integer" },
+          url: {
+            type: ["string", "null"],
+            description:
+              "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call.",
+          },
+        },
+        required: ["call", "folder", "part", "url"],
+      },
+      errors: {
+        400: ["bad_term", "bad_workspace"],
+        403: ["permission"],
+        409: ["already_recording", "cancelled"],
+        422: ["bad_field"],
+        503: ["capture_failed", "models_missing", "quitting"],
+      },
     },
     async (c) => {
       const b = await c.body<{
@@ -170,6 +223,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         live?: unknown;
         review?: unknown;
         reviewEvery?: unknown;
+        engines?: unknown;
         attach?: boolean;
       }>();
       if (b.live !== undefined && (typeof b.live !== "string" || !isLiveCallSetting(b.live))) {
@@ -197,6 +251,19 @@ export function callRoutes(r: Router<ApiApp>): void {
           { field: "reviewEvery" },
         );
       }
+      const engines = b.engines;
+      if (
+        engines !== undefined &&
+        (!Array.isArray(engines) ||
+          !engines.every((e) => typeof e === "string" && finalModelOf(e) !== null))
+      ) {
+        throw new HttpError(
+          422,
+          "bad_field",
+          `engines is a list of ${FINAL_MODELS.filter((m) => m !== "auto").join(", ")}, qwen or parakeet`,
+          { field: "engines" },
+        );
+      }
       const vocab = [];
       for (const term of b.vocab ?? []) {
         const bad = validateTerm(term);
@@ -215,6 +282,13 @@ export function callRoutes(r: Router<ApiApp>): void {
         live: b.live as string | undefined,
         review: b.review as string | undefined,
         reviewEvery: every as number | undefined,
+        ...(engines
+          ? {
+              engines: (engines as string[]).map((e) =>
+                finalModelId(finalModelOf(e) as FinalModel),
+              ),
+            }
+          : {}),
         attach: b.attach === true,
       });
       if (!res.ok) return outcome(res);
@@ -226,7 +300,7 @@ export function callRoutes(r: Router<ApiApp>): void {
           ...brief,
           part: res.part,
           folder: res.folder,
-          url: `akou://call/${id}`,
+          url: null,
         });
       }
       return json(201, {
@@ -234,7 +308,9 @@ export function callRoutes(r: Router<ApiApp>): void {
         folder: res.folder,
         part: res.part,
         firstAudioMs: res.startMs,
-        url: `akou://call/${res.call}`,
+        // Always null (PG-U1): nothing registers `akou://`, and `/v1` never drops a field. A
+        // client that wants the window on this call asks `POST /window {call}`.
+        url: null,
       });
     },
   );
@@ -302,6 +378,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: CALL_ID },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const call = await callOf(c);
@@ -320,6 +397,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "title?": "string", "workspace?": "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field"] }),
     },
     async (c) => {
       const b = await c.body<{ title?: string; workspace?: string }>();
@@ -452,6 +530,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         params: { id: CALL_ID },
         body: {},
         ok: 200,
+        errors: errorsOf(LIVE_REF_ERRORS, { 409: CONTROL_REFUSALS[name] }),
       },
       async (c) => {
         await c.body();
@@ -475,6 +554,18 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "force?": "boolean" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, {
+        403: ["permission"],
+        409: [
+          "already_recording",
+          "cancelled",
+          "locked",
+          "not_restartable",
+          "restart_in_progress",
+          "stale_restart",
+        ],
+        503: ["capture_failed"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ force?: boolean }>();
