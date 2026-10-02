@@ -4,7 +4,8 @@
  * removes `runtime.json` at once, as the real app does before its process ends, and exits 1.5 s
  * later (`--linger MS` sets it). Its helper child never exits on its own. `--harness FILE` also
  * starts a child that stands in for an agent the app started: it runs `akou quit` itself, writes
- * the exit code and output to FILE, and stays. Prints the pids, then `ready`.
+ * the exit code and output to FILE, and stays. `--recording FILE` makes the helper one that
+ * records into FILE. Prints the pids, then `ready`.
  */
 
 import { spawn } from "node:child_process";
@@ -44,7 +45,17 @@ writeFileSync(
   runtime,
   `${JSON.stringify({ pid: process.pid, port: server.port, version: "0.0.0-quit" })}\n`,
 );
-const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+// `--recording FILE`: the helper records like a capture helper (`run --out FILE`).
+const recording = arg("--recording");
+const helper = recording
+  ? spawn(
+      process.execPath,
+      [join(import.meta.dir, "growing-helper.ts"), "run", "--out", recording],
+      {
+        stdio: "ignore",
+      },
+    )
+  : spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 const out = arg("--harness");
 if (out) {
   const cli = join(import.meta.dir, "..", "..", "src", "main", "cli", "cli.ts");

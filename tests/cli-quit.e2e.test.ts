@@ -129,4 +129,45 @@ describe("[DK-M8] akou quit takes every process of the app down (akou-m23)", () 
     },
     30_000,
   );
+  test.skipIf(process.platform === "win32")(
+    "an app that never finishes quitting is stopped after the wait, and quit says so",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const a = await startApp(t.dir, ["--linger", "600000"]);
+      try {
+        const quit = await cliChild({ ...process.env, AKOU_HOME: t.dir }, ["quit"]);
+        expect(quit.err).toContain("akou: akou did not finish quitting within 20 s; stopped it");
+        expect(quit.out.trim()).toBe("akou has quit");
+        expect(quit.code).toBe(0);
+        expect(processAlive(a.app)).toBe(false);
+        expect(processAlive(a.helper)).toBe(false);
+      } finally {
+        a.kill();
+        t.cleanup();
+      }
+    },
+    45_000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "positive control: an app that never finishes quitting while a call records is never stopped",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const audio = join(t.dir, "part-1.opus");
+      const a = await startApp(t.dir, ["--linger", "600000", "--recording", audio]);
+      try {
+        const quit = await cliChild({ ...process.env, AKOU_HOME: t.dir }, ["quit"]);
+        expect(quit.code).toBe(70);
+        expect(quit.err).toContain(
+          `akou: akou did not finish quitting within 20 s and a call is still recording (capture helper pid ${a.helper}), so nothing was stopped; kill -KILL ${a.app} stops it by hand, the audio so far stays`,
+        );
+        expect(processAlive(a.app)).toBe(true);
+        expect(processAlive(a.helper)).toBe(true);
+      } finally {
+        a.kill();
+        t.cleanup();
+      }
+    },
+    45_000,
+  );
 });

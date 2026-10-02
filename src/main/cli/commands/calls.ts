@@ -23,7 +23,7 @@ import {
   ref,
   wall,
 } from "../context.ts";
-import { processTable, stopAll, stopList } from "../heal.ts";
+import { processTable, recordingBelow, stopAll, stopList } from "../heal.ts";
 
 const start: Command = {
   name: "start",
@@ -402,6 +402,9 @@ const enhance: Command = {
   },
 };
 
+/** How long `akou quit` waits for the app to finish quitting before it stops it. */
+const QUIT_WAIT_MS = 20_000;
+
 const quit: Command = {
   name: "quit",
   summary: "Stop the app cleanly (the live call is stopped and its log ended first)",
@@ -445,10 +448,23 @@ const quit: Command = {
     // Returns once every process of the app is gone, so a script can start it again straight
     // after: `runtime.json` goes before the process exits, and the launcher has outlived the app
     // before (akou-m23).
-    const deadline = performance.now() + 20_000;
+    const deadline = performance.now() + QUIT_WAIT_MS;
     const appAlive = () => ctx.client.runtime() !== null || (!!rt && processAlive(rt.pid));
     while (appAlive() && performance.now() < deadline) {
       await new Promise((res) => setTimeout(res, 50));
+    }
+    if (appAlive() && rt) {
+      // The app answered 202 and has not finished quitting: it is stopped, as the quit promised,
+      // unless a call is still recording, which nothing here ever ends.
+      const rec = await recordingBelow(await processTable(), rt.pid);
+      if (rec) {
+        const message = `akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s and a call is still recording (capture helper pid ${rec.pid}), so nothing was stopped; kill -KILL ${rt.pid} stops it by hand, the audio so far stays`;
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: false, running: true, message }));
+        else ctx.io.err(`akou: ${message}`);
+        return EXIT.software;
+      }
+      ctx.io.err(`akou: akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s; stopped it`);
+      await stopAll([rt.pid]);
     }
     let gone = !appAlive();
     if (gone) {
