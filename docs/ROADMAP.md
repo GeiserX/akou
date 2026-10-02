@@ -4,7 +4,7 @@ Each milestone has exit criteria you can check. A milestone is done when every c
 
 ## M0: gates (1 to 2 weeks)
 
-Each gate ends in a measured yes or no. Nothing else starts until every gate has a result, because two of them can change where capture runs.
+Each gate ends in a measured yes or no. The gates block the stable release, not development: a release without a prerelease part (1.0.0 or later) fails unless the summary table of [gates/M0-results.md](gates/M0-results.md) records a Pass for every gate from G1 to G8 (`scripts/stamp-version.ts`, [CI-28](CI-CD.md)). Prereleases never wait on a gate. G3 and G4 stay blockers, because their results can change where capture runs.
 
 | # | Gate | Pass criterion | If it fails |
 |---|---|---|---|
@@ -25,11 +25,15 @@ Results so far, on the reference Mac mini (M4, macOS 26.6, SIP off), are in [gat
 - G6: pass on the M-series half. Real-time factor 0.081 for both channels, committed line 1.02 s median and 1.14 s worst after the utterance ends. The 4-core x64 half is open.
 - G8: pass. Cold p95 193 ms over 20 separate app launches, warm p95 159 ms. The first tap after a reboot is not measured.
 
-Also in M0: pin ElectroBun 2.0.1 with its bundled Bun 1.4.0 for the app runtime, and pin Hutch to the version whose `hutch --version` produced the working signed build; re-run `soak.ts` on Bun and Cottontail and keep the output; verify the `Info.plist` patch and re-sign; verify both sherpa dylibs land in the bundle; confirm the WebKit GPU helper exclusion removes the window's audio from the call channel.
+Status on main: the summary table in [gates/M0-results.md](gates/M0-results.md) is the current verdict. G5, G6 (M-series half) and G8 pass; G3 is partial; G4 is partial since its re-run after the capture fixes; G1, G2 and G7 have no recorded result. Every release so far is a 0.x prerelease, which the gates do not block.
+
+Also in M0: pin ElectroBun 2.0.1 with its bundled Bun 1.4.0 for the app runtime, and pin Hutch to the version whose `hutch --version` produced the working signed build; re-run the soak ([TESTING.md](TESTING.md) TS-24, not built yet) on Bun and Cottontail and keep the output; verify the `Info.plist` patch and re-sign; verify both sherpa dylibs land in the bundle; confirm the WebKit GPU helper exclusion removes the window's audio from the call channel.
 
 ## M1: macOS v0.1, replaces hark and hark-viewer (4 to 6 weeks)
 
-In: the capture helper for macOS (system, per-app with stop when every tapped app exits, mic, mute, pause, dead-call monitor, stall recovery, device watch, keep-awake, bounded teardown); stereo Opus; the event log with parts, pauses, clocks and crash recovery; live transcription with the provisional line; live speaker clusters, names, merge and unmerge; the final pass with whole-call diarization and name mapping; window parity with hark-viewer plus notepad, ask box (excerpts plus the harness provider), speaker chips, level meters, playback; query engine (header, memo slot, recency, BM25, vocabulary, wall-clock citations, cursors); vocabulary layers 1 and 2 (the YAML files, decode biasing on Parakeet with the `bpe.vocab` built from the model's tokenizer, read-time correction in the fold, `vocab.*` events, "Fix this word", `--vocab` on start, the `vocab` CLI, `/vocab` routes and `akou_vocab_*` tools, import of the older list formats, the nightly vocabulary evaluation); providers `harness`, `openai-compatible`, `anthropic`, `none`; CLI, HTTP API with the security suite, MCP, the skill and `akou skill install`; export folder and hooks; `akou import hark-viewer`; `akou doctor`; signed and notarized DMG with the updater; the cask, pushed to the tap with a fine-scoped token.
+In: the capture helper for macOS (system, per-app with stop when every tapped app exits, mic, mute, pause, dead-call monitor, stall recovery, device watch, keep-awake, bounded teardown); stereo Opus; the event log with parts, pauses, clocks and crash recovery; live transcription with the provisional line; live speaker clusters, names, merge and unmerge; the final pass with whole-call diarization and name mapping; window parity with hark-viewer plus notepad, ask box (excerpts plus the harness provider), speaker chips, level meters, playback; query engine (header, memo slot, recency, BM25, vocabulary, wall-clock citations, cursors); vocabulary layers 1 and 2 (the YAML files, decode biasing on Parakeet with the `bpe.vocab` built from the model's tokenizer, read-time correction in the fold, `vocab.*` events, "Fix this word", `--vocab` on start, the `vocab` CLI, `/vocab` routes and `akou_vocab_*` tools, import of the older list formats, the nightly vocabulary evaluation); providers `harness`, `openai-compatible`, `anthropic`, `none`; CLI, HTTP API with the security suite, MCP, the skill and `akou skill install`; export folder and hooks; `akou import hark-viewer`; `akou doctor`; the DMG with the updater; the cask, pushed to the tap with a fine-scoped token. Builds are unsigned for now (ad-hoc signed on macOS): Developer ID signing and notarization moved to [Later](#later-on-demand).
+
+Status on main: the 0.x prereleases ship the macOS capture helper, the event log, live and final transcription, speaker labels and names, the window with notepad and ask box, the query engine, vocabulary layers 1 and 2, the four providers, the CLI, the HTTP API, MCP, the skill and `akou skill install`, export and hooks, `akou import hark-viewer` and `akou doctor`. The cask ([CI-25](CI-CD.md)) and the updater wiring ([DK-U1](ux/DESKTOP.md)) are not built.
 
 The hardware release checklist includes the Bluetooth probe-click listening test ([TRAPS](TRAPS.md), [DESIGN risk F12](DESIGN.md#12-risks-and-falsifiers)).
 
@@ -43,7 +47,6 @@ Exit criteria:
 - [ ] Start p95 under 1 s warm and 3 s cold, measured on the release build.
 - [ ] Pack build p95 under 50 ms on a synthetic 3-hour log.
 - [ ] Replay evaluation: the answering segment is in the pack for at least 85 % of questions over 5 real calls with 30 questions each (the first calls are the author's own; the fixtures are not committed).
-- [ ] Grant survival across one signed update, on hardware.
 - [ ] One week of the author's real calls with the old skill retired.
 - [ ] `akou import hark-viewer` converts every part of a multi-part predecessor folder and the result answers a question correctly.
 - [ ] Every version string equals the tag in the release job.
@@ -55,6 +58,8 @@ Exit criteria:
 ## M2: the notes loop (2 to 3 weeks)
 
 In: enhanced notes with templates, "Enhance so far", the citation check, re-enhance after the final layer, rolling memo (provider-driven; opt-in for the harness), presets, harness session reuse (`--resume`), the undo-stop toast while the meeting app holds the microphone, optional echo cancellation on the recognizer's copy of the mic, the signed webhook, `docs/providers.md` with the terms-of-service statement. Vocabulary layer 3: the post-call pass on the provider (same policy as Enhance), `vocab.propose` events, the "Words to review" list, `akou vocab pass`, and the `akou-vocab` learning skill (calendar attendees before the call, documents and repositories, exports, web confirmation of spellings, corrections becoming heard forms).
+
+Status on main: the five templates, the citation check, re-enhance after the final layer, the rolling memo, harness session reuse, the signed webhook and vocabulary layer 3 (the post-call pass, `vocab.propose` events, "Words to review", `akou vocab pass` and the `akou-vocab` skill) are built. Enhance stays reachable through `akou enhance`, the API and MCP, and is hidden in the window ([WINDOW.md](ux/WINDOW.md#63-enhanced)). Optional echo cancellation is not built.
 
 Exit criteria:
 
@@ -68,9 +73,22 @@ Exit criteria:
 - [ ] The learning skill, given an invite and a folder of documents, proposes attendees and product names with web-confirmed spellings and adds nothing as confirmed without the user's yes.
 - [ ] Stacked layers on the real-call clips: at least 26 of 30 after the pass (layers 1 and 2 alone measured 28 with an in-sample table; the pass must reach 26 with no table).
 
+## M-UX: the UX principles
+
+In: the ranked [P0 list](ux/PRINCIPLES.md#the-p0-list), then the P1 rows of the surface docs ([WINDOW](ux/WINDOW.md), [DESKTOP](ux/DESKTOP.md), [CLI](ux/CLI.md), [PROGRAMMABILITY](ux/PROGRAMMABILITY.md), [SERVER](ux/SERVER.md), [DICTATION](ux/DICTATION.md), [TESTING](TESTING.md), [CI-CD](CI-CD.md)). This milestone points at those ids and does not copy them: each id's priority, acceptance and status live in its owning doc.
+
+Exit criteria:
+
+- [ ] Every id in the P0 list has its acceptance recorded in its owning doc.
+- [ ] Every P1 row in the surface docs has its acceptance recorded in its owning doc.
+
+Status on main: the P0 list is mostly built, and most P1 rows are still partial or missing. The status cell of each id in its owning doc is the record.
+
 ## M3: Windows (3 to 4 weeks)
 
 In: the capture helper for Windows (process loopback in exclude mode on the app tree, endpoint loopback fallback, mic, device notifications, `Pro Audio` thread priority, `SetThreadExecutionState`), the installer, autostart, code signing (SignPath or Azure Trusted Signing; unsigned with a documented step until then), the updater test.
+
+Status on main: the Windows capture helper (process loopback in exclude mode, endpoint loopback fallback, mic) is built and recorded in CI on a virtual cable, and the release ships a Windows CLI binary. The installer, autostart, code signing and the updater test are not built.
 
 Exit criteria:
 
@@ -85,6 +103,8 @@ Exit criteria:
 
 In: the capture helper for Linux (PipeWire default source and sink monitor, PulseAudio fallback, logind inhibitor), AppImage, `.deb`, the CLI-only tarball (`bun build --compile` on Bun 1.4.2 or newer, with an ad-hoc `codesign` and `codesign --verify --strict` step), the systemd user unit, the `local-link` share transport with the visible pill and audit events, Wayland hotkey through the portal where available.
 
+Status on main: the Linux capture helper (over the PulseAudio protocol, which PipeWire and PulseAudio both serve), the CLI-only binary in the release and the `local-link` share link with its pill are built. AppImage, `.deb` and the systemd user unit are not.
+
 Exit criteria:
 
 - [ ] `capture-linux` CI job: null sink plus virtual source, left = mic tone, right = call tone, skew under 20 ms.
@@ -95,6 +115,7 @@ Exit criteria:
 
 ## Later, on demand
 
+- Developer ID signing and notarization on macOS, so the grants survive an update. Exit criterion: grant survival across one signed update, on hardware. The release workflow already reads the Developer ID secrets when they exist.
 - The self-hosted hub (`hub` transport) when someone needs viewers who cannot reach the laptop.
 - Embeddings through the provider, only if the replay evaluation falls under 85 %.
 - Per-app capture on Linux.

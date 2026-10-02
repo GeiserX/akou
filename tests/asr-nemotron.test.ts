@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import type { SpeakerTurn } from "../src/main/asr/engine.ts";
@@ -130,6 +130,26 @@ describe("the final pass's diarizer", () => {
     },
     30_000,
   );
+
+  test("a helper that has exited, not yet reaped, when its audio is written is judged by its own words, not the broken pipe", async () => {
+    // The race behind the CI flake, made certain. onLoad runs in the turn that writes the first
+    // frame: holding that turn until the helper has exited means the event loop has not seen the
+    // exit when the write starts. 70 s is more than the pipe takes at once, so the write answers
+    // with a promise that rejects with EPIPE while flush() answers 0; dropped, it failed the test
+    // as an unhandled error.
+    const t = tempDir();
+    cleanups.push(t.cleanup);
+    const mark = join(t.dir, "exited");
+    const d = new NemotronDiarizer(
+      spec(["--exit-mark", mark], join("/nonexistent", "model.onnx")),
+      () => {
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(mark) && Date.now() < deadline) Bun.sleepSync(5);
+        Bun.sleepSync(200);
+      },
+    );
+    await expect(d.process(tone(70, 0.1))).rejects.toThrow(/cannot load/);
+  }, 30_000);
 
   test("a helper that crashes mid-pass rejects; it never hangs the pass", async () => {
     const d = new NemotronDiarizer(spec(["--die-after", "1"]));
