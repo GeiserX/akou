@@ -47,7 +47,11 @@ const mcp: Command = {
   run: async (ctx) => {
     // Loaded only here, so the SDK never slows down the other commands.
     const { runMcpStdio } = await import("../mcp/server.ts");
-    await runMcpStdio({ client: ctx.client, version: ctx.version });
+    await runMcpStdio({
+      client: ctx.client,
+      version: ctx.version,
+      remote: !!ctx.io.env.AKOU_URL?.trim(),
+    });
     return EXIT.ok;
   },
 };
@@ -81,9 +85,10 @@ function help(): string {
     "",
     ...COMMANDS.map((c) => `  ${c.name.padEnd(w)}  ${c.summary}`),
     "",
-    "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 nothing live, 64 usage,",
-    "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission,",
-    "78 settings refuse it (`akou serve`, `akou dictate start`), 124 timed out (`akou wait`).",
+    "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 no call to act on,",
+    "64 usage, 65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording,",
+    "77 permission, 78 settings refuse it (`akou serve`, `akou dictate start`), 124 timed out",
+    "(`akou wait`), 130 interrupted by Ctrl-C.",
   ].join("\n");
 }
 
@@ -186,6 +191,8 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
       else io.err(`akou: ${err.message}`);
       return EXIT.unavailable;
     }
+    // Ctrl-C ended the command, not akou: the aborted request is no failure (CLI-21).
+    if (io.signal?.aborted) return EXIT.interrupted;
     const msg = (err as Error).message ?? String(err);
     if (json) io.out(JSON.stringify({ error: "software", message: msg }));
     else io.err(`akou: ${msg}`);
@@ -236,6 +243,10 @@ function stdinKeys(): Keys {
 }
 
 if (import.meta.main) {
+  // A reader that closed stdout (`akou events -f | head -3`) has what it wanted: stop, exit 0.
+  process.stdout.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EPIPE") process.exit(EXIT.ok);
+  });
   const ac = new AbortController();
   process.on("SIGINT", () => {
     if (ac.signal.aborted) process.exit(130);

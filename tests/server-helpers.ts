@@ -4,6 +4,7 @@
  * keeps its own copies; the web UI's and the server defaults' tests share these.
  */
 
+import { z } from "zod";
 import { KeyStore } from "../src/main/api/keys.ts";
 import type { AppRig } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -90,3 +91,53 @@ export async function asKey(
   });
   return answer(res);
 }
+
+/** The result of SV-J4, as a schema: no field missing, none extra. */
+export const RESULT = z
+  .object({
+    job_id: z.string().startsWith("job_"),
+    status: z.literal("done"),
+    text: z.string(),
+    language: z.string().nullable(),
+    language_confidence: z.number().nullable(),
+    duration_s: z.number().nonnegative(),
+    words: z.array(
+      z
+        .object({
+          w: z.string(),
+          s: z.number().nullable(),
+          e: z.number().nullable(),
+          c: z.number().min(0).max(1).nullable(),
+        })
+        .strict(),
+    ),
+    segments: z.array(
+      z
+        .object({ s: z.number(), e: z.number(), text: z.string(), speaker: z.string().nullable() })
+        .strict(),
+    ),
+    engine: z
+      .object({
+        name: z.literal("akou"),
+        version: z.string(),
+        preset: z.string(),
+        models: z.array(z.string()).min(1),
+      })
+      .strict(),
+    confidence: z.number().min(0).max(1).nullable(),
+    skipped: z.array(z.object({ s: z.number(), e: z.number(), reason: z.string() }).strict()),
+    speakers: z
+      .object({ asked: z.boolean(), labelled: z.boolean(), error: z.string().nullable() })
+      .strict(),
+    warnings: z.array(z.string()),
+    metadata: z.unknown(),
+    // Wall seconds per stage (akou-5an.115).
+    timings: z
+      .object({
+        decode_s: z.number().nonnegative(),
+        diarize_s: z.number().nonnegative().nullable(),
+        transcribe_s: z.number().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();

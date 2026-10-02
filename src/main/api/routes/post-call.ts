@@ -31,9 +31,17 @@ import {
 import { chooseTemplate, type Template, TemplateError } from "../../notes/templates.ts";
 import { reasonText } from "../../query/ask.ts";
 import type { CallQuery } from "../../query/context.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf } from "./common.ts";
+import {
+  CALL_ID,
+  CALL_REF_ERRORS,
+  callId,
+  callOf,
+  LIVE_REF_ERRORS,
+  WRITE_ERRORS,
+} from "./common.ts";
 
 async function exclusive(id: string, fn: () => Promise<Response>): Promise<Response> {
   const r = await enhanceExclusive(id, fn);
@@ -108,6 +116,11 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       doc: "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced.",
       body: { "force?": "boolean", "model?": "string" },
       ok: 202,
+      errors: errorsOf(CALL_REF_ERRORS, {
+        409: ["already_final", "final_running", "not_ended"],
+        422: ["bad_field"],
+        501: ["final_unavailable"],
+      }),
     }),
     async (c) => {
       const b = await c.body<{ force?: boolean; model?: unknown }>();
@@ -129,6 +142,12 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       doc: "Write the call's enhanced notes with the configured provider, from the transcript and the user's notepad, in a template's sections, citing the transcript. With no provider, an agent writes them with enhanced.context and enhanced.put.",
       body: { "template?": "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_template"],
+        409: ["enhance_running"],
+        499: ["cancelled"],
+        503: ["provider_unavailable"],
+      }),
     }),
     async (c) => {
       const b = await c.body<{ template?: string }>();
@@ -207,6 +226,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       doc: "What an agent needs to write the enhanced notes itself: the instructions, the input built from the transcript and the notepad, and the log position it covers. Send the result with enhanced.put.",
       query: { template: { type: "string", doc: "The template to use; default: the call's own." } },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 400: ["bad_template"] }),
     }),
     async (c) => {
       const id = callId(c);
@@ -239,6 +259,10 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       doc: "Store enhanced notes an agent wrote, covering the log up to `coversSeq`. Citations are checked against the transcript and the user's notes are kept.",
       body: { markdown: "string", coversSeq: "integer", "template?": "string" },
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_field", "bad_template"],
+        409: ["enhance_running"],
+      }),
     }),
     async (c) => {
       const b = await c.body<{ markdown: string; coversSeq: number; template?: string }>();
@@ -292,6 +316,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
         rev: { type: "integer", min: 1, max: 1_000_000, doc: "One revision; default: the latest." },
       },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     }),
     async (c) => {
       const call = await callOf(c);
@@ -333,6 +358,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       doc: "The audio of one part of the call, as Ogg. Honours `Range`.",
       params: { part: "The part number, from 1." },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 416: ["bad_range"] }),
       type: "audio",
     }),
     async (c) => {
@@ -358,7 +384,11 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       }
       const rg = parseRange(range, size);
       if (!rg) {
-        return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}` } });
+        return json(
+          416,
+          { error: "bad_range", message: `the range is outside the ${size} bytes of part ${n}` },
+          { "content-range": `bytes */${size}` },
+        );
       }
       return new Response(file.slice(rg.start, rg.end + 1), {
         status: 206,

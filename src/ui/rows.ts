@@ -274,6 +274,54 @@ export function selectBox(o: {
   return select;
 }
 
+/**
+ * A select of named values with one more choice last, `other`, which shows a field to type a value
+ * of the user's own (a model's id). A value the list does not hold shows as itself. The value lives
+ * in a hidden input carrying the setting's key, so a save reads it like any field; a pick, or a
+ * value typed, sets it and fires `change`.
+ */
+export function selectOrTyped(o: {
+  id: string;
+  key: string;
+  label: string;
+  options: readonly (readonly [value: string, label: string])[];
+  value: string;
+  other: string;
+  placeholder: string;
+}): HTMLElement {
+  const select = selectBox({ id: o.id, label: o.label, options: o.options, value: o.value });
+  select.append(h("option", { value: "~" }, o.other));
+  select.value = o.value;
+  const typed = field({
+    id: `${o.id}-typed`,
+    label: o.other.replace(/…$/, ""),
+    value: "",
+    placeholder: o.placeholder,
+  });
+  typed.hidden = true;
+  const hidden = h("input", { type: "hidden", value: o.value });
+  hidden.dataset.key = o.key;
+  const write = (v: string) => {
+    if (!v || v === hidden.value) return;
+    hidden.value = v;
+    hidden.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  select.addEventListener("change", (e) => {
+    e.stopPropagation();
+    typed.hidden = select.value !== "~";
+    if (select.value === "~") {
+      typed.focus();
+      return;
+    }
+    write(select.value);
+  });
+  typed.addEventListener("change", (e) => {
+    e.stopPropagation();
+    write(typed.value.trim());
+  });
+  return h("span", { class: "pg-ctl-group" }, typed, select, hidden);
+}
+
 /** A text, password or number field; a number's unit follows it. */
 export function field(o: {
   id: string;

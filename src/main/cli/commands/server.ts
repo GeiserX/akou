@@ -30,9 +30,9 @@ function refused(ctx: Ctx, code: string, message: string, exit: number): number 
 
 const keys: Command = {
   name: "keys",
-  summary: "Create, list or revoke the API keys of server mode (no app needed)",
+  summary: "Create, list, update or revoke the API keys of server mode (no app needed)",
   usage:
-    "akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys revoke ID   [--json]",
+    "akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]",
   flags: {
     name: { type: "string", value: "NAME", desc: "create: who the key is for, shown in the audit" },
     scope: { type: "string", value: "S", desc: "create: jobs (default) or admin" },
@@ -40,12 +40,13 @@ const keys: Command = {
       type: "string",
       repeat: true,
       value: "HOST",
-      desc: "create: a host its callback URLs may name; repeat it, or `*` for any public host",
+      desc: "create, update: a host its callback URLs may name; repeat it, or `*` for any public host",
     },
   },
   examples: [
     "akou keys create --name archive --callback-host archive.lan",
     "akou keys list",
+    "akou keys update key_0123abcd --callback-host archive.lan --callback-host viewer.lan",
     "akou keys revoke key_0123abcd",
   ],
   run: async (ctx, p) => {
@@ -96,6 +97,25 @@ const keys: Command = {
       }
       return EXIT.ok;
     }
+    if (sub === "update") {
+      const hosts = repeated(p, "callback-host");
+      if (!id || rest.length > 0 || hosts.length === 0) {
+        return usage(ctx, "keys update needs one key id and at least one --callback-host");
+      }
+      let k: ReturnType<KeyStore["setCallbackHosts"]>;
+      try {
+        k = store(ctx).setCallbackHosts(id, hosts);
+      } catch (err) {
+        if (err instanceof KeyError) return refused(ctx, "bad_key", err.message, EXIT.usage);
+        throw err;
+      }
+      if (!k) {
+        return refused(ctx, "not_found", `no key ${id}; \`akou keys list\` shows them`, EXIT.usage);
+      }
+      if (ctx.json) ctx.io.out(JSON.stringify(k));
+      else ctx.io.out(`updated ${k.id}; callback hosts: ${k.callback_hosts.join(", ")}`);
+      return EXIT.ok;
+    }
     if (sub === "revoke") {
       if (!id || rest.length > 0) return usage(ctx, "keys revoke needs one key id");
       if (!store(ctx).revoke(id)) {
@@ -105,7 +125,7 @@ const keys: Command = {
       else ctx.io.out(`revoked ${id}`);
       return EXIT.ok;
     }
-    return usage(ctx, "keys needs create, list or revoke");
+    return usage(ctx, "keys needs create, list, update or revoke");
   },
 };
 

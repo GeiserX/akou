@@ -18,7 +18,7 @@
  *   - the two recognition Workers, the browser pages and the `akou` command line (a
  *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
  *     first;
- *   - the shipped note templates;
+ *   - the shipped note templates and ask presets;
  *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
  *     `native/akou-diarize` (Nemotron on a statically linked ONNX Runtime; no library beside it).
@@ -63,6 +63,15 @@ export const BUILT = {
   /** The `akou` command the app carries, for "Install Command-Line Tool…" (DK-M6). */
   cli: "dist/app-cli/akou",
 } as const;
+
+/**
+ * Where the app's updater reads `stable-macos-arm64-update.json` and the bundle it names
+ * (docs/CI-CD.md CI-23): the assets of one fixed release, `update-feed`, which every tagged release
+ * replaces. Not `releases/latest/download`: GitHub's latest release skips prereleases, and every
+ * 0.x release is one.
+ */
+export const FEED_TAG = "update-feed";
+export const UPDATE_FEED = `https://github.com/GeiserX/akou/releases/download/${FEED_TAG}`;
 
 type Exists = (path: string) => boolean;
 
@@ -166,6 +175,7 @@ export default {
       "src/ui/draft.html": "views/draft/index.html",
       "src/ui/draft.css": "views/draft/draft.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
+      "src/main/notes/presets": `${MAIN_OUT}/presets`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       "src/main/window/tray": `${MAIN_OUT}/tray`,
       // The licence and the third-party credits, which the bundled word lists' CC BY-SA 4.0 and
@@ -188,6 +198,9 @@ export default {
     win: { bundleCEF: false, defaultRenderer: "native" },
     linux: { bundleCEF: false, defaultRenderer: "native" },
   },
+  // No delta patches: the updater falls back to the full bundle, and a patch would make every
+  // packaging dry run download the previous bundle to diff against.
+  release: { baseUrl: UPDATE_FEED, generatePatch: false },
   // A tray app: closing the window never quits it.
   runtime: { exitOnLastWindowClosed: false },
   scripts: { postBuild: "./scripts/post-build.ts", postWrap: "./scripts/post-wrap.ts" },

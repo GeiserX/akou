@@ -115,6 +115,152 @@ describe("following a call", () => {
   });
 });
 
+/** A call of 200 `seg` events with 3 `health` among them (seqs 10, 100, 150), ending on a seg. */
+function noisyLog(): LogEvent[] {
+  const HEALTH = new Set([10, 100, 150]);
+  return Array.from(
+    { length: 203 },
+    (_, i) => ({ seq: i + 1, t: i + 1, type: HEALTH.has(i + 1) ? "health" : "seg" }) as LogEvent,
+  );
+}
+
+/** Reads a stream until `done(text)` or `ms` pass, then closes it. */
+async function readStream(res: Response, done: (text: string) => boolean, ms = 3000) {
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  const dec = new TextDecoder();
+  let text = "";
+  const until = performance.now() + ms;
+  while (!done(text) && performance.now() < until) {
+    const next = await Promise.race([
+      reader.read(),
+      Bun.sleep(Math.max(0, until - performance.now())).then(() => null),
+    ]);
+    if (next === null || next.done) break;
+    text += dec.decode(next.value, { stream: true });
+  }
+  await reader.cancel();
+  return text;
+}
+
+/** The SSE records of a stream's text: each with its id, event name and data. */
+function records(text: string): { id?: string; event?: string; data?: string }[] {
+  return text
+    .split("\n\n")
+    .filter((r) => r.trim() !== "" && !r.startsWith(":") && !r.startsWith("retry:"))
+    .map((r) => {
+      const out: { id?: string; event?: string; data?: string } = {};
+      for (const line of r.split("\n")) {
+        const at = line.indexOf(": ");
+        if (at > 0) out[line.slice(0, at) as "id" | "event" | "data"] = line.slice(at + 2);
+      }
+      return out;
+    });
+}
+
+describe("[PG-S2] the event stream filtered by type on the server", () => {
+  test("types=health over 200 seg and 3 health events delivers exactly the 3; the cursor moves past the rest", async () => {
+    const f = fakeApp(noisyLog());
+    const ctl = new AbortController();
+    const res = await route(f.app, "/calls/c1/stream?after=0&types=health", {
+      signal: ctl.signal,
+    });
+    const text = await readStream(res, (t) => /^id: 203$/m.test(t));
+    ctl.abort();
+    const recs = records(text);
+    const delivered = recs.filter((r) => r.event === "event");
+    expect(delivered.map((r) => JSON.parse(r.data as string).seq)).toEqual([10, 100, 150]);
+    expect(delivered.every((r) => JSON.parse(r.data as string).type === "health")).toBe(true);
+    // The skipped events come as their id alone, which moves Last-Event-ID and delivers nothing:
+    // the last id is the last event, so a reconnect from it replays none of the 200.
+    expect(recs.at(-1)).toEqual({ id: "203" });
+    expect(recs.filter((r) => r.event === undefined && r.data !== undefined)).toEqual([]);
+
+    // A reconnect from that id gets nothing more.
+    const ctl2 = new AbortController();
+    const again = await route(f.app, "/calls/c1/stream?after=0&types=health", {
+      headers: { "last-event-id": "203" },
+      signal: ctl2.signal,
+    });
+    const rest = await readStream(again, () => false, 400);
+    ctl2.abort();
+    expect(records(rest)).toEqual([]);
+
+    // Positive control: without the filter every one of the 203 is delivered.
+    const ctl3 = new AbortController();
+    const all = await route(f.app, "/calls/c1/stream?after=0", { signal: ctl3.signal });
+    const allText = await readStream(all, (t) => /^id: 203$/m.test(t));
+    ctl3.abort();
+    expect(records(allText).filter((r) => r.event === "event").length).toBe(203);
+  });
+
+  test("ephemeral=none drops the levels; without it they come", async () => {
+    const f = fakeApp([EV(1)]);
+    // A live call with levels, and a view the follower's `read` can ask, so the stream stays open.
+    Object.assign(f.app, {
+      levels: () => ({ mic: -20, call: -30, at: 0 }),
+      call: async () => ({
+        view: {
+          call: { tz: "UTC" },
+          provisional: { current: () => [] },
+          lines: () => [],
+          changesSince: () => ({ cursor: 0, all: false, ids: [] }),
+        },
+      }),
+    });
+    const level = (t: string) => /^event: level$/m.test(t);
+    const ctl = new AbortController();
+    const on = await route(f.app, "/calls/c1/stream?after=0", { signal: ctl.signal });
+    expect(level(await readStream(on, level, 2000))).toBe(true);
+    ctl.abort();
+    const ctl2 = new AbortController();
+    const off = await route(f.app, "/calls/c1/stream?after=0&ephemeral=none", {
+      signal: ctl2.signal,
+    });
+    const text = await readStream(off, level, 800);
+    ctl2.abort();
+    expect(level(text)).toBe(false);
+    expect(/^id: 1$/m.test(text)).toBe(true);
+  });
+
+  test("the long poll keeps the types asked for, moves its cursor past the rest, and waits for a kept one", async () => {
+    const f = fakeApp(noisyLog());
+    const res = await route(f.app, "/calls/c1/events?after=0&types=health");
+    const body = (await res.json()) as { events: LogEvent[]; cursor: number };
+    expect(body.events.map((e) => e.seq)).toEqual([10, 100, 150]);
+    expect(body.cursor).toBe(203);
+
+    // A seg arrives during the wait and is passed over; the health after it ends the wait.
+    setTimeout(() => f.append({ seq: 204, t: 204, type: "seg" } as LogEvent), 100);
+    setTimeout(() => f.append({ seq: 205, t: 205, type: "health" } as LogEvent), 300);
+    const t0 = performance.now();
+    const waited = await route(f.app, "/calls/c1/events?after=203&wait=5&types=health");
+    const wb = (await waited.json()) as { events: LogEvent[]; cursor: number };
+    expect(wb.events.map((e) => e.seq)).toEqual([205]);
+    expect(wb.cursor).toBe(205);
+    expect(performance.now() - t0).toBeLessThan(3000);
+
+    // Only skipped events until the wait ends: none kept, and the cursor past them.
+    setTimeout(() => f.append({ seq: 206, t: 206, type: "seg" } as LogEvent), 100);
+    const quiet = await route(f.app, "/calls/c1/events?after=205&wait=1&types=health");
+    expect(await quiet.json()).toEqual({ call: "c1", events: [], cursor: 206 });
+  });
+
+  test("an unknown type is refused, not silently matched by nothing", async () => {
+    const f = fakeApp(noisyLog());
+    for (const path of ["/calls/c1/events?types=health,helth", "/calls/c1/stream?types=helth"]) {
+      try {
+        await route(f.app, path);
+        throw new Error(`${path} was not refused`);
+      } catch (err) {
+        expect([(err as { status?: number }).status, (err as { code?: string }).code]).toEqual([
+          400,
+          "bad_param",
+        ]);
+      }
+    }
+  });
+});
+
 describe("a request during recovery", () => {
   test("approving a call's proposals waits for the calls to be indexed", async () => {
     let indexed = false;
