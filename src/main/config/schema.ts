@@ -451,7 +451,7 @@ export const SETTINGS = {
     type: "string[]",
     default: [],
     apiWritable: false,
-    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). With `asr.accelerator` set to `cpu`, akou adds `--device none`, so the build must accept `--device` (llama.cpp from late 2024 on). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
   },
   "asr.diarizeHelper": {
     type: "string[]",
