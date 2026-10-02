@@ -266,13 +266,30 @@ pub fn devices(list: &crate::source::Endpoints) -> String {
                 .collect(),
         )
     };
-    Json::obj(vec![
+    let mut fields = vec![
         ("type", Json::str("devices")),
         ("backend", Json::str(list.backend)),
         ("inputs", side(&list.inputs)),
         ("outputs", side(&list.outputs)),
-    ])
-    .to_line()
+    ];
+    match &list.apps {
+        Ok(apps) => fields.push((
+            "apps",
+            Json::Arr(
+                apps.iter()
+                    .map(|a| {
+                        Json::obj(vec![
+                            ("id", Json::str(&a.id)),
+                            ("name", Json::str(&a.name)),
+                            ("pid", Json::Num(f64::from(a.pid))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        )),
+        Err(why) => fields.push(("apps_unavailable", Json::str(why))),
+    }
+    Json::obj(fields).to_line()
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +336,36 @@ mod tests {
 
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    #[test]
+    fn the_devices_line_lists_the_apps_or_says_why_there_are_none() {
+        use crate::source::{AudioApp, Endpoint, Endpoints};
+        let mut list = Endpoints {
+            backend: "coreaudio",
+            inputs: vec![Endpoint {
+                id: "mic-1".into(),
+                name: "Mic".into(),
+                default: true,
+            }],
+            outputs: vec![],
+            apps: Ok(vec![AudioApp {
+                id: "us.zoom.xos".into(),
+                name: "us.zoom.xos".into(),
+                pid: 300,
+            }]),
+        };
+        assert_eq!(
+            devices(&list),
+            r#"{"type":"devices","backend":"coreaudio","inputs":[{"id":"mic-1","name":"Mic","default":true}],"outputs":[],"apps":[{"id":"us.zoom.xos","name":"us.zoom.xos","pid":300}]}"#
+        );
+        list.apps = Err("not here".into());
+        let line = devices(&list);
+        assert!(
+            line.ends_with(r#""outputs":[],"apps_unavailable":"not here"}"#),
+            "{line}"
+        );
+        assert!(!line.contains(r#""apps":"#), "{line}");
     }
 
     #[test]

@@ -3,6 +3,7 @@
  * any `ApiClient`, real (a rig's app) or a stand-in that answers from a function.
  */
 
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import type { ApiClient, ApiResponse, RequestOptions } from "../src/main/cli/client.ts";
@@ -39,8 +40,8 @@ export interface ToolAnswer {
 }
 
 /** An MCP client named `name`, connected in process to a fresh akou MCP server over `api`. */
-export async function mcpClient(api: ApiClient, name = "claude-code") {
-  const server = createMcpServer({ client: api });
+export async function mcpClient(api: ApiClient, name = "claude-code", mode?: "app" | "server") {
+  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}) });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b);
   const client = new Client({ name, version: "1.0.0" });
@@ -73,6 +74,8 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_merge_speakers: { a: "c3", b: "c2" },
   akou_unmerge_speaker: { speaker: "c3" },
   akou_add_note: { text: "ship it friday" },
+  akou_edit_note: { id: "n0001", text: "ship it thursday" },
+  akou_delete_note: { id: "n0001" },
   akou_get_notes: {},
   akou_remember: { text: "Ben owns the deploy" },
   akou_forget: { id: "r0001" },
@@ -88,12 +91,24 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_enhance_context: {},
   akou_enhanced_put: { markdown: "- Ship it [#l000001]", coversSeq: 4 },
   akou_enhance: {},
+  akou_template_list: {},
+  akou_template_get: { name: "standup" },
+  akou_finalize: {},
   akou_rename_call: { title: "Q3 planning" },
   akou_list_calls: {},
   akou_get_call: { call: "last" },
   akou_export: { call: "last" },
+  akou_share_status: {},
+  akou_share_on: { expires: "2h" },
+  akou_share_off: {},
+  akou_open_window: { call: "last" },
+  akou_config_get: {},
   akou_dictation_list: {},
   akou_dictation_get: { id: "d1" },
+  akou_transcribe: { path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 },
+  akou_job_get: { id: "job_1", wait: 0 },
+  akou_jobs_list: {},
+  akou_devices: {},
 };
 
 /**
@@ -117,6 +132,34 @@ export function sampleApi(n = 3): ApiClient {
   }));
   const body = (method: string, path: string, o: RequestOptions): unknown => {
     if (path === "/status") return { app: { port: 1 }, ...PROVIDER_STATUS };
+    if (/^\/calls\/live\/notes\/n\d+$/.test(path)) {
+      return method === "PATCH" ? { note: { id: "n0001", rev: 1 } } : { ok: true };
+    }
+    if (path === "/templates") {
+      return {
+        dir: "/cfg/templates",
+        templates: ["general", "standup"],
+        details: [{ name: "standup", match: ["standup"], sections: ["Updates"], bundled: true }],
+      };
+    }
+    if (path.startsWith("/templates/")) {
+      return {
+        name: "standup",
+        match: ["standup"],
+        sections: ["Updates"],
+        bundled: true,
+        path: "/t/standup.md",
+        text: "---\nname: standup\n---\n## Updates\nOne bullet per speaker.\n",
+      };
+    }
+    if (path.endsWith("/finalize")) return { call: "c1", model: "qwen" };
+    if (path === "/share" && method === "GET") return { active: false, shares: [] };
+    if (path === "/share" && method === "POST") return { id: "s1", call: "c1", url: "http://x" };
+    if (path === "/share") return { ok: true, stopped: 1 };
+    if (path === "/window") return { ok: true };
+    if (path === "/config") {
+      return { file: "/cfg/config.json", settings: { "asr.live": "auto" }, set: {}, issues: [] };
+    }
     if (path === "/calls" && method === "POST") {
       return { call: "c1", folder: "/rec/c1", part: 1, firstAudioMs: 12, url: null };
     }
@@ -251,10 +294,41 @@ export function sampleApi(n = 3): ApiClient {
       model: "fake",
       ms: 12,
     });
+    // A machine has a handful of devices, however long its calls are.
+    if (path === "/devices") {
+      return {
+        backend: "fake",
+        inputs: [
+          { id: "mic-1", name: "Built-in Microphone", default: true },
+          { id: "mic-2", name: "Desk Mic", default: false },
+        ],
+        outputs: [{ id: "out-1", name: "Speakers", default: true }],
+      };
+    }
+    if (path === "/apps")
+      return { backend: "fake", apps: [{ id: "us.zoom.xos", name: "zoom", pid: 3 }] };
     if (path === "/dictations") {
       return { items: Array.from({ length: n }, (_, i) => dictation(i)), next_cursor: null };
     }
     if (path.startsWith("/dictations/")) return dictation(1);
+    // File jobs of a server (SI-7): a done job and its transcript, and the key's list.
+    const job = (i: number) => ({
+      id: `job_${i}`,
+      title: null,
+      status: "done",
+      preset: "fast",
+      model: "fake",
+      created_at: "2026-10-02T10:00:00.000Z",
+      finished_at: "2026-10-02T10:00:03.000Z",
+    });
+    const transcript = { job_id: "job_1", status: "done", text: say(0), segments: [] };
+    if (path === "/jobs" && method === "POST") return { ...job(1), result: transcript };
+    if (path === "/jobs") {
+      const limit = Number(o.query?.limit ?? 50);
+      return { jobs: Array.from({ length: Math.min(n, limit) }, (_, i) => job(i)), cursor: null };
+    }
+    if (path.endsWith("/result")) return transcript;
+    if (path.startsWith("/jobs/")) return job(1);
     return {};
   };
   // A new vocabulary entry answers 201, as the real route does.

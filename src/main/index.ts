@@ -79,13 +79,16 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import {
+  chooseFinalEngines,
   chooseFinalModel,
+  type DroppedEngine,
   type FinalChoice,
+  type FinalModel,
   finalModelId,
   finalModelOf,
 } from "./asr/final-model.ts";
 import type { FinalStep } from "./asr/final-text.ts";
-import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import { type FinalAudioSpec, finalizeCall, finalSpecName } from "./asr/finalize-worker.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
   chooseLiveSetup,
@@ -104,7 +107,6 @@ import {
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
-  modelNameFor,
   recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
@@ -137,6 +139,7 @@ import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
+import { type CaptureDevices, queryDevices } from "./capture/devices.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
 import {
@@ -203,6 +206,7 @@ import {
   reEnhanceState,
   storeEnhanced,
 } from "./notes/enhance.ts";
+import { listPresets, type Preset } from "./notes/presets.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
 import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
@@ -215,7 +219,10 @@ import {
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
 import {
+  type AutoChoice,
+  autoChoice,
   type Held,
+  hardwareChoice,
   kindOf,
   ModelRefused,
   ModelStore,
@@ -652,7 +659,7 @@ export class AkouApp implements ApiApp {
   private readonly runMode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
-  /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
+  /** File jobs (docs/ux/SERVER.md section 5), in both modes: the app takes them with its token. */
   private jobService: JobService | null = null;
   /**
    * The models on disk, their per-model downloads, last use, measured speed and the unused-days
@@ -701,7 +708,14 @@ export class AkouApp implements ApiApp {
     this.headless = o.headless ?? cfg.settings["app.headless"];
     this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
     this.keyStore =
-      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+      this.runMode === "server"
+        ? new KeyStore(
+            this.configDir,
+            // clock: the key store's injected clock, real in the app.
+            () => Date.now(),
+            (line) => this.log("info", line),
+          )
+        : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.appLog = o.supervise ? new AppLog(join(this.configDir, APP_LOG)) : null;
@@ -1157,6 +1171,7 @@ export class AkouApp implements ApiApp {
           pull.done.set(pull.file, p.bytes);
           // The progress rides the status push (DESKTOP DK-E2), at most once a second, so the
           // window's welcome follows it without polling `GET /models`.
+          // clock: throttles a progress push to once a second of real time.
           const now = Date.now();
           if (now - pushedAt < 1000) return;
           pushedAt = now;
@@ -1191,6 +1206,12 @@ export class AkouApp implements ApiApp {
   templates(): Template[] {
     return listTemplates(this.configDir, {
       onError: (msg) => this.log("warn", `template: ${msg}`),
+    });
+  }
+
+  presets(): Preset[] {
+    return listPresets(this.configDir, {
+      onError: (msg) => this.log("warn", `preset: ${msg}`),
     });
   }
 
@@ -1472,6 +1493,7 @@ export class AkouApp implements ApiApp {
     if (this.cfg.settings["export.dir"] === "") return;
     const t = this.reexports.get(id);
     if (t) clearTimeout(t);
+    // clock: debounces a re-export after edits, in real time.
     const timer = setTimeout(() => {
       this.reexports.delete(id);
       if (this.quitting || this.finals.has(id)) return;
@@ -1980,6 +2002,11 @@ export class AkouApp implements ApiApp {
     );
   }
 
+  /** `GET /devices`, `GET /apps`: the device query of the helper `capture.helper` names (PG-A8). */
+  devices(): Promise<CaptureDevices> {
+    return queryDevices(locateHelper(this.cfg.settings["capture.helper"]).command);
+  }
+
   /** What the API key is saved in: the Keychain, or null for the config file. */
   secretStore(): "keychain" | null {
     // A key the store refused at start is still in the file, and the page must not say otherwise.
@@ -2231,7 +2258,7 @@ export class AkouApp implements ApiApp {
 
   async call(id: string): Promise<CallController> {
     const c = await this.manager.open(id);
-    if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    if (!c) throw new HttpError(404, "not_found", `no call ${id}`, { call: id });
     await this.readyRead(c);
     return c;
   }
@@ -2383,18 +2410,39 @@ export class AkouApp implements ApiApp {
    * `asr.final.model`, never one whose files are missing.
    */
   /** `GET /models`'s `final`: the setting, the model it names, and what the next pass runs. */
-  finalModel(): { setting: string; named: string | null; next: string | null } | null {
+  finalModel(): {
+    setting: string;
+    named: string | null;
+    next: string | null;
+    engines: string[];
+  } | null {
     if (this.runMode === "server") return null;
     const setting = this.cfg.settings["asr.final.model"];
     const named = finalModelOf(setting);
+    const list = this.cfg.settings["asr.final.engines"];
+    // With a list the next pass runs the listed models that are here, fused when several.
+    const many = list.length > 0 ? chooseFinalEngines(list, this.finalContext()).models : null;
+    const next = many
+      ? many.length === 0
+        ? null
+        : many.length === 1
+          ? finalModelId(many[0] as FinalModel)
+          : `rover-conf(${many.map(finalModelId).join(",")})`
+      : ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model);
     return {
       setting,
       named: named ? finalModelId(named) : null,
-      next: ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model),
+      next,
+      engines: list.flatMap((v) => ((m) => (m ? [finalModelId(m)] : []))(finalModelOf(v))),
     };
   }
 
   finalChoice(asked?: string): FinalChoice {
+    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], this.finalContext());
+  }
+
+  /** What decides the final pass's models here. */
+  private finalContext(): LiveSetupContext {
     const ctx = this.liveContext();
     // A recognizer given on purpose (tests) stands for Parakeet: here with no test catalog, else
     // when the catalog's recognizer set is on disk, whatever that recognizer is called.
@@ -2402,10 +2450,7 @@ export class AkouApp implements ApiApp {
       this.o.models !== undefined
         ? this.givenRecognizer() || this.finalModelsPresent(false)
         : ctx.present(RECOGNIZER);
-    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], {
-      ...ctx,
-      present: (id) => (id === RECOGNIZER ? given : ctx.present(id)),
-    });
+    return { ...ctx, present: (id) => (id === RECOGNIZER ? given : ctx.present(id)) };
   }
 
   /**
@@ -2523,21 +2568,44 @@ export class AkouApp implements ApiApp {
         why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
-    // The engine first, so the presence check below is that engine's own.
-    const choice = this.finalChoice(asked);
-    const named = finalModelOf(asked);
+    // The engines first, so the presence check below is theirs. Several (`asr.final.engines`)
+    // unless this run names one model.
+    const list =
+      asked === undefined ? (c.view.call?.engines ?? this.cfg.settings["asr.final.engines"]) : [];
+    let picked: FinalModel[];
+    let dropped: DroppedEngine[] = [];
     const title = (m: string) => (m === "qwen" ? "Qwen" : "Parakeet");
-    // A model asked for by name for this run and not here: refused, never the other in its place.
-    if (named && choice.model !== named)
-      return { why: `${title(named)} cannot run this pass: ${choice.note}` };
-    if (!choice.model)
-      return { why: `no model can run the final pass: ${choice.note}`, unavailable: true };
-    const base = this.finalModels(choice.model === "qwen");
+    if (list.length > 0) {
+      const many = chooseFinalEngines(list, this.finalContext());
+      if (many.models.length === 0)
+        return {
+          why: `no model in asr.final.engines can run the final pass: ${many.dropped.map((d) => `${d.engine} is ${d.reason}`).join("; ")}`,
+          unavailable: true,
+        };
+      picked = many.models;
+      dropped = many.dropped;
+      for (const d of dropped)
+        this.log("info", `final ${id}: ${d.engine} does not run: ${d.reason}`);
+    } else {
+      const choice = this.finalChoice(asked);
+      const named = finalModelOf(asked);
+      // A model asked for by name for this run and not here: refused, never the other in its place.
+      if (named && choice.model !== named)
+        return { why: `${title(named)} cannot run this pass: ${choice.note}` };
+      if (!choice.model)
+        return { why: `no model can run the final pass: ${choice.note}`, unavailable: true };
+      if (choice.note) this.log("info", `final ${id}: runs ${title(choice.model)}: ${choice.note}`);
+      picked = [choice.model];
+    }
+    const base = this.finalModels(!picked.includes("parakeet"));
     if (!base) return { why: "the speech models are not downloaded", unavailable: true };
-    if (choice.note) this.log("info", `final ${id}: runs ${title(choice.model)}: ${choice.note}`);
-    const qwen = choice.model === "qwen";
-    const models: ModelSpec = qwen ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
-    const model = models.final?.engine ?? modelNameFor(models);
+    const qwen = picked.includes("qwen");
+    const models: ModelSpec = {
+      ...base,
+      ...(qwen ? { final: this.llamaSpec(QWEN_ASR) } : {}),
+      ...(picked.length > 1 ? { finals: picked.map(finalModelId) } : {}),
+    };
+    const model = finalSpecName(models);
     const ws = c.view.call?.workspace ?? "";
     // One Qwen pass at a time: this one waits for the one ahead of it.
     const ahead = qwen ? this.qwenLine : null;
@@ -2551,6 +2619,7 @@ export class AkouApp implements ApiApp {
     });
     const p = finalizeCall(c, {
       models,
+      ...(dropped.length > 0 ? { dropped } : {}),
       audio,
       vocab: this.vocabCache.get(ws),
       inThread: this.o.asrInThread,
@@ -2610,6 +2679,17 @@ export class AkouApp implements ApiApp {
   private ranModels(model: string, audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
+    // Several engines fused: each was used, and the pass's time is theirs together, so no one
+    // engine's speed is measured by it.
+    const fused = /^rover-[a-z]+\((.*)\)$/.exec(model)?.[1]?.split(",");
+    if (fused) {
+      const set = this.runningSet()
+        .map((m) => m.id)
+        .filter((m) => m !== RECOGNIZER || fused.includes(RECOGNIZER));
+      const q = fused.includes(QWEN_ASR) ? reviewModels("qwen", this.liveContext()) : [];
+      shelf.touch([...set, ...q]);
+      return;
+    }
     // On Qwen, Parakeet was not used (and may not be on disk).
     const qwen = model === QWEN_ASR;
     const set = this.runningSet()
@@ -2809,6 +2889,39 @@ export class AkouApp implements ApiApp {
     return jobs.obtainable(QWEN_ASR);
   }
 
+  /** The last `auto` verdict logged, so each change is logged once. */
+  private autoLogged = "";
+
+  /**
+   * What a job that names no model runs here, and why (SV-R2): `autoChoice` over the models on
+   * disk and the GPU `asr.accelerator` found. A recognizer given at start (tests) is `fast`.
+   */
+  autoChoice(): AutoChoice {
+    const v = this.givenRecognizer()
+      ? {
+          ...hardwareChoice(),
+          preset: "fast" as const,
+          reason: "akou was started with one recognizer.",
+        }
+      : this.autoFromDisk();
+    const line = `auto runs ${v.preset}: ${v.reason}`;
+    if (line !== this.autoLogged) {
+      this.autoLogged = line;
+      this.log("info", line);
+    }
+    return v;
+  }
+
+  private autoFromDisk(): AutoChoice {
+    const c = this.liveContext();
+    return autoChoice({
+      present: c.present,
+      catalog: c.catalog ?? [],
+      runtime: c.runtime ?? null,
+      ...(c.machine ? { machine: c.machine } : {}),
+    });
+  }
+
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
   engines(): { id: string; provider: string; installed: boolean }[] {
     const dir = this.cfg.settings["asr.modelsDir"];
@@ -2928,6 +3041,7 @@ export class AkouApp implements ApiApp {
         "dictate",
         "--probe",
       ],
+      helper: () => locateHelper(this.cfg.settings["capture.helper"]).command,
       cue: (moment) => cues.cue(moment),
       mic: () => ({
         device: this.cfg.settings["dictation.mic"],
@@ -3383,7 +3497,18 @@ export class AkouApp implements ApiApp {
    */
   private modelsHeld(): Held {
     const jobs = this.jobService;
-    if (jobs) return jobs.held();
+    if (jobs && this.runMode === "server") return jobs.held();
+    const app = this.appModelsHeld();
+    // What the app's queued and running file jobs and their Workers need is in use; the job
+    // service's default model is not one of the app's defaults.
+    return {
+      defaults: app.defaults,
+      inUse: new Set([...app.inUse, ...(jobs?.held().inUse ?? [])]),
+    };
+  }
+
+  /** What the app's own settings and running recognizer hold, without its file jobs. */
+  private appModelsHeld(): Held {
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
     const ctx = this.liveContext();
     const next = chooseLiveSetup(ctx);
@@ -3470,7 +3595,7 @@ export class AkouApp implements ApiApp {
    */
   sweepModels(): void {
     const jobs = this.jobService;
-    if (jobs) {
+    if (jobs && this.runMode === "server") {
       jobs.sweepModels();
       return;
     }
@@ -3478,16 +3603,20 @@ export class AkouApp implements ApiApp {
     this.shelf?.sweep(new Set([...held.defaults, ...held.inUse]));
   }
 
-  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
+  /**
+   * The job queue, in `<config>/jobs`, started behind the API in both modes. The desktop app takes
+   * a file job with its own token (`akou transcribe FILE`) through the same Worker and presets as
+   * server mode; what server mode adds is keys, webhook secrets, remotes and the dictation lane,
+   * which the app leaves out: its dictation runs on its own engines.
+   */
   private startJobs(): void {
     const shelf = this.startShelf();
     const keys = this.keyStore;
-    if (this.runMode !== "server" || !keys) {
-      this.sweepModels();
+    const server = this.runMode === "server" && keys !== null;
+    if (!server) {
       // clock: the hourly sweep of SV-M5, as server mode's job service runs it.
       this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
       this.modelSweep.unref?.();
-      return;
     }
     const { modelStore: _store, ...jobSeams } = this.o.jobs ?? {};
     const s = () => this.cfg.settings;
@@ -3497,26 +3626,31 @@ export class AkouApp implements ApiApp {
       models: (recognizer) => this.jobModels(recognizer),
       shelf,
       defaultModel: () => s()["server.default_model"],
+      auto: () => this.autoChoice(),
       diarizer: () => this.runningDiarizer(),
       secrets: (id) => {
-        const s = keys.secretOf(id);
+        const s = keys?.secretOf(id);
         return s ? [s] : [];
       },
       hostListed: (id, host) =>
-        keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
+        !!keys?.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
       retainDays: () => this.cfg.settings["server.retain_days"],
+      sweepsModels: server,
       maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
-      remotes: () => this.cfg.settings["server.remotes"],
+      remotes: () => (server ? this.cfg.settings["server.remotes"] : []),
       env: this.o.env ?? process.env,
       concurrency: () => this.cfg.settings["server.concurrency"],
+      modelIdleMinutes: () => this.cfg.settings["server.model_idle_minutes"],
       queueMax: () => this.cfg.settings["server.queue_max"],
       queueMaxPerKey: () => this.cfg.settings["server.queue_max_per_key"],
-      dictationSlots: () => this.cfg.settings["server.dictation_slots"],
+      dictationSlots: () => (server ? this.cfg.settings["server.dictation_slots"] : 0),
       dictationEngine: () => this.cfg.settings["server.dictation_engine"],
       ...jobSeams,
       log: (level, msg) => this.log(level, msg),
     });
     this.jobService.start();
+    // The app's sweep, now that it also knows what its jobs hold.
+    if (!server) this.sweepModels();
   }
 
   recognizer(): "loading" | "ready" | "unavailable" {
@@ -3664,6 +3798,7 @@ export class AkouApp implements ApiApp {
     this.quitting ??= (async () => {
       this.appLog?.line("info", "quitting");
       // Let the answer to `POST /quit` go out first.
+      // clock: lets the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
       try {
         await this.window?.close();

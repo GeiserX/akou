@@ -73,6 +73,14 @@ pub struct Dictate {
     next_id: u64,
     /// The live session: its id and what it saw at key-down.
     live: Option<(String, Captured)>,
+    /// The live session was pressed with the draft key (DC-S3); the next one will be, once
+    /// `Draft` came before its `Start`.
+    live_draft: bool,
+    next_draft: bool,
+    /// The live session's `session.started` went out, and it latched (DC-A3): `latched` is said
+    /// once both are true, so the app always knows the id it names.
+    live_said: bool,
+    live_latched: bool,
     /// The last ended session, whose text the app inserts next.
     last: Option<(String, Captured)>,
     /// The Accessibility grant as `ready` reported it, until `grant.lost`.
@@ -107,6 +115,10 @@ impl Dictate {
             inserter,
             next_id: 1,
             live: None,
+            live_draft: false,
+            next_draft: false,
+            live_said: false,
+            live_latched: false,
             last: None,
             accessibility: "not-needed".into(),
             secure_on: false,
@@ -429,24 +441,53 @@ impl Dictate {
                 }
                 return false;
             }
-            Command::Rebind { hotkey, activation } => {
-                let parsed = Hotkey::parse(&hotkey).and_then(|h| {
+            Command::Rebind {
+                hotkey,
+                activation,
+                draft,
+                fix_last,
+                paste_last,
+            } => {
+                // The other keys first: a refused one refuses the whole binding, which stays.
+                let extra = |what: &str, k: &Option<String>| {
+                    k.as_deref()
+                        .map(Hotkey::parse_extra)
+                        .transpose()
+                        .map_err(|e| format!("{what}: {e}"))
+                };
+                let more = extra("the draft key", &draft).and_then(|d| {
+                    let mut shortcuts = Vec::new();
+                    for (name, what, k) in [
+                        ("fixLast", "fix last", &fix_last),
+                        ("pasteLast", "paste last", &paste_last),
+                    ] {
+                        if let Some(h) = extra(what, k)? {
+                            shortcuts.push((name, h));
+                        }
+                    }
+                    Ok((d, shortcuts))
+                });
+                let parsed = more.and_then(|more| {
+                    let h = Hotkey::parse(&hotkey)?;
                     let mode = activation
                         .as_deref()
                         .map_or(Ok(Mode::HoldOrToggle), Mode::parse)?;
-                    Ok((h, mode))
+                    Ok((h, mode, more))
                 });
-                let parsed = parsed.and_then(|(h, mode)| match self.binder.as_mut() {
-                    Some(b) => b.bind(&h).map(|()| (h, mode)),
-                    None => Ok((h, mode)),
+                let parsed = parsed.and_then(|(h, mode, more)| match self.binder.as_mut() {
+                    Some(b) => b.bind(&h).map(|()| (h, mode, more)),
+                    None => Ok((h, mode, more)),
                 });
                 match parsed {
-                    Ok((h, mode)) => {
+                    Ok((h, mode, (draft, shortcuts))) => {
                         if let Some(g) = self.globe.as_mut() {
                             g.follow(&h);
                         }
                         self.hotkey = h.clone();
-                        self.act(t_ns, out, |a, acts| a.rebind(h, mode, acts));
+                        self.act(t_ns, out, |a, acts| {
+                            a.rebind(h, mode, acts);
+                            a.bind_more(draft, shortcuts);
+                        });
                         out.line(p::rebound(&hotkey));
                     }
                     Err(e) => out.line(p::rebind_failed(&hotkey, &e)),
@@ -560,23 +601,46 @@ impl Dictate {
                     out.line(p::press(false, None));
                     self.mic.disarm(t_ns, &mut ev);
                 }
+                Note::Act(Action::Draft) => self.next_draft = true,
+                Note::Act(Action::Shortcut(name)) => {
+                    let target = self.targets.target(t_ns);
+                    out.line(p::hotkey(name, &target));
+                }
                 Note::Act(Action::Start { t_ns: at }) => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
+                    self.live_draft = std::mem::take(&mut self.next_draft);
                     let cap = Captured {
                         target: self.targets.target(at),
                         secure_input: self.targets.secure_input(),
                     };
                     self.live = Some((id, cap));
+                    self.live_said = false;
+                    self.live_latched = false;
                     self.mic.start(at, &mut ev);
                     self.media_pause();
                 }
                 Note::Act(Action::End { reason }) => self.mic.end(t_ns, reason, &mut ev),
                 Note::Act(Action::Key(name)) => out.line(p::key(&name)),
+                Note::Act(Action::Latched) => {
+                    self.live_latched = true;
+                    self.say_latched(out);
+                }
                 Note::Commit => self.finish_watch(out),
                 Note::Disabled => self.recheck_grant(out),
             }
             self.mic_events(ev, out);
+        }
+    }
+
+    /// `latched {id}` once the live session has both latched and said `session.started`.
+    fn say_latched(&mut self, out: &mut dyn Out) {
+        if let Some((id, _)) = &self.live
+            && self.live_said
+            && self.live_latched
+        {
+            out.line(p::latched(id));
+            self.live_latched = false;
         }
     }
 
@@ -590,8 +654,11 @@ impl Dictate {
                             id,
                             &cap.target,
                             capture_ns,
+                            self.live_draft,
                             self.device.as_ref(),
                         ));
+                        self.live_said = true;
+                        self.say_latched(out);
                     }
                 }
                 MicEvent::Audio {
@@ -715,7 +782,7 @@ mod tests {
         assert!(!d.key(true, "Escape", 1600 * MS, &mut out));
         assert!(!d.key(false, "Escape", 1610 * MS, &mut out));
         run(&mut d, &mut out, 1610, 2000);
-        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
         d.key(true, "RightCommand", 2000 * MS, &mut out);
         d.key(false, "RightCommand", 2100 * MS, &mut out);
         run(&mut d, &mut out, 2100, 2500);
@@ -850,6 +917,40 @@ mod tests {
         );
     }
 
+    /// DC-A3: a tapped session says `latched` with its id right after `session.started`, and so
+    /// does the door's start; the hold of the test above says no such line.
+    #[test]
+    fn dc_a3_a_tap_or_the_door_says_latched_after_session_started() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        run(&mut d, &mut out, 1000, 1100);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 1500);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l == r#"{"type":"latched","id":"1"}"#)
+        );
+        d.key(true, "RightCommand", 1500 * MS, &mut out);
+        d.key(false, "RightCommand", 1600 * MS, &mut out);
+        run(&mut d, &mut out, 1600, 2000);
+        d.command(Command::Settled { id: "1".into() }, 2000 * MS, &mut out);
+        d.command(Command::SessionStart, 2000 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2200);
+        let after: Vec<String> = types(&out).into_iter().skip(5).collect();
+        assert_eq!(after, ["session.started", "latched"], "{:?}", out.lines);
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l == r#"{"type":"latched","id":"2"}"#)
+        );
+    }
+
     /// `stop` during the post-roll still ends the session, and a paste still waiting settles.
     #[test]
     fn stop_in_the_post_roll_ends_the_session() {
@@ -892,6 +993,72 @@ mod tests {
             .unwrap();
         d.command(good, 300 * MS, &mut out);
         assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+    }
+
+    /// DC-A5 and DC-S3 through the core: a rebind binds fix last and the draft key. Shift then
+    /// Right Command says `hotkey fixLast` with what has the keyboard and starts no session; the
+    /// draft key's session says `draft: true` and the dictation key's does not. A bad fix last
+    /// refuses the whole rebind, naming it.
+    #[test]
+    fn dc_a5_dc_s3_a_rebind_binds_fix_last_and_the_draft_key() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        let rebind = |fix: &str| {
+            Command::parse(&format!(
+                r#"{{"type":"rebind","hotkey":"RightCommand","draft":"RightOption","fixLast":"{fix}","pasteLast":""}}"#
+            ))
+            .unwrap()
+        };
+        d.command(rebind("Shift+Command"), 0, &mut out);
+        let last = out.lines.last().unwrap().clone();
+        assert!(
+            last.contains("rebind.failed") && last.contains("fix last"),
+            "{last}"
+        );
+        d.command(rebind("Shift+RightCommand"), 0, &mut out);
+        assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+        d.key(true, "LeftShift", 100 * MS, &mut out);
+        d.key(true, "RightCommand", 150 * MS, &mut out);
+        d.key(false, "RightCommand", 250 * MS, &mut out);
+        d.key(false, "LeftShift", 300 * MS, &mut out);
+        run(&mut d, &mut out, 300, 600);
+        let shortcuts: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"hotkey""#))
+            .collect();
+        assert_eq!(shortcuts.len(), 1, "{:?}", out.lines);
+        let v = p::Value::parse(shortcuts[0]).unwrap();
+        assert_eq!(v.get("name").unwrap().as_str(), Some("fixLast"));
+        assert_eq!(
+            Target::from_value(v.get("target").unwrap()).unwrap(),
+            w.borrow().target
+        );
+        assert!(!types(&out).contains(&"session.started".to_string()));
+
+        d.key(true, "RightOption", 1000 * MS, &mut out);
+        d.key(false, "RightOption", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1000, 1300);
+        d.key(true, "RightOption", 1300 * MS, &mut out);
+        d.key(false, "RightOption", 1350 * MS, &mut out);
+        run(&mut d, &mut out, 1300, 1800);
+        d.command(
+            Command::parse(r#"{"type":"settled","id":"1"}"#).unwrap(),
+            1800 * MS,
+            &mut out,
+        );
+        d.key(true, "RightCommand", 2000 * MS, &mut out);
+        d.key(false, "RightCommand", 2100 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2300);
+        let started: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"session.started""#))
+            .collect();
+        assert_eq!(started.len(), 2, "{:?}", out.lines);
+        assert!(started[0].contains(r#""draft":true"#), "{}", started[0]);
+        assert!(!started[1].contains("draft"), "{}", started[1]);
     }
 
     /// DC-N1: a backend that binds the key itself (the portal) is told each binding; one it
@@ -1166,7 +1333,7 @@ mod tests {
             !d.tap_started("simulate", "granted", &mut out),
             "a session is live"
         );
-        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
         d.key(true, "RightCommand", 1500 * MS, &mut out);
         d.key(false, "RightCommand", 1600 * MS, &mut out);
         run(&mut d, &mut out, 1600, 2000);
