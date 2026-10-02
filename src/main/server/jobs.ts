@@ -7,8 +7,14 @@
  *   `POST /v1/jobs`, the OpenAI endpoint or `akou transcribe`.
  * - **A queue a backlog can lean on** (SV-Q1 to SV-Q4). Up to `server.concurrency` jobs run at
  *   once, each in its own Worker with its models loaded; the next is the highest `priority`, then
- *   the oldest. A submit past `server.queue_max` or `server.queue_max_per_key` is refused with a
- *   retry time from the jobs that ended, and the same numbers give the queue's ETA.
+ *   the oldest, except that among jobs of one priority a job on a model an idle Worker holds goes
+ *   first, so a switch of preset does not reload a model (at most `WARM_PASS_LIMIT` times past one
+ *   job). An idle Worker keeps its models for `server.model_idle_minutes`, then lets them go. A
+ *   submit past `server.queue_max` or `server.queue_max_per_key` is refused with a retry time
+ *   from the jobs that ended, and the same numbers give the queue's ETA.
+ * - **One Metal llama-server at a time.** Two on Metal stop each other (llama-server.ts), so a job
+ *   whose engine runs on a Metal llama-server waits while another such job runs, in any Worker,
+ *   the dictation lane's included.
  * - **Every state change is one transaction** in the store: the job's state, its feed event and its
  *   delivery. A job the last process left running is queued again at start, in its place.
  * - **Remotes** (section 14): a queued job this server cannot run, or one a `server.remotes` entry
@@ -29,9 +35,16 @@ import { join } from "node:path";
 import type { Identity } from "../api/access.ts";
 import { DecodeError } from "../asr/decode.ts";
 import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
-import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
+import {
+  type JobPassResult,
+  type JobProgress,
+  type JobTimings,
+  JobWorker,
+} from "../asr/finalize-worker.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "../asr/nemotron.ts";
+import { findHelper } from "../capture/helper.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
 import { readUploadAudio } from "./audio.ts";
 import {
@@ -66,6 +79,14 @@ export { DAY_MS };
  * second stop, it fails `interrupted`, since the job itself may be what stops the server.
  */
 export const MAX_JOB_STARTS = 2;
+
+/** `server.model_idle_minutes`' default: an idle Worker keeps its models this long. */
+export const MODEL_IDLE_MINUTES = 60;
+/**
+ * How many times a queued job may be passed over for a job of its priority on a model an idle
+ * Worker holds, so a steady stream on one model never starves a job on another.
+ */
+export const WARM_PASS_LIMIT = 8;
 
 /** The most Workers `server.dictation_slots` reserves. */
 export const MAX_DICTATION_SLOTS = 8;
@@ -108,6 +129,8 @@ export interface QueueStats {
   mean_job_seconds: number | null;
   /** Seconds until the queue is empty at that pace; null before a job has ended. */
   eta_seconds: number | null;
+  /** The recognizers a job Worker holds loaded now, so a client can batch its jobs by them. */
+  loaded: string[];
 }
 
 /** A submit refused because the queue is full (SV-Q3). */
@@ -126,7 +149,10 @@ interface Slot {
   worker: JobWorker | null;
   spec: string;
   model: string | null;
-  job: { id: string; abort: AbortController } | null;
+  /** The running job and the model it runs (the Worker takes it only once the upload is read). */
+  job: { id: string; abort: AbortController; model: string } | null;
+  /** When the Worker last ended a job (the service's clock), while it has none. */
+  idleSince: number | null;
 }
 
 export interface JobServiceOptions {
@@ -139,12 +165,19 @@ export interface JobServiceOptions {
   shelf: ModelStore;
   /** `server.default_model`, as the settings hold it now. */
   defaultModel(): string;
+  /** What `auto` runs here now (SV-R2, `autoChoice`); absent, `fast`. */
+  auto?(): { model: string; preset: string };
   diarizer(): DiarizerKind;
   /** A key's webhook secrets (SV-E2); none for the app's token or an admin session. */
   secrets(keyId: string): string[];
   /** Does the key list this callback host by name, not only through `*`? (SV-K4) */
   hostListed(keyId: string, host: string): boolean;
   retainDays(): number;
+  /**
+   * Whether the hourly sweep also deletes unused models (SV-M5). Default true; the desktop app
+   * sweeps them itself, since only it knows what its calls and dictation hold.
+   */
+  sweepsModels?: boolean;
   /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
   maxAudioMinutes(): number;
   /** `server.remotes` as the settings hold it now (section 14). */
@@ -156,6 +189,11 @@ export interface JobServiceOptions {
   remoteFetch?: typeof fetch;
   /** `server.concurrency`: jobs run at once. Default 1. */
   concurrency?(): number;
+  /**
+   * `server.model_idle_minutes`: how long an idle Worker keeps its models before it is closed; 0
+   * closes it once no queued job needs its model. Default `MODEL_IDLE_MINUTES`.
+   */
+  modelIdleMinutes?(): number;
   /** `server.queue_max`: jobs queued or running across keys; 0 or absent, no limit. */
   queueMax?(): number;
   /** `server.queue_max_per_key`: the same for one key; 0 or absent, no limit. */
@@ -171,8 +209,24 @@ export interface JobServiceOptions {
   log(level: "info" | "warn" | "error", msg: string): void;
 }
 
+/**
+ * Why a job that asks for speaker labels cannot have them, or null when it can: Nemotron runs in
+ * the `akou-diarize` helper, which the app carries but a source checkout does not. Without it the
+ * labels would be lost in silence, so the job fails and says what to do.
+ */
+export function diarizeHelperMissing(spec: ModelSpec): string | null {
+  if (spec.kind !== "sherpa" || (spec.diarizer ?? "nemotron") !== "nemotron") return null;
+  const helper = findHelper(spec.diarizeHelper ?? [], undefined, { name: DIARIZE_HELPER_NAME });
+  if (helper.found) return null;
+  return `speaker labels need the ${DIARIZE_HELPER_NAME} helper, and ${helper.command[0]} is not there: put it on PATH or set asr.diarizeHelper to it (docs/server.md says where to get it), set asr.diarizer to embeddings, or send the job without diarize`;
+}
+
 /** A job as a client sees it (SV-J3), with the download it waits on while queued (SV-M1). */
-export function jobView(j: Job, waiting: Waiting | null = null): Record<string, unknown> {
+export function jobView(
+  j: Job,
+  waiting: Waiting | null = null,
+  progress: JobProgress | null = null,
+): Record<string, unknown> {
   const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString());
   const finished = j.done_at ?? j.failed_at ?? j.cancelled_at;
   return {
@@ -189,9 +243,13 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
     priority: j.priority,
     interactive: j.interactive,
     language: j.language,
+    languages: j.languages,
     diarize: j.diarize,
     metadata: j.metadata,
     ...(waiting ? { waiting_for: waiting } : {}),
+    // A running job here says where it is (akou-5an.116); a done one, how long each stage took.
+    ...(progress && j.status === "running" ? { progress } : {}),
+    ...(j.result?.timings ? { timings: j.result.timings } : {}),
     ...(j.error ? { error: j.error } : {}),
     links: {
       self: `/v1/jobs/${j.id}`,
@@ -213,7 +271,10 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
   };
 }
 
-/** The model ids a job ran, as the engine registry names them (SV-J4). */
+/**
+ * The model ids a job ran, as the engine registry names them (SV-J4): the speaker models only when
+ * they ran, so a job whose labels failed does not name them.
+ */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
   const out = [recognizer, "silero-vad"];
   if (diarize) {
@@ -229,11 +290,30 @@ export function registryKnows(id: string): boolean {
   return MODELS.some((m) => m.id === id);
 }
 
+/** What a client is told about a result that is less than it asked for. */
+export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">): string[] {
+  const { asked, labelled, error } = pass.speakers;
+  if (!asked || labelled || pass.segments.length === 0) return [];
+  return [
+    error === null
+      ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
+      : `speaker labels were asked for and failed: every speaker is null (${error})`,
+  ];
+}
+
+/** The mean of the words' confidences, or null when no word has one. */
+function meanConfidence(words: JobPassResult["words"]): number | null {
+  const cs = words.map((w) => w.c).filter((c): c is number => c !== null);
+  if (cs.length === 0) return null;
+  return Math.round((cs.reduce((a, b) => a + b, 0) / cs.length) * 1000) / 1000;
+}
+
 /** The result of a job (SV-J4). */
 export function jobResult(
   job: Job,
   pass: JobPassResult,
   engine: { version: string; models: string[] },
+  timings?: JobTimings,
 ): Record<string, unknown> {
   return {
     job_id: job.id,
@@ -243,13 +323,16 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // No built engine gives word times yet.
-    words: [],
+    words: pass.words,
     segments: pass.segments,
     engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    // Neither words nor segments carry an engine confidence yet.
-    confidence: null,
+    confidence: meanConfidence(pass.words),
+    skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
+    speakers: pass.speakers,
+    warnings: jobWarnings(pass),
     metadata: job.metadata,
+    // Wall seconds per stage (akou-5an.115): reading the file, speaker labels, transcribing.
+    ...(timings ? { timings } : {}),
   };
 }
 
@@ -285,8 +368,14 @@ export class JobService {
   /** The running times of the last `MEAN_OF_JOBS` jobs this process ran, in ms. */
   private runTimes: number[] = [];
   private readonly waiters = new Map<string, Set<Waiter>>();
+  /** Where each job running here is (akou-5an.116); dropped when it ends. */
+  private readonly progress = new Map<string, JobProgress>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
+  /** Wakes `releaseIdle` when the next idle Worker's time is up. */
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many times each queued job was passed over for a job on a loaded model. */
+  private readonly passedOver = new Map<string, number>();
   /** The other akou servers jobs are sent to (section 14). */
   readonly remotes: Remotes;
   /** The jobs out on a remote now, and how to stop following one. */
@@ -450,6 +539,7 @@ export class JobService {
       jobs_last_hour: this.ended.length,
       audio_seconds_last_hour: Math.round(this.ended.reduce((a, e) => a + e.audio_s, 0)),
       mean_job_seconds: mean === null ? null : Math.round(mean / 100) / 10,
+      loaded: this.loaded(),
       eta_seconds: depth === 0 ? 0 : this.secondsFor(depth),
     };
   }
@@ -486,15 +576,21 @@ export class JobService {
   // Which model (SV-S1)
 
   /**
-   * The model a request runs: its `model`, its `preset`, `server.default_model`, then the
-   * hardware's choice. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
+   * The model a request runs: its `model`, its `preset`, `server.default_model`, then what `auto`
+   * runs here. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
    */
   choose(ask: { model?: string; preset?: string }, unknownIsAuto = false): ModelChoice {
     return resolveModel(ask, {
       catalog: this.o.shelf.catalog(),
       defaultModel: this.o.defaultModel(),
       unknownIsAuto,
+      auto: () => this.auto(),
     });
+  }
+
+  /** What `auto` runs here now. */
+  private auto(): { model: string; preset: string } {
+    return this.o.auto?.() ?? hardwareChoice();
   }
 
   /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */
@@ -502,7 +598,7 @@ export class JobService {
     try {
       return this.choose({}).model;
     } catch {
-      return hardwareChoice().model;
+      return this.auto().model;
     }
   }
 
@@ -529,7 +625,7 @@ export class JobService {
       j.status === "queued" && j.route !== "remote"
         ? this.o.shelf.waiting(this.localNeeds(j))
         : null;
-    return jobView(j, waiting);
+    return jobView(j, waiting, this.progress.get(j.id) ?? null);
   }
 
   /**
@@ -545,7 +641,7 @@ export class JobService {
     const n = named(ask.model, "request") ??
       named(ask.preset, "request") ??
       named(this.o.defaultModel(), "server_default") ?? {
-        name: hardwareChoice().preset,
+        name: this.auto().preset,
         source: "hardware" as const,
       };
     if (!this.remotes.offered([n.name])) return null;
@@ -570,6 +666,14 @@ export class JobService {
   /** The recognizer a live worker holds (the first, with several), or null. */
   workerModel(): string | null {
     return this.slots.find((s) => s.worker && s.model)?.model ?? null;
+  }
+
+  /** The recognizers the job Workers hold loaded now, the queue's and the dictation lane's. */
+  loaded(): string[] {
+    const ids = [...this.slots, ...this.laneSlots]
+      .filter((s) => s.worker && s.model)
+      .map((s) => s.model as string);
+    return [...new Set(ids)];
   }
 
   /** Every queued job waiting on `model` fails: its download failed for good (SV-M3). */
@@ -625,6 +729,7 @@ export class JobService {
       if (fields.length > 0) return { conflict: r.job, fields };
       return r;
     }
+    this.o.log("info", `job.created ${r.job.id} key ${r.job.key_id}`);
     this.dispatch();
     this.pump();
     return r;
@@ -634,6 +739,21 @@ export class JobService {
   get(who: Identity, id: string): Job | null {
     const j = this.store.job(id);
     return j && this.visible(who, j.key_id) ? j : null;
+  }
+
+  /**
+   * Whether the caller once had this job and the server no longer holds it: deleted by a client or
+   * past `server.retain_days`. False for an id that never was, or another key's.
+   */
+  gone(who: Identity, id: string): boolean {
+    if (this.store.job(id)) return false;
+    const key = this.store.formerKey(id);
+    return key !== null && this.visible(who, key);
+  }
+
+  /** `server.retain_days`: how long a job is kept, from its creation. */
+  retainDays(): number {
+    return this.o.retainDays();
   }
 
   private visible(who: Identity, key: string): boolean {
@@ -720,8 +840,10 @@ export class JobService {
       slot.worker?.cancel("the job was deleted");
       // The slot is free now: an aborted run touches neither it nor its Worker again.
       slot.job = null;
+      slot.idleSince = this.now();
     }
     this.heldUntil.delete(id);
+    this.passedOver.delete(id);
     // A job sent to a remote is deleted there too, so its audio and text do not outlive it.
     this.sent.get(id)?.abort.abort();
     if (r.job.remote && r.job.remote_job) this.remotes.cancel(r.job.remote, r.job.remote_job);
@@ -738,7 +860,7 @@ export class JobService {
    */
   sweep(): number {
     const n = this.sweepJobs();
-    this.sweepModels();
+    if (this.o.sweepsModels !== false) this.sweepModels();
     return n;
   }
 
@@ -770,6 +892,7 @@ export class JobService {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
     for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
+    this.store.scrubCancelled(before);
     if (n > 0)
       this.o.log(
         "info",
@@ -780,6 +903,11 @@ export class JobService {
 
   // -------------------------------------------------------------------------
   // The feed
+
+  /** The feed's id (SV-E1): a new one means a new jobs.db, whose cursors start at 0 again. */
+  get feedId(): string {
+    return this.store.feedId;
+  }
 
   events(who: Identity, after: number, limit: number): FeedEvent[] {
     return this.store.events(who.scopes.includes("admin") ? null : who.id, after, limit);
@@ -821,36 +949,51 @@ export class JobService {
 
   /**
    * An idle slot for a job on `model`: one whose Worker holds it already, so its models stay
-   * loaded, else an empty one, else any idle one, whose Worker is rebuilt.
+   * loaded, else an empty one, else a new one while there is room for it, else any idle one,
+   * whose Worker is rebuilt.
    */
-  private slotFor(model: string, slots: Slot[] = this.slots): Slot {
+  private slotFor(model: string, slots: Slot[], room: number): Slot {
     const idle = slots.filter((s) => !s.job);
     const slot =
-      idle.find((s) => s.worker && s.model === model) ?? idle.find((s) => !s.worker) ?? idle[0];
+      idle.find((s) => s.worker && s.model === model) ??
+      idle.find((s) => !s.worker) ??
+      (slots.length < room ? undefined : idle[0]);
     if (slot) return slot;
-    const fresh: Slot = { worker: null, spec: "", model: null, job: null };
+    const fresh: Slot = { worker: null, spec: "", model: null, job: null, idleSince: null };
     slots.push(fresh);
     return fresh;
   }
 
+  private idleMs(): number {
+    const m = this.o.modelIdleMinutes?.() ?? MODEL_IDLE_MINUTES;
+    return Number.isFinite(m) ? Math.max(0, m) * 60_000 : 0;
+  }
+
   /**
-   * Idle Workers are closed when they hold a model other than the default's that no queued job
-   * needs, so an idle worker never pins a model the sweep should free (SV-M4), and when there are
-   * more of them than `server.concurrency` allows.
+   * Closes the idle Workers whose time is up: an idle Worker keeps its models while a queued job
+   * needs them or for `server.model_idle_minutes` after its last job, and at most as many Workers
+   * as `server.concurrency` stay. So consecutive jobs reuse one model load, and an idle box gets
+   * its memory back. The idle timer calls it; a test with its own clock calls it too.
    */
-  private releaseWorkers(): void {
+  releaseIdle(): void {
+    if (this.closed) return;
     let kept = this.slots.filter((s) => s.job).length;
     const room = this.concurrency();
     const queued = this.store.queued();
-    const fallback = this.defaultRecognizer();
+    const idleMs = this.idleMs();
+    const now = this.now();
+    let wake = Number.POSITIVE_INFINITY;
     for (const s of this.slots) {
       if (s.job || !s.worker) continue;
-      const wanted =
-        s.model !== null &&
-        (s.model === fallback || queued.some((j) => this.modelOf(j) === s.model));
-      if (wanted && kept < room) {
+      const needed = s.model !== null && queued.some((j) => this.modelOf(j) === s.model);
+      const left = idleMs - (now - (s.idleSince ?? now));
+      if ((needed || (s.model !== null && left > 0)) && kept < room) {
         kept++;
+        if (!needed) wake = Math.min(wake, left);
         continue;
+      }
+      if (!needed && s.model !== null && idleMs > 0 && left <= 0) {
+        this.o.log("info", `jobs: ${s.model} unloaded after ${idleMs / 60_000} min with no job`);
       }
       s.worker.close();
       s.worker = null;
@@ -861,23 +1004,66 @@ export class JobService {
       const s = this.slots[i] as Slot;
       if (!s.job && !s.worker) this.slots.splice(i, 1);
     }
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    if (Number.isFinite(wake)) {
+      // clock: wakes when the next idle Worker's time is up; the check reads the service's clock.
+      this.idleTimer = setTimeout(() => this.releaseIdle(), Math.max(1000, wake));
+      this.idleTimer.unref?.();
+    }
+  }
+
+  /** Whether a model's engine runs on a Metal llama-server (Qwen on Apple silicon). */
+  private onMetal(model: string): boolean {
+    try {
+      return this.o.models(model)?.final?.accelerator === "metal";
+    } catch {
+      return false;
+    }
+  }
+
+  /** A job on a Metal llama-server runs now, in any Worker (the queue's or the lane's). */
+  private metalBusy(): boolean {
+    return [...this.slots, ...this.laneSlots].some((s) => s.job && this.onMetal(s.job.model));
   }
 
   /**
    * The next queued job whose models are on disk, in the queue's order. A job whose models are
-   * missing starts their download and waits, holding no worker (SV-M1).
+   * missing starts their download and waits, holding no worker (SV-M1). A job on a Metal
+   * llama-server waits while another one runs. Among the jobs of the first one's priority, a job
+   * on a model an idle Worker holds goes first, unless the first was passed over
+   * `WARM_PASS_LIMIT` times already.
    */
   private nextRunnable(): Job | null {
     const lane = this.laneSize() > 0;
+    const warm = new Set(
+      this.slots.filter((s) => !s.job && s.worker && s.model).map((s) => s.model as string),
+    );
+    let head: Job | null = null;
     for (const j of this.store.queued()) {
       // The lane's jobs are the lane's while it has slots; with none, they queue as any other.
       if (lane && j.interactive) continue;
       if (this.routeOf(j).where !== "local") continue;
+      if (head && j.priority !== head.priority) break;
       const needs = this.localNeeds(j);
-      if (this.o.shelf.missing(needs).length === 0) return j;
-      this.o.shelf.fetch(needs);
+      if (this.o.shelf.missing(needs).length > 0) {
+        if (!head) this.o.shelf.fetch(needs);
+        continue;
+      }
+      const model = this.modelOf(j);
+      if (this.onMetal(model) && this.metalBusy()) continue;
+      if (!head) {
+        head = j;
+        if (warm.size === 0 || warm.has(model)) return j;
+        if ((this.passedOver.get(j.id) ?? 0) >= WARM_PASS_LIMIT) return j;
+        continue;
+      }
+      if (warm.has(model)) {
+        this.passedOver.set(head.id, (this.passedOver.get(head.id) ?? 0) + 1);
+        return j;
+      }
     }
-    return null;
+    return head;
   }
 
   /**
@@ -889,8 +1075,12 @@ export class JobService {
     queued.sort((a, b) => a.seq - b.seq);
     for (const j of queued) {
       const needs = this.localNeeds(j);
-      if (this.o.shelf.missing(needs).length === 0) return j;
-      this.o.shelf.fetch(needs);
+      if (this.o.shelf.missing(needs).length > 0) {
+        this.o.shelf.fetch(needs);
+        continue;
+      }
+      if (this.onMetal(this.modelOf(j)) && this.metalBusy()) continue;
+      return j;
     }
     return null;
   }
@@ -901,7 +1091,7 @@ export class JobService {
     while (this.laneSlots.filter((s) => s.job).length < size) {
       const next = this.nextInteractive();
       if (!next) break;
-      this.start1(next, this.laneSlots);
+      this.start1(next, this.laneSlots, size);
     }
     // Past a lower `server.dictation_slots`, idle lane Workers go.
     for (let i = this.laneSlots.length - 1; i >= 0 && this.laneSlots.length > size; i--) {
@@ -913,15 +1103,21 @@ export class JobService {
   }
 
   /** Marks one queued job running in a slot of `slots`, and runs it. */
-  private start1(next: Job, slots: Slot[]): void {
+  private start1(next: Job, slots: Slot[], room: number): void {
     const job = this.store.markRunning(next.id);
     if (job?.status !== "running") return;
-    const slot = this.slotFor(this.modelOf(job), slots);
+    this.passedOver.delete(job.id);
+    const model = this.modelOf(job);
+    const slot = this.slotFor(model, slots, room);
     const abort = new AbortController();
-    slot.job = { id: job.id, abort };
+    slot.job = { id: job.id, abort, model };
+    slot.idleSince = null;
     this.notify(job.id, "running");
     void this.run(job, slot, abort).finally(() => {
-      if (slot.job?.id === job.id) slot.job = null;
+      if (slot.job?.id === job.id) {
+        slot.job = null;
+        slot.idleSince = this.now();
+      }
       this.pump();
     });
   }
@@ -933,9 +1129,9 @@ export class JobService {
     while (this.slots.filter((s) => s.job).length < this.concurrency()) {
       const next = this.nextRunnable();
       if (!next) break;
-      this.start1(next, this.slots);
+      this.start1(next, this.slots, this.concurrency());
     }
-    this.releaseWorkers();
+    this.releaseIdle();
   }
 
   private async run(job: Job, slot: Slot, abort: AbortController): Promise<void> {
@@ -953,7 +1149,11 @@ export class JobService {
           new Error("the speech models are not downloaded; run `akou models pull`"),
           { code: "models_missing" },
         );
+      const helperless = job.diarize ? diarizeHelperMissing(spec) : null;
+      if (helperless) throw Object.assign(new Error(helperless), { code: "diarize_unavailable" });
       let samples: Float32Array;
+      this.progress.set(job.id, { stage: "decode", done_s: 0, total_s: null });
+      const decodeFrom = performance.now();
       try {
         const maxSamples = this.o.maxAudioMinutes() * 60 * ASR_RATE;
         samples = await (
@@ -965,6 +1165,12 @@ export class JobService {
         });
       }
       if (abort.signal.aborted) return;
+      const decodeS = Math.round(performance.now() - decodeFrom) / 1000;
+      this.progress.set(job.id, {
+        stage: job.diarize ? "diarize" : "transcribe",
+        done_s: 0,
+        total_s: Math.round((samples.length / ASR_RATE) * 1000) / 1000,
+      });
       // A llama-server engine (Qwen) takes the keywords as its glossary instead of hotwords.
       const decode: DecodeList | null =
         job.keywords.length === 0 || spec.final
@@ -989,6 +1195,10 @@ export class JobService {
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
         language: job.language,
         glossary: job.keywords,
+        progress: (p) => {
+          if (this.progress.has(job.id)) this.progress.set(job.id, p);
+        },
+        languages: job.languages,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
@@ -996,10 +1206,21 @@ export class JobService {
       if (pass.decode_s !== undefined) this.o.shelf.recordRun(model, audioS, pass.decode_s);
       end = {
         status: "done",
-        result: jobResult(job, pass, {
-          version: this.o.version,
-          models: jobModels(recognizer, job.diarize, this.o.diarizer()),
-        }),
+        result: jobResult(
+          job,
+          pass,
+          {
+            version: this.o.version,
+            // The speaker models are named only when they ran: not after a missing helper or a
+            // missed deadline, nor on a file with no speech for them.
+            models: jobModels(recognizer, pass.diarized, this.o.diarizer()),
+          },
+          {
+            decode_s: decodeS,
+            diarize_s: pass.stages?.diarize_s ?? null,
+            transcribe_s: pass.stages?.transcribe_s ?? 0,
+          },
+        ),
       };
     } catch (err) {
       if (abort.signal.aborted) return;
@@ -1007,6 +1228,7 @@ export class JobService {
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
       this.o.shelf.touch(needs);
+      this.progress.delete(job.id);
     }
     this.conclude(job, end);
   }
@@ -1019,7 +1241,10 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
-    const e =
+    // A queued job that ends without starting (a failed download, a remote's answer) is not
+    // passed over again.
+    this.passedOver.delete(job.id);
+    const r =
       end.status === "done"
         ? this.store.finish(job.id, end, {
             type: "transcription.completed",
@@ -1032,7 +1257,7 @@ export class JobService {
             deliverTo: job.callback_url,
           });
     if (job.audio) rmSync(job.audio, { force: true });
-    if (!e) return;
+    if (!r) return;
     this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
@@ -1041,7 +1266,8 @@ export class JobService {
         : `job.${end.status} ${job.id} key ${job.key_id} model ${job.model ?? job.preset} on ${remote}`,
     );
     this.notify(job.id, end.status);
-    for (const fn of [...this.feedWatchers]) fn(e);
+    const e = r.event;
+    if (e) for (const fn of [...this.feedWatchers]) fn(e);
     if (job.callback_url) this.deliverer.kick();
   }
 
@@ -1101,6 +1327,7 @@ export class JobService {
       model: j.model ?? undefined,
       language: j.language,
       keywords: j.keywords,
+      languages: j.languages,
       diarize: j.diarize,
     };
   }
@@ -1213,6 +1440,7 @@ export class JobService {
     this.remotes.close();
     for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
+    if (this.idleTimer) clearTimeout(this.idleTimer);
     this.deliverer.close();
     for (const s of [...this.slots, ...this.laneSlots]) {
       s.job?.abort.abort();
@@ -1229,19 +1457,22 @@ const REQUEST_FIELDS = [
   "model",
   "language",
   "keywords",
+  "languages",
   "diarize",
 ] as const satisfies readonly (keyof JobRequest)[];
 
 /**
- * The options as compared, not as stored: keywords in any order and a language tag in any case
- * (BCP-47 tags are case-insensitive) make the same transcript, so they are the same request. The
- * row keeps the options as sent, so a job stored before this compares the same way.
+ * The options as compared, not as stored: keywords and languages in any order and a language tag
+ * in any case (BCP-47 tags are case-insensitive) make the same transcript, so they are the same
+ * request. The row keeps the options as sent, so a job stored before this compares the same way;
+ * one stored before `languages[]` existed compares as a request with none.
  */
 function comparable(r: JobRequest): JobRequest {
   return {
     ...r,
     language: r.language.toLowerCase(),
     keywords: [...new Set(r.keywords)].sort(),
+    languages: [...new Set((r.languages ?? []).map((l) => l.toLowerCase()))].sort(),
   };
 }
 

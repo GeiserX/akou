@@ -18,7 +18,7 @@
  *   - the two recognition Workers, the browser pages and the `akou` command line (a
  *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
  *     first;
- *   - the shipped note templates;
+ *   - the shipped note templates and ask presets;
  *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
  *     `native/akou-diarize` (Nemotron on a statically linked ONNX Runtime; no library beside it).
@@ -166,6 +166,7 @@ export default {
       "src/ui/draft.html": "views/draft/index.html",
       "src/ui/draft.css": "views/draft/draft.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
+      "src/main/notes/presets": `${MAIN_OUT}/presets`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       "src/main/window/tray": `${MAIN_OUT}/tray`,
       // The licence and the third-party credits, which the bundled word lists' CC BY-SA 4.0 and

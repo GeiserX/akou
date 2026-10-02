@@ -258,9 +258,11 @@ export function runHook(o: RunHookOptions): Promise<HookRun> {
     let settled = false;
     let timedOut = false;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
+    // clock: a deadline on a user's hook process.
     const timer = setTimeout(() => {
       timedOut = true;
       killGroup(child, "SIGTERM", platform);
+      // clock: a grace for a user's hook process to exit before it is killed.
       killTimer = setTimeout(() => killGroup(child, "SIGKILL", platform), KILL_GRACE_MS);
       killTimer.unref?.();
     }, timeoutMs);
@@ -278,6 +280,7 @@ export function runHook(o: RunHookOptions): Promise<HookRun> {
     child.on("error", (err) => done(EXIT_NOT_STARTED, `cannot start: ${err.message}`));
     // `close` waits for the pipes; a grandchild that escaped the group could hold them for ever.
     child.on("exit", (code, signal) => {
+      // clock: a grace for a hook's pipes once its process has exited.
       const t = setTimeout(
         () => done(code ?? (signal ? 128 + (osConstants.signals[signal] ?? 0) : 1)),
         1000,

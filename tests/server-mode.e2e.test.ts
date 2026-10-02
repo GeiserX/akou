@@ -544,21 +544,33 @@ describe("SV-K1: GET /v1/server", () => {
       expect(b).toMatchObject({ name: "akou", version: rig.app.version, mode, gpu: null });
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
       // `fast` (Parakeet) and `best` (Qwen on llama-server) are built; each is available once the
-      // default models are there, and best fetches Qwen on demand.
+      // default models are there, and best fetches Qwen on demand. `auto` runs fast here, so it is
+      // available too, and says so.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best", "auto"]);
+      expect(b.presets.at(-1)).toMatchObject({ name: "auto", resolves_to: "fast" });
       expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
         "parakeet-tdt-0.6b-v3-fp32",
         "qwen3-asr-1.7b",
       ]);
       expect(Object.keys(b.capabilities).sort()).toEqual(
-        ["bazarr", "events", "interactive", "jobs", "openai", "webhooks", "wyoming"].sort(),
+        [
+          "bazarr",
+          "events",
+          "interactive",
+          "jobs",
+          "languages_bound",
+          "openai",
+          "webhooks",
+          "wyoming",
+        ].sort(),
       );
-      // server.dictation_slots reserves one Worker by default (DC-R2); the app runs no jobs.
+      // server.dictation_slots reserves one Worker by default (DC-R2); the app has no lane.
       expect(b.capabilities.interactive).toBe(mode === "server");
-      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
-      for (const c of ["jobs", "events", "webhooks"])
-        expect(b.capabilities[c]).toBe(mode === "server");
+      // Jobs, their feed and a job's `languages[]` bound exist in both modes (akou-5an.119); signed
+      // deliveries need keys.
+      for (const c of ["jobs", "events", "languages_bound"]) expect(b.capabilities[c]).toBe(true);
+      expect(b.capabilities.webhooks).toBe(mode === "server");
     }
   });
 
@@ -651,8 +663,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
-        // The job queue's numbers (SV-Q4): the app has no queue.
-        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
+        // The job queue's numbers (SV-Q4), in both modes: the app runs file jobs too.
+        queue: expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });

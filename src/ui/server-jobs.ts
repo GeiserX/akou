@@ -158,6 +158,7 @@ export class JobsPage implements ServerScreen {
   show(): void {
     void this.readKeys();
     void this.read();
+    // clock: polls the job list while the page shows it.
     this.timer ??= setInterval(() => void this.read(), POLL_MS);
   }
 
@@ -262,7 +263,8 @@ export class JobsPage implements ServerScreen {
       started === null
         ? ""
         : j.status === "running"
-          ? took(Date.now() - started)
+          ? // clock: a running job's elapsed time on screen.
+            took(Date.now() - started)
           : took((ended ?? started) - started);
     const waiting = j.waiting_for
       ? ` (downloading ${j.waiting_for.model}: ${j.waiting_for.total > 0 ? Math.floor((100 * j.waiting_for.bytes) / j.waiting_for.total) : 0} %)`

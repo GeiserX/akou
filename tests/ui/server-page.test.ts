@@ -159,7 +159,8 @@ describe("SV-U7: the server-mode page", () => {
       await page.click(`#jobs-table tr[data-id="${id}"] button.cancel`);
       expect((await waiting).body.status).toBe("cancelled");
       await until(
-        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 404,
+        // A cancel from the dashboard deletes the job: its id answers 410 gone from then on.
+        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 410,
         3000,
         "the job to be gone",
       );
@@ -342,21 +343,30 @@ describe("SV-U7: the server-mode page", () => {
 
       // Each change saves that key alone, when the field is left: there is no Save button.
       expect(await page.$("#settings-save")).toBeNull();
-      await page.fill("#page-settings input[data-key='server.default_language']", "not a tag");
-      await page.press("#page-settings input[data-key='server.default_language']", "Tab");
+      const days = "#page-settings input[data-key='server.retain_days']";
+      await page.fill(days, "0");
+      await page.press(days, "Tab");
       await until(
         async () =>
-          (
-            await page.getAttribute(
-              "#page-settings div[data-key='server.default_language']",
-              "class",
-            )
-          )?.includes("refused") === true,
+          (await page.getAttribute("#page-settings div[data-key='server.retain_days']", "class"))
+            ?.split(" ")
+            .includes("refused") === true,
         3000,
         "the refusal on the field",
       );
-      await page.fill("#page-settings input[data-key='server.default_language']", "es");
-      await page.press("#page-settings input[data-key='server.default_language']", "Tab");
+      await page.fill(days, "7");
+      // The job defaults are selects in words (SV-S1, SV-S2): the model by name, the language as
+      // Detect it or its name.
+      const model = "#page-settings select[data-key='server.default_model']";
+      const language = "#page-settings select[data-key='server.default_language']";
+      const picked = (sel: string) =>
+        page.$eval(sel, (x) => (x as HTMLSelectElement).selectedOptions[0]?.text);
+      expect(await picked(model)).toBe("Automatic");
+      expect(await picked(language)).toBe("Detect it");
+      const models = await page.$$eval(`${model} option`, (o) => o.map((x) => x.textContent));
+      expect(models).toContain("Parakeet v3");
+      expect(models).not.toContain(RECOGNIZER);
+      await page.selectOption(language, "es");
       await page.check("#page-settings input[data-key='server.default_diarize']");
       await until(
         async () =>

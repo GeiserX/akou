@@ -100,6 +100,13 @@ describe("DC-A2: the dictation key", () => {
     expect(checkDictationHotkey("")).toBeNull();
   });
 
+  test("DC-A6: Mouse4 can be saved as the dictation key; the left button cannot", () => {
+    expect(validateSetting("dictation.hotkey", "Mouse4").ok).toBe(true);
+    expect(checkDictationHotkey("Mouse5")).toBeNull();
+    expect(validateSetting("dictation.hotkey", "Mouse1")).toMatchObject({ ok: false });
+    expect(checkDictationHotkey("Mouse2")).toContain("right button");
+  });
+
   test("Shift held first is fix last's form, not a dictation key", () => {
     expect(parseHotkey("Shift+RightCommand")).toEqual({
       kind: "modifier",
@@ -240,6 +247,13 @@ describe("DC-U9: the apps setting type", () => {
     expect(validateApps([rule, rule])).toMatchObject({ ok: false });
     expect(validateApps({ app: "x" })).toMatchObject({ ok: false });
     expect(validateApps([{ app: "x", language: "Spanish" }])).toMatchObject({ ok: false });
+  });
+
+  test("a rule may carry the app's name to be shown by (akou-qx2), and nothing else of it", () => {
+    const named = { ...rule, name: "Example Chat" };
+    expect(validateApps([named])).toEqual({ ok: true, value: [named] });
+    expect(validateApps([{ ...rule, name: 7 }])).toMatchObject({ ok: false });
+    expect(validateApps([{ ...rule, name: "x".repeat(201) }])).toMatchObject({ ok: false });
   });
 
   test("PATCH /config refuses a rule the validator refuses", () => {
