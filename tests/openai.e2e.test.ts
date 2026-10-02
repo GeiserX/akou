@@ -9,7 +9,14 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { promptTerms, RESPONSE_FORMATS, srt, vtt } from "../src/main/api/routes/openai.ts";
+import {
+  CUE_CHARS,
+  promptTerms,
+  RESPONSE_FORMATS,
+  srt,
+  vtt,
+  wordCues,
+} from "../src/main/api/routes/openai.ts";
 import { MODELS, RECOGNIZER } from "../src/main/asr/models.ts";
 import { resolveModel } from "../src/main/server/model-store.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -329,6 +336,26 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const r = await post([["model", "whisper-1"]], monoWav(silence(61)));
     expect(r.status).toBe(422);
     expect(JSON.parse(r.text)).toMatchObject({ error: "too_long" });
+  });
+
+  test("[SV-J5] cues from timed words: at most 42 characters, never across a segment", () => {
+    const segs = [
+      { s: 0, e: 4, text: "x", speaker: "s0" },
+      { s: 5, e: 6, text: "y", speaker: "s1" },
+    ];
+    const long = "abcdefghij";
+    const words = [0, 1, 2, 3].map((i) => ({ w: long, s: i, e: i + 0.5, c: 1 }));
+    const cues = wordCues([...words, { w: "ok", s: 5, e: 5.5, c: null }], segs);
+    // 10 + 1 + 10 + 1 + 10 + 1 + 10 is 43: the fourth word starts a cue of its own.
+    expect(cues).toEqual([
+      { s: 0, e: 2.5, text: `${long} ${long} ${long}`, speaker: "s0" },
+      { s: 3, e: 3.5, text: long, speaker: "s0" },
+      { s: 5, e: 5.5, text: "ok", speaker: "s1" },
+    ]);
+    expect(cues?.every((c) => c.text.length <= CUE_CHARS)).toBe(true);
+    // A word with no time (Qwen) leaves the cues to the segments.
+    expect(wordCues([{ w: "a", s: null, e: null, c: 0.9 }], segs)).toBeNull();
+    expect(wordCues([], segs)).toBeNull();
   });
 
   test("srt and vtt cues from segments", () => {
