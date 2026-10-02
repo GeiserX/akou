@@ -3385,11 +3385,11 @@ export class AkouApp implements ApiApp {
     const jobs = this.jobService;
     if (jobs && this.runMode === "server") return jobs.held();
     const app = this.appModelsHeld();
-    // The app's file jobs hold their models too, as server mode's do.
-    const held = jobs?.held();
+    // What the app's queued and running file jobs and their Workers need is in use; the job
+    // service's default model is not one of the app's defaults.
     return {
-      defaults: new Set([...app.defaults, ...(held?.defaults ?? [])]),
-      inUse: new Set([...app.inUse, ...(held?.inUse ?? [])]),
+      defaults: app.defaults,
+      inUse: new Set([...app.inUse, ...(jobs?.held().inUse ?? [])]),
     };
   }
 
