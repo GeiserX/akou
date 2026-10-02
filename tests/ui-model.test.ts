@@ -22,6 +22,7 @@ import {
   HueBook,
   hasRecording,
   languages,
+  noteMarks,
   playingLine,
   positionText,
   presets,
@@ -740,6 +741,20 @@ describe("[W5.3] the player's position is a wall time", () => {
     expect(positionText(v, 1, 20)).not.toMatch(/^\d{1,2}:\d{2}$/);
     // A part the view does not have yet shows nothing rather than a guess.
     expect(positionText(v, 9, 1)).toBe("");
+  });
+});
+
+describe("[akou-dzm.10] note marks on the scrubber", () => {
+  test("a note at wall time t marks t in its part; a note outside it, none", () => {
+    const v = live((b) => {
+      b.add({ type: "note", id: "n1", rev: 1, text: "a", w: T0 + 3000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n2", rev: 1, text: "b", w: T0 + 9000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n3", rev: 1, text: "c", w: T0 + 60_000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n4", rev: 1, text: "d", w: T0 - 5000, afterSeq: 1, by: "user" });
+    });
+    expect(noteMarks(v, 1, 12)).toEqual([0.25, 0.75]);
+    expect(noteMarks(v, 2, 12)).toEqual([]);
+    expect(noteMarks(v, 1, Number.NaN)).toEqual([]);
   });
 });
 

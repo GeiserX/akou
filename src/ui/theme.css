@@ -2451,9 +2451,35 @@ button.cite:hover {
   background: transparent;
   border-color: var(--line2);
 }
-#play {
-  border-radius: 14px;
+/* Play is a round icon (b2): a triangle, or two bars while playing. */
+#player-bar #play {
+  width: 28px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--fg);
+}
+#play::before {
+  content: "";
+  width: 9px;
+  height: 11px;
+  margin-left: 2px;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+#play.playing::before {
+  width: 3px;
+  height: 10px;
+  margin-left: 0;
+  clip-path: none;
+  box-shadow: 5px 0 0 currentColor;
+  transform: translateX(-2.5px);
+}
+/* One readout, "15:41:07 / 16:03:40": where the audio is and where the part ends. */
+#readout {
+  white-space: nowrap;
 }
 #player-bar time {
   font-variant-numeric: tabular-nums;
@@ -2462,15 +2488,48 @@ button.cite:hover {
 #pos {
   color: var(--fg);
 }
+/* The speed is a small pill (b2); it stays a picker, so its keys are unchanged. */
+#player-bar #speed {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  appearance: none;
+  color: var(--dim);
+  text-align: center;
+}
 /* The sliders match the buttons' 28 px, so one row fits the 48 px bar. */
 #player-bar input[type="range"] {
   height: 28px;
   margin: 0;
   padding-block: 0;
 }
-#scrub {
+#scrub-box {
+  position: relative;
   flex: 1 1 120px;
   min-width: 80px;
+  display: flex;
+  align-items: center;
+}
+#scrub {
+  flex: 1;
+  min-width: 0;
+}
+/* A note taken during the part: a short tick over the scrubber, under the pointer. */
+#marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#marks .mk {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 12px;
+  margin: -6px 0 0 -1px;
+  border-radius: 1px;
+  background: var(--faint);
 }
 #balance {
   width: 72px;

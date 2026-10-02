@@ -160,7 +160,7 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
     v.t.cleanup();
   });
 
-  test("auto pulls what it resolves to on this machine, which is fast until hardware detection exists", async () => {
+  test("auto with no Qwen in the catalog pulls fast's models, what a job would run here", async () => {
     const machine = [RECOGNIZER, "silero-vad", NEMOTRON];
     expect(presetModels("auto", machine)).toEqual({ preset: "auto", models: machine });
     expect(presetModels("fast", machine)).toEqual({ preset: "fast", models: machine });
@@ -194,6 +194,29 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
       preset: "best",
       models: [QWEN_ASR, "silero-vad"],
     });
+    v.t.cleanup();
+  });
+
+  test("[SV-R2] auto with Qwen and its build on disk pulls best's models, as a job would run it", async () => {
+    const build = llamaRuntime(
+      { "asr.accelerator": "auto", "asr.llamaServer": [] },
+      hostPlatform(),
+      MODELS,
+      { detected: detectAccelerator("auto", hostProbe()) },
+    ) as string;
+    const withQwen = [...registry, entry(QWEN_ASR, ["qwen.gguf"]), entry(build, ["llama.tar.gz"])];
+    const v = volume();
+    expect(
+      (await cli(v.env, ["models", "pull", "best", "--json"], { models: withQwen })).code,
+    ).toBe(0);
+    const r = await cli(v.env, ["models", "pull", "auto", "--json"], { models: withQwen });
+    expect(r.code).toBe(0);
+    expect(r.json).toMatchObject({
+      preset: "auto",
+      models: [QWEN_ASR, build, "silero-vad", NEMOTRON],
+    });
+    // Never Parakeet: with Qwen here, auto does not run it.
+    expect(existsSync(join(v.models, RECOGNIZER))).toBe(false);
     v.t.cleanup();
   });
 
