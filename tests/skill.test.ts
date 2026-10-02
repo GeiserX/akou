@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
@@ -374,6 +374,62 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
       t.cleanup();
     }
   }, 30_000);
+
+  test("[CLI-33] install then uninstall leaves the skills folders and the MCP config byte-identical", async () => {
+    // Every folder and file under the scratch home, with its bytes; the fakes' programs and
+    // call logs are not the harness's config, so they stay out.
+    const snapshot = (root: string): string[] => {
+      const out: string[] = [];
+      const walk = (rel: string) => {
+        for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
+          const r = rel === "" ? e.name : `${rel}/${e.name}`;
+          if (r === "fake-bin" || r.endsWith(".log")) continue;
+          if (e.isDirectory()) {
+            out.push(`${r}/`);
+            walk(r);
+          } else out.push(`${r} ${readFileSync(join(root, r)).toString("base64")}`);
+        }
+      };
+      walk("");
+      return out.sort();
+    };
+    const roundTrip = async (seed: (home: string) => void) => {
+      const t = tempDir();
+      try {
+        const f = fakeHarnesses(t.dir);
+        seed(t.dir);
+        const before = snapshot(t.dir);
+        const akou = join(t.dir, "bin", "akou");
+        const installed = await cli(f.env, ["skill", "install"], { self: [akou] });
+        expect(installed.code).toBe(0);
+        // Positive control: the install did write, so an unchanged snapshot is not a blind check.
+        expect(snapshot(t.dir)).not.toEqual(before);
+        const gone = await cli(f.env, ["skill", "uninstall"], { self: [akou] });
+        expect(gone.code).toBe(0);
+        expect(snapshot(t.dir)).toEqual(before);
+      } finally {
+        t.cleanup();
+      }
+    };
+    // A fresh harness: its folder and its own config exist, its skills folder and MCP entries do
+    // not.
+    await roundTrip((home) => {
+      mkdirSync(join(home, ".claude"));
+      mkdirSync(join(home, ".codex"));
+      writeFileSync(join(home, "fake-state", "claude.json"), "{}");
+      writeFileSync(join(home, "fake-state", "codex.json"), "{}");
+    });
+    // A harness in use: another skill and another MCP server are there before, and stay.
+    await roundTrip((home) => {
+      for (const h of [".claude", ".codex"]) {
+        mkdirSync(join(home, h, "skills", "other"), { recursive: true });
+        writeFileSync(join(home, h, "skills", "other", "SKILL.md"), "---\nname: other\n---\n");
+      }
+      const other = JSON.stringify({ other: { command: "/bin/other", args: ["serve"] } });
+      writeFileSync(join(home, "fake-state", "claude.json"), other);
+      writeFileSync(join(home, "fake-state", "codex.json"), other);
+    });
+  }, 60_000);
 
   test("with neither program on PATH it prints the exact commands and exits 0", async () => {
     const t = tempDir();

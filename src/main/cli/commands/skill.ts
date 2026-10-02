@@ -45,6 +45,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -379,7 +380,11 @@ interface Target {
   harness?: Harness;
 }
 
-/** Removes the shipped skills from a folder: only folders whose `SKILL.md` names that skill. */
+/**
+ * Removes the shipped skills from a folder: only folders whose `SKILL.md` names that skill. The
+ * skills folder goes too when that leaves it empty, so a harness whose skills folder install
+ * created is left as it was before (CLI-33).
+ */
 function removeSkills(skillsDir: string): string[] {
   const removed: string[] = [];
   for (const name of SKILL_NAMES) {
@@ -389,6 +394,7 @@ function removeSkills(skillsDir: string): string[] {
     rmSync(dest, { recursive: true, force: true });
     removed.push(dest);
   }
+  if (removed.length > 0 && readdirSync(skillsDir).length === 0) rmdirSync(skillsDir);
   return removed;
 }
 
