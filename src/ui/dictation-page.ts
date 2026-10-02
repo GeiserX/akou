@@ -35,7 +35,7 @@ import { remoteParts } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
-import { modelName } from "./models-rows.ts";
+import { type JobModels, jobModelChoices, modelName } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
 import {
@@ -51,6 +51,7 @@ import {
   section,
   segmented,
   selectBox,
+  selectOrTyped,
   toggle,
   unit,
 } from "./rows.ts";
@@ -82,6 +83,8 @@ type DictationReply = {
   final?: string | null;
   /** Each choice's time after the key is let go for 10 s of speech, measured or estimated (DC-T3). */
   latency?: Record<string, { ms: number; measured: boolean } | undefined>;
+  /** The engines a retry can use on this machine now: History offers only these. */
+  engines?: string[];
 };
 
 /** A choice's time after the key is let go, in words: "0.4 s after you let go, measured". */
@@ -90,6 +93,9 @@ export function latencyWords(l: { ms: number; measured: boolean } | undefined): 
   const s = Math.max(0.1, Math.round(l.ms / 100) / 10);
   return `About ${s} s after you let go of 10 s of speech, ${l.measured ? "measured on this kind of computer" : "estimated"}.`;
 }
+
+/** Pausing other media while dictating (DC-U8), which macOS cannot do. */
+const MEDIA_KEY = "dictation.muteMedia";
 
 /** The master switch, the first row. */
 export const ENABLE_KEY = "dictation.enabled";
@@ -153,12 +159,7 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
   },
   {
     title: "Voice",
-    keys: [
-      "dictation.languages",
-      MIC_KEY,
-      "dictation.preferBuiltInOverBluetooth",
-      "dictation.muteMedia",
-    ],
+    keys: ["dictation.languages", MIC_KEY, "dictation.preferBuiltInOverBluetooth", MEDIA_KEY],
   },
   { title: "Words and history", keys: [WORDS, HISTORY] },
   { title: "Rules per app", keys: ["dictation.apps"] },
@@ -220,6 +221,31 @@ export const HISTORY_KEYS: readonly string[] = ["dictation.retainDays", "dictati
 export const SERVER_GROUPS: readonly DictationGroup[] = [
   { title: "For other computers", keys: ["server.dictation_slots", "server.dictation_engine"] },
 ];
+
+/** The setting a dictating client's request runs when it names no engine (server mode). */
+export const SERVER_ENGINE_KEY = "server.dictation_engine";
+
+/**
+ * The engine for other computers' dictation: Automatic, a preset or a model by name (`choices`,
+ * the server's own list when it answered, else the presets in words), or a model named by its id,
+ * which the setting takes too. The Settings page draws it the same way.
+ */
+export function serverEngineControl(
+  id: string,
+  value: string,
+  choices?: readonly (readonly [value: string, label: string])[],
+): HTMLElement {
+  const w = wordsFor(SERVER_ENGINE_KEY);
+  return selectOrTyped({
+    id,
+    key: SERVER_ENGINE_KEY,
+    label: w.label,
+    options: choices?.length ? choices : (w.choices ?? []),
+    value,
+    other: "A model, by its id…",
+    placeholder: "Its id, such as qwen3-asr-1.7b",
+  });
+}
 
 /** Every key the app-mode page and its Advanced page place. */
 export function dictationKeys(): string[] {
@@ -332,6 +358,8 @@ export class DictationPage {
   private review: DictationReview | null = null;
   /** Dictations served in the last hour, in server mode. */
   private served: number | undefined;
+  /** Server mode: the presets and engines a dictation may run, as a select's choices. */
+  private engines: [value: string, label: string][] = [];
   /** The page under this one on screen instead of the page itself, if any. */
   private sub: Sub | null = null;
   /** "Use another computer" was turned on before an address was saved: the address turns it on. */
@@ -350,9 +378,12 @@ export class DictationPage {
   ) {
     this.root.append(this.col);
     this.root.addEventListener("change", (e) => this.changed(e.target as HTMLElement));
-    // History retries on another computer only when one has an address.
-    if (hooks.history)
+    // History retries on the engines this machine runs, and on another computer only when one
+    // has an address.
+    if (hooks.history) {
       hooks.history.remote = () => String(this.settings[REMOTE_URL_KEY] ?? "").trim() !== "";
+      hooks.history.engines = () => this.dictation?.engines ?? null;
+    }
   }
 
   /** Reads everything and draws the page; on `key`, goes to that setting. */
@@ -444,7 +475,12 @@ export class DictationPage {
     });
     const [cfg, server, status, dictation, mics, review] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config").catch(reach),
-      app ? null : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
+      app
+        ? null
+        : this.t.request<JobModels & { dictation?: { served_last_hour?: number } }>(
+            "GET",
+            "/server",
+          ),
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.readDictation() : null,
       app ? readMics(this.t) : null,
@@ -461,6 +497,7 @@ export class DictationPage {
     this.lost = lostOf(dictation);
     this.mics = mics;
     this.served = server?.body?.dictation?.served_last_hour;
+    this.engines = server && server.status < 400 ? jobModelChoices(server.body) : [];
     this.readError = null;
     if (cfg.status !== 200) {
       this.schema = {};
@@ -619,6 +656,8 @@ export class DictationPage {
     else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
     else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
     else if (key === FORMAT_WAIT_KEY) controls = [formatWait(id, w.label, spec, value)];
+    else if (key === SERVER_ENGINE_KEY)
+      controls = [serverEngineControl(id, String(value ?? "auto"), this.engines)];
     else if (key === "dictation.language")
       controls = [
         selectBox({
@@ -635,6 +674,11 @@ export class DictationPage {
     if (key === ENABLE_KEY) help = this.offReason() ?? help;
     if (key === REMOTE_URL_KEY && !inWindow)
       help = "Set in the akou app, since it decides where your voice goes.";
+    // macOS lets no app see another's player (docs/gates/dc-u8-media-pause.md): the switch would
+    // do nothing there, so it says so and cannot be turned on.
+    const noMedia = key === MEDIA_KEY && this.mac;
+    if (noMedia)
+      help = "macOS does not let akou see what is playing, so this does nothing on a Mac yet.";
     const els = controls.filter((c): c is HTMLElement => c instanceof HTMLElement);
     const all = (sel: string) =>
       els.flatMap((el) => [
@@ -645,7 +689,7 @@ export class DictationPage {
       const input = all("input, select, textarea")[0];
       if (input) input.dataset.key = key;
     }
-    if (fileOnly)
+    if (fileOnly || noMedia)
       for (const x of all("input, select, textarea, button"))
         (x as HTMLInputElement).disabled = true;
     const r = row(
@@ -1303,7 +1347,10 @@ export class DictationPage {
    * Waits for the next dictation's app for the per-app rules (DC-U9). With dictation off no
    * dictation comes, so the page says so rather than wait for nothing.
    */
-  private nextApp(found: (app: string) => void, failed: (why: string) => void): { stop(): void } {
+  private nextApp(
+    found: (app: string, name?: string) => void,
+    failed: (why: string) => void,
+  ): { stop(): void } {
     this.stopNextApp();
     const on =
       this.col.querySelector<HTMLInputElement>(`input[data-key="${ENABLE_KEY}"]`)?.checked ??
@@ -1679,6 +1726,7 @@ export class DictationPage {
     if (flash) {
       r.scrollIntoView({ block: "center" });
       r.classList.add("pg-flash");
+      // clock: how long a row's highlight shows.
       setTimeout(() => r.classList.remove("pg-flash"), 1200);
     }
     r.querySelector<HTMLElement>(

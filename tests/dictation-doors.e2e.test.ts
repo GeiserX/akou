@@ -82,6 +82,8 @@ describe("DC-G1: GET /v1/dictation", () => {
       backend: "fake",
       swallow_keys: true,
       latency: dictationLatency(),
+      // A retry can use only the engines whose model is here: fast's.
+      engines: ["fast"],
     });
   });
 

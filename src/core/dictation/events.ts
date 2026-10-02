@@ -14,6 +14,8 @@ export type FieldKind = "editable" | "not-editable" | "unknown" | "secure";
 export interface Target {
   /** Bundle id (macOS), executable name (Windows) or window class (Linux). */
   app: string;
+  /** The app's name as people know it (`Slack`); absent or empty where the helper gives none. */
+  name?: string;
   pid: number;
   /** An opaque window id, compared at insert time. */
   window: string;
@@ -78,6 +80,8 @@ export type DictationDraft =
        * context (DC-E6).
        */
       echo_retry?: boolean;
+      /** The AI tidy (DC-U6) wrote `text`; `raw` is still what the engine heard. */
+      formatted?: boolean;
     }
   | { type: "dictation.empty"; id: string }
   | { type: "dictation.inserted"; id: string; method: string; receipt_ms: number }
@@ -150,6 +154,7 @@ function isTarget(v: unknown): boolean {
   const t = v as Record<string, unknown>;
   return (
     isStr(t.app) &&
+    (t.name === undefined || isStr(t.name)) &&
     isNum(t.pid) &&
     isStr(t.window) &&
     ["editable", "not-editable", "unknown", "secure"].includes(t.field as string)
@@ -189,7 +194,8 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
         isNum(o.ms) &&
         (o.fallback_from === undefined || isStr(o.fallback_from)) &&
         (o.language_forced === undefined || typeof o.language_forced === "boolean") &&
-        (o.echo_retry === undefined || typeof o.echo_retry === "boolean")
+        (o.echo_retry === undefined || typeof o.echo_retry === "boolean") &&
+        (o.formatted === undefined || typeof o.formatted === "boolean")
         ? null
         : "dictation.text";
     case "dictation.inserted":
@@ -262,6 +268,8 @@ export interface DictationItem {
   language_forced: boolean | null;
   /** The engine echoed its context and the dictation was decoded again without it (DC-E6). */
   echo_retry: boolean;
+  /** The AI tidy (DC-U6) wrote `text`; `raw` is what the engine heard. */
+  formatted: boolean;
   error: string | null;
   /**
    * Why the field could not be read back after the insert (DC-L2), so nothing could be learned
@@ -295,6 +303,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
         fallback_from: null,
         language_forced: null,
         echo_retry: false,
+        formatted: false,
         error: null,
         learn: null,
       });
@@ -320,6 +329,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
           fallback_from: e.fallback_from ?? null,
           language_forced: e.language_forced ?? null,
           echo_retry: e.echo_retry ?? false,
+          formatted: e.formatted ?? false,
         });
         break;
       case "dictation.empty":

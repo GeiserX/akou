@@ -30,7 +30,7 @@ import {
 import { DictationLog } from "../src/main/dictation/store.ts";
 import { FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
-import { created, FakeModels, speak } from "./fixtures/asr-fake.ts";
+import { concat, created, FakeModels, silence, speak } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -331,6 +331,24 @@ describe("DC-E7: the stream's words", () => {
   test("a whole buffer streams in one-second pieces and comes back as one decode", async () => {
     const d = await liveDecode(fakeOpen(), new Float32Array(CAPTURE_RATE * 3));
     expect(d.text).toBe("w0 w1 w2 last");
+  });
+});
+
+describe("a dictation from a quiet microphone is cut on its gained copy", () => {
+  test("a word whose peak is under the -50 dBFS trim still gives a span that holds all of it", () => {
+    const p = new LivePipeline(new FakeModels(), {}, () => {});
+    // Peak about 0.0027, under the cut rule's -50 dBFS floor (0.0032) on the raw signal.
+    const word = speak(["hello"], { amp: 0.002 });
+    const quiet = concat(silence(0.5), word, silence(0.5));
+    const start = silence(0.5).length;
+    const spans = p.dictationSpans(quiet);
+    expect(spans.length).toBe(1);
+    const [span] = spans as [{ from: number; to: number }];
+    expect(span.from).toBeLessThanOrEqual(start);
+    expect(span.to).toBeGreaterThanOrEqual(start + word.length - Math.round(0.12 * 16_000));
+    expect(span.to).toBeLessThanOrEqual(quiet.length);
+    // The buffer itself is the caller's: the gain went into a copy.
+    expect(Math.max(...quiet.map(Math.abs))).toBeLessThan(0.0032);
   });
 });
 

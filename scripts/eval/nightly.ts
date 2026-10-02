@@ -6,6 +6,7 @@
  *   bun scripts/eval/nightly.ts --models <dir> --data <dir> --diarize <akou-diarize> --nemotron <onnx>
  *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,dictation]
  *                               [--out results.json] [--latency-table <json> [--machine <what>]]
+ *                               [--accelerator cpu|vulkan|cuda|metal]
  *
  * What it measures, per OS:
  *
@@ -20,10 +21,14 @@
  *   0.25 s collar, overlap scored). Gated at or below the baseline.
  * - The replay recall of the query engine on five generated three-hour calls, with its 85 % floor.
  * - Qwen3-ASR-1.7B through the pinned llama-server, on macOS and Linux (ASR-5's acceptance,
- *   docs/research/asr-architecture.md section 9; Windows waits for its own gate, ASR-12): WER on
+ *   docs/research/asr-architecture.md section 9; on Windows only with `--accelerator`, the way the
+ *   Windows gate ASR-12 runs it by hand, docs/gates/asr-12-windows.md): WER on
  *   30 FLEURS clips per language within +0.5 of the benchmark, no words on 25 silent AMI
  *   stretches, and llama-server's memory flat over 150 requests. The same requests on a server
  *   that keeps its default prompt cache are the failing control: its memory must pass the bound.
+ *   And a five-minute unit of joined clips, which the engine sends in requests of at most
+ *   `QWEN_MAX_REQUEST_SECONDS`, under a WER bound; the same unit sent uncut is the failing
+ *   control, which must lose words past it.
  * - Dictation's release-to-text time per engine (DC-T3, `scripts/eval/dictation-latency.ts`): the
  *   streaming model, Qwen and a loopback remote akou, p50 and p95 for 3, 10 and 30 s of FLEURS
  *   speech. Recorded, and with `--latency-table` written as `docs/gates/dictation-latency.json`'s
@@ -62,7 +67,7 @@ import {
   RECOGNIZER,
 } from "../../src/main/asr/models.ts";
 import { NemotronDiarizer } from "../../src/main/asr/nemotron.ts";
-import { QwenEngine } from "../../src/main/asr/qwen.ts";
+import { QWEN_MAX_REQUEST_SECONDS, QwenEngine } from "../../src/main/asr/qwen.ts";
 import { SherpaModels } from "../../src/main/asr/sherpa.ts";
 import { BestEngine } from "../../src/main/dictation/best.ts";
 import { LiveWords } from "../../src/main/dictation/live.ts";
@@ -223,14 +228,17 @@ export function readWav(b: Uint8Array): Float32Array {
 
 // --- FLEURS ------------------------------------------------------------------------------------
 
-interface Utterance {
+export interface Utterance {
   id: string;
   ref: string;
   wav: string;
 }
 
 /** The pinned FLEURS utterances of one language, extracted into `dir` once and cached there. */
-async function fleurs(lang: keyof typeof FLEURS.sets, dataDir: string): Promise<Utterance[]> {
+export async function fleurs(
+  lang: keyof typeof FLEURS.sets,
+  dataDir: string,
+): Promise<Utterance[]> {
   const set = FLEURS.sets[lang];
   const dir = join(dataDir, "fleurs", set.config);
   mkdirSync(dir, { recursive: true });
@@ -311,6 +319,13 @@ export const QWEN_GATE = {
   flatMb: 200,
   /** Requests the control makes: about 700 MB of cache at 18 MB each, over three times the bound. */
   controlRequests: 50,
+  /**
+   * The long unit: English clips joined into five minutes, past the 4096-token context. Cut into
+   * requests by the engine it read 4.41 % WER on an M4; sent uncut, 86.18 % (100 of 679 words).
+   */
+  longSeconds: 300,
+  /** The WER the long unit stays under, and the uncut control must pass. */
+  longWer: 15,
 } as const;
 
 /**
@@ -386,10 +401,20 @@ async function silence(dataDir: string): Promise<Float32Array[]> {
 /**
  * A process's memory in MB, counting what the system compressed or swapped out: macOS's
  * `footprint` (which also counts the Metal buffers the process owns), Linux's resident plus
- * swapped size. `ps`'s resident size alone misses compressed memory, so a growing cache can read
- * flat.
+ * swapped size, Windows' private bytes (its commit, resident or paged out). `ps`'s resident size
+ * alone misses compressed memory, so a growing cache can read flat.
  */
 export function memoryMb(pid: number, platform = process.platform): number {
+  if (platform === "win32") {
+    const r = Bun.spawnSync(
+      ["powershell", "-NoProfile", "-Command", `(Get-Process -Id ${pid}).PrivateMemorySize64`],
+      { stderr: "pipe" },
+    );
+    const bytes = Number(r.stdout.toString().trim());
+    if (!(bytes > 0))
+      throw new Error(`powershell: no private bytes for pid ${pid}: ${r.stderr.toString()}`);
+    return bytes / 2 ** 20;
+  }
   if (platform === "darwin") {
     const r = Bun.spawnSync(["footprint", "-f", "bytes", "-p", String(pid)], { stderr: "pipe" });
     const m = /Footprint:\s*(\d+)\s*B/.exec(r.stdout.toString());
@@ -411,8 +436,10 @@ export function memoryMb(pid: number, platform = process.platform): number {
 async function qwenServers(
   dir: string,
   platform: string,
+  setting = "auto",
 ): Promise<{ make(promptCache: boolean): LlamaServer; accelerator: string }> {
-  const { accelerator } = resolveAccelerator("auto", platform);
+  const { accelerator, note } = resolveAccelerator(setting, platform);
+  if (note) throw new Error(note);
   const buildId = llamaBuildId(platform, accelerator);
   const build = MODELS.find((m) => m.id === buildId);
   if (!build) throw new Error(`no llama-server build for ${platform}`);
@@ -465,8 +492,9 @@ async function qwenStage(
   platform: string,
   measures: Measure[],
   notes: string[],
+  setting = "auto",
 ): Promise<void> {
-  const { make, accelerator } = await qwenServers(modelsDir, platform);
+  const { make, accelerator } = await qwenServers(modelsDir, platform, setting);
   const load = (u: Utterance, lang: string) => ({
     samples: readWav(new Uint8Array(readFileSync(u.wav))),
     lang,
@@ -545,9 +573,62 @@ async function qwenStage(
     gate: "record",
     bound: QWEN_GATE.flatMb,
   });
-  notes.push(
-    `Qwen3-ASR-1.7B Q8_0 on llama-server (${accelerator}): WER on the first ${k} FLEURS clips per language, language set to the clip's; the benchmark's ${quiet.length} silent AMI stretches on auto among en and es; memory over ${n} requests, then ${QWEN_GATE.controlRequests} with the default --cache-ram as the control, which must grow past ${QWEN_GATE.flatMb} MB`,
+
+  // The long unit: the engine cuts it into requests of at most QWEN_MAX_REQUEST_SECONDS; the same
+  // audio in one request is the failing control, whose answer stops when the context is full.
+  const long = joinClips(
+    en.map((u, i) => ({ samples: (english[i] as { samples: Float32Array }).samples, ref: u.ref })),
+    QWEN_GATE.longSeconds,
   );
+  const longSeconds = Math.round(long.samples.length / ASR_RATE);
+  for (const uncut of [false, true]) {
+    const server = make(false);
+    const engine = new QwenEngine({
+      id: QWEN_ASR,
+      server,
+      allowed: ["en", "es"],
+      timeoutMs: 1_800_000,
+      ...(uncut ? { maxSeconds: Number.POSITIVE_INFINITY } : {}),
+    });
+    try {
+      const h = await engine.decode({ samples: long.samples, lang: "en", glossary: [] });
+      measures.push({
+        key: `wer.fleurs_en_long${QWEN_GATE.longSeconds}.${QWEN_ASR}${uncut ? ".uncut_control" : ""}`,
+        value: wer([{ ref: long.ref, hyp: h.text }]),
+        unit: "%",
+        better: uncut ? "higher" : "lower",
+        gate: "record",
+        bound: QWEN_GATE.longWer,
+      });
+    } finally {
+      await server.stop();
+    }
+  }
+  notes.push(
+    `Qwen3-ASR-1.7B Q8_0 on llama-server (${accelerator}): WER on the first ${k} FLEURS clips per language, language set to the clip's; the benchmark's ${quiet.length} silent AMI stretches on auto among en and es; memory over ${n} requests, then ${QWEN_GATE.controlRequests} with the default --cache-ram as the control, which must grow past ${QWEN_GATE.flatMb} MB; a ${longSeconds} s unit of joined English clips in requests of at most ${QWEN_MAX_REQUEST_SECONDS} s, then uncut as the control, which must lose words past ${QWEN_GATE.longWer} % WER`,
+  );
+}
+
+/** Clips joined in order, 0.3 s of silence after each, until `seconds` of audio; their refs joined. */
+export function joinClips(
+  clips: readonly { samples: Float32Array; ref: string }[],
+  seconds: number,
+): { samples: Float32Array; ref: string } {
+  const gap = Math.round(0.3 * ASR_RATE);
+  const taken: { samples: Float32Array; ref: string }[] = [];
+  let n = 0;
+  for (const c of clips) {
+    if (n >= seconds * ASR_RATE) break;
+    taken.push(c);
+    n += c.samples.length + gap;
+  }
+  const samples = new Float32Array(n);
+  let at = 0;
+  for (const c of taken) {
+    samples.set(c.samples, at);
+    at += c.samples.length + gap;
+  }
+  return { samples, ref: taken.map((c) => c.ref).join(" ") };
 }
 
 // --- dictation latency (DC-T3) ----------------------------------------------------------------
@@ -899,9 +980,21 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (only.has("qwen")) {
-    if (platform.startsWith("win32"))
-      notes.push("Qwen3-ASR: not run on Windows until its own gate (ASR-12)");
-    else await qwenStage(flag("--qwen-models") ?? modelsDir, dataDir, platform, measures, notes);
+    const accelerator = flag("--accelerator");
+    // Windows runs Qwen by hand only, with its backend named (the gate, ASR-12), not each night.
+    if (platform.startsWith("win32") && !accelerator)
+      notes.push(
+        "Qwen3-ASR: not run on Windows each night; the Windows gate (ASR-12) runs it by hand with --accelerator",
+      );
+    else
+      await qwenStage(
+        flag("--qwen-models") ?? modelsDir,
+        dataDir,
+        platform,
+        measures,
+        notes,
+        accelerator ?? "auto",
+      );
   }
 
   if (only.has("dictation")) {

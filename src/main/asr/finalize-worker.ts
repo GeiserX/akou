@@ -33,6 +33,7 @@
  */
 
 import { closeSync, openSync, readSync } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import { workerData } from "node:worker_threads";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
@@ -45,14 +46,19 @@ import {
   ASR_RATE,
   type DiarizedSpan,
   type FinalEngine,
+  type Hypothesis,
   loadModelSet,
   type ModelSet,
   type ModelSpec,
   type PreparedHotwords,
+  RecognizerEngine,
+  type WordHyp,
 } from "./engine.ts";
+import { type DroppedEngine, finalEngineMemoryMb } from "./final-model.ts";
 import type { FinalStep } from "./final-text.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
 import { peak, prepareSpan } from "./pad.ts";
+import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
 
@@ -71,6 +77,12 @@ export interface FinalOptions {
   attachSeconds: number;
   /** A diarizer's turn edge cuts at the nearest pause within this many seconds of it. */
   snapSeconds: number;
+  /**
+   * Memory the engines of one pass may hold together, MB; 0 for 60 % of this machine's memory. A
+   * pass over several engines leaves engines out from the end of its list until the rest fit
+   * (`finalEngineMemoryMb`); the first always runs.
+   */
+  memoryBudgetMb: number;
 }
 
 export const DEFAULT_FINAL: FinalOptions = {
@@ -81,7 +93,10 @@ export const DEFAULT_FINAL: FinalOptions = {
   minGapSeconds: 0.3,
   attachSeconds: 1,
   snapSeconds: 0.5,
+  memoryBudgetMb: 0,
 };
+
+const MB = 1024 * 1024;
 
 /** One part's stereo audio at 16 kHz, read by channel index. */
 export interface FinalAudio {
@@ -126,6 +141,8 @@ export interface FinalInput {
    * each by the audio it decodes, so it moves about evenly; nothing is written to the log for it.
    */
   progress?(done_s: number, total_s: number, step: FinalStep): void;
+  /** Engines of `asr.final.engines` the host already left out (not downloaded), and why. */
+  dropped?: readonly DroppedEngine[];
   options?: Partial<FinalOptions>;
 }
 
@@ -478,12 +495,47 @@ function labelPiece(p: Piece, spans: readonly DiarizedSpan[], reach: number): st
   return near ? `s${near.speaker}` : "s?";
 }
 
+/**
+ * The engines of a list that fit `budgetMb` together, in order: engines are left out from the end
+ * until the rest fit, and each one left out goes to `dropped`. The first always stays.
+ */
+export function enginesWithinBudget(
+  list: readonly FinalEngine[],
+  budgetMb: number,
+  dropped: DroppedEngine[],
+): FinalEngine[] {
+  const keep = [...list];
+  const mb = (es: readonly FinalEngine[]) => es.reduce((n, e) => n + finalEngineMemoryMb(e), 0);
+  while (keep.length > 1 && mb(keep) > budgetMb) {
+    const e = keep.pop() as FinalEngine;
+    dropped.push({
+      engine: e.id,
+      reason: `over the memory budget: with the engines before it the pass needs about ${mb([...keep, e])} MB, the budget is ${budgetMb} MB`,
+    });
+  }
+  return keep;
+}
+
+/** The name of the words several engines wrote together: `rover-conf(a,b)`, or the one engine. */
+function fusedName(engines: readonly FinalEngine[]): string {
+  return engines.length === 1
+    ? (engines[0] as FinalEngine).id
+    : `rover-conf(${engines.map((e) => e.id).join(",")})`;
+}
+
+/**
+ * The final pass. With no `engine` the model set's recognizer (Parakeet) writes the words. With
+ * one, that engine (Qwen) does. With a list (`asr.final.engines`), every engine that fits the
+ * memory budget decodes every piece and confidence ROVER fuses their words (rover.ts), the first
+ * engine breaking ties; an engine that goes down during the pass is dropped and the pass goes on
+ * with the rest, and only the last one left going down fails it.
+ */
 export async function runFinalPass(
   input: FinalInput,
   models: ModelSet,
   emit: (d: EventDraft) => void,
   log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
-  engine?: FinalEngine,
+  engine?: FinalEngine | readonly FinalEngine[],
 ): Promise<FinalResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
   const view = fold(input.events);
@@ -495,9 +547,20 @@ export async function runFinalPass(
     .map((p) => p.part)
     .filter((p) => audio.length(p) > 0);
   const skipped: SkippedSpan[] = [];
+  const listed: readonly FinalEngine[] =
+    engine === undefined ? [] : Array.isArray(engine) ? engine : [engine as FinalEngine];
+  const dropped: DroppedEngine[] = [...(input.dropped ?? [])];
+  const budgetMb = o.memoryBudgetMb > 0 ? o.memoryBudgetMb : Math.round((totalmem() * 0.6) / MB);
+  // The engines still decoding; one that goes down mid-pass leaves it.
+  const engines = enginesWithinBudget(listed, budgetMb, dropped);
+  for (const d of dropped.slice(input.dropped?.length ?? 0))
+    log("warn", `${d.engine} does not run: ${d.reason}`);
+  // `final.done` names the engines and the dropped ones when the pass was given several.
+  const several = listed.length > 1 || dropped.length > 0;
+  const fuser = new RoverFuser("rover-conf");
   // With an engine (Qwen) the model set's recognizer is never prepared, so it never loads. The
   // recognizer's name is known before it loads; the lines take the loaded one's own.
-  let modelId = engine ? engine.id : models.recognizerModel;
+  let modelId = engines.length > 0 ? fusedName(engines) : models.recognizerModel;
   let step = "energy";
   if (!input.announced)
     emit({ type: "final.started", pid: input.pid ?? process.pid, model: modelId });
@@ -520,10 +583,12 @@ export async function runFinalPass(
         layer.push({ type: "seg", id: l.id, rev: l.rev + 1, text: null, by: "app" });
     }
 
+    const named = () =>
+      several ? { engines: engines.map((e) => e.id), dropped: [...dropped] } : {};
     if (!any) {
       for (const d of layer) emit(d);
       for (const p of parts) emit({ type: "final.part.done", part: p });
-      emit({ type: "final.done", parts, skipped: [], model: modelId });
+      emit({ type: "final.done", parts, skipped: [], model: modelId, ...named() });
       return { ok: true, parts, skipped, model: modelId };
     }
 
@@ -545,15 +610,15 @@ export async function runFinalPass(
     progress(0, "starting");
     // Qwen's llama-server starts now, so the step says so while it loads. A start that fails is
     // tried again by the first piece's decode, which restarts it once before the pass fails.
-    if (engine) {
+    for (const e of engines) {
       try {
-        await engine.load();
+        await e.load();
       } catch (err) {
-        log("warn", `${engine.id} did not start: ${(err as Error).message}; trying again`);
+        log("warn", `${e.id} did not start: ${(err as Error).message}; trying again`);
       }
     }
     const glossary = input.glossary ?? input.decode?.entries.map((e) => e.term) ?? [];
-    const hw = engine ? null : models.prepare(input.decode);
+    const hw = engines.length > 0 ? null : models.prepare(input.decode);
     if (hw) modelId = hw.recognizer.model;
     emit({
       type: "vocab.used",
@@ -630,9 +695,16 @@ export async function runFinalPass(
           const skip = (from: number, to: number, error: string) =>
             skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error });
           // Qwen: an engine that stays down (it failed twice) fails the pass, never falls back.
-          const r = engine
-            ? await decodeHalvingWith(engine, unit, samples, piece.from, piece.to, o, skip)
-            : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
+          const r: { text: string; lang?: string; model?: string } =
+            engines.length > 0
+              ? await decodeEngines(engines, fuser, unit, samples, piece.from, piece.to, o, {
+                  skip,
+                  drop: (e, err) => {
+                    dropped.push({ engine: e.id, reason: `failed during the pass: ${err}` });
+                    log("error", `${e.id} failed, the final pass goes on without it: ${err}`);
+                  },
+                })
+              : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
           progress(piece.to);
           if (r.lang) languages.add(r.lang);
           if (r.text === "") continue;
@@ -655,7 +727,7 @@ export async function runFinalPass(
             w0,
             w1,
             text: r.text,
-            model: modelId,
+            model: r.model ?? modelId,
             ...(r.lang ? { lang: r.lang } : {}),
           });
         }
@@ -670,6 +742,8 @@ export async function runFinalPass(
       layer.push({ type: "final.part.done", part: p });
     }
     const decode_s = (performance.now() - decodeFrom) / 1000;
+    // An engine dropped mid-pass: the pass is named by the engines that decoded to its end.
+    if (engines.length > 0) modelId = fusedName(engines);
     for (const d of layer) emit(d);
 
     // 4 (names). Final clusters to live clusters, jointly.
@@ -698,6 +772,7 @@ export async function runFinalPass(
       ...(languages.size > 0 ? { languages: [...languages].sort() } : {}),
       ...(warning ? { warning } : {}),
       model: modelId,
+      ...named(),
     });
     const audio_s = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
     return {
@@ -716,6 +791,36 @@ export async function runFinalPass(
   }
 }
 
+/** What one span decoded to: its text, its language, and its words timed in `samples`. */
+interface Decoded {
+  text: string;
+  lang?: string;
+  /** The engine's words; `t0` and `t1`, when the engine gives them, are seconds into `samples`. */
+  words: WordHyp[];
+}
+
+/**
+ * The engine's words of the span that starts at sample `from`, timed from the start of `samples`:
+ * `prepareSpan` pads after the speech only, so a time into the span plus its start is its time.
+ */
+function placed(words: readonly WordHyp[] | undefined, from: number): WordHyp[] {
+  const off = from / ASR_RATE;
+  return (words ?? []).map((w) => ({
+    ...w,
+    ...(w.t0 !== undefined ? { t0: off + w.t0 } : {}),
+    ...(w.t1 !== undefined ? { t1: off + w.t1 } : {}),
+  }));
+}
+
+/** Two halves of a span, joined. */
+function joined(a: Decoded, b: Decoded): Decoded {
+  return {
+    text: [a.text, b.text].filter((t) => t !== "").join(" "),
+    lang: a.lang ?? b.lang,
+    words: [...a.words, ...b.words],
+  };
+}
+
 /**
  * `decodeHalving` over a `FinalEngine` (Qwen through llama-server): the same halving of a span the
  * engine refuses, but an error marked `fatal` (the engine is down) ends the pass instead of costing
@@ -729,21 +834,66 @@ async function decodeHalvingWith(
   to: number,
   o: FinalOptions,
   skip: (from: number, to: number, error: string) => void,
-): Promise<{ text: string; lang?: string }> {
+): Promise<Decoded> {
   try {
     const h = await engine.decode({ ...unit, samples: prepareSpan(samples.subarray(from, to)) });
-    return { text: h.text.trim(), lang: h.lang };
+    const text = h.text.trim();
+    // Fusion aligns words: an engine that gives text alone gives its words unscored.
+    const words =
+      h.words.length > 0 || text === ""
+        ? placed(h.words, from)
+        : text.split(/\s+/).map((w): WordHyp => ({ w }));
+    return { text, lang: h.lang, words };
   } catch (err) {
     if ((err as { fatal?: boolean }).fatal) throw err;
     if (to - from > o.minSplitSeconds * ASR_RATE) {
       const mid = from + Math.floor((to - from) / 2);
       const a = await decodeHalvingWith(engine, unit, samples, from, mid, o, skip);
       const b = await decodeHalvingWith(engine, unit, samples, mid, to, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+      return joined(a, b);
     }
     skip(from, to, (err as Error).message);
-    return { text: "" };
+    return { text: "", words: [] };
   }
+}
+
+/**
+ * One piece through every engine still running, fused. With one engine its own words, and an
+ * error marked `fatal` fails the pass as before. With several, a fatal error drops that engine
+ * (`drop`, which the caller records) and the piece is fused from the rest; a span one engine
+ * refuses is listed with that engine's id. The fused line is named `rover-conf(<ids>)`.
+ */
+async function decodeEngines(
+  engines: FinalEngine[],
+  fuser: RoverFuser,
+  unit: { lang: string; glossary: readonly string[] },
+  samples: Float32Array,
+  from: number,
+  to: number,
+  o: FinalOptions,
+  on: {
+    skip: (from: number, to: number, error: string) => void;
+    drop: (engine: FinalEngine, error: string) => void;
+  },
+): Promise<{ text: string; lang?: string; model: string }> {
+  const hyps: Hypothesis[] = [];
+  for (const e of [...engines]) {
+    const skip =
+      engines.length > 1
+        ? (a: number, b: number, error: string) => on.skip(a, b, `${e.id}: ${error}`)
+        : on.skip;
+    try {
+      const r = await decodeHalvingWith(e, unit, samples, from, to, o, skip);
+      hyps.push({ engine: e.id, ms: 0, ...r });
+    } catch (err) {
+      if (engines.length === 1) throw err;
+      engines.splice(engines.indexOf(e), 1);
+      on.drop(e, (err as Error).message);
+      await e.unload().catch(() => {});
+    }
+  }
+  const h = hyps.length > 1 ? fuser.fuseSync(hyps) : (hyps[0] as Hypothesis);
+  return { text: h.text.trim(), model: h.engine, ...(h.lang ? { lang: h.lang } : {}) };
 }
 
 /** Decodes `[from, to)`; a refused span is halved while longer than `minSplitSeconds`. */
@@ -754,19 +904,19 @@ function decodeHalving(
   hw: PreparedHotwords,
   o: FinalOptions,
   skip: (from: number, to: number, error: string) => void,
-): { text: string; lang?: string } {
+): Decoded {
   try {
     const r = hw.recognizer.decode(prepareSpan(samples.subarray(from, to)), streamHotwords(hw));
-    return { text: r.text.trim(), lang: r.lang };
+    return { text: r.text.trim(), lang: r.lang, words: placed(r.words, from) };
   } catch (err) {
     if (to - from > o.minSplitSeconds * ASR_RATE) {
       const mid = from + Math.floor((to - from) / 2);
       const a = decodeHalving(samples, from, mid, hw, o, skip);
       const b = decodeHalving(samples, mid, to, hw, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+      return joined(a, b);
     }
     skip(from, to, (err as Error).message);
-    return { text: "" };
+    return { text: "", words: [] };
   }
 }
 
@@ -786,6 +936,8 @@ type ToFinal = {
   models: ModelSpec;
   decode: DecodeList | null;
   files: { path: string; sha256: string }[];
+  /** Engines of the list the host left out before the pass (not downloaded). */
+  dropped?: DroppedEngine[];
   options?: Partial<FinalOptions>;
 };
 
@@ -808,7 +960,7 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   let models: ModelSet | undefined;
   let engine: FinalEngine | undefined;
   // The VAD and the speaker labels come from the model set; the words from Qwen when it is named.
-  const { final: llama, ...setSpec } = m.models;
+  const { final: llama, finals, ...setSpec } = m.models;
   let sent = Number.NEGATIVE_INFINITY;
   let sentStep: FinalStep | null = null;
   // A new step always goes; within decoding, at most once a second, and the last figure.
@@ -828,6 +980,15 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
         log,
       });
     }
+    // Several engines: Qwen where the list names it, the model set's recognizer (Parakeet) for the
+    // rest, in the list's order.
+    const set = models;
+    const listed =
+      finals && finals.length > 1
+        ? finals.map((id) =>
+            engine && id === engine.id ? engine : new RecognizerEngine(set as ModelSet, m.decode),
+          )
+        : engine;
     const langs = llama?.languages ?? [];
     const audio = await openFinalAudio(m.audio);
     try {
@@ -841,12 +1002,13 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
           // One language is forced; several are lidc among them (QwenEngine's `allowed`).
           language: langs.length === 1 ? (langs[0] as string) : "auto",
           progress,
+          ...(m.dropped ? { dropped: m.dropped } : {}),
           options: m.options,
         },
         models,
         emit,
         log,
-        engine,
+        listed,
       );
     } finally {
       audio.close?.();
@@ -887,9 +1049,20 @@ export interface FinalCall {
   holdWriter(): () => void;
 }
 
+/**
+ * What a pass on `models` is named in `final.started`: `rover-conf(<ids>)` over several engines,
+ * else Qwen's id with `final`, else the recognizer's.
+ */
+export function finalSpecName(models: ModelSpec): string {
+  if (models.finals && models.finals.length > 1) return `rover-conf(${models.finals.join(",")})`;
+  return models.final?.engine ?? modelNameFor(models);
+}
+
 export interface FinalizeOptions {
   /** The model set; with `final`, Qwen on llama-server writes the words. */
   models: ModelSpec;
+  /** Engines of `asr.final.engines` left out before the pass (not downloaded), for `final.done`. */
+  dropped?: readonly DroppedEngine[];
   audio: FinalAudioSpec;
   vocab?: VocabSource;
   options?: Partial<FinalOptions>;
@@ -925,13 +1098,14 @@ export const FINAL_MIN_BUDGET_MS = 60_000;
 export const FINAL_LLAMA_START_MS = 300_000;
 
 /**
- * How long a final pass may take: half the call's recorded length (DESIGN 3.3 targets 10 to 25 %),
- * and never under a minute. A pass past it is stuck, not slow.
+ * How long a final pass may take: half the call's recorded length (DESIGN 3.3 targets 10 to 25 %)
+ * for each engine, since each one decodes every piece, and never under a minute. A pass past it is
+ * stuck, not slow.
  */
-export function finalBudgetMs(events: readonly LogEvent[]): number {
+export function finalBudgetMs(events: readonly LogEvent[], engines = 1): number {
   let seconds = 0;
   for (const e of events) if (e.type === "part.ended") seconds += e.fileSeconds;
-  return Math.max(FINAL_MIN_BUDGET_MS, Math.round(seconds * 500));
+  return Math.max(FINAL_MIN_BUDGET_MS, Math.round(seconds * 500 * Math.max(1, engines)));
 }
 
 /**
@@ -946,7 +1120,9 @@ export async function finalizeCall(
   o: FinalizeOptions,
 ): Promise<FinalResult & { loads: Record<string, number> }> {
   const release = call.holdWriter();
-  const model = o.models.final?.engine ?? modelNameFor(o.models);
+  const model = finalSpecName(o.models);
+  // The decode list is built for the first engine: with several, it goes to them as a glossary.
+  const listModel = o.models.finals?.[0] ?? model;
   // Written before the first await, so the pass is in the log by the time the caller answers: a
   // `finalize --force` followed by `akou wait` never takes the earlier final.done for this one.
   call.record({ type: "final.started", pid: process.pid, model });
@@ -982,13 +1158,15 @@ export async function finalizeCall(
       events,
       audio: o.audio,
       models: o.models,
-      decode: callDecodeList(view, model, o.vocab),
+      decode: callDecodeList(view, listModel, o.vocab),
       files: [...(o.vocab?.files ?? [])],
+      ...(o.dropped && o.dropped.length > 0 ? { dropped: [...o.dropped] } : {}),
       options: o.options,
     };
     const clock = o.clock ?? realClock;
     const budget =
-      o.budgetMs ?? finalBudgetMs(events) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
+      o.budgetMs ??
+      finalBudgetMs(events, o.models.finals?.length) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
@@ -1069,7 +1247,27 @@ export interface JobPassInput {
   language?: string;
   /** The job's keywords as a glossary, for an engine that takes one (Qwen's context). */
   glossary?: readonly string[];
+  /** The languages an `auto` decode may choose among (the job's `languages[]`), over the engine's. */
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
+  /** Told as the pass moves: its stage, and the seconds of audio it has transcribed of the total. */
+  progress?: (p: JobProgress) => void;
+}
+
+/** Where a running job is (akou-5an.116): reading its file, labelling speakers, transcribing. */
+export interface JobProgress {
+  stage: "decode" | "diarize" | "transcribe";
+  /** Seconds of the file transcribed so far; 0 before the transcribing starts. */
+  done_s: number;
+  /** The file's length in seconds; null while the file is still being read. */
+  total_s: number | null;
+}
+
+/** Wall seconds per stage of a job (akou-5an.115); `diarize_s` is null when no labels were asked. */
+export interface JobTimings {
+  decode_s: number;
+  diarize_s: number | null;
+  transcribe_s: number;
 }
 
 export interface JobSegment {
@@ -1080,6 +1278,27 @@ export interface JobSegment {
   speaker: string | null;
 }
 
+/**
+ * One word of a job (SV-J4). `s` and `e` are seconds into the file, null from an engine that gives
+ * no word times (Qwen); `c` is the engine's confidence, 0 to 1, null from one that gives none.
+ */
+export interface JobWord {
+  w: string;
+  s: number | null;
+  e: number | null;
+  c: number | null;
+}
+
+/** Whether a job's speaker labels were made (SV-J4). */
+export interface JobSpeakers {
+  /** The job asked for `diarize`. */
+  asked: boolean;
+  /** Its segments carry speaker labels: the speaker model ran and found turns. */
+  labelled: boolean;
+  /** Why the speaker model failed (a missing helper, a missed deadline), or null. */
+  error: string | null;
+}
+
 export interface JobPassResult {
   text: string;
   segments: JobSegment[];
@@ -1088,12 +1307,20 @@ export interface JobPassResult {
   duration_s: number;
   /** The recognizer's registry name, or null when nothing was decoded. */
   model: string | null;
+  /** Every decoded word, in order. */
+  words: JobWord[];
+  /** Spans the engine refused even after halving to `minSplitSeconds`: their words are missing. */
   skipped: { s: number; e: number; error: string }[];
+  speakers: JobSpeakers;
+  /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
+  diarized: boolean;
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
    */
   decode_s?: number;
+  /** Wall seconds of the pass's two stages, model loads and an engine's start included. */
+  stages?: { diarize_s: number | null; transcribe_s: number };
 }
 
 /**
@@ -1114,20 +1341,32 @@ export async function runJobPass(
   const o = { ...DEFAULT_FINAL, ...input.options };
   const x = input.samples;
   const duration_s = round3(x.length / ASR_RATE);
+  const tell = (stage: JobProgress["stage"], done: number) =>
+    input.progress?.({ stage, done_s: round3(done), total_s: duration_s });
+  const passFrom = performance.now();
+  let diarize_s: number | null = null;
   const empty: JobPassResult = {
     text: "",
     segments: [],
     language: null,
     duration_s,
     model: null,
+    words: [],
     skipped: [],
+    // Nothing to label: no speech, so no speaker model runs.
+    speakers: { asked: input.diarize, labelled: false, error: null },
+    diarized: false,
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
   // With an engine the model set's recognizer is never prepared, so it never loads.
   const hw = engine ? null : models.prepare(input.decode);
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
   const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
-  const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
+  const unit = {
+    lang: input.language ?? "auto",
+    glossary: input.glossary ?? [],
+    allowed: input.languages,
+  };
   const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
   const vadS = (performance.now() - vadFrom) / 1000;
@@ -1140,19 +1379,24 @@ export async function runJobPass(
   const from = w0 * window;
   const samples = x.subarray(from, Math.min(x.length, w1 * window));
   let spans: DiarizedSpan[] = [];
+  let diarizeError: string | null = null;
   if (input.diarize) {
+    tell("diarize", 0);
+    const diarizeFrom = performance.now();
     // A diarizer that fails costs the labels, not the job, as on a call.
     try {
       spans = await models.diarizer().process(samples);
     } catch (err) {
-      log(
-        "error",
-        `speaker labels failed, the job goes on without them: ${(err as Error).message}`,
-      );
+      diarizeError = (err as Error).message;
+      log("error", `speaker labels failed, the job goes on without them: ${diarizeError}`);
     }
+    diarize_s = round3((performance.now() - diarizeFrom) / 1000);
   }
+  tell("transcribe", from / ASR_RATE);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
+  const words: JobWord[] = [];
+  const at = (t: number | undefined) => (t === undefined ? null : round3(from / ASR_RATE + t));
   // Characters of text per detected language: the job's language is the one most of it is in, so
   // a filler the model hears as another language at the start does not name the whole file.
   const heard = new Map<string, number>();
@@ -1177,8 +1421,17 @@ export async function runJobPass(
     const r = engine
       ? await decodeHalvingWith(engine, unit, samples, piece.from, piece.to, o, skip)
       : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
+    tell("transcribe", (from + piece.to) / ASR_RATE);
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
+    for (const w of r.words) {
+      words.push({
+        w: w.w,
+        s: at(w.t0),
+        e: at(w.t1 ?? w.t0),
+        c: w.conf === undefined ? null : round3(w.conf),
+      });
+    }
     segments.push({
       s: round3((from + piece.from) / ASR_RATE),
       e: round3((from + piece.to) / ASR_RATE),
@@ -1198,8 +1451,15 @@ export async function runJobPass(
     language,
     duration_s,
     model: modelId,
+    words,
     skipped,
+    speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
+    diarized: input.diarize && diarizeError === null,
     decode_s,
+    stages: {
+      diarize_s,
+      transcribe_s: round3((performance.now() - passFrom) / 1000 - (diarize_s ?? 0)),
+    },
   };
 }
 
@@ -1211,11 +1471,13 @@ type ToJob = {
   diarize: boolean;
   language?: string;
   glossary?: readonly string[];
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 };
 
 type FromJob =
   | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
   | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
@@ -1246,6 +1508,8 @@ async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEn
 }
 
 async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
+  let lastSent = Number.NEGATIVE_INFINITY;
+  let lastStage: JobProgress["stage"] | null = null;
   const { final: _, ...setSpec } = m.models;
   const key = JSON.stringify(setSpec);
   if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(setSpec as ModelSpec) };
@@ -1264,7 +1528,22 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         decode: m.decode,
         language: m.language,
         glossary: m.glossary,
+        languages: m.languages,
         options: m.options,
+        progress: (p) => {
+          // A new stage always goes; within one, at most once a second, and the last figure.
+          const now = performance.now();
+          if (
+            p.stage === lastStage &&
+            now - lastSent < PROGRESS_EVERY_MS &&
+            p.done_s < (p.total_s ?? 0)
+          ) {
+            return;
+          }
+          lastSent = now;
+          lastStage = p.stage;
+          reply({ type: "progress", ...p });
+        },
       },
       models,
       (level, msg) => reply({ type: "log", level, msg }),
@@ -1301,6 +1580,7 @@ export class JobWorker {
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
+    const onProgress = input.progress;
     if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
     this.w ??= new Worker(siblingModule(import.meta.url, "finalize-worker"), {
       workerData: FINALIZE_WORKER_NAME,
@@ -1321,6 +1601,10 @@ export class JobWorker {
       w.onmessage = (e: MessageEvent<FromJob>) => {
         const r = e.data;
         if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        if (r.type === "progress") {
+          const { type: _t, ...p } = r;
+          return onProgress?.(p);
+        }
         if (r.type === "child") {
           if (r.alive) this.kids.add(r.pid);
           else this.kids.delete(r.pid);
@@ -1347,6 +1631,7 @@ export class JobWorker {
         diarize: input.diarize,
         language: input.language,
         glossary: input.glossary,
+        languages: input.languages,
         options: input.options,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
