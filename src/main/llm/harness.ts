@@ -90,6 +90,7 @@ async function run(
       stdout: "pipe",
       stderr: "ignore",
     });
+    // clock: a deadline on a real harness process.
     const timer = setTimeout(() => p.kill(), timeoutMs);
     let out = "";
     const dec = new TextDecoder();
@@ -105,6 +106,7 @@ async function run(
     clearTimeout(timer);
     // A descendant that inherited stdout (a login profile's background job) can hold it open after
     // the program is gone: what arrived within a short grace is the answer.
+    // clock: a grace for pipes a descendant may hold open.
     const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
     await Promise.race([read, grace]);
     reader.cancel().catch(() => {});
@@ -556,6 +558,7 @@ export class HarnessProvider implements Provider {
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => {
       killTree(proc, "SIGTERM");
+      // clock: a grace for a real harness process to exit before it is killed.
       killTimer = setTimeout(() => killTree(proc, "SIGKILL"), KILL_GRACE_MS);
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -589,6 +592,7 @@ export class HarnessProvider implements Provider {
       // A descendant that inherited the pipes (and left the group) can hold them open after the
       // harness is gone; once it has exited, the pipes get a short grace and are then abandoned.
       const code = await proc.exited;
+      // clock: a grace for pipes a descendant may hold open.
       const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
       await Promise.race([Promise.all([outDone, errDone]), grace]);
       if (signal.aborted) throw new ProviderError("cancelled", "cancelled");

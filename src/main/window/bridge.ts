@@ -171,6 +171,7 @@ export class Bridge {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const soon = () => {
       if (timer) return;
+      // clock: a deadline on the window's answer over its socket.
       timer = setTimeout(() => {
         timer = null;
         fn();

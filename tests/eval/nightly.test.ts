@@ -124,6 +124,23 @@ describe("the committed baselines", () => {
     );
     expect(named).toEqual(Object.keys(b.platforms));
   });
+
+  test("each OS the night runs on has a baseline for every gated number", () => {
+    const b = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "docs", "gates", "nightly-baselines.json"),
+        "utf8",
+      ),
+    ) as { platforms: Record<string, Record<string, number>> };
+    const gated = [
+      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32",
+      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32",
+      "der.ami_test2.nemotron-3-diarization",
+    ];
+    // nightly.yml's matrix: macos-latest, ubuntu-latest and windows-latest.
+    for (const p of ["darwin-arm64", "linux-x64", "win32-x64"])
+      expect(Object.keys(b.platforms[p] ?? {}).sort()).toEqual([...gated].sort());
+  });
 });
 
 describe("Qwen's silent clips (ASR-5)", () => {

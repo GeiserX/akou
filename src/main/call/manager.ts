@@ -89,6 +89,11 @@ export interface StartRequest {
   review?: string;
   reviewEvery?: number;
   /**
+   * This call's final-pass engines (`asr.final.engines`' values, as ids), instead of the setting.
+   * Written into `call.created`, so a pass after a restart still runs them.
+   */
+  engines?: string[];
+  /**
    * An agent's start: when a call is already starting, recording or paused, start nothing and
    * answer with that call (`attached`) instead of `409 already_recording`. A call still starting
    * is answered once its capture opened, or with its failure.
@@ -295,7 +300,7 @@ export class CallManager {
       return last ? { ok: true, id: last.id } : fail(404, "no_calls", "there are no calls yet");
     }
     if (this.index.has(ref) || this.controllers.has(ref)) return { ok: true, id: ref };
-    return fail(404, "not_found", `no call ${ref}`);
+    return fail(404, "not_found", `no call ${ref}`, { call: ref });
   }
 
   view(ref: CallRef): CallView | null {
@@ -360,6 +365,7 @@ export class CallManager {
           user: this.o.user ?? "",
           akou: this.o.akouVersion ?? "0.0.0",
           ...(req.template ? { template: req.template } : {}),
+          ...(req.engines && req.engines.length > 0 ? { engines: [...req.engines] } : {}),
         },
         this.deps(workspace),
         capture,
@@ -504,7 +510,7 @@ export class CallManager {
       // Two restarts at once (the window and an agent) share one load and one controller; the
       // second then finds the call starting and is refused, never a second helper.
       const loaded = await this.open(r.id);
-      if (!loaded) return fail(404, "not_found", `no call ${r.id}`);
+      if (!loaded) return fail(404, "not_found", `no call ${r.id}`, { call: r.id });
       c = loaded;
       const other = this.live();
       if (other && other !== c) {

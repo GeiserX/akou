@@ -321,6 +321,7 @@ export class KeyRecorder {
     if (!live) return;
     this.say("Press Fn now.");
     clearTimeout(this.fnWait);
+    // clock: how long the page waits for the user to press Fn.
     const wait = setTimeout(() => {
       this.fnWait = undefined;
       if (this.live) this.say(NO_FN, true);

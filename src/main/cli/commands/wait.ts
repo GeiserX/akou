@@ -43,8 +43,6 @@ export type WaitStage = (typeof WAIT_STAGES)[number];
 export const WAIT_TIMEOUT_S = 30 * 60;
 /** The API's longest long poll. */
 const POLL_S = 25;
-/** What Ctrl-C returns, as a shell reports a process ended by SIGINT. */
-const INTERRUPTED = 130;
 
 export type StageState = { state: "pending" } | { state: "done" | "failed"; event: Body };
 
@@ -84,6 +82,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
     return usage(ctx, `--for is one of ${WAIT_STAGES.join(", ")}`);
   }
   const timeoutS = duration(p, "timeout") ?? WAIT_TIMEOUT_S;
+  // clock: `--timeout` is real seconds from the moment the command runs.
   const deadline = Date.now() + timeoutS * 1000;
   const ref = objectCall(p, p.positional[0]) ?? "last";
   const head = await api(ctx, "GET", `/calls/${enc(ref)}`);
@@ -102,7 +101,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
   let cursor = 0;
   let wait = 0;
   while (true) {
-    if (ctx.io.signal?.aborted) return INTERRUPTED;
+    if (ctx.io.signal?.aborted) return EXIT.interrupted;
     const r = await api(ctx, "GET", `/calls/${enc(id)}/events`, {
       query: { after: cursor, wait },
       timeoutMs: (wait + 15) * 1000,
@@ -111,7 +110,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
       if (ctx.io.signal?.aborted) return null;
       throw err;
     });
-    if (r === null) return INTERRUPTED;
+    if (r === null) return EXIT.interrupted;
     if (r.status !== 200) return finish(ctx, r, () => "");
     s = stageAfter(stage as WaitStage, s, r.body.events);
     cursor = r.body.cursor;
@@ -120,6 +119,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
       const code = s.event.step === "unavailable" ? EXIT.unavailable : EXIT.software;
       return report("failed", code, failure(s.event), s.event);
     }
+    // clock: `--timeout` is real seconds from the moment the command runs.
     const left = Math.ceil((deadline - Date.now()) / 1000);
     if (left <= 0) {
       return report(

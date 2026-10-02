@@ -4,16 +4,21 @@
  *
  * - CLI-20: colour on a terminal only, and never colour alone.
  * - CLI-24: `akou watch`, the live call in a terminal.
+ * - CLI-21: Ctrl-C ends the command, never the recording.
  *
  * Bun's pseudo-terminal is POSIX only, so the terminal cases skip on Windows; the piped halves
  * run everywhere.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { HarnessProvider } from "../src/main/llm/harness.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../src/main/llm/provider.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cliChild } from "./cli-helpers.ts";
+import { tempDir } from "./helpers.ts";
 import { ptyAkou } from "./pty-helpers.ts";
 
 const LONG = 60_000;
@@ -302,3 +307,114 @@ describe("[CLI-24] Follow and ask a live call in the terminal with akou watch", 
     expect((await rig.api("GET", `/calls/${id}`)).body.state).toBe("recording");
   });
 });
+
+const FAKE_HARNESS = join(import.meta.dir, "fixtures", "fake-harness.ts");
+
+/** The pids of every process whose command line holds `needle`. */
+function pidsWith(needle: string): number[] {
+  const ps = Bun.spawnSync(["ps", "-ax", "-o", "pid=,command="]).stdout.toString();
+  return ps
+    .split("\n")
+    .filter((l) => l.includes(needle))
+    .map((l) => Number(l.trim().split(/\s+/)[0]));
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe.skipIf(NO_PTY)(
+  "[CLI-21] Ctrl-C ends the command, never the recording (not on Windows: no pty)",
+  () => {
+    let rig: AppRig;
+    let id: string;
+    let env: Record<string, string | undefined>;
+    let tmp: { dir: string; cleanup: () => void };
+    let fixture: string;
+    let childPid: string;
+
+    beforeAll(async () => {
+      tmp = tempDir();
+      // The fixture under a path only this test uses, so `ps` finds this test's harness alone.
+      fixture = join(tmp.dir, "claude-ok.jsonl");
+      copyFileSync(join(import.meta.dir, "fixtures", "harness", "claude-ok.jsonl"), fixture);
+      childPid = join(tmp.dir, "child.pid");
+      // A harness that starts a child of its own, then holds its answer for a minute.
+      const provider = new HarnessProvider({
+        target: () => ({
+          kind: "claude",
+          command: [process.execPath, FAKE_HARNESS, fixture],
+          version: "2.1.281",
+        }),
+        env: {
+          ...process.env,
+          FAKE_DELAY_MS: "60000",
+          FAKE_GRANDCHILD: "group",
+          FAKE_GRANDCHILD_PID: childPid,
+        },
+      });
+      rig = await appRig({ provider });
+      env = { ...process.env, ...rig.env };
+      id = await rig.startCall({ title: "Weekly sync", withoutModels: true });
+      await seg(rig, id, 1, "mic", "you", "Can we move the release to Thursday?");
+    }, LONG);
+    afterAll(async () => {
+      for (const pid of [
+        ...pidsWith(fixture),
+        Number(existsSync(childPid) ? readFileSync(childPid, "utf8") : 0),
+      ]) {
+        if (pid > 0 && alive(pid)) process.kill(pid, "SIGKILL");
+      }
+      await rig.close();
+      tmp.cleanup();
+    });
+
+    test(
+      "tail -f: the first Ctrl-C exits 0, and the call is still recording",
+      async () => {
+        const t = ptyAkou(env, ["tail", "-f", "-c", id]);
+        try {
+          await t.waitFor("Can we move the release to Thursday?");
+          t.type("\x03");
+          expect(await t.exited).toBe(0);
+          const status = await cliChild(env, ["status", "--json"]);
+          expect(JSON.parse(status.out).live).toMatchObject({ call: id, state: "recording" });
+        } finally {
+          t.kill();
+        }
+      },
+      LONG,
+    );
+
+    test(
+      "ask: Ctrl-C exits 130, the provider's processes end, and the call is still recording",
+      async () => {
+        const t = ptyAkou(env, ["ask", "what moved?", "-c", id]);
+        try {
+          await until(async () => existsSync(childPid), 15_000, "the harness to start its child");
+          const child = Number(readFileSync(childPid, "utf8"));
+          // Positive control: the harness and its child are running before the Ctrl-C.
+          expect(pidsWith(fixture).length).toBeGreaterThan(0);
+          expect(alive(child)).toBe(true);
+          t.type("\x03");
+          expect(await t.exited).toBe(130);
+          expect(t.bytes()).not.toContain("aborted");
+          await until(
+            async () => !alive(child) && pidsWith(fixture).length === 0,
+            10_000,
+            "the harness and its child to end",
+          );
+          expect((await rig.api("GET", `/calls/${id}`)).body.state).toBe("recording");
+        } finally {
+          t.kill();
+        }
+      },
+      LONG,
+    );
+  },
+);

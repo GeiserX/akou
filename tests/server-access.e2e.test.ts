@@ -13,14 +13,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { OPENAPI_FILE } from "../scripts/openapi.ts";
 import type { Access } from "../src/main/api/access.ts";
-import { json } from "../src/main/api/http.ts";
+import { json, Router } from "../src/main/api/http.ts";
 import { type OpenApiDoc, operations } from "../src/main/api/openapi.ts";
-import {
-  type ApiApp,
-  type ApiServer,
-  buildRouter,
-  startApiServer,
-} from "../src/main/api/server.ts";
+import { callRoutes } from "../src/main/api/routes/calls.ts";
+import { type ApiApp, type ApiServer, startApiServer } from "../src/main/api/server.ts";
 import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
@@ -182,12 +178,18 @@ function uploadServer(maxUploadBytes?: number): ApiServer {
     port: 0,
     token: () => TOKEN,
     maxUploadBytes,
-    // The job route's shape (SV-J1): an upload, for any key. It counts what arrives.
-    router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, async (c) => {
-      let bytes = 0;
-      for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
-      return json(202, { bytes });
-    }),
+    // The job route's shape (SV-J1): an upload, for any key. It counts what arrives. The call
+    // routes beside it are the JSON routes the cap still holds; the real job route is not here,
+    // since both modes serve it and this one stands in for it.
+    router: (() => {
+      const r = new Router<ApiApp>().add("POST", "/jobs", JOBS_CREATE, async (c) => {
+        let bytes = 0;
+        for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
+        return json(202, { bytes });
+      });
+      callRoutes(r);
+      return r;
+    })(),
   });
 }
 
