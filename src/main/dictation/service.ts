@@ -30,7 +30,8 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
+import type { ShortcutName } from "../../core/dictation/activation.ts";
+import type { DictationEvent, DictationItem, Target } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
 import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Chip, ChipAnswer, PillAction } from "../../ui/pill-protocol.ts";
@@ -188,6 +189,11 @@ export interface DictationServiceOptions extends TextRules {
    * without asking and exits (DC-U2, DC-N3). Absent, the grants are known only while it runs.
    */
   probe?(): readonly string[];
+  /**
+   * The capture helper's command, which keeps a dictation's audio as Opus (`encode`) and reads it
+   * back (`decode`); absent or null, the audio is kept as WAV (DC-H2).
+   */
+  helper?(): readonly string[] | null;
   /** Plays the cue for a moment of a spoken dictation, or nothing, as the settings say (DC-O3). */
   cue?(moment: CueMoment): void;
   /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
@@ -352,7 +358,10 @@ export class DictationService {
 
   constructor(private readonly o: DictationServiceOptions) {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
-    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO));
+    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO), {
+      helper: () => o.helper?.() ?? null,
+      onLog: (level, msg) => o.onLog?.(level, msg),
+    });
     this.uploadDir = join(o.configDir, DICTATION_DIR, "uploads");
     const d = o.draft ?? {};
     this.draft = new DraftBox({
@@ -888,6 +897,7 @@ export class DictationService {
       onGrantLost: (name) => this.grantLost(h, name),
       onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
+      onHotkey: (name, target) => this.lastHotkey(session, name, target),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
       metering: () => this.metering,
       send: (c) => {
@@ -937,6 +947,27 @@ export class DictationService {
     })();
     this.helper = h;
     this.emit();
+  }
+
+  /**
+   * Fix last and paste last (DC-A5), on the newest dictation with text: fix last opens it in the
+   * draft box for teaching, touching nothing in the app it went into; paste last inserts its text
+   * again into `target`, which had the keyboard at the press.
+   */
+  private lastHotkey(session: DictationSession, name: ShortcutName, target: Target): void {
+    const last = this.log.items().find((it) => it.text);
+    if (!last?.text) {
+      this.o.onLog?.("info", `dictation: ${name} found no dictation with text`);
+      return;
+    }
+    if (name === "fixLast") {
+      const r = this.draft.open(last.id, { focus: true, fix: true });
+      if (!r.ok) this.o.onLog?.("warn", `dictation: fix last did not open: ${r.message}`);
+      return;
+    }
+    void session.pasteText(last.text, target).then((r) => {
+      if (!r.ok) this.o.onLog?.("warn", `dictation: paste last did not go in: ${r.reason}`);
+    });
   }
 
   /**

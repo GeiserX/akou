@@ -8,7 +8,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { formatWall } from "../src/core/log/clock.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { AnthropicProvider } from "../src/main/llm/anthropic.ts";
+import { pickHarness } from "../src/main/llm/harness.ts";
+import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
 import {
+  askUnavailable,
   banner,
   type CallSummary,
   callHeadMeta,
@@ -22,6 +26,7 @@ import {
   HueBook,
   hasRecording,
   languages,
+  noteMarks,
   playingLine,
   positionText,
   presets,
@@ -494,6 +499,49 @@ describe("citations", () => {
   });
 });
 
+describe("[akou-dzm.19] the Ask card says why no assistant answered without a setting's key", () => {
+  // The reasons are the providers' own, so a provider that changes its words keeps this honest.
+  const reason = async (p: { available(): Promise<{ ok: boolean }> }) => {
+    const a = (await p.available()) as { ok: false; reason: string; kind: string };
+    return [a.reason, a.kind] as const;
+  };
+
+  test("a missing or signed-out assistant reads as one plain line pointing at Settings", async () => {
+    const none = pickHarness("auto", "", { claude: null, codex: null });
+    expect("none" in none).toBe(true);
+    const harness = (none as { none: string }).none;
+    expect(harness).toContain("provider.harnessPath");
+    const cases: (readonly [string, string])[] = [
+      [harness, "missing"],
+      await reason(new AnthropicProvider({ apiKey: "" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "", model: "m" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "http://127.0.0.1:1/v1", model: "" })),
+      ["Claude Code is not logged in (please run /login)", "auth"],
+      ["the server answered 401", "auth"],
+    ];
+    const said = cases.map(([r, k]) => askUnavailable(r, k));
+    expect(said).toEqual([
+      "Claude Code or Codex was not found. Install one, or choose another assistant in Settings.",
+      "The assistant has no API key. Add one in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "Claude Code is not signed in. Sign in to it, or choose another assistant in Settings.",
+      "The assistant did not accept its key. Check it in Settings, or choose another assistant.",
+    ]);
+    for (const s of said) expect(s).not.toMatch(/provider\.|https?:|\//);
+  });
+
+  test("any other reason is already plain and is said as it came", () => {
+    expect(
+      askUnavailable("Claude Code reported its usage limit is reached until 18:00", "exhausted"),
+    ).toBe("Claude Code reported its usage limit is reached until 18:00.");
+    expect(askUnavailable("still looking for Claude Code and Codex", "missing")).toBe(
+      "still looking for Claude Code and Codex.",
+    );
+    expect(askUnavailable(undefined, undefined)).toBe("");
+  });
+});
+
 describe("the welcome's speech models step (WINDOW section 10)", () => {
   test("gone once the models are there; offers the download, shows progress, offers a retry", () => {
     const base = { dir: "/m", bytes: 0, total: 700_000_000 };
@@ -740,6 +788,20 @@ describe("[W5.3] the player's position is a wall time", () => {
     expect(positionText(v, 1, 20)).not.toMatch(/^\d{1,2}:\d{2}$/);
     // A part the view does not have yet shows nothing rather than a guess.
     expect(positionText(v, 9, 1)).toBe("");
+  });
+});
+
+describe("[akou-dzm.10] note marks on the scrubber", () => {
+  test("a note at wall time t marks t in its part; a note outside it, none", () => {
+    const v = live((b) => {
+      b.add({ type: "note", id: "n1", rev: 1, text: "a", w: T0 + 3000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n2", rev: 1, text: "b", w: T0 + 9000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n3", rev: 1, text: "c", w: T0 + 60_000, afterSeq: 1, by: "user" });
+      b.add({ type: "note", id: "n4", rev: 1, text: "d", w: T0 - 5000, afterSeq: 1, by: "user" });
+    });
+    expect(noteMarks(v, 1, 12)).toEqual([0.25, 0.75]);
+    expect(noteMarks(v, 2, 12)).toEqual([]);
+    expect(noteMarks(v, 1, Number.NaN)).toEqual([]);
   });
 });
 

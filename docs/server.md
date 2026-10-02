@@ -44,7 +44,7 @@ Every program that sends jobs needs its own key. Create one in the running conta
 docker exec akou akou keys create --name archive --scope jobs --callback-host telegram-viewer
 ```
 
-It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way.
+It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way. To change the hosts of a key a program already uses, run `akou keys update ID --callback-host HOST ...`: the key, its secret and its jobs stay, and the server uses the new hosts from the next request. Each key edit, and each job, is a line in the server's log (`key.created`, `key.updated`, `key.revoked`, `job.created`, `job.done`, `job.failed`), never with the audio or the text.
 
 akou keeps a job, its result and its events for `server.retain_days` (default 7), counted from the job's creation; `GET /v1/server` answers the number as `retain_days`. Once that time passes, or a client deletes the job, its id answers `410 Gone` with `retain_days` in the body, so a program can tell a job it must submit again from an id it got wrong, which answers `404`. The [OpenAPI file](https://github.com/GeiserX/akou/blob/main/docs/api/openapi.json) describes every job route.
 
@@ -54,6 +54,50 @@ Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That i
 
 `akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
 
+
+## A reverse proxy in front
+
+akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. There is no WebSocket to upgrade. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits.
+
+Caddy passes events on and holds long requests by default; it only needs the body limit:
+
+```caddyfile
+akou.example {
+	request_body {
+		max_size 512MiB
+	}
+	reverse_proxy 127.0.0.1:8476 {
+		flush_interval -1
+	}
+}
+```
+
+nginx needs each of them said:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name akou.example;
+    ssl_certificate     /etc/ssl/akou.example.crt;
+    ssl_certificate_key /etc/ssl/akou.example.key;
+
+    client_max_body_size 512m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8476;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
+If you raise `server.max_upload_mb`, raise `max_size` or `client_max_body_size` with it. Then `curl https://akou.example/v1/server` answers the server's description.
 
 ## A Mac as the server
 
@@ -67,7 +111,13 @@ bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-serve
 bun src/main/cli/cli.ts serve
 ```
 
-It keeps its settings, keys and jobs in `~/.config/akou` and the models in `~/Library/Application Support/akou/models`. To reach it from another machine, put a proxy with TLS in front of it (a `tailscale serve` of port 8476 on a tailnet works) and set `{ "api.bind": "127.0.0.1", "server.behind_proxy": true }` in `~/.config/akou/config.json`.
+It keeps its settings, keys and jobs in `~/.config/akou` and the models in `~/Library/Application Support/akou/models`.
+
+Two limits refuse long recordings by default. `server.max_upload_mb` is 512 MiB, which is less than a long meeting video, and `server.max_audio_minutes` is 240. For long meetings, raise both in `~/.config/akou/config.json`, for example `{ "server.max_upload_mb": 2048, "server.max_audio_minutes": 360 }`, and restart the server.
+
+Speaker labels (`diarize`) with Nemotron, the default speaker model, run in the `akou-diarize` helper, which the app carries and a source checkout does not; `models pull` does not fetch it. Download `akou-diarize-<version>-darwin-arm64.tar.gz` from the release, unpack it, and put `akou-diarize` on the server's `PATH`, or set `asr.diarizeHelper` to its path in `~/.config/akou/config.json`, for example `{ "asr.diarizeHelper": ["/Users/YOU/bin/akou-diarize"] }`. The app's release zip carries it too, at `akou.app/Contents/Resources/app/bun/akou-diarize`. Releases up to 0.5.4 have no such file: take it from the zip, or build it from the checkout with Rust 1.88 or newer (`cargo build --locked --release --manifest-path native/akou-diarize/Cargo.toml`). Or set `asr.diarizer` to `embeddings`, which needs no helper. Without either, a job that asks for `diarize` fails with `diarize_unavailable` and says the same.
+
+To reach it from another machine, put a proxy with TLS in front of it (a `tailscale serve` of port 8476 on a tailnet works) and set `{ "api.bind": "127.0.0.1", "server.behind_proxy": true }` in `~/.config/akou/config.json`.
 
 To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons/io.github.geiserx.akou.serve.plist` with your user name, the checkout's path and Bun's path filled in, then run `sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.geiserx.akou.serve.plist`:
 
@@ -97,7 +147,13 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 </plist>
 ```
 
-`KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good.
+`KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good. Started this way, with no one logged in, it still runs `best` on Metal: `GET /v1/server` shows `accelerator.active` as `metal`. After a reboot, check it came back with:
+
+```sh
+curl -s http://127.0.0.1:8476/healthz
+```
+
+which answers `{"ok":true,…,"models_ready":true}` once the models are loaded. If it answers nothing, the log is the `StandardErrorPath` file.
 
 ## Sending jobs to another akou
 

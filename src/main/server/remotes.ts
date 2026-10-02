@@ -145,6 +145,7 @@ export interface RemoteJob {
   model?: string;
   language: string;
   keywords: readonly string[];
+  languages: readonly string[];
   diarize: boolean;
 }
 
@@ -388,6 +389,8 @@ export class Remotes {
     if (j.model) form.append("model", j.model);
     form.append("language", j.language);
     for (const k of j.keywords) form.append("keywords[]", k);
+    // Sent only when set, so a remote from before the field still takes every other job.
+    for (const l of j.languages) form.append("languages[]", l);
     form.append("diarize", j.diarize ? "true" : "false");
     const res = await this.request(r, "/jobs", {
       method: "POST",
