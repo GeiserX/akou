@@ -17,7 +17,7 @@ import { startReceiver, tamperedRefused } from "../scripts/server-roundtrip.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
-import { checkRemotes, parseRemote } from "../src/main/server/remotes.ts";
+import { checkRemotes, parseRemote, RemoteError, Remotes } from "../src/main/server/remotes.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
@@ -594,5 +594,38 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
     } finally {
       await primary.close();
     }
+  });
+});
+
+describe("a remote that forgot a job", () => {
+  test("410 Gone, like 404, means the remote lost it: the job is sent again, never failed", async () => {
+    const dir = tempDir("akou-remote-gone-").dir;
+    const url = "http://remote.example";
+    const answer = (status: number) => {
+      const r = new Remotes({
+        entries: () => [`${url} ${keyFile(dir, "ak_x")}`],
+        fetch: (async () =>
+          Response.json(
+            { error: status === 410 ? "gone" : "not_found" },
+            { status },
+          )) as unknown as typeof fetch,
+        log: () => {},
+      });
+      // Reads the entries, as the server does before it sends anything.
+      expect(r.configured()).toBe(true);
+      return r;
+    };
+    for (const status of [404, 410]) {
+      const err = await answer(status)
+        .job(url, "job_1", 0)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RemoteError);
+      expect((err as RemoteError).kind).toBe("lost");
+    }
+    // Positive control: a refusal of another kind is not read as lost.
+    const other = await answer(422)
+      .job(url, "job_1", 0)
+      .catch((e: unknown) => e);
+    expect((other as RemoteError).kind).toBe("rejected");
   });
 });

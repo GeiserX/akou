@@ -7,7 +7,7 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../src/main/asr/models.ts";
@@ -17,7 +17,7 @@ import { type AppRig, appRig } from "./api-helpers.ts";
 import { ManualClock, until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
-import { tempDir } from "./helpers.ts";
+import { jsonLines, tempDir } from "./helpers.ts";
 
 setDefaultTimeout(60_000);
 
@@ -89,13 +89,7 @@ async function rig(
     },
   });
   cleanups.push(() => r.close());
-  const llama = () =>
-    existsSync(log)
-      ? readFileSync(log, "utf8")
-          .trim()
-          .split("\n")
-          .map((l) => JSON.parse(l) as Record<string, unknown>)
-      : [];
+  const llama = () => jsonLines(log);
   return { r, dir, llama, fetched };
 }
 
@@ -286,7 +280,13 @@ describe("DC-E2: best gives way to a final pass holding the GPU on Metal", () =>
 });
 
 describe("DC-L3: the audio check on the warm best", () => {
-  const chipless = { open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} };
+  const chipless = {
+    open: () => {},
+    chip: () => {},
+    append: () => {},
+    showInactive: () => {},
+    hide: () => {},
+  };
 
   /** A spoken "deploy to kubernetes" through the fake helper, fixed in the box with Fix. */
   async function fixed(engine: string) {

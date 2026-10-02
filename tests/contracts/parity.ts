@@ -3,8 +3,8 @@
  * and what each door calls it. `tests/contracts/parity.test.ts` reads the real doors (the CLI's
  * command registry, the API's route table, the tools the MCP server registers and the window's
  * source) and fails when a door named here lacks the action, when a door lacks it and the row
- * gives no reason, or when a door has an action no row maps. PG-A1 and PG-M4 close the gaps the
- * reasons name; CLI-31 renders this table into `docs/cli.md`.
+ * gives no reason, or when a door has an action no row maps. The window's RPC is checked method by
+ * method against the API in `WINDOW_RPC` (PG-A1). CLI-31 renders this table into `docs/cli.md`.
  *
  * A door that has the action lists its names: CLI command names, API routes as `METHOD /path`,
  * MCP tool names, and for the window the source that performs it (a file under `src/` and a
@@ -129,6 +129,16 @@ export const PARITY: readonly Row[] = [
     note: "akou_ask is listed only when a provider can answer, and hidden from a harness client when that harness is the provider (src/main/mcp/server.ts askListed)",
   },
   {
+    action: "Ask presets",
+    cli: ["presets", "ask"],
+    api: ["GET /presets"],
+    mcp: {
+      none: "the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7)",
+    },
+    window: [ui("ask.ts", "`/presets?call=#{encodeURIComponent(call)}`")],
+    note: "`akou ask --preset NAME` asks one; the files live in the config folder's presets/ (PG-F2)",
+  },
+  {
     action: "Search one call",
     cli: ["search"],
     api: ["GET /calls/:id/search"],
@@ -161,7 +171,7 @@ export const PARITY: readonly Row[] = [
     action: "Edit and delete a note",
     cli: ["note"],
     api: ["PATCH /calls/:id/notes/:nid", "DELETE /calls/:id/notes/:nid"],
-    mcp: { none: "missing: PG-M4 adds note edit and delete" },
+    mcp: ["akou_edit_note", "akou_delete_note"],
     window: [
       ui("notepad.ts", '"PATCH", `/calls/#{call}/notes/'),
       ui("notepad.ts", '"DELETE", `/calls/#{call}/notes/#{id}`'),
@@ -283,7 +293,7 @@ export const PARITY: readonly Row[] = [
     action: "Final pass",
     cli: ["finalize"],
     api: ["POST /calls/:id/finalize"],
-    mcp: { none: "missing: PG-M4 adds it" },
+    mcp: ["akou_finalize"],
     window: { none: "no run-again control yet (docs/ux/WINDOW.md)" },
   },
   {
@@ -320,7 +330,9 @@ export const PARITY: readonly Row[] = [
     action: "List and add workspaces",
     cli: ["workspaces", "workspace"],
     api: ["GET /workspaces", "POST /workspaces"],
-    mcp: { none: "akou_start names the workspace and makes its folder; a list is PG-M4" },
+    mcp: {
+      none: "not one call's: akou_start names the workspace and makes its folder, and akou_list_calls shows each call's",
+    },
     window: [
       ui("workspaces.ts", '"GET", "/workspaces"'),
       ui("workspaces.ts", '"POST", "/workspaces"'),
@@ -330,14 +342,14 @@ export const PARITY: readonly Row[] = [
     action: "Share a live link",
     cli: ["share"],
     api: ["GET /share", "POST /share", "DELETE /share"],
-    mcp: { none: "missing: PG-M4 adds share on, off and status" },
+    mcp: ["akou_share_on", "akou_share_off", "akou_share_status"],
     window: [app('"POST", "/share"'), app('"DELETE", "/share"')],
   },
   {
     action: "Templates",
-    cli: { none: "missing: PG-F3" },
-    api: ["GET /templates"],
-    mcp: { none: "missing: PG-F3" },
+    cli: ["templates"],
+    api: ["GET /templates", "GET /templates/:name"],
+    mcp: ["akou_template_list", "akou_template_get"],
     window: {
       none: "the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template",
     },
@@ -346,13 +358,12 @@ export const PARITY: readonly Row[] = [
     action: "Settings",
     cli: ["config"],
     api: ["GET /config", "PATCH /config"],
-    mcp: {
-      none: "writes stay off MCP on purpose, so an agent never switches the provider or the share bind; PG-M4 adds the read-only akou_config_get",
-    },
+    mcp: ["akou_config_get"],
     window: [
       ui("settings-page.ts", '"GET", "/config"'),
       ui("settings-page.ts", '"PATCH", "/config"'),
     ],
+    note: "MCP only reads: writes stay off MCP on purpose, so an agent never switches the provider or the share bind (PROGRAMMABILITY.md section 1). For the same reason akou_share_on takes no bind.",
   },
   {
     action: "Speech models",
@@ -395,7 +406,7 @@ export const PARITY: readonly Row[] = [
     action: "Open the window",
     cli: ["open"],
     api: ["POST /window"],
-    mcp: { none: "missing: PG-M4 adds open window" },
+    mcp: ["akou_open_window"],
     window: { none: "it is the window" },
   },
   {
@@ -420,19 +431,12 @@ export const PARITY: readonly Row[] = [
     window: { none: "a one-time migration; the CLI is enough" },
   },
   {
-    action: "List capture devices",
-    cli: ["devices"],
-    api: ["GET /devices"],
-    mcp: { none: "missing: PG-A8's akou_devices tool" },
+    action: "Devices and apps",
+    cli: ["devices", "apps"],
+    api: ["GET /devices", "GET /apps"],
+    mcp: ["akou_devices"],
+    // The Dictation page's microphone picker; the call source picker is W3.3.
     window: [ui("dictation-mic.ts", '"GET", "/devices"')],
-    note: "`akou devices` still exits 69 until it reads the route (CLI-07)",
-  },
-  {
-    action: "List audio apps",
-    cli: ["apps"],
-    api: { none: "missing: PG-A8 adds GET /apps; the command exits 69 until then" },
-    mcp: { none: "missing: PG-A8" },
-    window: { none: "the source picker (W3.3) waits on PG-A8" },
   },
   {
     action: "Update the CLI",
@@ -460,9 +464,8 @@ export const PARITY: readonly Row[] = [
       "GET /events",
       "POST /audio/transcriptions",
     ],
-    mcp: {
-      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
-    },
+    // SI-7: an agent with a shell uploads a file on its machine; Executor uses the OpenAPI file.
+    mcp: ["akou_transcribe", "akou_job_get", "akou_jobs_list"],
     // The Jobs page of server mode's web UI (SERVER.md SV-U4).
     window: [
       ui("server-jobs.ts", '"GET", `/jobs?#{q}`'),
@@ -476,7 +479,7 @@ export const PARITY: readonly Row[] = [
     },
     api: ["PATCH /jobs/:id"],
     mcp: {
-      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
+      none: "an agent reads its jobs by id; SI-7 names no rename tool, and a title is for the Jobs page",
     },
     // SERVER.md SV-J10: the Jobs page shows the name and searches it; the program names the job.
     window: {
@@ -507,6 +510,15 @@ export const PARITY: readonly Row[] = [
       ui("server-keys.ts", '"POST", "/keys"'),
       ui("server-keys.ts", '"DELETE", `/keys/#{encodeURIComponent(id)}`'),
     ],
+  },
+  {
+    action: "Change a key's callback hosts (server mode)",
+    cli: ["keys"],
+    api: ["PATCH /keys/:id"],
+    mcp: { none: "made by the operator, on the box, not by an agent (SV-K2)" },
+    window: {
+      none: "the Keys page creates and revokes; changing hosts is the CLI's and the API's (SV-K7)",
+    },
   },
   {
     action: "Transcribe a clip through the dictation path",
@@ -622,11 +634,63 @@ export const PARITY: readonly Row[] = [
   },
 ];
 
+/**
+ * The window's RPC, method by method (PG-A1): the API routes that do the same thing, or why none
+ * does. The window's bridge is not a second, richer API: every method that acts on a call or the
+ * app has a route. The methods are read from the `AkouRpc` type in `src/ui/protocol.ts`, so a new
+ * one with no entry here fails the test.
+ */
+export const WINDOW_RPC: Readonly<Record<string, readonly string[] | None>> = {
+  api: { none: "it is the API itself: the page sends any route through it, in process" },
+  follow: ["GET /calls/:id/stream", "GET /calls/:id/events"],
+  unfollow: { none: "an HTTP client ends a follow by closing the stream it opened" },
+  ask: ["POST /calls/:id/ask"],
+  cancelAsk: { none: "an HTTP client cancels an ask by closing its request" },
+  audio: ["GET /calls/:id/audio/:part"],
+  status: ["GET /status"],
+  openSettingsPane: {
+    none: "opens the OS's own privacy or settings pane on this screen; GET and PATCH /config are the settings themselves",
+  },
+  answerQuit: ["POST /quit"],
+  recordDictationKeys: {
+    none: "listens to the keys the user presses while the key field is open; the key itself is a setting, PATCH /config",
+  },
+  watchDictationMic: {
+    none: "a level meter while the dictation setup is on screen; nothing to act on",
+  },
+  zoomWindow: { none: "zooms the window on a double-click of its title bar" },
+};
+
+/**
+ * The request methods of the window's RPC (`AkouRpc.bun.requests` in `src/ui/protocol.ts`), read
+ * from the type's source: the member names one level inside `requests: {`.
+ */
+export function rpcMethods(protocolSource: string): string[] {
+  const at = protocolSource.indexOf("export interface AkouRpc {");
+  if (at < 0) return [];
+  const lines = protocolSource.slice(at).split("\n");
+  const start = lines.findIndex((l) => /^\s*requests: \{\s*$/.test(l));
+  if (start < 0) return [];
+  const out: string[] = [];
+  let depth = 1;
+  for (const line of lines.slice(start + 1)) {
+    const t = line.trim();
+    if (t.startsWith("*") || t.startsWith("/*") || t.startsWith("//")) continue;
+    const m = /^(\w+)\s*:/.exec(t);
+    if (depth === 1 && m) out.push(m[1] as string);
+    depth += (t.match(/\{/g) ?? []).length - (t.match(/\}/g) ?? []).length;
+    if (depth <= 0) break;
+  }
+  return out;
+}
+
 /** What each door offers today, read from the code. */
 export interface Doors {
   cli: ReadonlySet<string>;
   api: ReadonlySet<string>;
   mcp: ReadonlySet<string>;
+  /** The request methods of the window's RPC (`rpcMethods`). */
+  rpc: ReadonlySet<string>;
   /** The source of a file under the repository, or null when it does not exist. */
   source(file: string): string | null;
 }
@@ -634,9 +698,29 @@ export interface Doors {
 const isNone = (c: unknown): c is None =>
   typeof c === "object" && c !== null && !Array.isArray(c) && "none" in c;
 
-/** Every way the table and the doors disagree; empty when they match. */
-export function parityProblems(table: readonly Row[], doors: Doors): string[] {
+/** Every way the tables and the doors disagree; empty when they match. */
+export function parityProblems(
+  table: readonly Row[],
+  doors: Doors,
+  rpcTable: Readonly<Record<string, readonly string[] | None>> = WINDOW_RPC,
+): string[] {
   const out: string[] = [];
+  for (const method of doors.rpc) {
+    const cell = rpcTable[method];
+    if (cell === undefined)
+      out.push(`the window's RPC has ${method}, which neither names a route nor says why none`);
+    else if (isNone(cell)) {
+      if (cell.none.trim().length < 10)
+        out.push(`the window's RPC ${method} has no route and gives no reason`);
+    } else {
+      if (cell.length === 0) out.push(`the window's RPC ${method} names no route`);
+      for (const route of cell)
+        if (!doors.api.has(route))
+          out.push(`the window's RPC ${method}: the api door has no ${route}`);
+    }
+  }
+  for (const method of Object.keys(rpcTable))
+    if (!doors.rpc.has(method)) out.push(`the window's RPC has no ${method} any more`);
   const mapped = { cli: new Set<string>(), api: new Set<string>(), mcp: new Set<string>() };
   for (const row of table) {
     for (const door of ["cli", "api", "mcp"] as const) {

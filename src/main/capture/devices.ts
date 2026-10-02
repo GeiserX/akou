@@ -1,101 +1,146 @@
 /**
- * The capture helper's device query (`akou-capture devices`, docs/DESIGN.md section 2.4), as
- * `GET /devices` answers it (PROGRAMMABILITY.md PG-A8): the inputs and outputs the OS lists, read
- * without opening a stream or asking for a permission, with the ids `--mic` and `dictation.mic`
- * take. A helper that refuses (`AKOU_CAPTURE_FILE_ONLY=1`, no audio system) answers its own reason,
- * never an empty list.
+ * The capture helper's device query (docs/DESIGN.md section 2.4, docs/ux/PROGRAMMABILITY.md
+ * PG-A8): `akou-capture devices` prints one JSON line with the inputs, the outputs and the apps
+ * with audio, and `GET /devices` and `GET /apps` answer from it. The ids are the ones `POST /calls`
+ * takes as `mic` and as `call: "app:<id>"`.
+ *
+ * A helper that refuses (`AKOU_CAPTURE_FILE_ONLY=1`, no audio service) or is not there throws
+ * `DevicesRefused` with its reason: the routes answer it, never an empty list.
  */
 
-import { realClock, withDeadline } from "./engine.ts";
 import { parseStderrLine } from "./protocol.ts";
 
-/** One device as the helper lists it. */
-export interface Device {
+/** How long the query may take: it opens no stream, but an audio service can be slow to answer. */
+export const DEVICES_TIMEOUT_MS = 15_000;
+
+export interface CaptureDevice {
+  /** What `mic` takes (an input), or the output's id. */
   id: string;
   name: string;
   default: boolean;
 }
 
-export interface DeviceList {
-  /** The audio system that answered (`coreaudio`, `wasapi`, `pulse`, or a fake's). */
-  backend: string;
-  inputs: Device[];
-  outputs: Device[];
+export interface AudioApp {
+  /** What `call: "app:<id>"` takes. */
+  id: string;
+  name: string;
+  pid: number;
 }
 
-export type DevicesAnswer =
-  | { ok: true; list: DeviceList }
-  | { ok: false; code: string; message: string };
+export interface CaptureDevices {
+  backend: string;
+  inputs: CaptureDevice[];
+  outputs: CaptureDevice[];
+  /** The apps with audio, or null where one app cannot be captured (`appsUnavailable` says why). */
+  apps: AudioApp[] | null;
+  appsUnavailable: string | null;
+}
 
-/** The query reads properties only; one that has not answered by then answers nothing. */
-export const DEVICES_DEADLINE_MS = 10_000;
+export class DevicesRefused extends Error {
+  override name = "DevicesRefused";
+  constructor(
+    message: string,
+    /** The helper's own code (`file-only`, `unavailable`, ...), or `no-helper`, `bad-answer`. */
+    readonly helperCode: string,
+  ) {
+    super(message);
+  }
+}
 
-const isDevice = (v: unknown): v is Device => {
-  if (typeof v !== "object" || v === null) return false;
-  const d = v as Record<string, unknown>;
-  return typeof d.id === "string" && typeof d.name === "string" && typeof d.default === "boolean";
+const isDevice = (d: unknown): d is CaptureDevice => {
+  const o = d as Record<string, unknown> | null;
+  return typeof o?.id === "string" && typeof o.name === "string" && typeof o.default === "boolean";
 };
 
-/** The `devices` line of the helper's stdout, or null when the line is not one. */
-export function parseDevices(line: string): DeviceList | null {
-  let o: unknown;
+const isApp = (d: unknown): d is AudioApp => {
+  const o = d as Record<string, unknown> | null;
+  return typeof o?.id === "string" && typeof o.name === "string" && typeof o.pid === "number";
+};
+
+/** The helper's `devices` line, checked; throws `DevicesRefused` on anything else. */
+export function parseDevicesLine(line: string): CaptureDevices {
+  let o: Record<string, unknown>;
   try {
     o = JSON.parse(line);
   } catch {
-    return null;
+    throw new DevicesRefused("the capture helper's device list is not JSON", "bad-answer");
   }
-  if (typeof o !== "object" || o === null) return null;
-  const r = o as Record<string, unknown>;
-  if (r.type !== "devices" || typeof r.backend !== "string") return null;
-  if (!Array.isArray(r.inputs) || !r.inputs.every(isDevice)) return null;
-  if (!Array.isArray(r.outputs) || !r.outputs.every(isDevice)) return null;
-  return { backend: r.backend, inputs: r.inputs, outputs: r.outputs };
+  const inputs = o?.inputs;
+  const outputs = o?.outputs;
+  if (
+    o?.type !== "devices" ||
+    typeof o.backend !== "string" ||
+    !Array.isArray(inputs) ||
+    !inputs.every(isDevice) ||
+    !Array.isArray(outputs) ||
+    !outputs.every(isDevice)
+  ) {
+    throw new DevicesRefused(
+      "the capture helper's device list is not one akou reads",
+      "bad-answer",
+    );
+  }
+  const apps = Array.isArray(o.apps) ? o.apps.filter(isApp) : null;
+  const why =
+    typeof o.apps_unavailable === "string"
+      ? o.apps_unavailable
+      : apps === null
+        ? "this capture helper lists no apps; update akou"
+        : null;
+  return { backend: o.backend, inputs, outputs, apps, appsUnavailable: why };
 }
 
-/** Runs `argv` (the helper's command and `devices`) and answers its list or its refusal. */
+/**
+ * Runs `<command> devices` and reads its answer. The helper inherits akou's environment, so
+ * `AKOU_CAPTURE_FILE_ONLY=1` reaches it and it refuses.
+ */
 export async function queryDevices(
-  argv: readonly string[],
-  deadlineMs = DEVICES_DEADLINE_MS,
-): Promise<DevicesAnswer> {
+  command: readonly string[],
+  o: { timeoutMs?: number; env?: Record<string, string | undefined> } = {},
+): Promise<CaptureDevices> {
   let proc: Bun.Subprocess<"ignore", "pipe", "pipe">;
   try {
-    // The environment as it is now, so `AKOU_CAPTURE_FILE_ONLY` set after start still reaches it.
-    proc = Bun.spawn([...argv], {
+    proc = Bun.spawn([...command, "devices"], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: o.env ?? process.env,
     });
   } catch (err) {
-    return {
-      ok: false,
-      code: "no_helper",
-      message: `the capture helper did not start: ${(err as Error).message}`,
-    };
+    throw new DevicesRefused(
+      `the capture helper ${command[0]} could not start: ${(err as Error).message}`,
+      "no-helper",
+    );
   }
-  const read = Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  const r = await withDeadline(realClock, read, deadlineMs);
-  if (!r.ok) {
-    proc.kill("SIGKILL");
-    return { ok: false, code: "timeout", message: "the capture helper did not list its devices" };
+  // clock: a deadline on the helper's device query.
+  const timer = setTimeout(() => proc.kill(), o.timeoutMs ?? DEVICES_TIMEOUT_MS);
+  try {
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (proc.signalCode) {
+      throw new DevicesRefused("the capture helper did not list the devices in time", "timeout");
+    }
+    if (code !== 0) {
+      // The helper says why on stderr, as a `warn` line: the refusal is that, word for word.
+      for (const line of err.split("\n").reverse()) {
+        const l = parseStderrLine(line);
+        if (l.kind === "msg" && l.msg.type === "warn")
+          throw new DevicesRefused(l.msg.msg, l.msg.code);
+      }
+      throw new DevicesRefused(
+        `the capture helper could not list the devices (exit ${code})`,
+        "unavailable",
+      );
+    }
+    const line = out.split("\n").find((l) => l.trim() !== "");
+    if (line === undefined) {
+      throw new DevicesRefused("the capture helper answered nothing", "bad-answer");
+    }
+    return parseDevicesLine(line);
+  } finally {
+    clearTimeout(timer);
   }
-  const [out, err, code] = r.value;
-  for (const line of out.split("\n")) {
-    const list = parseDevices(line.trim());
-    if (code === 0 && list) return { ok: true, list };
-  }
-  for (const line of err.split("\n")) {
-    const m = parseStderrLine(line);
-    if (m.kind === "msg" && m.msg.type === "warn")
-      return { ok: false, code: m.msg.code, message: m.msg.msg };
-  }
-  return {
-    ok: false,
-    code: "no_devices",
-    message: `the capture helper listed no devices (exit ${code})`,
-  };
 }

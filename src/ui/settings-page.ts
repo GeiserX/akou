@@ -19,14 +19,15 @@
  * The search finds a setting by its words across the page and its Advanced pages, and goes to it.
  */
 
+import { QWEN_LANGUAGE_CODES } from "../main/asr/llama-catalog.ts";
 import { everyText, liveModelName } from "../main/asr/model-text.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
-import { onDictationPage } from "./dictation-page.ts";
+import { onDictationPage, SERVER_ENGINE_KEY, serverEngineControl } from "./dictation-page.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
-import { MODELS_KEYS } from "./models-rows.ts";
+import { type JobModels, jobModelChoices, MODELS_KEYS } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { AppStatus, Transport } from "./protocol.ts";
 import {
@@ -159,7 +160,7 @@ const SUBS: Record<string, SubPage> = {
         title: "Live transcript",
         keys: ["asr.live.engine", "asr.parakeet.decoding", "asr.segmentPause", "asr.segmentWindow"],
       },
-      { title: "Final transcript", keys: ["asr.final.model"] },
+      { title: "Final transcript", keys: ["asr.final.model", "asr.final.engines"] },
       { title: "Engines", keys: ["asr.threads", "asr.modelsDir"] },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],
@@ -219,6 +220,7 @@ const SUBS: Record<string, SubPage> = {
           "server.default_language",
           "server.default_diarize",
           "server.concurrency",
+          "server.model_idle_minutes",
           "server.queue_max",
           "server.queue_max_per_key",
           "server.retain_days",
@@ -235,6 +237,12 @@ const SUBS: Record<string, SubPage> = {
     ],
   },
 };
+
+/** `server.default_language`'s choices: Detect it for `auto`, then each language by its name. */
+const JOB_LANGUAGES: readonly (readonly [string, string])[] = [
+  ["auto", "Detect it"],
+  ...QWEN_LANGUAGE_CODES.map((c) => [c, languageName(c)] as const),
+];
 
 /** Keys whose value is a folder: drawn as its name, changed by typing where it is. */
 const FOLDERS = new Set(["recordings.root", "export.dir", "asr.modelsDir"]);
@@ -353,8 +361,8 @@ export class SettingsPage {
   private status: Status = {};
   private live: LiveReply["live"] | null = null;
   private mics: CaptureInput[] | null = null;
-  /** Server mode: the presets and engines a job may name. */
-  private models: string[] = [];
+  /** The presets and engines a job may name, as a select's choices; empty when unread. */
+  private models: [value: string, label: string][] = [];
   private recorder: KeyRecorder | null = null;
   /** The Advanced page on screen, or null for the page itself. */
   private sub: string | null = null;
@@ -394,6 +402,7 @@ export class SettingsPage {
     this.search.addEventListener("keydown", (e) => this.searchKey(e));
     this.search.addEventListener("blur", () => {
       // A click on a result lands before the list goes.
+      // clock: lets a click on a result land before the list goes.
       setTimeout(() => {
         this.results.hidden = true;
       }, 150);
@@ -447,28 +456,15 @@ export class SettingsPage {
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.t.request<LiveReply>("GET", "/models") : null,
       app && mics ? readMics(this.t) : null,
-      app
-        ? null
-        : this.t.request<{ presets?: { name: string }[]; engines?: { id: string }[] }>(
-            "GET",
-            "/server",
-          ),
+      // Both modes: the desktop's Server mode page sets the same job defaults.
+      this.t.request<JobModels>("GET", "/server").catch(() => null),
     ]);
     if (read !== this.reads) return;
     this.status = st && st.status < 400 ? (st.body ?? {}) : {};
     this.live = models && models.status < 400 ? (models.body?.live ?? null) : null;
     if (mics) this.mics = inputs && "inputs" in inputs ? inputs.inputs : null;
     // A job's model is a preset or an engine: offer both.
-    this.models =
-      server && server.status < 400
-        ? [
-            ...new Set([
-              "auto",
-              ...(server.body.presets ?? []).map((p) => p.name),
-              ...(server.body.engines ?? []).map((e) => e.id),
-            ]),
-          ]
-        : [];
+    this.models = server && server.status < 400 ? jobModelChoices(server.body) : [];
     if (cfg.status >= 400) {
       toast(message(cfg.body, "the settings could not be read"));
       return;
@@ -666,12 +662,18 @@ export class SettingsPage {
     else if (key === "asr.languages") controls = [this.languagesControl(id, value)];
     else if (key === "app.hotkey") controls = this.hotkeyControls(id, String(value ?? ""));
     else if (key === "share.bind") controls = [this.bindControl(id, String(value ?? ""))];
+    else if (key === SERVER_ENGINE_KEY)
+      controls = [serverEngineControl(id, String(value ?? "auto"), this.models)];
     else if (key === "server.default_model" && this.models.length > 0)
+      controls = [
+        selectBox({ id, label: w.label, options: this.models, value: String(value ?? "auto") }),
+      ];
+    else if (key === "server.default_language")
       controls = [
         selectBox({
           id,
           label: w.label,
-          options: this.models.map((m) => [m, m === "auto" ? "Automatic" : m] as const),
+          options: JOB_LANGUAGES,
           value: String(value ?? "auto"),
         }),
       ];
@@ -1664,6 +1666,7 @@ function controlId(controls: (Node | null)[]): string | null {
 function flash(el: HTMLElement): void {
   el.scrollIntoView({ block: "center" });
   el.classList.add("pg-flash");
+  // clock: how long a setting's highlight shows.
   setTimeout(() => el.classList.remove("pg-flash"), 1200);
 }
 

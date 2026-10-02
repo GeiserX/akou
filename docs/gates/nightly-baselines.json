@@ -1,14 +1,24 @@
 {
   "_about": "Baselines of the nightly model evaluation (scripts/eval/nightly.ts, docs/TESTING.md TS-19 and TS-20), per platform as process.platform-process.arch. A gated number worse than its baseline, or with none, fails the night. Lower a baseline when a change makes a number better; raising one needs the reason in the commit. Rounded to two decimals.",
   "_measured": {
-    "linux-x64": "2026-09-25, an Ubuntu 24.04 x64 container limited to 4 CPUs, twice with the same numbers (the AMI diarization error too, after the set moved from VoxConverse); the first night on the GitHub runner confirms them or replaces them in its own commit. The two WER numbers were decoded with beam search (modified_beam_search), the default before #34; the night decodes with the app default, greedy since #34, so a first-night WER miss here is the decoder change to re-baseline, not a regression",
-    "darwin-arm64": "not yet: the first night prints the numbers to commit",
-    "win32-x64": "not yet: the first night prints the numbers to commit"
+    "linux-x64": "the GitHub ubuntu-latest runner, the nights of 2026-10-01 and 2026-10-02, the same numbers both nights. English WER rose from 6.78 to 6.9 against the 2026-09-25 container baseline because that one was decoded with beam search (modified_beam_search) and the night decodes with the app default, greedy since #34; Spanish fell from 3.22 to 3.17 for the same reason; the AMI diarization error is unchanged",
+    "darwin-arm64": "the GitHub macos-latest runner, the nights of 2026-10-01 and 2026-10-02, the same numbers both nights, greedy decoding",
+    "win32-x64": "the GitHub windows-latest runner, the nights of 2026-10-01 and 2026-10-02, the same numbers both nights, greedy decoding"
   },
   "platforms": {
     "linux-x64": {
-      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32": 6.78,
-      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32": 3.22,
+      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32": 6.9,
+      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32": 3.17,
+      "der.ami_test2.nemotron-3-diarization": 20.17
+    },
+    "darwin-arm64": {
+      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32": 6.9,
+      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32": 3.17,
+      "der.ami_test2.nemotron-3-diarization": 20.17
+    },
+    "win32-x64": {
+      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32": 6.9,
+      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32": 3.17,
       "der.ami_test2.nemotron-3-diarization": 20.17
     }
   }

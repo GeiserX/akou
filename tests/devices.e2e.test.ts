@@ -1,100 +1,196 @@
 /**
- * `GET /devices` (docs/ux/PROGRAMMABILITY.md PG-A8) and the Dictation page's microphone picker it
- * feeds (docs/ux/DICTATION.md DC-U4), through a whole app over the fake helper: the route lists the
- * helper's devices, refuses with the helper's own reason under `AKOU_CAPTURE_FILE_ONLY=1`, and an
- * input it lists, once saved as `dictation.mic` as the picker saves it, reaches the dictation
- * helper as `rebuild_mic`. The picker's drawing of the list is `tests/ui/dictation.test.ts`'s.
- * Nothing opens a device.
+ * The capture devices and the apps with audio over the API (docs/ux/PROGRAMMABILITY.md PG-A8):
+ * `GET /devices` and `GET /apps` answer the capture helper's device query, here the fake helper's
+ * (`scripts/fake-helper.ts devices`), with the ids `POST /calls` takes as `mic` and
+ * `call: "app:<id>"`; `akou devices` and `akou apps` print them; a helper that refuses
+ * (`AKOU_CAPTURE_FILE_ONLY=1`) is answered as a refusal, never as an empty list.
  */
 
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type AppRig, appRig } from "./api-helpers.ts";
-import { until } from "./capture-helpers.ts";
-import { tempDir } from "./helpers.ts";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import type { LogEvent } from "../src/core/log/events.ts";
+import { Router } from "../src/main/api/http.ts";
+import { deviceRoutes } from "../src/main/api/routes/devices.ts";
+import { type ApiApp, routeRequest } from "../src/main/api/server.ts";
+import { type CaptureDevices, queryDevices } from "../src/main/capture/devices.ts";
+import { EXIT } from "../src/main/cli/client.ts";
+import { type AppRig, appRig, FAKE_HELPER } from "./api-helpers.ts";
+import { rigCli } from "./cli-helpers.ts";
+import { fakeApi, mcpClient } from "./mcp-helpers.ts";
 
-setDefaultTimeout(30_000);
+let rig: AppRig;
 
-const cleanups: (() => void | Promise<void>)[] = [];
-afterEach(async () => {
-  for (const c of cleanups.splice(0).reverse()) await c();
+beforeAll(async () => {
+  rig = await appRig();
 });
 
-async function rig(o: Parameters<typeof appRig>[0] = {}): Promise<AppRig> {
-  const r = await appRig(o);
-  cleanups.push(() => r.close());
-  return r;
+afterAll(async () => {
+  await rig?.close();
+});
+
+/** Runs `fn` with `AKOU_CAPTURE_FILE_ONLY=1` in the environment the helper inherits. */
+async function fileOnly<T>(fn: () => Promise<T>): Promise<T> {
+  const was = process.env.AKOU_CAPTURE_FILE_ONLY;
+  process.env.AKOU_CAPTURE_FILE_ONLY = "1";
+  try {
+    return await fn();
+  } finally {
+    if (was === undefined) delete process.env.AKOU_CAPTURE_FILE_ONLY;
+    else process.env.AKOU_CAPTURE_FILE_ONLY = was;
+  }
 }
 
-describe("PG-A8: GET /devices", () => {
-  test("lists the helper's inputs and outputs with their ids", async () => {
-    const r = await rig();
-    const res = await r.api("GET", "/devices");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({
-      backend: "fake",
-      inputs: [
-        { id: "fake-built-in", name: "Built-in Microphone", default: true },
-        { id: "fake-usb", name: "USB Microphone", default: false },
-      ],
-      outputs: [{ id: "fake-speakers", name: "Speakers", default: true }],
-    });
+describe("[PG-A8] GET /devices and GET /apps", () => {
+  test("list the helper's devices and apps, with ids POST /calls takes as mic and call", async () => {
+    const devices = await rig.api("GET", "/devices");
+    expect(devices.status).toBe(200);
+    expect(devices.body.inputs.map((d: { id: string }) => d.id)).toEqual([
+      "fake-mic-1",
+      "fake-usb-2",
+    ]);
+    expect(devices.body.outputs).toEqual([
+      { id: "fake-out-1", name: "Fake Speakers", default: true },
+    ]);
+    const apps = await rig.api("GET", "/apps");
+    expect(apps.status).toBe(200);
+    expect(apps.body.apps[0]).toEqual({ id: "com.example.call", name: "Example Call", pid: 4242 });
+
+    // The ids as they came: the second input, not the default, and the first app.
+    const mic = devices.body.inputs[1];
+    const id = await rig.startCall({ mic: mic.id, call: `app:${apps.body.apps[0].id}` });
+    try {
+      const events = (await rig.api("GET", `/calls/${id}/events`)).body.events as LogEvent[];
+      const part = events.find((e) => e.type === "part.started") as unknown as {
+        mic: string;
+        call: { mode: string };
+      };
+      expect(part.mic).toBe(mic.name);
+      expect(part.call.mode).toBe("app:com.example.call");
+    } finally {
+      expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    }
+    // Positive control: an app id the helper does not list is refused by the helper.
+    const none = await rig.api("POST", "/calls", { call: "app:com.example.none" });
+    expect([none.status, none.body.error]).toEqual([503, "capture_failed"]);
+    expect(none.body.message).toContain("no running app matches com.example.none");
   });
 
-  test("with AKOU_CAPTURE_FILE_ONLY=1 it answers the helper's refusal, not an empty list", async () => {
-    const r = await rig();
-    const was = process.env.AKOU_CAPTURE_FILE_ONLY;
-    process.env.AKOU_CAPTURE_FILE_ONLY = "1";
-    try {
-      const res = await r.api("GET", "/devices");
-      expect(res.status).toBe(503);
-      // The picker shows the message beside its text box (src/ui/dictation-mic.ts readMics).
-      expect(res.body).toMatchObject({
-        error: "file-only",
-        message: expect.stringContaining("AKOU_CAPTURE_FILE_ONLY=1"),
+  test("with AKOU_CAPTURE_FILE_ONLY=1 both routes answer the helper's refusal, not an empty list", async () => {
+    await fileOnly(async () => {
+      for (const path of ["/devices", "/apps"]) {
+        const r = await rig.api("GET", path);
+        expect([path, r.status, r.body.error, r.body.helper]).toEqual([
+          path,
+          503,
+          "devices_unavailable",
+          "file-only",
+        ]);
+        expect(r.body.message).toContain("AKOU_CAPTURE_FILE_ONLY=1");
+        expect(r.body.inputs).toBeUndefined();
+        expect(r.body.apps).toBeUndefined();
+      }
+    });
+    // Positive control: without it the same route lists the devices.
+    expect((await rig.api("GET", "/devices")).status).toBe(200);
+  });
+
+  test("akou devices and akou apps print the ids, --json is the route's body, a refusal exits 69", async () => {
+    const run = rigCli(rig);
+    const devices = await run(["devices"]);
+    expect(devices.code).toBe(0);
+    expect(devices.out).toContain("* fake-mic-1  Fake Microphone");
+    expect(devices.out).toContain("  fake-usb-2  Fake USB Microphone");
+    expect(devices.out).toContain("fake-out-1  Fake Speakers");
+    const json = await run(["devices", "--json"]);
+    expect(json.json.inputs).toEqual((await rig.api("GET", "/devices")).body.inputs);
+    const apps = await run(["apps"]);
+    expect(apps.code).toBe(0);
+    // The id comes first (CLI-07); a name that is only the id (macOS) is printed once.
+    expect(apps.out).toContain("  com.example.call  Example Call  pid 4242");
+    expect(apps.out).toContain("  com.example.music  pid 4343");
+    expect(apps.out).not.toContain("com.example.music  com.example.music");
+    expect((await run(["apps", "--json"])).json.apps.length).toBe(2);
+    const refused = await fileOnly(() => run(["devices"]));
+    expect(refused.code).toBe(EXIT.unavailable);
+    expect(refused.err).toContain("AKOU_CAPTURE_FILE_ONLY=1");
+  });
+});
+
+describe("[PG-A8] where one app cannot be captured", () => {
+  test("the helper says why, and GET /apps answers 501 apps_unavailable with it", async () => {
+    const d = await queryDevices([process.execPath, FAKE_HELPER, "--no-apps"]);
+    expect(d.apps).toBeNull();
+    expect(d.appsUnavailable).toBe("capturing one app is not available on this fake");
+    expect(d.inputs.length).toBe(2);
+
+    const r = new Router<ApiApp>();
+    deviceRoutes(r);
+    const app = (devices: CaptureDevices) =>
+      ({ devices: async () => devices }) as unknown as ApiApp;
+    const get = async (path: string, devices: CaptureDevices) => {
+      const res = await routeRequest(r, app(devices), new Request(`http://127.0.0.1/v1${path}`), {
+        by: "user",
       });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    const apps = await get("/apps", d);
+    expect([apps.status, apps.body.error, apps.body.message]).toEqual([
+      501,
+      "apps_unavailable",
+      "capturing one app is not available on this fake",
+    ]);
+    // The devices still list, and with an app list the same route answers it.
+    expect((await get("/devices", d)).status).toBe(200);
+    const listed = await get("/apps", { ...d, apps: [], appsUnavailable: null });
+    expect([listed.status, listed.body.apps]).toEqual([200, []]);
+  });
+});
+
+describe("[PG-A8] akou_devices and the ids akou_start takes", () => {
+  const DEVICES = {
+    backend: "fake",
+    inputs: [{ id: "mic-2", name: "Desk Mic", default: false }],
+    outputs: [],
+  };
+
+  test("where GET /apps answers 501, apps is null and the reason is given", async () => {
+    const api = fakeApi(
+      (_m, p) =>
+        p === "/apps"
+          ? { error: "apps_unavailable", message: "capturing one app is not available here" }
+          : DEVICES,
+      undefined,
+      (_m, p) => (p === "/apps" ? 501 : 200),
+    );
+    const c = await mcpClient(api);
+    try {
+      const r = await c.call("akou_devices");
+      expect(r.isError).toBe(false);
+      expect(r.structured.inputs).toEqual(DEVICES.inputs);
+      expect(r.structured.apps).toBeNull();
+      expect(r.structured.appsUnavailable).toContain("apps_unavailable");
+      expect(r.structured.appsUnavailable).toContain("capturing one app is not available here");
     } finally {
-      if (was === undefined) delete process.env.AKOU_CAPTURE_FILE_ONLY;
-      else process.env.AKOU_CAPTURE_FILE_ONLY = was;
+      await c.close();
     }
   });
 
-  test("a helper that is not there is a refusal with its reason", async () => {
-    const r = await rig({ settings: { "capture.helper": ["/nonexistent/akou-capture"] } });
-    const res = await r.api("GET", "/devices");
-    expect(res.status).toBe(503);
-    expect(res.body).toMatchObject({ error: "no_helper" });
-  });
-});
-
-describe("DC-U4: the picker over the real route", () => {
-  test("the picker lists the helper's microphones, and the one chosen reaches the helper", async () => {
-    const t = tempDir("akou-devices-");
-    cleanups.push(t.cleanup);
-    const commands = join(t.dir, "commands.jsonl");
-    const r = await rig({
-      helperArgs: ["--commands-log", commands],
-      settings: { "dictation.enabled": true },
+  test("an input id from akou_devices reaches POST /calls as mic", async () => {
+    const sent: unknown[] = [];
+    const api = fakeApi((m, p, o) => {
+      if (m === "POST" && p === "/calls") {
+        sent.push(o.body);
+        return { call: "c1", folder: "/rec/c1", part: 1, firstAudioMs: 5, url: null };
+      }
+      return p === "/apps" ? { backend: "fake", apps: [] } : DEVICES;
     });
-    // What the picker reads (src/ui/dictation-mic.ts readMics): the route's `inputs`.
-    const inputs = (await r.api("GET", "/devices")).body.inputs as { id: string; name: string }[];
-    expect(inputs.map((d) => d.name)).toEqual(["Built-in Microphone", "USB Microphone"]);
-    await until(() => r.app.dictation()?.status().state === "idle", 10_000, "the helper ready");
-    const chosen = inputs[1]?.id;
-    expect(chosen).toBe("fake-usb");
-    expect((await r.api("PATCH", "/config", { "dictation.mic": chosen })).status).toBe(200);
-    const rebuilt = () =>
-      existsSync(commands)
-        ? readFileSync(commands, "utf8")
-            .split("\n")
-            .filter(Boolean)
-            .map((l) => JSON.parse(l) as { type: string; device?: string })
-            .filter((c) => c.type === "rebuild_mic")
-            .map((c) => c.device)
-        : [];
-    await until(() => rebuilt().includes("fake-usb"), 10_000, "rebuild_mic with the choice");
-    // After ready the helper got the setting as it was (none: the default), then the choice.
-    expect(rebuilt()).toEqual(["default", "fake-usb"]);
+    const c = await mcpClient(api);
+    try {
+      const mic = (await c.call("akou_devices")).structured.inputs[0].id;
+      const r = await c.call("akou_start", { title: "Sync", mic });
+      expect(r.isError).toBe(false);
+      expect(sent).toEqual([{ title: "Sync", mic: "mic-2", attach: true }]);
+    } finally {
+      await c.close();
+    }
   });
 });

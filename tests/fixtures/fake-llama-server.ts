@@ -14,7 +14,7 @@
  *   bun tests/fixtures/fake-llama-server.ts [--fake-log FILE] [--fake-lang NAME] [--fake-lp NAME=LP]
  *     [--fake-die-after N] [--fake-die-on N] [--fake-hang] [--fake-hang-context] [--fake-500 N]
  *     [--fake-loading-ms MS]
- *     [--fake-refuse-cache] <llama-server args>
+ *     [--fake-refuse-cache] [--fake-devices TEXT] <llama-server args>
  *
  * `--fake-log FILE` appends one JSON line per start (`{argv}`) and per request (`{body}`);
  * `--fake-lang` is the language an auto decode answers (default English); `--fake-lp Spanish=-0.9`
@@ -24,7 +24,8 @@
  * answers a completion; `--fake-hang-context` never answers one that carries a context (a non-empty
  * system message, as an audio check's); `--fake-500 N` answers the first N
  * completions with HTTP 500 (a Metal out-of-memory server), counted across restarts; `--fake-loading-ms` answers 503 on
- * `/health` for that long; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`.
+ * `/health` for that long; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`;
+ * `--list-devices` prints `--fake-devices` and exits.
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -63,6 +64,11 @@ const loadedAt = Date.now() + Number(opt("--fake-loading-ms") ?? 0);
 const port = Number(opt("--port"));
 const host = opt("--host") ?? "127.0.0.1";
 
+// `--list-devices` prints `--fake-devices` (none by default) and exits, as llama-server does.
+if (argv.includes("--list-devices")) {
+  process.stdout.write(`Available devices:\n${opt("--fake-devices") ?? ""}\n`);
+  process.exit(0);
+}
 if (argv.includes("--fake-refuse-cache") && opt("--cache-ram") !== "0") {
   process.stderr.write("fake-llama-server: started without --cache-ram 0\n");
   process.exit(64);

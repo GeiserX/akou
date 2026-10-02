@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
 import { ApiClient } from "../src/main/cli/client.ts";
@@ -264,6 +264,30 @@ describe("[DK-M8] An app that takes the connection and never answers", () => {
           );
         }
         await cliChild(h.env, ["quit"]);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
+  test.skipIf(!POSIX)(
+    "a process list that cannot be read stops nothing: the CLI names the kill instead",
+    async () => {
+      const h = await hungHome();
+      try {
+        const empty = join(h.cfg, "no-bin");
+        mkdirSync(empty);
+        const start = await cliChild({ ...h.env, PATH: empty }, [
+          "start",
+          "-t",
+          "X",
+          "--without-models",
+        ]);
+        expect(start.code).toBe(69);
+        expect(start.err).toContain(
+          `akou: akou is not answering, and the processes below it could not be listed (ps failed), so nothing was stopped; kill -KILL ${h.pid} restarts it by hand`,
+        );
+        expect(processAlive(h.pid)).toBe(true);
       } finally {
         h.cleanup();
       }
