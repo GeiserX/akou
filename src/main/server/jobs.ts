@@ -32,6 +32,8 @@ import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
 import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "../asr/nemotron.ts";
+import { findHelper } from "../capture/helper.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
 import { readUploadAudio } from "./audio.ts";
 import {
@@ -139,6 +141,8 @@ export interface JobServiceOptions {
   shelf: ModelStore;
   /** `server.default_model`, as the settings hold it now. */
   defaultModel(): string;
+  /** What `auto` runs here now (SV-R2, `autoChoice`); absent, `fast`. */
+  auto?(): { model: string; preset: string };
   diarizer(): DiarizerKind;
   /** A key's webhook secrets (SV-E2); none for the app's token or an admin session. */
   secrets(keyId: string): string[];
@@ -169,6 +173,18 @@ export interface JobServiceOptions {
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
   now?: () => number;
   log(level: "info" | "warn" | "error", msg: string): void;
+}
+
+/**
+ * Why a job that asks for speaker labels cannot have them, or null when it can: Nemotron runs in
+ * the `akou-diarize` helper, which the app carries but a source checkout does not. Without it the
+ * labels would be lost in silence, so the job fails and says what to do.
+ */
+export function diarizeHelperMissing(spec: ModelSpec): string | null {
+  if (spec.kind !== "sherpa" || (spec.diarizer ?? "nemotron") !== "nemotron") return null;
+  const helper = findHelper(spec.diarizeHelper ?? [], undefined, { name: DIARIZE_HELPER_NAME });
+  if (helper.found) return null;
+  return `speaker labels need the ${DIARIZE_HELPER_NAME} helper, and ${helper.command[0]} is not there: put it on PATH or set asr.diarizeHelper to it (docs/server.md says where to get it), set asr.diarizer to embeddings, or send the job without diarize`;
 }
 
 /** A job as a client sees it (SV-J3), with the download it waits on while queued (SV-M1). */
@@ -214,7 +230,10 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
   };
 }
 
-/** The model ids a job ran, as the engine registry names them (SV-J4). */
+/**
+ * The model ids a job ran, as the engine registry names them (SV-J4): the speaker models only when
+ * they ran, so a job whose labels failed does not name them.
+ */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
   const out = [recognizer, "silero-vad"];
   if (diarize) {
@@ -228,6 +247,24 @@ export function jobModels(recognizer: string, diarize: boolean, diarizer: Diariz
 /** Every id in `jobModels`'s answer for the built engine is in the registry. */
 export function registryKnows(id: string): boolean {
   return MODELS.some((m) => m.id === id);
+}
+
+/** What a client is told about a result that is less than it asked for. */
+export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">): string[] {
+  const { asked, labelled, error } = pass.speakers;
+  if (!asked || labelled || pass.segments.length === 0) return [];
+  return [
+    error === null
+      ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
+      : `speaker labels were asked for and failed: every speaker is null (${error})`,
+  ];
+}
+
+/** The mean of the words' confidences, or null when no word has one. */
+function meanConfidence(words: JobPassResult["words"]): number | null {
+  const cs = words.map((w) => w.c).filter((c): c is number => c !== null);
+  if (cs.length === 0) return null;
+  return Math.round((cs.reduce((a, b) => a + b, 0) / cs.length) * 1000) / 1000;
 }
 
 /** The result of a job (SV-J4). */
@@ -244,12 +281,13 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // No built engine gives word times yet.
-    words: [],
+    words: pass.words,
     segments: pass.segments,
     engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    // Neither words nor segments carry an engine confidence yet.
-    confidence: null,
+    confidence: meanConfidence(pass.words),
+    skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
+    speakers: pass.speakers,
+    warnings: jobWarnings(pass),
     metadata: job.metadata,
   };
 }
@@ -487,15 +525,21 @@ export class JobService {
   // Which model (SV-S1)
 
   /**
-   * The model a request runs: its `model`, its `preset`, `server.default_model`, then the
-   * hardware's choice. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
+   * The model a request runs: its `model`, its `preset`, `server.default_model`, then what `auto`
+   * runs here. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
    */
   choose(ask: { model?: string; preset?: string }, unknownIsAuto = false): ModelChoice {
     return resolveModel(ask, {
       catalog: this.o.shelf.catalog(),
       defaultModel: this.o.defaultModel(),
       unknownIsAuto,
+      auto: () => this.auto(),
     });
+  }
+
+  /** What `auto` runs here now. */
+  private auto(): { model: string; preset: string } {
+    return this.o.auto?.() ?? hardwareChoice();
   }
 
   /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */
@@ -503,7 +547,7 @@ export class JobService {
     try {
       return this.choose({}).model;
     } catch {
-      return hardwareChoice().model;
+      return this.auto().model;
     }
   }
 
@@ -546,7 +590,7 @@ export class JobService {
     const n = named(ask.model, "request") ??
       named(ask.preset, "request") ??
       named(this.o.defaultModel(), "server_default") ?? {
-        name: hardwareChoice().preset,
+        name: this.auto().preset,
         source: "hardware" as const,
       };
     if (!this.remotes.offered([n.name])) return null;
@@ -771,6 +815,7 @@ export class JobService {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
     for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
+    this.store.scrubCancelled(before);
     if (n > 0)
       this.o.log(
         "info",
@@ -781,6 +826,11 @@ export class JobService {
 
   // -------------------------------------------------------------------------
   // The feed
+
+  /** The feed's id (SV-E1): a new one means a new jobs.db, whose cursors start at 0 again. */
+  get feedId(): string {
+    return this.store.feedId;
+  }
 
   events(who: Identity, after: number, limit: number): FeedEvent[] {
     return this.store.events(who.scopes.includes("admin") ? null : who.id, after, limit);
@@ -954,6 +1004,8 @@ export class JobService {
           new Error("the speech models are not downloaded; run `akou models pull`"),
           { code: "models_missing" },
         );
+      const helperless = job.diarize ? diarizeHelperMissing(spec) : null;
+      if (helperless) throw Object.assign(new Error(helperless), { code: "diarize_unavailable" });
       let samples: Float32Array;
       try {
         const maxSamples = this.o.maxAudioMinutes() * 60 * ASR_RATE;
@@ -1000,7 +1052,9 @@ export class JobService {
         status: "done",
         result: jobResult(job, pass, {
           version: this.o.version,
-          models: jobModels(recognizer, job.diarize, this.o.diarizer()),
+          // The speaker models are named only when they ran: not after a missing helper or a missed
+          // deadline, nor on a file with no speech for them.
+          models: jobModels(recognizer, pass.diarized, this.o.diarizer()),
         }),
       };
     } catch (err) {
@@ -1021,7 +1075,7 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
-    const e =
+    const r =
       end.status === "done"
         ? this.store.finish(job.id, end, {
             type: "transcription.completed",
@@ -1034,7 +1088,7 @@ export class JobService {
             deliverTo: job.callback_url,
           });
     if (job.audio) rmSync(job.audio, { force: true });
-    if (!e) return;
+    if (!r) return;
     this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
@@ -1043,7 +1097,8 @@ export class JobService {
         : `job.${end.status} ${job.id} key ${job.key_id} model ${job.model ?? job.preset} on ${remote}`,
     );
     this.notify(job.id, end.status);
-    for (const fn of [...this.feedWatchers]) fn(e);
+    const e = r.event;
+    if (e) for (const fn of [...this.feedWatchers]) fn(e);
     if (job.callback_url) this.deliverer.kick();
   }
 

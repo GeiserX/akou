@@ -27,7 +27,7 @@
  *   `known_speaker_names[]` and `known_speaker_references[]` (until diarization names speakers).
  */
 
-import type { JobSegment } from "../../asr/finalize-worker.ts";
+import type { JobSegment, JobWord } from "../../asr/finalize-worker.ts";
 import type { Job } from "../../server/store.ts";
 import { caller } from "../caller.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
@@ -126,6 +126,63 @@ export function vtt(segments: readonly JobSegment[]): string {
   ].join("\n");
 }
 
+/** A subtitle line holds at most this many characters (SV-J5). */
+export const CUE_CHARS = 42;
+
+/**
+ * Subtitle cues from timed words (SV-J5): words join a cue while it stays within `CUE_CHARS` and
+ * inside one segment, so a cue never runs across a pause or a change of speaker. Null when a word
+ * has no time (an engine that gives none, such as Qwen): the segments are the cues then.
+ */
+export function wordCues(
+  words: readonly JobWord[],
+  segments: readonly JobSegment[],
+): JobSegment[] | null {
+  if (words.length === 0 || words.some((w) => w.s === null || w.e === null)) return null;
+  const out: JobSegment[] = [];
+  let cue: JobSegment | null = null;
+  let seg = 0;
+  let cueSeg = -1;
+  for (const w of words) {
+    const s = w.s as number;
+    // The segment the word starts in: the words and the segments are both in time order.
+    while (seg < segments.length - 1 && s >= (segments[seg] as JobSegment).e) seg++;
+    if (cue && (seg !== cueSeg || cue.text.length + 1 + w.w.length > CUE_CHARS)) {
+      out.push(cue);
+      cue = null;
+    }
+    if (cue) {
+      cue.text += ` ${w.w}`;
+      cue.e = w.e as number;
+    } else {
+      cue = { s, e: w.e as number, text: w.w, speaker: segments[seg]?.speaker ?? null };
+      cueSeg = seg;
+    }
+  }
+  if (cue) out.push(cue);
+  return out;
+}
+
+/** The formats of a job's result (SV-J5). */
+export const RESULT_FORMATS = ["json", "verbose_json", "text", "srt", "vtt"] as const;
+export type ResultFormat = (typeof RESULT_FORMATS)[number];
+
+/**
+ * A done job's result in a format of SV-J5: `json` is the result as stored; `verbose_json` the
+ * OpenAI shape of SV-C1 with its segments; `srt` and `vtt` cues from the timed words, else from
+ * the segments; `text` the text.
+ */
+export function renderResult(job: Job, format: ResultFormat): Response {
+  if (format === "json") return json(200, job.result);
+  const r = rendered(job);
+  if (format === "srt" || format === "vtt") {
+    const words = ((job.result as Record<string, unknown>).words ?? []) as JobWord[];
+    const cues = wordCues(words, r.segments) ?? r.segments;
+    return renderOpenAI({ ...r, segments: cues }, format, []);
+  }
+  return renderOpenAI(r, format, ["segment"]);
+}
+
 interface Rendered {
   segments: JobSegment[];
   text: string;
@@ -165,7 +222,8 @@ export function renderOpenAI(
         language: r.language ?? "unknown",
         duration: r.duration,
         text: r.text,
-        // No built engine gives word times yet: asked-for words are an empty list, never guesses.
+        // This door does not carry the engine's words yet (akou-5an.84): asked-for words are an
+        // empty list, never guesses.
         ...(granularities.includes("word") ? { words: [] } : {}),
         ...(granularities.includes("segment")
           ? {
@@ -314,6 +372,8 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
       title: titleIn(metadata),
       idempotency_key: null,
       interactive,
+      // The caller has the answer in the response; the feed never hears of the job (SV-E1).
+      quiet: true,
       file_sha256: file.sha256,
       audio: file.path,
     });
