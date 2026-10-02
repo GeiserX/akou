@@ -237,7 +237,9 @@ describe("[PG-A7] the list holds every code the source answers", () => {
  * every id under `calls.` that the file does not add by name) and the refusals its handler builds
  * with a literal status.
  */
-function routeChunks(text: string): { ids: (string | RegExp)[]; refusals: string[] }[] {
+function routeChunks(
+  text: string,
+): { ids: string; adds: (id: string) => boolean; refusals: string[] }[] {
   const starts = [...text.matchAll(/\.add\(\s*"(?:GET|POST|PUT|PATCH|DELETE)"/g)].map(
     (m) => m.index as number,
   );
@@ -245,16 +247,13 @@ function routeChunks(text: string): { ids: (string | RegExp)[]; refusals: string
   return starts.map((s, i) => {
     const chunk = text.slice(s, starts[i + 1] ?? text.length);
     const id = /\bid:\s*(?:"([^"]+)"|`([^`$]*)\$\{)/.exec(chunk);
+    const exact = id?.[1];
     const prefix = id?.[2];
-    const ids: (string | RegExp)[] = id?.[1]
-      ? [id[1]]
-      : prefix
-        ? [
-            new RegExp(
-              `^(?!(?:${named.map((n) => n.replace(/\./g, "\\.")).join("|")})$)${prefix.replace(/\./g, "\\.")}`,
-            ),
-          ]
-        : [];
+    const adds = (x: string) =>
+      exact !== undefined
+        ? x === exact
+        : prefix !== undefined && x.startsWith(prefix) && !named.includes(x);
+    const ids = exact ?? (prefix !== undefined ? `${prefix}*` : "");
     const refusals = new Set<string>();
     for (const m of chunk.matchAll(/new HttpError\(\s*(\d{3}),\s*"([a-z_]+)"/g)) {
       refusals.add(`${m[1]} ${m[2]}`);
@@ -262,7 +261,7 @@ function routeChunks(text: string): { ids: (string | RegExp)[]; refusals: string
     for (const m of chunk.matchAll(/json\(\s*(\d{3}),\s*\{\s*error:\s*"([a-z_]+)"/g)) {
       refusals.add(`${m[1]} ${m[2]}`);
     }
-    return { ids, refusals: [...refusals] };
+    return { ids, adds, refusals: [...refusals] };
   });
 }
 
@@ -277,12 +276,10 @@ function declared(e: RouteEntry): Set<string> {
 /** The refusals a route file's handlers build that their routes do not declare. */
 function undeclared(text: string, entries: RouteEntry[]): string[] {
   const out: string[] = [];
-  for (const { ids, refusals } of routeChunks(text)) {
-    const routes = entries.filter((e) =>
-      ids.some((id) => (typeof id === "string" ? e.doc.id === id : id.test(e.doc.id))),
-    );
+  for (const { ids, adds, refusals } of routeChunks(text)) {
+    const routes = entries.filter((e) => adds(e.doc.id));
     if (routes.length === 0) {
-      out.push(`a route with no id the table knows (${ids.join(", ")})`);
+      out.push(`a route with no id the table knows (${ids})`);
       continue;
     }
     for (const r of routes) {
