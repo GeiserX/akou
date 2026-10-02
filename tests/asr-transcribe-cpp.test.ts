@@ -401,7 +401,7 @@ describe("the transcribe-cpp catalog entries", () => {
     ]);
   });
 
-  test("a job that names one is refused before any download: no job runs them yet", () => {
+  test("a job that names one alone is refused before any download: they run only in the fusion preset", () => {
     const o = { catalog: MODELS, defaultModel: "auto" };
     const refused = (model: string) => {
       try {
@@ -417,9 +417,12 @@ describe("the transcribe-cpp catalog entries", () => {
       "preset_unavailable",
       WHISPER_LARGE_V3,
     ]);
-    expect(w.message).toContain("which no job runs");
-    // Canary is also an engine of the unbuilt fusion preset, which the refusal names.
+    expect(w.message).toContain("runs only as one engine of the fusion preset");
+    // The refusal names the preset that runs them.
     expect(refused(CANARY_1B_V2).details.preset).toBe("fusion");
+    // In a fused list they are accepted.
+    const fused = `rover-conf(${QWEN_ASR},${WHISPER_LARGE_V3},${CANARY_1B_V2})`;
+    expect(resolveModel({ model: fused }, o).model).toBe(fused);
     // Positive control: the recognizers jobs run are still accepted.
     for (const id of [RECOGNIZER, QWEN_ASR]) {
       const m = MODELS.find((x) => x.id === id) as CatalogEntry;

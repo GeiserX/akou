@@ -19,6 +19,8 @@ import type {
   DiarizedSpan,
   Diarizer,
   Embedder,
+  FinalEngine,
+  Hypothesis,
   LiveEngine,
   LiveStream,
   LiveToken,
@@ -230,6 +232,10 @@ export interface FakeOptions {
   liveLoadMs?: number;
   /** `release` takes this long before it lets go of the models, ms. */
   releaseMs?: number;
+  /** The language a `createEngine` engine reports on `auto` (default `en`). */
+  engineLang?: string;
+  /** Ids of `createEngine` engines whose load fails. */
+  engineLoadFails?: string[];
 }
 
 export interface DecodeCall {
@@ -602,6 +608,39 @@ export function createModels(options: FakeOptions = {}, model?: string): ModelSe
   const m = new FakeModels({ ...options, model: model ?? options.model });
   created.push(m);
   return m;
+}
+
+/**
+ * An engine of a fusion list that the test module stands in for (`createEngine`, the module kind of
+ * `FusionEngineSpec`): Whisper or Canary on transcribe-cpp in the app. It hears the fake words as
+ * the fake recognizer does and, as they do, gives neither word times nor confidences. Its load
+ * fails when its id is in `engineLoadFails`.
+ */
+export function createEngine(options: FakeOptions = {}, engine = "fake-engine"): FinalEngine {
+  const rec = new FakeRecognizer(engine, { ...options, words: false });
+  return {
+    id: engine,
+    features: { confidence: false, timestamps: false, glossary: true, languageId: true },
+    load: async () => {
+      if (options.engineLoadFails?.includes(engine)) throw new Error(`${engine} would not load`);
+    },
+    unload: async () => {},
+    decode: async (u) => {
+      const t = performance.now();
+      const text = rec.decode(u.samples).text;
+      const h: Hypothesis = {
+        engine,
+        text,
+        words: text
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((w) => ({ w })),
+        ms: performance.now() - t,
+      };
+      if (text !== "") h.lang = u.lang === "auto" ? (options.engineLang ?? "en") : u.lang;
+      return h;
+    },
+  };
 }
 
 /** In-memory parts for the final pass: `parts[part] = { mic, call }`. */

@@ -27,6 +27,7 @@ import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { FINAL_MODELS, finalModelId } from "../asr/final-model.ts";
+import { enginesRefusal, FUSION_DEFAULT, FUSION_ENGINES, fuserRefusal } from "../asr/fusion.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
@@ -476,6 +477,27 @@ export const SETTINGS = {
     values: FINAL_MODELS,
     default: "auto",
     doc: "The model that writes the final transcript after a call: `auto`, or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same). `qwen`: Qwen3-ASR on its llama-server, the most accurate; it gives no word times, so each line keeps the times of the stretch it was cut from. While the pass runs it holds about 3 GB of memory and the GPU when there is one. Without a GPU it decodes on the processor, much slower, and a pass gets half the call's length plus 300 s before it is stopped as stuck, so on such a machine a long call can fail: set `parakeet` there. One Qwen pass runs at a time; another waits for it. `parakeet`: Parakeet, on the processor. `auto` picks `qwen` whenever its model and its llama-server are downloaded, else `parakeet`. A model that is not downloaded never runs: the setting falls back to the other model and says why in the log, and with neither downloaded no pass runs. On Qwen the pass does not need Parakeet on disk. Speaker labels are the same with either. A Qwen that cannot start, or fails twice in a row, fails the pass, and `akou finalize --force` runs it again. `akou finalize --model` sets it for one run, and is refused when that model is not downloaded; a pass stopped by a quit runs again at the next start on this setting's model. A change applies from the next pass.",
+  },
+  "asr.final.engines": {
+    type: "string[]",
+    default: [],
+    check: (v) => enginesRefusal(v as readonly string[]),
+    doc: `The engines of the \`fusion\` preset's pass, in priority order: the order the fuser breaks ties in. Every engine decodes every piece of the file, one engine after another so one GPU model is loaded at a time, and the fuser (\`asr.fusion\`) joins their words. Ids: ${FUSION_ENGINES.map((id) => `\`${id}\``).join(", ")}. Empty: the preset's own, ${FUSION_DEFAULT.map((id) => `\`${id}\``).join(", ")}, the three the benchmark measured best together; add \`canary-1b-v2\` for a fourth. With no job language, the first engine that identifies languages decodes first and the others are given the language it heard. An engine that cannot load, or fails, is left out and the job goes on with the rest; the result's \`engine.fusion\` says which ran and which were left out, and why. Applies to the next job.`,
+  },
+  "asr.fusion": {
+    type: "string",
+    min: 1,
+    max: 20,
+    default: "rover-conf",
+    check: (v) => fuserRefusal(v as string),
+    doc: "How the `fusion` preset joins its engines' words: `rover-conf` (the default) aligns them and keeps, word by word, the one most engines wrote, weighted by each engine's confidence in it; `rover-freq` counts engines only, and loses words past three engines; `first` keeps the first engine's text and uses the others only where it failed. Needs no provider. The fusers that ask a language model (`llm-pick`, `llm-free`) are not built.",
+  },
+  "asr.memoryBudgetMb": {
+    type: "integer",
+    min: 0,
+    max: 1_048_576,
+    default: 0,
+    doc: "Memory, MB, an engine of the `fusion` preset may need: an engine whose estimate (its model files and a fifth more) is over it is left out of the pass and the result says so. The engines load one at a time, so each is held against the budget alone. 0: 60 % of this machine's memory.",
   },
   "asr.review.everySeconds": {
     type: "integer",

@@ -21,6 +21,7 @@
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
 
+import { fusionChoice } from "../../asr/fusion.ts";
 import { RECOGNIZER } from "../../asr/models.ts";
 import type { QueueStats } from "../../server/jobs.ts";
 import { PRESETS } from "../../server/presets.ts";
@@ -73,7 +74,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -93,15 +94,22 @@ export function serverRoutes(r: Router<ApiApp>): void {
         name: "akou",
         version: c.app.version,
         mode: c.app.mode?.() ?? "app",
-        presets: PRESETS.map((p) => ({
-          name: p.name,
-          available:
-            (p.built && (c.app.presetAvailable?.(p.name) ?? ready)) ||
-            (remotes?.offered([p.name]) ?? false),
-          engines: p.engines,
-          hardware: p.hardware,
-          speed: p.speed,
-        })),
+        // SV-R1: each preset's engines, speaker model and how it joins its engines; `fusion`'s as
+        // the settings make it (`asr.final.engines`, `asr.fusion`).
+        presets: PRESETS.map((p) => {
+          const fused = p.name === "fusion" ? fusionChoice(c.app.config().settings) : null;
+          return {
+            name: p.name,
+            available:
+              (p.built && (c.app.presetAvailable?.(p.name) ?? ready)) ||
+              (remotes?.offered([p.name]) ?? false),
+            engines: fused ? fused.engines : p.engines,
+            diarizer: p.diarizer,
+            fusion: fused ? fused.fuser : p.fusion,
+            hardware: p.hardware,
+            speed: p.speed,
+          };
+        }),
         // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
         // Qwen (`metal`, `vulkan`, `cuda`, `sycl`, `rocm`), or `custom` for an own llama-server
         // (`asr.llamaServer`).

@@ -10,6 +10,7 @@
 import { existsSync, statSync } from "node:fs";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
+import { fusionChoice } from "../../asr/fusion.ts";
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
 import { llamaRuntime } from "../../asr/llama-server.ts";
 import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
@@ -217,6 +218,7 @@ function pullPlan(
         image: ctx.io.env.AKOU_LLAMA_SERVER,
         detected,
       }),
+      fusionChoice(settings).engines,
     );
     if ("unavailable" in p) {
       return {
@@ -224,10 +226,11 @@ function pullPlan(
         message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
       };
     }
-    // `best` names on-demand entries (Qwen, a llama-server build) that the machine's list leaves out.
+    // `best` and `fusion` name on-demand entries (Qwen, a llama-server build, Whisper, Canary)
+    // that the machine's list leaves out.
     return {
       ids: [...p.models],
-      registry: name === "best" ? all : reg,
+      registry: name === "best" || name === "fusion" ? all : reg,
       preset: name,
       named: name,
     };

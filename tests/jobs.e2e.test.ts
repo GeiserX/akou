@@ -717,7 +717,7 @@ describe("SV-J4: the result shape", () => {
     }
   });
 
-  for (const preset of ["lite", "fusion"]) {
+  for (const preset of ["lite"]) {
     test(`the ${preset} preset is not built: 409 preset_unavailable, and nothing is queued`, async () => {
       const k = await newKey(server, `j4-${preset}`);
       const r = await submit(server, k.key, NOTE, { preset });
@@ -1143,7 +1143,7 @@ describe("SV-D1: transcribing a file is a product feature", () => {
         "transcribe",
         f.path,
         "--preset",
-        "fusion",
+        "lite",
       ]);
       expect(r.code).not.toBe(0);
       expect(r.err).toContain("not built");

@@ -36,6 +36,14 @@
  * times in seconds on the timeline of `samples`, language, unit confidence), the refused-span halving
  * included. Parakeet goes through it as `hotwordEngine(prepared)`. A call's lines keep the text
  * only; a file job's result carries the words too (`jobWord`, SV-J4).
+ *
+ * A file job's pass runs any number of engines (`runEngines`, ASR-6): every engine decodes every
+ * piece, one engine loaded at a time, and confidence ROVER fuses them (the `fusion` preset). A
+ * call's pass stays single-engine (Parakeet or Qwen, `asr.final.model`) for now. Fusing it is not
+ * a change to this loop alone: each engine in turn needs the pieces of every part and channel,
+ * which this pass reads one channel at a time and never holds together; `final.done` needs fields
+ * for the engines and the dropped ones in the event schema and the fold; and the pass's budget,
+ * the Qwen-pass queue and the models ledger are all per engine today.
  */
 
 import { closeSync, openSync, readSync } from "node:fs";
@@ -51,6 +59,7 @@ import {
   ASR_RATE,
   type DiarizedSpan,
   type FinalEngine,
+  type FusionSpec,
   type Hypothesis,
   loadModelSet,
   type ModelSet,
@@ -59,8 +68,10 @@ import {
   type WordHyp,
 } from "./engine.ts";
 import type { FinalStep } from "./final-text.ts";
+import { type BuiltFuser, fusionModelId } from "./fusion.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
 import { peak, prepareSpan } from "./pad.ts";
+import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
 
@@ -824,6 +835,250 @@ export function hotwordEngine(hw: PreparedHotwords): FinalEngine {
   };
 }
 
+// ---------------------------------------------------------------------------
+// The N-engine pass (ASR-6)
+
+/** One unit of the N-engine pass: `samples[from, to)`, a piece of the timeline. */
+export interface EngineUnit {
+  samples: Float32Array;
+  from: number;
+  to: number;
+}
+
+/** An engine that loaded and decoded in the pass. */
+export interface EngineRun {
+  id: string;
+  /** Units it decoded whole; the fused model id names the engines with at least one. */
+  units: number;
+  /** Seconds it spent decoding, refused units included, its load not counted. */
+  decode_s: number;
+  /** Seconds its load took (a llama-server's start, a model read from disk). */
+  load_s: number;
+}
+
+/** An engine the pass went on without, and why. */
+export interface EngineDrop {
+  engine: string;
+  reason: string;
+  /** Units it was dropped for; null when it decoded none (over budget, or it would not load). */
+  units: number | null;
+}
+
+export interface EnginesOptions {
+  /** `asr.fusion`. */
+  fuser: BuiltFuser;
+  /** The job's or call's language: forced on every engine when it is not `auto`. */
+  lang: string;
+  glossary: readonly string[];
+  minSplitSeconds: number;
+  /** An engine whose `memoryMb` is over this is dropped before it loads. 0 or absent: none. */
+  memoryBudgetMb?: number;
+  log?(level: "info" | "warn" | "error", msg: string): void;
+}
+
+export interface EnginesResult {
+  /** One hypothesis per unit, fused; word times on the timeline of the unit's samples. */
+  hyps: Hypothesis[];
+  /**
+   * The pieces of a unit no engine decoded: when every engine refused some of a unit, the first
+   * engine's partial hypothesis stands and its refused pieces are listed here.
+   */
+  skipped: { unit: number; from: number; to: number; error: string }[];
+  /**
+   * The model the result carries: with a list of one, that engine's id; with more,
+   * `<fuser>(<id>,<id>,...)` over the engines that decoded at least one unit, in list order.
+   */
+  model: string;
+  ran: EngineRun[];
+  dropped: EngineDrop[];
+}
+
+/** A hypothesis with text and no words gets its words from the text, with no times or confidence. */
+function withWords(h: Hypothesis): Hypothesis {
+  if (h.words.length > 0 || h.text === "") return h;
+  return {
+    ...h,
+    words: h.text
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => ({ w })),
+  };
+}
+
+/**
+ * Runs `engines` over `units`, one engine after another, then fuses each unit (ASR-6,
+ * docs/research/asr-architecture.md sections 4 and 5).
+ *
+ * - **One engine at a time.** Each engine loads before its turn and, with more than one in the
+ *   list, unloads after it, so one Metal model is resident at a time (section 2.3: two Metal engines
+ *   together ran out of memory, and llama-server answered 500 until restarted). A list of one keeps
+ *   its engine loaded, as a single-engine job always has (Qwen's llama-server stays up between jobs).
+ * - **The memory budget.** An engine whose estimate is over `memoryBudgetMb` is dropped before it
+ *   loads. The engines never run together, so each is held against the budget alone.
+ * - **The language.** The job's language, when it has one, is forced on every engine. On `auto`
+ *   the first engine in the list that identifies languages (Qwen, Whisper) runs first, and each
+ *   later engine decodes a unit in the language the earliest such engine in the list reported for
+ *   it, so Canary, which must be told one, gets it, and Whisper does not wander into another. A unit
+ *   no engine reported a language for stays `auto`.
+ * - **A failing engine is isolated.** An engine that will not load (it is tried twice) is dropped
+ *   for the whole pass; one that refuses part of a unit even after halving is dropped for that unit;
+ *   one whose error is `fatal` (Qwen's llama-server down after a restart, a transcribe-cpp model
+ *   that will not open) is dropped for the rest of the pass and keeps the units it decoded. The pass
+ *   fails only when a unit is left with no engine: it throws, with the engine's own error when the
+ *   list has one engine. A unit every engine refused part of keeps the first engine's partial
+ *   hypothesis, its refused pieces listed, as a single-engine pass always has.
+ * - **The fuser**, in list order: `rover-conf` and `rover-freq` vote word by word
+ *   (`RoverFuser`), `first` takes the first engine's hypothesis. A unit one engine decoded is that
+ *   engine's hypothesis. An engine that gives text and no words gets the text's words.
+ */
+export async function runEngines(
+  engines: readonly FinalEngine[],
+  units: readonly EngineUnit[],
+  o: EnginesOptions,
+): Promise<EnginesResult> {
+  const log = o.log ?? (() => {});
+  const n = engines.length;
+  if (n === 0) throw new Error("no engine to run");
+  type Partial = { h: Hypothesis; skips: EnginesResult["skipped"] };
+  const whole: (Hypothesis | null)[][] = engines.map(() => units.map(() => null));
+  const partial: (Partial | null)[][] = engines.map(() => units.map(() => null));
+  /** The language a unit was heard in, and the list index of the engine that said so. */
+  const heard: ({ lang: string; by: number } | null)[] = units.map(() => null);
+  const runs: (EngineRun | null)[] = engines.map(() => null);
+  const dropped: EngineDrop[] = [];
+  const errors: (Error | null)[] = engines.map(() => null);
+  const remaining = engines.map((_, i) => i);
+  let identified = false;
+  while (remaining.length > 0) {
+    // On `auto`, the first engine that identifies languages goes first, so the rest can use it.
+    let at = 0;
+    if (o.lang === "auto" && !identified) {
+      const k = remaining.findIndex((i) => (engines[i] as FinalEngine).features.languageId);
+      if (k >= 0) at = k;
+    }
+    const idx = remaining.splice(at, 1)[0] as number;
+    const e = engines[idx] as FinalEngine;
+    const drop = (reason: string, units: number | null, err: Error) => {
+      dropped.push({ engine: e.id, reason, units });
+      errors[idx] = err;
+      log("warn", `${e.id} dropped${units === null ? "" : ` for ${units} unit(s)`}: ${reason}`);
+    };
+    const budget = o.memoryBudgetMb ?? 0;
+    if (budget > 0 && e.memoryMb !== undefined && e.memoryMb > budget) {
+      const reason = `needs about ${e.memoryMb} MB, over the memory budget of ${budget} MB (asr.memoryBudgetMb)`;
+      drop(reason, null, new Error(`${e.id} ${reason}`));
+      continue;
+    }
+    let loadError: Error | null = null;
+    const loadFrom = performance.now();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await e.load();
+        loadError = null;
+        break;
+      } catch (err) {
+        loadError = err as Error;
+        if (attempt === 0) log("warn", `${e.id} did not load: ${loadError.message}; trying again`);
+      }
+    }
+    if (loadError) {
+      drop(`did not load: ${loadError.message}`, null, loadError);
+      await e.unload().catch(() => {});
+      continue;
+    }
+    const run: EngineRun = {
+      id: e.id,
+      units: 0,
+      decode_s: 0,
+      load_s: round3((performance.now() - loadFrom) / 1000),
+    };
+    let refused = 0;
+    let firstRefusal = "";
+    try {
+      for (const [u, unit] of units.entries()) {
+        const lang = o.lang !== "auto" ? o.lang : (heard[u]?.lang ?? "auto");
+        const skips: EnginesResult["skipped"] = [];
+        const t = performance.now();
+        let h: Hypothesis;
+        try {
+          h = await decodeUnit(
+            e,
+            { lang, glossary: o.glossary },
+            unit.samples,
+            unit.from,
+            unit.to,
+            o,
+            (from, to, error) => skips.push({ unit: u, from, to, error }),
+          );
+        } catch (err) {
+          // Fatal: the engine is down for the rest of the pass, and keeps the units it decoded.
+          drop((err as Error).message, units.length - u, err as Error);
+          break;
+        }
+        run.decode_s += (performance.now() - t) / 1000;
+        // Fusion aligns words; a single engine's result keeps exactly what the engine gave.
+        if (n > 1) h = withWords(h);
+        const said = heard[u];
+        if (h.lang && (!said || said.by > idx)) heard[u] = { lang: h.lang, by: idx };
+        if (skips.length > 0) {
+          (partial[idx] as (Partial | null)[])[u] = { h, skips };
+          refused++;
+          firstRefusal ||= (skips[0] as { error: string }).error;
+          continue;
+        }
+        (whole[idx] as (Hypothesis | null)[])[u] = h;
+        run.units++;
+      }
+    } finally {
+      if (n > 1) {
+        await e.unload().catch((err) => log("warn", `${e.id}: unload failed: ${err}`));
+      }
+    }
+    if (refused > 0) {
+      dropped.push({ engine: e.id, reason: firstRefusal, units: refused });
+      log("warn", `${e.id} refused ${refused} unit(s): ${firstRefusal}`);
+    }
+    run.decode_s = round3(run.decode_s);
+    runs[idx] = run;
+    if (e.features.languageId && run.units > 0) identified = true;
+  }
+
+  const fuser = o.fuser === "first" ? null : new RoverFuser(o.fuser);
+  const hyps: Hypothesis[] = [];
+  const skipped: EnginesResult["skipped"] = [];
+  for (const [u] of units.entries()) {
+    const done = whole.flatMap((row) => (row[u] ? [row[u] as Hypothesis] : []));
+    if (done.length > 0) {
+      hyps.push(fuser && done.length > 1 ? fuser.fuseSync(done) : (done[0] as Hypothesis));
+      continue;
+    }
+    const part = partial.find((row) => row[u])?.[u];
+    if (part) {
+      hyps.push(part.h);
+      skipped.push(...part.skips);
+      continue;
+    }
+    // Every engine was dropped before it decoded this unit: no engine is left.
+    const only = n === 1 ? errors[0] : null;
+    if (only) throw only;
+    throw Object.assign(
+      new Error(
+        `no engine is left to decode with: ${dropped.map((d) => `${d.engine}: ${d.reason}`).join("; ")}`,
+      ),
+      { code: "engine_unavailable", fatal: true },
+    );
+  }
+  const ran = runs.filter((r): r is EngineRun => r !== null);
+  const model =
+    n === 1
+      ? (engines[0] as FinalEngine).id
+      : fusionModelId(
+          o.fuser,
+          ran.filter((r) => r.units > 0).map((r) => r.id),
+        );
+  return { hyps, skipped, model, ran, dropped };
+}
+
 function round3(x: number): number {
   return Math.round(x * 1000) / 1000;
 }
@@ -1175,8 +1430,23 @@ export interface JobPassResult {
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
+   * With several engines, the VAD and every engine's decode time, summed.
    */
   decode_s?: number;
+  /**
+   * The N-engine pass (ASR-6), for a job that ran one: the fuser, each engine that loaded with the
+   * units it decoded whole and its decode seconds, and each engine the pass went on without, why,
+   * and for how many units (null: all of them).
+   */
+  fusion?: { fuser: BuiltFuser; engines: EngineRun[]; dropped: EngineDrop[] };
+}
+
+/** The N-engine pass of a job: the engines in priority order, the fuser, the memory budget. */
+export interface FusionPass {
+  engines: readonly FinalEngine[];
+  fuser: BuiltFuser;
+  /** MB; 0 or absent: none. */
+  memoryBudgetMb?: number;
 }
 
 /**
@@ -1192,9 +1462,11 @@ export async function runJobPass(
   input: JobPassInput,
   models: ModelSet,
   log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
-  engine?: FinalEngine,
+  engine?: FinalEngine | FusionPass,
 ): Promise<JobPassResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
+  const fusion = engine && "engines" in engine ? engine : null;
+  const one = engine && !("engines" in engine) ? engine : undefined;
   const x = input.samples;
   const duration_s = round3(x.length / ASR_RATE);
   const empty: JobPassResult = {
@@ -1209,12 +1481,21 @@ export async function runJobPass(
     speakers: { asked: input.diarize, labelled: false, error: null },
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
-  // With an engine the model set's recognizer is never prepared, so it never loads.
+  // With an engine the model set's recognizer is never prepared, so it never loads; in a fusion
+  // list it loads in its own turn.
   const hw = engine ? null : models.prepare(input.decode);
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
-  const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
-  const decoder = engine ?? hotwordEngine(hw as PreparedHotwords);
-  const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
+  const engines: readonly FinalEngine[] = fusion
+    ? fusion.engines
+    : [one ?? hotwordEngine(hw as PreparedHotwords)];
+  // Until the pass has run, the model is the fused id over the whole list.
+  let modelId =
+    engines.length > 1
+      ? fusionModelId(
+          fusion?.fuser ?? "first",
+          engines.map((e) => e.id),
+        )
+      : (engines[0] as FinalEngine).id;
   const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
   const vadS = (performance.now() - vadFrom) / 1000;
@@ -1249,21 +1530,34 @@ export async function runJobPass(
   // noise on its own.
   const heardSpeech = flags.slice(w0, w1);
   const kept = heardSpeech.map((f, i) => f || i < first - w0 || i > last - w0);
-  const decodeFrom = performance.now();
-  for (const piece of timelinePieces(samples, kept, window, o, spans, heardSpeech)) {
-    // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
-    // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a
-    // word there that the plain run does not have.
-    if (
-      !heardSpeech
-        .slice(Math.floor(piece.from / window), Math.ceil(piece.to / window))
-        .includes(true)
-    ) {
-      continue;
-    }
-    const skip = (a: number, b: number, reason: string) =>
-      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), reason });
-    const r = await decodeUnit(decoder, unit, samples, piece.from, piece.to, o, skip);
+  // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
+  // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a word
+  // there that the plain run does not have.
+  const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) =>
+    heardSpeech.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true),
+  );
+  const pass = await runEngines(
+    engines,
+    pieces.map((p) => ({ samples, from: p.from, to: p.to })),
+    {
+      fuser: fusion?.fuser ?? "first",
+      lang: input.language ?? "auto",
+      glossary: input.glossary ?? [],
+      minSplitSeconds: o.minSplitSeconds,
+      memoryBudgetMb: fusion?.memoryBudgetMb,
+      log,
+    },
+  );
+  if (engines.length > 1) modelId = pass.model;
+  for (const k of pass.skipped) {
+    skipped.push({
+      s: round3((from + k.from) / ASR_RATE),
+      e: round3((from + k.to) / ASR_RATE),
+      reason: k.error,
+    });
+  }
+  for (const [u, piece] of pieces.entries()) {
+    const r = pass.hyps[u] as Hypothesis;
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
     for (const w of r.words) words.push(jobWord(w, offset));
@@ -1277,7 +1571,7 @@ export async function runJobPass(
       speaker: spans.length > 0 ? labelPiece(piece, spans, Number.POSITIVE_INFINITY) : null,
     });
   }
-  const decode_s = vadS + (performance.now() - decodeFrom) / 1000;
+  const decode_s = vadS + pass.ran.reduce((t, r) => t + r.decode_s, 0);
   let language: string | null = null;
   for (const [lang, n] of heard)
     if (language === null || n > (heard.get(language) as number)) language = lang;
@@ -1294,6 +1588,9 @@ export async function runJobPass(
     skipped,
     speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
     decode_s,
+    ...(fusion
+      ? { fusion: { fuser: fusion.fuser, engines: pass.ran, dropped: pass.dropped } }
+      : {}),
   };
 }
 
@@ -1365,18 +1662,120 @@ async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEn
   return jobEngine.engine;
 }
 
+/**
+ * The model set's recognizer (Parakeet) as an engine of a fusion list, under the list's id for it:
+ * it is prepared in its own turn, with the job's hotwords where the decoding takes them, and the
+ * set keeps it loaded after, as it does for every job (it runs on the CPU, never on Metal).
+ */
+export function recognizerEngine(
+  id: string,
+  models: ModelSet,
+  decode: DecodeList | null,
+  log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
+): FinalEngine {
+  let inner: FinalEngine | null = null;
+  const load = async () => {
+    if (inner) return;
+    const hw = models.prepare(decode);
+    for (const d of hw.dropped) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
+    inner = hotwordEngine(hw);
+  };
+  return {
+    id,
+    features: { confidence: true, timestamps: true, glossary: false, languageId: false },
+    load,
+    unload: async () => {},
+    decode: async (u) => {
+      await load();
+      return { ...(await (inner as FinalEngine).decode(u)), engine: id };
+    },
+  };
+}
+
+/** An engine with its memory estimate, for the pass's budget. */
+function withMemory(e: FinalEngine, memoryMb: number | undefined): FinalEngine {
+  if (memoryMb === undefined) return e;
+  return {
+    id: e.id,
+    features: e.features,
+    memoryMb,
+    load: () => e.load(),
+    unload: () => e.unload(),
+    decode: (u) => e.decode(u),
+  };
+}
+
+/**
+ * The engines of a job's fusion list, in its order. One that cannot even be built (no llama-server
+ * to run, a module that fails) is an engine whose load fails, so the pass drops it and goes on.
+ */
+async function fusionEngines(
+  spec: FusionSpec,
+  models: ModelSet,
+  decode: DecodeList | null,
+  reply: (r: FromJob) => void,
+): Promise<FinalEngine[]> {
+  const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
+  const out: FinalEngine[] = [];
+  for (const s of spec.engines) {
+    let e: FinalEngine;
+    try {
+      if (s.kind === "recognizer") e = recognizerEngine(s.engine, models, decode, log);
+      else if (s.kind === "llama-server") {
+        const { createLlamaEngine } = await import("./llama-server.ts");
+        e = createLlamaEngine(s, {
+          onChild: (pid, alive) => reply({ type: "child", pid, alive }),
+          log,
+        });
+      } else if (s.kind === "transcribe-cpp") {
+        const { createTranscribeCppEngine } = await import("./transcribe-cpp.ts");
+        e = createTranscribeCppEngine(s.engine, s.modelsDir, {
+          allowed: s.languages ?? [],
+          log,
+        });
+      } else {
+        const mod = (await import(s.path)) as {
+          createEngine(o: unknown, engine: string): FinalEngine;
+        };
+        e = mod.createEngine(s.options, s.engine);
+      }
+    } catch (err) {
+      const why = (err as Error).message;
+      e = {
+        id: s.engine,
+        features: { confidence: false, timestamps: false, glossary: false, languageId: false },
+        load: async () => {
+          throw new Error(why);
+        },
+        unload: async () => {},
+        decode: async () => {
+          throw Object.assign(new Error(why), { fatal: true });
+        },
+      };
+    }
+    out.push(withMemory(e, s.memoryMb));
+  }
+  return out;
+}
+
 async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
-  const { final: _, ...setSpec } = m.models;
+  const { final: _, fusion, ...setSpec } = m.models;
   const key = JSON.stringify(setSpec);
   if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(setSpec as ModelSpec) };
   let models: ModelSet | null = null;
+  let fused: FinalEngine[] = [];
   try {
     models = await jobModels.set;
     // An engine that starts for this job starts inside its first decode, so the job's decode time
     // would carry the start: such a job reports none.
     const starts =
       m.models.final !== undefined && jobEngine?.key !== JSON.stringify(m.models.final);
-    const engine = await engineFor(m, reply);
+    // A fusion job stops a llama-server kept from an earlier job: one Metal engine at a time.
+    const single = await engineFor(m, reply);
+    if (fusion) fused = await fusionEngines(fusion, models, m.decode, reply);
+    const engine: FinalEngine | FusionPass | undefined = fusion
+      ? { engines: fused, fuser: fusion.fuser, memoryBudgetMb: fusion.memoryBudgetMb }
+      : single;
     const result = await runJobPass(
       {
         samples: m.samples,
@@ -1389,7 +1788,10 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
       models,
       (level, msg) => reply({ type: "log", level, msg }),
       engine,
-    );
+    ).finally(async () => {
+      // A fusion list's engines are the job's own: none is kept running after it.
+      for (const e of fused) await e.unload().catch(() => {});
+    });
     if (starts) delete result.decode_s;
     reply({ type: "job.done", result, loads: { ...models.loads } });
   } catch (err) {
