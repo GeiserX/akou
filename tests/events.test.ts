@@ -96,6 +96,16 @@ export const EXAMPLES: Record<string, Record<string, unknown>> = {
     model: "parakeet-tdt-0.6b-v3-fp32",
   },
   "vocab.add": { id: "v1", rev: 1, term: "Anika", heard: ["annika"], by: "user" },
+  "vocab.learned": {
+    id: "k1",
+    rev: 1,
+    term: "Vercel",
+    heard: ["versal"],
+    by: "user",
+    lines: 4,
+    kept: "workspace",
+    vocab: ["v1"],
+  },
   "vocab.propose": {
     id: "p1",
     rev: 1,
@@ -166,6 +176,7 @@ describe("schema v1 (DESIGN 4.3)", () => {
       "call.created": ["template"],
       seg: ["lang"],
       "final.done": ["languages", "warning"],
+      "vocab.learned": ["heard", "lines", "kept", "vocab"],
     };
     let checked = 0;
     for (const type of EVENT_TYPES) {
