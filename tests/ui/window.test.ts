@@ -1173,6 +1173,53 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+describe("the sidebar at 1024 px wide", () => {
+  test(
+    "a long call title ends in an ellipsis inside its row, and a page gives the sidebar its full width",
+    async () => {
+      const title = "Quarterly planning with the platform and identity teams about the rollout";
+      let id = "";
+      await withRig(
+        {
+          seed: (home) => {
+            id = seedCall(home, (b) => b.created({ title }, T0)).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1024, height: 700 });
+          await page.waitForSelector("#calls li .what");
+          expect(await page.$eval("body", (b) => b.className)).not.toContain("welcoming");
+          const titleFit = () =>
+            page.$eval("#calls li .what", (el) => {
+              const row = (el.closest("button") as HTMLElement).getBoundingClientRect();
+              const r = el.getBoundingClientRect();
+              return {
+                inside: r.right <= row.right,
+                clipped: el.scrollWidth > el.clientWidth,
+                ellipsis: getComputedStyle(el).textOverflow,
+              };
+            });
+          // On a call the side pane is there and the sidebar is narrow: the title is cut with an
+          // ellipsis at the row's edge, never drawn past it.
+          expect(await titleFit()).toEqual({ inside: true, clipped: true, ellipsis: "ellipsis" });
+          const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+          const rem = await page.evaluate(() =>
+            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+          );
+          expect(await width()).toBe(10 * rem);
+          // A page has no side pane: the sidebar keeps the width it has in a wide window.
+          await page.click("#settings-open");
+          await page.waitForSelector("body.paged");
+          expect(await width()).toBe(13.75 * rem);
+          expect((await titleFit()).inside).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the workspace menu (WINDOW 3.1)", () => {
   const chip = (page: Page) => text(page, "#workspace-name");
   const listed = (page: Page) =>
