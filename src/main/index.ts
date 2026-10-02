@@ -699,7 +699,13 @@ export class AkouApp implements ApiApp {
     this.headless = o.headless ?? cfg.settings["app.headless"];
     this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
     this.keyStore =
-      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+      this.runMode === "server"
+        ? new KeyStore(
+            this.configDir,
+            () => Date.now(),
+            (line) => this.log("info", line),
+          )
+        : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.appLog = o.supervise ? new AppLog(join(this.configDir, APP_LOG)) : null;

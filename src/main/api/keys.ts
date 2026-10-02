@@ -12,9 +12,13 @@
  *   a revoked key gets 401 on its next request.
  * - When a key was last used goes to `keys-used.json`, which only the server writes, at most once a
  *   minute per key, so the server never rewrites the file the CLI edits.
- * - A create or a revoke reads, changes and writes the file under `keys.json.lock`, so two edits
- *   at once cannot write back a list the other changed (a revoked key coming back). An edit that
- *   finds the lock held is refused, never queued.
+ * - A create, an update of the callback hosts or a revoke reads, changes and writes the file under
+ *   `keys.json.lock`, so two edits at once cannot write back a list the other changed (a revoked key
+ *   coming back). An edit that finds the lock held is refused, never queued.
+ * - The server's store writes the audit lines of SV-K6: `key.created`, `key.updated` and
+ *   `key.revoked`, with the key id and where the edit came from. An edit over HTTP names the
+ *   client's address; an edit the CLI made in the file is noticed when the server reads the file
+ *   again and names `keys.json`. Never a key, a hash or a secret.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -116,6 +120,19 @@ function valid(r: unknown): r is KeyRecord {
   );
 }
 
+/** A key's callback hosts, lower case and once each; a refusal names the first bad one. */
+function hostsOf(list: readonly string[]): string[] {
+  const hosts = [...new Set(list.map((h) => h.trim().toLowerCase()))];
+  const bad = hosts.find((h) => !HOST.test(h));
+  if (bad !== undefined) {
+    throw new KeyError(
+      `"${bad}" is not a host name or an address (no scheme, port or path)`,
+      "callback_hosts",
+    );
+  }
+  return hosts;
+}
+
 export class KeyStore {
   readonly path: string;
   readonly usedPath: string;
@@ -123,15 +140,41 @@ export class KeyStore {
   private stamp = "";
   private used: Record<string, number> = {};
   private usedWritten: Record<string, number> = {};
+  /** For the audit: each key id the last read held, with its callback hosts. */
+  private seen: Map<string, string> | null = null;
 
   constructor(
     readonly configDir: string,
     private readonly now: () => number = Date.now,
+    /** Where the audit lines go (SV-K6); the server's store has one, the CLI's none. */
+    private readonly audit?: (line: string) => void,
   ) {
     this.path = join(configDir, KEYS_FILE);
     this.usedPath = join(configDir, KEYS_USED_FILE);
     this.used = this.readUsed();
     this.usedWritten = { ...this.used };
+    // The keys at start are the baseline: what changes after it is audited.
+    if (audit) this.load();
+  }
+
+  /** Writes an audit line for each key that came, went or changed hosts since the last read. */
+  private notice(keys: readonly KeyRecord[], from: string): void {
+    if (!this.audit) return;
+    const now = new Map(keys.map((k) => [k.id, k.callback_hosts.join(",")]));
+    if (this.seen) {
+      for (const k of keys) {
+        const was = this.seen.get(k.id);
+        if (was === undefined) {
+          this.audit(`key.created ${k.id} "${k.name}" scope ${k.scopes.join(",")} from ${from}`);
+        } else if (was !== now.get(k.id)) {
+          this.audit(`key.updated ${k.id} callback_hosts [${now.get(k.id)}] from ${from}`);
+        }
+      }
+      for (const id of this.seen.keys()) {
+        if (!now.has(id)) this.audit(`key.revoked ${id} from ${from}`);
+      }
+    }
+    this.seen = now;
   }
 
   private fileStamp(): string {
@@ -150,19 +193,23 @@ export class KeyStore {
     this.stamp = stamp;
     if (stamp === "") {
       this.keys = [];
+      this.notice(this.keys, KEYS_FILE);
       return this.keys;
     }
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as { keys?: unknown };
       if (Array.isArray(parsed.keys)) this.keys = parsed.keys.filter(valid);
     } catch {}
+    this.notice(this.keys, KEYS_FILE);
     return this.keys;
   }
 
-  private save(keys: KeyRecord[]): void {
+  /** Writes the list; `from` is where the edit came from, for its audit line. */
+  private save(keys: KeyRecord[], from: string): void {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     writePrivateFile(this.path, `${JSON.stringify({ version: 1, keys }, null, 2)}\n`, true);
     this.stamp = "";
+    this.notice(keys, from);
   }
 
   /** Runs one read-change-write of the file under its lock, on the file as it is now. */
@@ -204,7 +251,13 @@ export class KeyStore {
     }
   }
 
-  create(o: { name: string; scope?: Scope; callbackHosts?: readonly string[] }): CreatedKey {
+  create(o: {
+    name: string;
+    scope?: Scope;
+    callbackHosts?: readonly string[];
+    /** Where the edit came from, for the audit: a client's address. */
+    from?: string;
+  }): CreatedKey {
     const name = o.name.trim();
     if (!NAME.test(name)) {
       throw new KeyError(
@@ -216,14 +269,7 @@ export class KeyStore {
     if (!(SCOPES as readonly string[]).includes(scope)) {
       throw new KeyError(`the scope is one of ${SCOPES.join(", ")}`, "scope");
     }
-    const hosts = [...new Set((o.callbackHosts ?? []).map((h) => h.trim().toLowerCase()))];
-    const bad = hosts.find((h) => !HOST.test(h));
-    if (bad !== undefined) {
-      throw new KeyError(
-        `"${bad}" is not a host name or an address (no scheme, port or path)`,
-        "callback_hosts",
-      );
-    }
+    const hosts = hostsOf(o.callbackHosts ?? []);
     return this.edit((keys) => {
       if (keys.some((k) => k.name === name))
         throw new KeyError(`a key named "${name}" exists`, "exists");
@@ -241,7 +287,7 @@ export class KeyStore {
         sha256: hashKey(key),
         secret,
       };
-      this.save([...keys, record]);
+      this.save([...keys, record], o.from ?? "this process");
       const { sha256: _h, secret: _s, ...info } = record;
       return { ...info, key, secret };
     });
@@ -259,12 +305,28 @@ export class KeyStore {
     }));
   }
 
+  /**
+   * Replaces a key's callback hosts; the key, its secret, its jobs and its feed stay. Null when
+   * there is no key with this id.
+   */
+  setCallbackHosts(id: string, callbackHosts: readonly string[], from?: string): KeyInfo | null {
+    const hosts = hostsOf(callbackHosts);
+    this.edit((keys) => {
+      const i = keys.findIndex((k) => k.id === id);
+      if (i < 0) return;
+      const next = [...keys];
+      next[i] = { ...(keys[i] as KeyRecord), callback_hosts: hosts };
+      this.save(next, from ?? "this process");
+    });
+    return this.list().find((k) => k.id === id) ?? null;
+  }
+
   /** Removes a key by its id, never its name. False when there is none. */
-  revoke(id: string): boolean {
+  revoke(id: string, from?: string): boolean {
     return this.edit((keys) => {
       const next = keys.filter((k) => k.id !== id);
       if (next.length === keys.length) return false;
-      this.save(next);
+      this.save(next, from ?? "this process");
       return true;
     });
   }

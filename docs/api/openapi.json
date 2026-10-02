@@ -4839,6 +4839,65 @@
       }
     },
     "/v1/keys/{id}": {
+      "patch": {
+        "operationId": "keys.update",
+        "tags": [
+          "keys"
+        ],
+        "description": "Replace a key's callback hosts. The key, its webhook secret, its jobs and its event feed stay; the next request with the key uses the new hosts. An empty list allows no callback.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id, `key_…`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "callback_hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "callback_hosts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
       "delete": {
         "operationId": "keys.revoke",
         "tags": [

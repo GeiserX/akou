@@ -7,7 +7,11 @@
  *   key, its hash or its webhook secret.
  * - `POST /v1/keys {name, scopes?, callback_hosts?}`: 201 with the `ak_` key and the `whsec_`
  *   secret, the only time either is shown.
+ * - `PATCH /v1/keys/{id} {callback_hosts}`: replaces a key's callback hosts. The key, its secret,
+ *   its jobs and its feed stay, so a client in the middle of its work keeps going.
  * - `DELETE /v1/keys/{id}`: revokes; the key gets 401 on its next request.
+ *
+ * Each edit is an audit line naming the client's address (SV-K6).
  */
 
 import { SCOPES, type Scope } from "../access.ts";
@@ -71,10 +75,38 @@ export function keyRoutes(r: Router<ApiApp>): void {
       const b = await c.body<{ name: string; scopes?: string[]; callback_hosts?: string[] }>();
       const scope = scopeOf(b.scopes);
       try {
-        return json(201, keys.create({ name: b.name, scope, callbackHosts: b.callback_hosts }));
+        return json(
+          201,
+          keys.create({ name: b.name, scope, callbackHosts: b.callback_hosts, from: c.source }),
+        );
       } catch (err) {
         refused(err);
       }
+    },
+  );
+
+  r.add(
+    "PATCH",
+    "/keys/:id",
+    {
+      id: "keys.update",
+      doc: "Replace a key's callback hosts. The key, its webhook secret, its jobs and its event feed stay; the next request with the key uses the new hosts. An empty list allows no callback.",
+      ...KEY_ROUTE,
+      params: { id: "The key id, `key_…`." },
+      body: { callback_hosts: "string[]" },
+      ok: 200,
+    },
+    async (c) => {
+      const id = c.params.id as string;
+      const b = await c.body<{ callback_hosts: string[] }>();
+      let key: ReturnType<KeyStore["setCallbackHosts"]>;
+      try {
+        key = storeOf(c).setCallbackHosts(id, b.callback_hosts, c.source);
+      } catch (err) {
+        refused(err);
+      }
+      if (!key) throw new HttpError(404, "not_found", `no key ${id}`);
+      return json(200, key);
     },
   );
 
@@ -92,7 +124,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
       const id = c.params.id as string;
       let gone: boolean;
       try {
-        gone = storeOf(c).revoke(id);
+        gone = storeOf(c).revoke(id, c.source);
       } catch (err) {
         refused(err);
       }
