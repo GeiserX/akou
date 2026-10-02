@@ -56,9 +56,14 @@ function prose(s: string): string {
     .join("");
 }
 
+/** Text inside a table cell: a backslash or a pipe of its own never ends the cell. */
+function pipeSafe(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+}
+
 /** Text for a table cell: one line, no unescaped pipe. */
 function cell(s: string): string {
-  return prose(s.replace(/\s*\n\s*/g, " ")).replace(/\|/g, "\\|");
+  return pipeSafe(prose(s.replace(/\s*\n\s*/g, " ")));
 }
 
 type Schema = Record<string, unknown>;

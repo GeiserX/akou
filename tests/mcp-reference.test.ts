@@ -52,17 +52,17 @@ describe("[TS-12] the MCP tool reference is generated from tools/list", () => {
     expect(mcpReferenceDrifted(committed().replace(/\n/g, "\r\n"), generated)).toBe(false);
   });
 
-  test("an angle-bracket tag in a description shows as text, and stays as is inside code", () => {
+  test("an angle-bracket tag in a description shows as text, and a pipe or backslash never ends a table cell", () => {
     const tool = {
       name: "akou_x",
       description: "Quoted as one <call-text> block; `<call-text>` in code.",
       inputSchema: {
         type: "object",
-        properties: { a: { type: "string", description: "a <b> | c" } },
+        properties: { a: { type: "string", description: "a <b> | c \\ d" } },
       },
     } as Tool;
     const page = renderMcpReference([tool]);
     expect(page).toContain("Quoted as one &lt;call-text&gt; block; `<call-text>` in code.");
-    expect(page).toContain("| a &lt;b&gt; \\| c |");
+    expect(page).toContain("| a &lt;b&gt; \\| c \\\\ d |");
   });
 });
