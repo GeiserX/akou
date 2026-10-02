@@ -191,12 +191,7 @@ Each row is one bead labelled `docs-lag`, closed by the PR that fixes the doc.
 | Doc | What lags | Fix |
 |---|---|---|
 | (missing) engine design | No doc names the five engines per OS, the registry schema, word timings on `seg`, the fusion stage or the runtime decision (open decision 7). DK-S2, DK-S3 and TS-16 all cite it | A new engine design, in `docs/ENGINES.md` or DESIGN §3, before any of those beads starts |
-| [DESIGN.md](../DESIGN.md) §3, [REQUIREMENTS.md](../REQUIREMENTS.md) | One engine | The single engine becomes the default of an engine registry with a fusion stage |
-| [asr-benchmark.md](../research/asr-benchmark.md) | Rejects Qwen partly on memory | A closing paragraph: Parakeet fp32 is the default; Qwen3-ASR 1.7B is an opt-in final engine wherever its runtime exists |
-| [ROADMAP.md](../ROADMAP.md), REQUIREMENTS F1.20 | Streaming deferred to "on demand" | A live-engine choice, measured against the Spanish floor (TRN-02 in the matrix) |
-| REQUIREMENTS F1.6 | Language id listed as open | Required, because the per-call model switch depends on it |
 | DESIGN §3.2, §3.3 | pyannote plus ERes2Net | Nemotron-class diarization for the final pass once PR #15 lands |
-| DESIGN §7 | Live labels shown as `c<N>` | Live clustering is a setting (`asr.liveLabels`), and the UI shows live labels as provisional |
 | [providers.md](../providers.md), release checklist | Harness terms check still open | A non-prerelease release fails while providers.md has no dated verdict. If the terms rule the harness out, the default provider becomes `none` and the harness stays opt-in |
 | DESIGN §1.5 | Hotkey default | Matches DK-K4 |
 | [TRAPS.md](../TRAPS.md) "The boost is a slider" | Names `akou vocab check --boost`, which does not exist | Rewritten against the per-entry `decode` field; CLI-17's scan covers TRAPS.md |
