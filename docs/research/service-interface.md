@@ -22,9 +22,9 @@ Versions read for this: Executor 1.6.8, source at commit [`a0b0d91`](https://git
 
 ```mermaid
 flowchart LR
-  classDef door fill:#e3f2fd,stroke:#1565c0,color:#0d2a4a
-  classDef core fill:#e8f5e9,stroke:#2e7d32,color:#14321c
-  classDef client fill:#f3e5f5,stroke:#6a1b9a,color:#2e0b40
+  classDef door stroke:#1565c0,stroke-width:2px
+  classDef core stroke:#2e7d32,stroke-width:2px
+  classDef client stroke:#6a1b9a,stroke-width:2px
 
   EX["Executor"]:::client
   TA["Telegram-Archive<br/>any service"]:::client
