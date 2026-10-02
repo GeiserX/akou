@@ -156,8 +156,8 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-16 | Exit 3 for "no call to act on" in every command | P0 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | bug |
-| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | partial: `tail -f` stops on the first Ctrl-C and exits 130 on the second |
+| CLI-16 | Exit 3 for "no call to act on" in every command | P0 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | has: `tests/cli-exit-codes.e2e.test.ts` lists every command in the registry and runs each call command with no calls, with `-c` naming no call, and each command that defaults to `live` with nothing live; a missing call answers `not_found` with `call` in the body, so a missing key or model stays 64 |
+| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | has: `tests/cli-terminal.e2e.test.ts` types Ctrl-C into `tail -f` and `ask` on a pty |
 
 ## 7. Errors that say what to do
 
@@ -438,7 +438,6 @@ The jobs that run them and the minimum test counts are in [CI-CD.md](../CI-CD.md
 
 ## P0 list
 
-- **CLI-16** Exit 3 for "no call to act on" in every command; today four commands exit 64 for the same situation.
 - **CLI-17** Every command, flag or setting named in a message exists, and nothing tells the user to run `akou start` (which records) just to launch the app.
 
 Not a CLI P0, but the agent path depends on it: PG-M1 in [PROGRAMMABILITY.md](PROGRAMMABILITY.md). The skill tells the agent to use the MCP tools, and nothing registers them today.
