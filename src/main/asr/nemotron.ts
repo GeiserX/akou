@@ -189,7 +189,8 @@ export class DiarizeHelper {
   send(bytes: Uint8Array): boolean {
     if (this.done || this.closing) return false;
     try {
-      this.stdin.write(bytes);
+      // A pending write rejects on its own promise when the helper has gone; its exit says why.
+      void Promise.resolve(this.stdin.write(bytes)).catch(() => {});
       void Promise.resolve(this.stdin.flush()).catch(() => {});
       return true;
     } catch (err) {
@@ -201,7 +202,10 @@ export class DiarizeHelper {
   /** Writes a frame and waits until the pipe has taken it (bounded memory for long streams). */
   async sendAll(bytes: Uint8Array): Promise<void> {
     if (this.done || this.closing) throw new Error("akou-diarize is not running");
-    this.stdin.write(bytes);
+    // A write the pipe cannot take at once answers with a promise. To a helper that has exited
+    // but is not yet reaped it rejects with EPIPE while flush() answers 0, so it is awaited here:
+    // dropped, the broken pipe escaped as an unhandled error instead of reaching the caller.
+    await this.stdin.write(bytes);
     await this.stdin.flush();
   }
 

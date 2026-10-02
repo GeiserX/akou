@@ -49,6 +49,7 @@ import {
   type ModelSet,
   type ModelSpec,
   type PreparedHotwords,
+  type WordHyp,
 } from "./engine.ts";
 import type { FinalStep } from "./final-text.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
@@ -716,6 +717,36 @@ export async function runFinalPass(
   }
 }
 
+/** What one span decoded to: its text, its language, and its words timed in `samples`. */
+interface Decoded {
+  text: string;
+  lang?: string;
+  /** The engine's words; `t0` and `t1`, when the engine gives them, are seconds into `samples`. */
+  words: WordHyp[];
+}
+
+/**
+ * The engine's words of the span that starts at sample `from`, timed from the start of `samples`:
+ * `prepareSpan` pads after the speech only, so a time into the span plus its start is its time.
+ */
+function placed(words: readonly WordHyp[] | undefined, from: number): WordHyp[] {
+  const off = from / ASR_RATE;
+  return (words ?? []).map((w) => ({
+    ...w,
+    ...(w.t0 !== undefined ? { t0: off + w.t0 } : {}),
+    ...(w.t1 !== undefined ? { t1: off + w.t1 } : {}),
+  }));
+}
+
+/** Two halves of a span, joined. */
+function joined(a: Decoded, b: Decoded): Decoded {
+  return {
+    text: [a.text, b.text].filter((t) => t !== "").join(" "),
+    lang: a.lang ?? b.lang,
+    words: [...a.words, ...b.words],
+  };
+}
+
 /**
  * `decodeHalving` over a `FinalEngine` (Qwen through llama-server): the same halving of a span the
  * engine refuses, but an error marked `fatal` (the engine is down) ends the pass instead of costing
@@ -729,20 +760,20 @@ async function decodeHalvingWith(
   to: number,
   o: FinalOptions,
   skip: (from: number, to: number, error: string) => void,
-): Promise<{ text: string; lang?: string }> {
+): Promise<Decoded> {
   try {
     const h = await engine.decode({ ...unit, samples: prepareSpan(samples.subarray(from, to)) });
-    return { text: h.text.trim(), lang: h.lang };
+    return { text: h.text.trim(), lang: h.lang, words: placed(h.words, from) };
   } catch (err) {
     if ((err as { fatal?: boolean }).fatal) throw err;
     if (to - from > o.minSplitSeconds * ASR_RATE) {
       const mid = from + Math.floor((to - from) / 2);
       const a = await decodeHalvingWith(engine, unit, samples, from, mid, o, skip);
       const b = await decodeHalvingWith(engine, unit, samples, mid, to, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+      return joined(a, b);
     }
     skip(from, to, (err as Error).message);
-    return { text: "" };
+    return { text: "", words: [] };
   }
 }
 
@@ -754,19 +785,19 @@ function decodeHalving(
   hw: PreparedHotwords,
   o: FinalOptions,
   skip: (from: number, to: number, error: string) => void,
-): { text: string; lang?: string } {
+): Decoded {
   try {
     const r = hw.recognizer.decode(prepareSpan(samples.subarray(from, to)), streamHotwords(hw));
-    return { text: r.text.trim(), lang: r.lang };
+    return { text: r.text.trim(), lang: r.lang, words: placed(r.words, from) };
   } catch (err) {
     if (to - from > o.minSplitSeconds * ASR_RATE) {
       const mid = from + Math.floor((to - from) / 2);
       const a = decodeHalving(samples, from, mid, hw, o, skip);
       const b = decodeHalving(samples, mid, to, hw, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+      return joined(a, b);
     }
     skip(from, to, (err as Error).message);
-    return { text: "" };
+    return { text: "", words: [] };
   }
 }
 
@@ -1069,6 +1100,8 @@ export interface JobPassInput {
   language?: string;
   /** The job's keywords as a glossary, for an engine that takes one (Qwen's context). */
   glossary?: readonly string[];
+  /** The languages an `auto` decode may choose among (the job's `languages[]`), over the engine's. */
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 }
 
@@ -1080,6 +1113,27 @@ export interface JobSegment {
   speaker: string | null;
 }
 
+/**
+ * One word of a job (SV-J4). `s` and `e` are seconds into the file, null from an engine that gives
+ * no word times (Qwen); `c` is the engine's confidence, 0 to 1, null from one that gives none.
+ */
+export interface JobWord {
+  w: string;
+  s: number | null;
+  e: number | null;
+  c: number | null;
+}
+
+/** Whether a job's speaker labels were made (SV-J4). */
+export interface JobSpeakers {
+  /** The job asked for `diarize`. */
+  asked: boolean;
+  /** Its segments carry speaker labels: the speaker model ran and found turns. */
+  labelled: boolean;
+  /** Why the speaker model failed (a missing helper, a missed deadline), or null. */
+  error: string | null;
+}
+
 export interface JobPassResult {
   text: string;
   segments: JobSegment[];
@@ -1088,7 +1142,13 @@ export interface JobPassResult {
   duration_s: number;
   /** The recognizer's registry name, or null when nothing was decoded. */
   model: string | null;
+  /** Every decoded word, in order. */
+  words: JobWord[];
+  /** Spans the engine refused even after halving to `minSplitSeconds`: their words are missing. */
   skipped: { s: number; e: number; error: string }[];
+  speakers: JobSpeakers;
+  /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
+  diarized: boolean;
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
@@ -1120,14 +1180,22 @@ export async function runJobPass(
     language: null,
     duration_s,
     model: null,
+    words: [],
     skipped: [],
+    // Nothing to label: no speech, so no speaker model runs.
+    speakers: { asked: input.diarize, labelled: false, error: null },
+    diarized: false,
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
   // With an engine the model set's recognizer is never prepared, so it never loads.
   const hw = engine ? null : models.prepare(input.decode);
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
   const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
-  const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
+  const unit = {
+    lang: input.language ?? "auto",
+    glossary: input.glossary ?? [],
+    allowed: input.languages,
+  };
   const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
   const vadS = (performance.now() - vadFrom) / 1000;
@@ -1140,19 +1208,20 @@ export async function runJobPass(
   const from = w0 * window;
   const samples = x.subarray(from, Math.min(x.length, w1 * window));
   let spans: DiarizedSpan[] = [];
+  let diarizeError: string | null = null;
   if (input.diarize) {
     // A diarizer that fails costs the labels, not the job, as on a call.
     try {
       spans = await models.diarizer().process(samples);
     } catch (err) {
-      log(
-        "error",
-        `speaker labels failed, the job goes on without them: ${(err as Error).message}`,
-      );
+      diarizeError = (err as Error).message;
+      log("error", `speaker labels failed, the job goes on without them: ${diarizeError}`);
     }
   }
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
+  const words: JobWord[] = [];
+  const at = (t: number | undefined) => (t === undefined ? null : round3(from / ASR_RATE + t));
   // Characters of text per detected language: the job's language is the one most of it is in, so
   // a filler the model hears as another language at the start does not name the whole file.
   const heard = new Map<string, number>();
@@ -1179,6 +1248,14 @@ export async function runJobPass(
       : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
+    for (const w of r.words) {
+      words.push({
+        w: w.w,
+        s: at(w.t0),
+        e: at(w.t1 ?? w.t0),
+        c: w.conf === undefined ? null : round3(w.conf),
+      });
+    }
     segments.push({
       s: round3((from + piece.from) / ASR_RATE),
       e: round3((from + piece.to) / ASR_RATE),
@@ -1198,7 +1275,10 @@ export async function runJobPass(
     language,
     duration_s,
     model: modelId,
+    words,
     skipped,
+    speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
+    diarized: input.diarize && diarizeError === null,
     decode_s,
   };
 }
@@ -1211,6 +1291,7 @@ type ToJob = {
   diarize: boolean;
   language?: string;
   glossary?: readonly string[];
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 };
 
@@ -1264,6 +1345,7 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         decode: m.decode,
         language: m.language,
         glossary: m.glossary,
+        languages: m.languages,
         options: m.options,
       },
       models,
@@ -1347,6 +1429,7 @@ export class JobWorker {
         diarize: input.diarize,
         language: input.language,
         glossary: input.glossary,
+        languages: input.languages,
         options: input.options,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
