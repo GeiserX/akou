@@ -50,7 +50,7 @@ import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protoc
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { SetupWizard } from "./setup-wizard.ts";
-import { TranscriptPane } from "./transcript.ts";
+import { jumpText, TranscriptPane } from "./transcript.ts";
 import { WorkspacePicker } from "./workspaces.ts";
 
 /** The answer of `POST /calls/{id}/fix`: what each changed word did, and how to take it back. */
@@ -348,6 +348,7 @@ class App {
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
+    // clock: the page repaints its ages and timers once a second.
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -434,13 +435,17 @@ class App {
           // A line arriving now counts from now (the page's clock); the backlog from when it was
           // written.
           if (e.type === "seg" && e.rev === 1) {
+            // clock: a line arriving now is timed by the page's clock, as the comment above says.
             this.lastLineAt = animate ? Date.now() : Math.max(this.lastLineAt ?? 0, e.t);
           }
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "ask" || e.type === "answer") asked = true;
         }
-        if (notes) this.notepad.render();
+        if (notes) {
+          this.notepad.render();
+          this.player.marks();
+        }
         if (speakers) this.askPane.speakersChanged();
         if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
@@ -461,7 +466,9 @@ class App {
         if (f !== this.follower) return;
         if (state === "open") {
           this.disconnectedSince = null;
+          // clock: when the page started following, by its own clock.
           this.followedAt ??= Date.now();
+          // clock: when the page lost the stream, by its own clock.
         } else this.disconnectedSince ??= Date.now();
         document.body.dataset.connection = state;
         this.paint();
@@ -478,6 +485,7 @@ class App {
 
   private paint(): void {
     const v = this.view();
+    // clock: the page paints ages against its own clock.
     const now = Date.now();
     const s = this.status;
     const st = stateLabel({
@@ -732,6 +740,7 @@ class App {
     const other = !!live && live.call !== this.callId;
     const body = document.body;
     body.classList.toggle("busy", mine || other);
+    byId("jump").textContent = jumpText(mine);
     byId("stop-label").textContent = other && !mine ? "Stop the other call" : "Stop";
     // Record waits for the speech models with its reason, so the page never sends a start that
     // the app refuses with 503 models_missing.
@@ -748,6 +757,7 @@ class App {
     const first = mine ? v?.parts()[0]?.wallStart : undefined;
     elapsed.hidden = first === undefined;
     if (first !== undefined) {
+      // clock: a running call's elapsed time on screen.
       byId("elapsed-text").textContent = formatDuration((Date.now() - first) / 1000);
     }
     // Quiet icon buttons: the label is their name for a screen reader and their tooltip.
@@ -809,6 +819,7 @@ class App {
   }
 
   private meters(l: Levels | null): void {
+    // clock: the meters fade by the page's own clock.
     const now = Date.now();
     if (l) {
       this.levelAt = now;
@@ -875,6 +886,7 @@ class App {
   private drawCalls(): void {
     const query = byId<HTMLInputElement>("calls-search").value;
     const live = this.status?.live?.call ?? null;
+    // clock: the call list shows ages against the page's own clock.
     const now = Date.now();
     const key = JSON.stringify([
       this.calls,

@@ -71,9 +71,12 @@ export interface ProcRow {
   args: string;
 }
 
-/** Every process of this machine, from `ps`; empty on Windows or when `ps` fails. */
-export function processTable(platform: string = process.platform): Promise<ProcRow[]> {
-  if (platform === "win32") return Promise.resolve([]);
+/**
+ * Every process of this machine, from `ps`; null on Windows or when `ps` cannot list them. A list
+ * that could not be read is never an empty one: a recording helper may be in it.
+ */
+export function processTable(platform: string = process.platform): Promise<ProcRow[] | null> {
+  if (platform === "win32") return Promise.resolve(null);
   return new Promise((resolve) => {
     const p = spawn("ps", ["-A", "-o", "pid=,ppid=,args="], {
       stdio: ["ignore", "pipe", "ignore"],
@@ -83,8 +86,8 @@ export function processTable(platform: string = process.platform): Promise<ProcR
     p.stdout.on("data", (d: string) => {
       out += d;
     });
-    p.on("error", () => resolve([]));
-    p.on("close", () => resolve(parsePs(out)));
+    p.on("error", () => resolve(null));
+    p.on("close", (code) => resolve(code === 0 ? parsePs(out) : null));
   });
 }
 
@@ -189,6 +192,7 @@ export async function recordingBelow(
     const out = recordingOut(args);
     if (out === null) continue;
     const before = sizeOf(out);
+    // clock: watching a real recording grow for `watchMs`.
     await new Promise((r) => setTimeout(r, watchMs));
     const after = sizeOf(out);
     return { pid, growing: before === null || after === null ? null : after > before };
@@ -211,6 +215,7 @@ export async function sampleHung(
   } catch {
     return null;
   }
+  // clock: the default of an injected time: the file is named when it is written.
   const stamp = (o.now ?? new Date()).toISOString().replace(/[:.]/g, "-");
   const file = join(dir, `hang-${stamp}.txt`);
   const ok = await new Promise<boolean>((resolve) => {
@@ -221,6 +226,7 @@ export async function sampleHung(
         stdio: "ignore",
       },
     );
+    // clock: a deadline on a real process that may hang.
     const timer = setTimeout(() => {
       p.kill("SIGKILL");
       resolve(false);
@@ -263,11 +269,13 @@ export async function stopAll(pids: readonly number[], graceMs = TERM_GRACE_MS):
   for (const p of pids) signal(p, "SIGTERM");
   const deadline = performance.now() + graceMs;
   while (performance.now() < deadline && pids.some(processAlive)) {
+    // clock: polling real processes we signalled, bounded by the grace.
     await new Promise((r) => setTimeout(r, 50));
   }
   for (const p of pids.filter(processAlive)) signal(p, "SIGKILL");
   const end = performance.now() + 1000;
   while (performance.now() < end && pids.some(processAlive)) {
+    // clock: polling real processes we signalled, bounded by the second.
     await new Promise((r) => setTimeout(r, 20));
   }
   return pids.filter(processAlive);
