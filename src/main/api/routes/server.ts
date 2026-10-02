@@ -129,8 +129,9 @@ export function serverRoutes(r: Router<ApiApp>): void {
         dictation,
         capabilities: {
           jobs: has("POST", "/jobs"),
-          // Signed deliveries per key (SV-E2) come with the job route's `callback_url`.
-          webhooks: has("POST", "/jobs"),
+          // Signed deliveries per key (SV-E2) come with the job route's `callback_url`, and need
+          // keys: the desktop app's token has no webhook secret.
+          webhooks: has("POST", "/jobs") && !!c.app.keys?.(),
           events: has("GET", "/events"),
           openai: has("POST", "/audio/transcriptions"),
           // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.

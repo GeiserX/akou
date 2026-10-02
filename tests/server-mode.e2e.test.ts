@@ -554,11 +554,11 @@ describe("SV-K1: GET /v1/server", () => {
       expect(Object.keys(b.capabilities).sort()).toEqual(
         ["bazarr", "events", "interactive", "jobs", "openai", "webhooks", "wyoming"].sort(),
       );
-      // server.dictation_slots reserves one Worker by default (DC-R2); the app runs no jobs.
+      // server.dictation_slots reserves one Worker by default (DC-R2); the app has no lane.
       expect(b.capabilities.interactive).toBe(mode === "server");
-      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
-      for (const c of ["jobs", "events", "webhooks"])
-        expect(b.capabilities[c]).toBe(mode === "server");
+      // Jobs and their feed exist in both modes (akou-5an.119); signed deliveries need keys.
+      for (const c of ["jobs", "events"]) expect(b.capabilities[c]).toBe(true);
+      expect(b.capabilities.webhooks).toBe(mode === "server");
     }
   });
 
@@ -651,8 +651,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
-        // The job queue's numbers (SV-Q4): the app has no queue.
-        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
+        // The job queue's numbers (SV-Q4), in both modes: the app runs file jobs too.
+        queue: expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });

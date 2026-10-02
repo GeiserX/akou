@@ -262,8 +262,8 @@ describe("akou jobs list against a server", () => {
   });
 });
 
-describe("akou jobs list against the desktop app", () => {
-  test("says jobs belong to a server, with exit 69, not a usage error", async () => {
+describe("akou jobs list against an akou that takes no jobs", () => {
+  test("says so, with exit 69, not a usage error", async () => {
     const t = tempDir();
     const configDir = join(t.dir, ".config", "akou");
     mkdirSync(configDir, { recursive: true });
@@ -275,7 +275,7 @@ describe("akou jobs list against the desktop app", () => {
     const e = { ...env({}), AKOU_HOME: t.dir };
     const r = await cli(e, ["jobs", "list"]);
     expect(r.code).toBe(EXIT.unavailable);
-    expect(r.err).toContain("server");
+    expect(r.err).toContain("takes no file jobs");
     expect(r.err).toContain("AKOU_URL");
     // Positive control: the local app was asked, and answered 404.
     expect(fakeSeen.at(-1)).toBe("GET /v1/jobs");

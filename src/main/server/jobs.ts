@@ -145,6 +145,11 @@ export interface JobServiceOptions {
   /** Does the key list this callback host by name, not only through `*`? (SV-K4) */
   hostListed(keyId: string, host: string): boolean;
   retainDays(): number;
+  /**
+   * Whether the hourly sweep also deletes unused models (SV-M5). Default true; the desktop app
+   * sweeps them itself, since only it knows what its calls and dictation hold.
+   */
+  sweepsModels?: boolean;
   /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
   maxAudioMinutes(): number;
   /** `server.remotes` as the settings hold it now (section 14). */
@@ -738,7 +743,7 @@ export class JobService {
    */
   sweep(): number {
     const n = this.sweepJobs();
-    this.sweepModels();
+    if (this.o.sweepsModels !== false) this.sweepModels();
     return n;
   }
 

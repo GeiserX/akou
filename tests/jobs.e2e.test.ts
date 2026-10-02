@@ -223,13 +223,17 @@ describe("SV-J1: POST /v1/jobs, multipart", () => {
     await call(server, k.key, "GET", `/jobs/${ok.body.id}?wait=60`);
   });
 
-  test("the job routes exist in server mode only: the desktop app answers 404", async () => {
+  test("[akou-5an.119] the desktop app serves the job routes with its own token; keys and the OpenAI door stay server-only", async () => {
     const routes = (s: AppRig) =>
       (s.app.server?.routes() ?? []).map((r) => `${r.method} ${r.path}`);
-    expect(routes(app)).not.toContain("POST /v1/jobs");
-    expect((await call(app, app.token, "GET", "/jobs")).status).toBe(404);
-    // Positive control: the server has it.
-    expect(routes(server)).toContain("POST /v1/jobs");
+    expect(routes(app)).toContain("POST /v1/jobs");
+    expect((await call(app, app.token, "GET", "/jobs")).status).toBe(200);
+    // Nothing about keys changes: the desktop app still has none, and no OpenAI door.
+    expect(routes(app)).not.toContain("GET /v1/keys");
+    expect(routes(app)).not.toContain("POST /v1/audio/transcriptions");
+    expect(routes(server)).toContain("GET /v1/keys");
+    // A wrong token is still refused.
+    expect((await call(app, "0".repeat(64), "GET", "/jobs")).status).toBe(401);
   });
 });
 
@@ -1083,15 +1087,104 @@ describe("SV-D1: transcribing a file is a product feature", () => {
     }
   });
 
-  test("the desktop app has no file jobs: exit 69, naming the setting", async () => {
+  test("[akou-5an.119] on the desktop app, with server.enabled off, akou transcribe prints the transcript", async () => {
     const f = noteFile();
     try {
+      expect(app.app.mode()).toBe("app");
       const r = await cli({ ...process.env, ...app.env }, ["transcribe", f.path]);
-      expect(r.code).toBe(69);
-      expect(r.err).toContain("server.enabled");
+      expect(`${r.code} ${r.out}`).toBe("0 hello world");
     } finally {
       f.cleanup();
     }
+  });
+
+  test("[akou-5an.119] on the desktop app akou transcribe --preset best --diarize runs Qwen and labels the speakers", async () => {
+    const t = tempDir("akou-desk-best-");
+    const rig = await appRig({
+      settings: {
+        "asr.llamaServer": [
+          process.execPath,
+          join(import.meta.dir, "fixtures", "fake-llama-server.ts"),
+          "--fake-log",
+          join(t.dir, "llama.log"),
+        ],
+      },
+    });
+    try {
+      expect(rig.app.mode()).toBe("app");
+      const path = join(t.dir, "two.wav");
+      writeFileSync(
+        path,
+        monoWav(
+          concat(
+            silence(0.4),
+            speak(["hello", "world"], { voice: 1 }),
+            silence(1.2),
+            speak(["ok", "great"], { voice: 4 }),
+            silence(0.6),
+          ),
+        ),
+      );
+      const r = await cli({ ...process.env, ...rig.env }, [
+        "transcribe",
+        path,
+        "--preset",
+        "best",
+        "--language",
+        "en",
+        "--diarize",
+        "--json",
+      ]);
+      expect(r.code).toBe(0);
+      const out = r.json as {
+        text: string;
+        engine: { models: string[] };
+        segments: { speaker: string }[];
+      };
+      expect(out.text).toBe("hello world ok great");
+      expect(out.engine.models[0]).toBe("qwen3-asr-1.7b");
+      expect(out.segments.map((x) => x.speaker)).toEqual(["s0", "s1"]);
+    } finally {
+      await rig.close();
+      t.cleanup();
+    }
+  });
+
+  test("[akou-5an.119] on the desktop app a submitted job runs, and akou jobs list shows it done", async () => {
+    const s = await submit(app, app.token, NOTE, { title: "desk note" });
+    expect(s.status).toBe(202);
+    const done = await call(app, app.token, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    expect((await call(app, app.token, "GET", `/jobs/${s.body.id}/result`)).body.text).toBe(
+      "hello world",
+    );
+    const list = await cli({ ...process.env, ...app.env }, ["jobs", "list", "--status", "done"]);
+    expect(list.code).toBe(0);
+    expect(list.out).toContain(`${s.body.id}  done`);
+    expect(list.out).toContain("desk note");
+  });
+
+  test("[akou-5an.119] on the desktop app a 15-minute file is cut at its pauses and transcribed whole", async () => {
+    const minutes = 15;
+    const x = concat(
+      silence(1),
+      speak(["hello", "world"]),
+      silence(7 * 60),
+      speak(["ok", "great"]),
+      silence(7 * 60),
+      speak(["yes"], { wordSeconds: 0.4 }),
+    );
+    const file = monoWav(concat(x, silence(minutes * 60 - x.length / RATE)));
+    const s = await submit(app, app.token, file);
+    expect(s.status).toBe(202);
+    const done = await call(app, app.token, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    const r = (await call(app, app.token, "GET", `/jobs/${s.body.id}/result`)).body;
+    expect(r.duration_s).toBe(minutes * 60);
+    expect(r.text).toBe("hello world ok great yes");
+    // Three runs of speech, three pieces: no piece is the whole file.
+    expect(r.segments.length).toBe(3);
+    for (const seg of r.segments) expect(seg.e - seg.s).toBeLessThan(30);
   });
 
   test("with nothing running it exits 69, and a missing file is a usage error", async () => {

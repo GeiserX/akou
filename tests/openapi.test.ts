@@ -439,7 +439,10 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
     try {
       const doc = (await app.get("/openapi.json")).body;
       expect(doc.paths["/v1/calls"]).toBeDefined();
-      expect(doc.paths["/v1/events"]).toBeUndefined();
+      // The desktop app takes file jobs (akou-5an.119); keys and the OpenAI door are server mode's.
+      expect(doc.paths["/v1/jobs"]?.post?.operationId).toBe("jobs.create");
+      expect(doc.paths["/v1/keys"]).toBeUndefined();
+      expect(doc.paths["/v1/audio/transcriptions"]).toBeUndefined();
     } finally {
       await app.server.stop();
     }
