@@ -35,6 +35,8 @@ export const ERROR_CODES = {
   capture_failed: "The capture helper could not start; `stage` says where.",
   cursor_stale: "The cursor is older than what the call still holds; read again from the start.",
   decode_failed: "The audio could not be decoded.",
+  diarize_unavailable:
+    "The job asked for speaker labels and no `akou-diarize` helper is here; the message names the settings that fix it.",
   dictation_busy: "A dictation is already running.",
   dictation_off: "Dictation is off (`dictation.enabled`).",
   dictation_starting: "The dictation helper is still starting.",
@@ -98,6 +100,8 @@ export const ERROR_CODES = {
   unauthorized: "A valid bearer token is required.",
   unknown_field: "The body has a field the route does not take; `field` names it.",
   unknown_model: "No model of that name in the catalog.",
+  unsupported_language:
+    "A `languages[]` code is one no engine here can choose; `codes` names them.",
   vocab_file_invalid: "The vocabulary file could not be read.",
   workspace_not_folder: "The workspace's name is taken by something that is not a folder.",
 } as const satisfies Record<string, string>;
