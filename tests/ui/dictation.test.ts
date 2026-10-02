@@ -3533,7 +3533,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       const clip = monoWav(concat(silence(0.6), speak(["deploy", "to", "kubernetes"]), silence(1)));
       const dictate = async () => {
         const form = new FormData();
-        form.append("file", new Blob([clip]), "clip.wav");
+        form.append("file", new Blob([new Uint8Array(clip)]), "clip.wav");
         form.append("engine", "fast");
         const res = await fetch(`http://127.0.0.1:${rig.port}/v1/dictations`, {
           method: "POST",
@@ -3924,7 +3924,14 @@ describe("DC-U5: the Words page reads the vocabulary of the call on screen", () 
     } as unknown as Transport;
     return { t, asked };
   };
-  const words = { status: 200, body: { entries: [{ term: "Vercel" }] } };
+  const words = {
+    status: 200,
+    body: {
+      entries: [
+        { term: "Vercel", heard: [], confirmed: true, scope: "global", file: "/c/vocabulary.yaml" },
+      ] as DictionaryEntry[],
+    },
+  };
 
   test("a call folder named so the vocabulary refuses it as a workspace still shows the global words", async () => {
     const a = answering({
