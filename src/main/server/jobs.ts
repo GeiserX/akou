@@ -29,7 +29,12 @@ import { join } from "node:path";
 import type { Identity } from "../api/access.ts";
 import { DecodeError } from "../asr/decode.ts";
 import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
-import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
+import {
+  type JobPassResult,
+  type JobProgress,
+  type JobTimings,
+  JobWorker,
+} from "../asr/finalize-worker.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
@@ -172,7 +177,11 @@ export interface JobServiceOptions {
 }
 
 /** A job as a client sees it (SV-J3), with the download it waits on while queued (SV-M1). */
-export function jobView(j: Job, waiting: Waiting | null = null): Record<string, unknown> {
+export function jobView(
+  j: Job,
+  waiting: Waiting | null = null,
+  progress: JobProgress | null = null,
+): Record<string, unknown> {
   const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString());
   const finished = j.done_at ?? j.failed_at ?? j.cancelled_at;
   return {
@@ -192,6 +201,9 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
     diarize: j.diarize,
     metadata: j.metadata,
     ...(waiting ? { waiting_for: waiting } : {}),
+    // A running job here says where it is (akou-5an.116); a done one, how long each stage took.
+    ...(progress && j.status === "running" ? { progress } : {}),
+    ...(j.result?.timings ? { timings: j.result.timings } : {}),
     ...(j.error ? { error: j.error } : {}),
     links: {
       self: `/v1/jobs/${j.id}`,
@@ -234,6 +246,7 @@ export function jobResult(
   job: Job,
   pass: JobPassResult,
   engine: { version: string; models: string[] },
+  timings?: JobTimings,
 ): Record<string, unknown> {
   return {
     job_id: job.id,
@@ -250,6 +263,8 @@ export function jobResult(
     // Neither words nor segments carry an engine confidence yet.
     confidence: null,
     metadata: job.metadata,
+    // Wall seconds per stage (akou-5an.115): reading the file, speaker labels, transcribing.
+    ...(timings ? { timings } : {}),
   };
 }
 
@@ -285,6 +300,8 @@ export class JobService {
   /** The running times of the last `MEAN_OF_JOBS` jobs this process ran, in ms. */
   private runTimes: number[] = [];
   private readonly waiters = new Map<string, Set<Waiter>>();
+  /** Where each job running here is (akou-5an.116); dropped when it ends. */
+  private readonly progress = new Map<string, JobProgress>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
   /** The other akou servers jobs are sent to (section 14). */
@@ -529,7 +546,7 @@ export class JobService {
       j.status === "queued" && j.route !== "remote"
         ? this.o.shelf.waiting(this.localNeeds(j))
         : null;
-    return jobView(j, waiting);
+    return jobView(j, waiting, this.progress.get(j.id) ?? null);
   }
 
   /**
@@ -634,6 +651,21 @@ export class JobService {
   get(who: Identity, id: string): Job | null {
     const j = this.store.job(id);
     return j && this.visible(who, j.key_id) ? j : null;
+  }
+
+  /**
+   * Whether the caller once had this job and the server no longer holds it: deleted by a client or
+   * past `server.retain_days`. False for an id that never was, or another key's.
+   */
+  gone(who: Identity, id: string): boolean {
+    if (this.store.job(id)) return false;
+    const key = this.store.formerKey(id);
+    return key !== null && this.visible(who, key);
+  }
+
+  /** `server.retain_days`: how long a job is kept, from its creation. */
+  retainDays(): number {
+    return this.o.retainDays();
   }
 
   private visible(who: Identity, key: string): boolean {
@@ -954,6 +986,8 @@ export class JobService {
           { code: "models_missing" },
         );
       let samples: Float32Array;
+      this.progress.set(job.id, { stage: "decode", done_s: 0, total_s: null });
+      const decodeFrom = performance.now();
       try {
         const maxSamples = this.o.maxAudioMinutes() * 60 * ASR_RATE;
         samples = await (
@@ -965,6 +999,12 @@ export class JobService {
         });
       }
       if (abort.signal.aborted) return;
+      const decodeS = Math.round(performance.now() - decodeFrom) / 1000;
+      this.progress.set(job.id, {
+        stage: job.diarize ? "diarize" : "transcribe",
+        done_s: 0,
+        total_s: Math.round((samples.length / ASR_RATE) * 1000) / 1000,
+      });
       // A llama-server engine (Qwen) takes the keywords as its glossary instead of hotwords.
       const decode: DecodeList | null =
         job.keywords.length === 0 || spec.final
@@ -989,6 +1029,9 @@ export class JobService {
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
         language: job.language,
         glossary: job.keywords,
+        progress: (p) => {
+          if (this.progress.has(job.id)) this.progress.set(job.id, p);
+        },
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
@@ -996,10 +1039,19 @@ export class JobService {
       if (pass.decode_s !== undefined) this.o.shelf.recordRun(model, audioS, pass.decode_s);
       end = {
         status: "done",
-        result: jobResult(job, pass, {
-          version: this.o.version,
-          models: jobModels(recognizer, job.diarize, this.o.diarizer()),
-        }),
+        result: jobResult(
+          job,
+          pass,
+          {
+            version: this.o.version,
+            models: jobModels(recognizer, job.diarize, this.o.diarizer()),
+          },
+          {
+            decode_s: decodeS,
+            diarize_s: pass.stages?.diarize_s ?? null,
+            transcribe_s: pass.stages?.transcribe_s ?? 0,
+          },
+        ),
       };
     } catch (err) {
       if (abort.signal.aborted) return;
@@ -1007,6 +1059,7 @@ export class JobService {
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
       this.o.shelf.touch(needs);
+      this.progress.delete(job.id);
     }
     this.conclude(job, end);
   }

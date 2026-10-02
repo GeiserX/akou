@@ -607,6 +607,17 @@ export class JobStore {
   }
 
   /**
+   * The key a job the store no longer holds belonged to, read from the events it left, which a
+   * delete or the retention sweep keeps (marked deleted). Null for an id it never held.
+   */
+  formerKey(id: string): string | null {
+    const r = this.db.query("SELECT key_id FROM events WHERE job_id = ? LIMIT 1").get(id) as {
+      key_id: string;
+    } | null;
+    return r?.key_id ?? null;
+  }
+
+  /**
    * The key's jobs (every key's for null), newest first, before the cursor. `q` keeps the jobs
    * whose title, id or state holds it, in any case.
    */

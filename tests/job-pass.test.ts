@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
 import {
   JOB_TRIM_PAD_SECONDS,
+  type JobProgress,
   JobWorker,
   runFinalPass,
   runJobPass,
@@ -303,5 +304,63 @@ describe("SV-R5: silence and hallucination guards on every job", () => {
     const { result, models } = await job(silence(10));
     expect(result.segments).toEqual([]);
     expect(Object.keys(models.loads)).toEqual([]);
+  });
+});
+
+describe("akou-5an.116: a job's progress", () => {
+  const THREE = concat(
+    silence(0.3),
+    speak(["hello", "world"], { voice: 1 }),
+    silence(1.5),
+    speak(["ok", "great"], { voice: 4 }),
+    silence(1.5),
+    speak(["thanks"], { voice: 1 }),
+    silence(0.3),
+  );
+
+  test("a diarized pass moves from diarize to transcribe, and the seconds done only grow", async () => {
+    const seen: JobProgress[] = [];
+    const r = await runJobPass(
+      { samples: THREE, diarize: true, decode: null, progress: (p) => seen.push(p) },
+      new FakeModels(),
+    );
+    expect(r.text).toBe("hello world ok great thanks");
+    const stages = seen.map((p) => p.stage).filter((s, i, a) => s !== a[i - 1]);
+    expect(stages).toEqual(["diarize", "transcribe"]);
+    const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+    expect(done.length).toBeGreaterThan(2);
+    for (let i = 1; i < done.length; i++) {
+      expect(done[i] as number).toBeGreaterThanOrEqual(done[i - 1] as number);
+    }
+    expect(new Set(done).size).toBeGreaterThan(2);
+    for (const p of seen) expect(p.total_s).toBe(r.duration_s);
+    expect(done.at(-1) as number).toBeLessThanOrEqual(r.duration_s);
+    // The stage times come back with the result.
+    expect(r.stages?.diarize_s).toBeGreaterThanOrEqual(0);
+    expect(r.stages?.transcribe_s).toBeGreaterThan(0);
+  });
+
+  test("without speaker labels there is no diarize stage, and no diarize time", async () => {
+    const seen: JobProgress[] = [];
+    const r = await runJobPass(
+      { samples: THREE, diarize: false, decode: null, progress: (p) => seen.push(p) },
+      new FakeModels(),
+    );
+    expect(new Set(seen.map((p) => p.stage))).toEqual(new Set(["transcribe"]));
+    expect(r.stages?.diarize_s).toBeNull();
+  });
+
+  test("the progress crosses the Worker boundary to the host", async () => {
+    const w = new JobWorker({ kind: "module", path: FAKE, model: "fake-parakeet" });
+    cleanups.push(() => w.close());
+    const seen: JobProgress[] = [];
+    await w.run({
+      samples: THREE.slice(),
+      diarize: true,
+      decode: null,
+      progress: (p) => seen.push(p),
+    });
+    expect(seen.map((p) => p.stage)).toContain("diarize");
+    expect(seen.at(-1)?.stage).toBe("transcribe");
   });
 });

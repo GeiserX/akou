@@ -630,6 +630,13 @@ const RESULT = z
       .strict(),
     confidence: z.number().nullable(),
     metadata: z.unknown(),
+    timings: z
+      .object({
+        decode_s: z.number().nonnegative(),
+        diarize_s: z.number().nonnegative().nullable(),
+        transcribe_s: z.number().nonnegative(),
+      })
+      .strict(),
   })
   .strict();
 
@@ -691,20 +698,23 @@ describe("SV-J4: the result shape", () => {
 });
 
 describe("SV-J6: delete and retention", () => {
-  test("after delete the result route answers 404, the upload is gone and the feed keeps the id and final state", async () => {
+  test("after delete the job answers 410, the upload is gone and the feed keeps the id and final state", async () => {
     const k = await newKey(server, "j6");
     const { id } = await transcribe(server, k.key, NOTE, { metadata: '{"secret": "x"}' });
     const del = await call(server, k.key, "DELETE", `/jobs/${id}`);
     expect(del.status).toBe(200);
     expect(del.body).toMatchObject({ id, status: "done", deleted: true });
-    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
-    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(410);
+    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(410);
     expect(audioFiles(server).length).toBe(0);
     const feed = await call(server, k.key, "GET", "/events");
     expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
       { job_id: id, status: "done", deleted: true },
     ]);
-    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(410);
+    // Another key never had it: 404, as for an id that never was.
+    const other = await newKey(server, "j6-other");
+    expect((await call(server, other.key, "GET", `/jobs/${id}`)).status).toBe(404);
   });
 
   test("a queued job is dropped with its upload, and its feed says cancelled", async () => {
@@ -783,11 +793,74 @@ describe("SV-J6: delete and retention", () => {
       expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(200);
       now += 86_400_000 + 1;
       expect(jobs.sweep()).toBe(1);
-      expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
+      // Expired: 410 with the window named, on the job and its result; a typo stays 404.
+      for (const path of [`/jobs/${id}`, `/jobs/${id}/result`]) {
+        const gone = await call(rig, k.key, "GET", path);
+        expect(gone.status).toBe(410);
+        expect(gone.body).toMatchObject({ error: "gone", id, retain_days: 7 });
+        expect(gone.body.message).toContain("7 days");
+      }
+      const typo = await call(rig, k.key, "GET", `/jobs/${id}x`);
+      expect(typo.status).toBe(404);
+      expect(typo.body.error).toBe("not_found");
       const feed = await call(rig, k.key, "GET", "/events");
       expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
         { job_id: id, status: "done", deleted: true },
       ]);
+    } finally {
+      await rig.close();
+    }
+  });
+});
+
+describe("akou-5an.116 and .115: a running job says where it is, a done one how long each stage took", () => {
+  test("polling a diarized job shows the stage and the seconds done moving, then the stage times", async () => {
+    // Every decode busy-waits, so the transcribe stage lasts long enough to be seen moving.
+    const slow: ModelSpec = {
+      kind: "module",
+      path: FAKE_MODELS,
+      model: "fake-parakeet",
+      options: { slowMs: 400 },
+    };
+    const rig = await appRig({ settings: SERVER, models: slow });
+    try {
+      const k = await newKey(rig, "progress");
+      const clip = monoWav(
+        concat(
+          silence(0.3),
+          speak(["hello", "world"]),
+          silence(1.5),
+          speak(["ok", "great"]),
+          silence(1.5),
+          speak(["thanks"]),
+          silence(1.5),
+          speak(["deploy"]),
+          silence(0.3),
+        ),
+      );
+      const s = await submit(rig, k.key, clip, { diarize: "true" });
+      expect(s.status).toBe(202);
+      const seen: { stage: string; done_s: number; total_s: number | null }[] = [];
+      let job = s.body;
+      while (job.status === "queued" || job.status === "running") {
+        if (job.progress) seen.push(job.progress);
+        await Bun.sleep(25);
+        job = (await call(rig, k.key, "GET", `/jobs/${s.body.id}`)).body;
+      }
+      expect(`${job.status} ${job.error?.message ?? ""}`).toBe("done ");
+      const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+      expect(new Set(done).size).toBeGreaterThan(1);
+      expect(Math.max(...done)).toBeGreaterThan(Math.min(...done));
+      for (const p of seen) expect(["decode", "diarize", "transcribe"]).toContain(p.stage);
+      // Done: no progress any more, and the stage times on the job and in the result.
+      expect(job.progress).toBeUndefined();
+      expect(job.timings).toMatchObject({
+        decode_s: expect.any(Number),
+        diarize_s: expect.any(Number),
+      });
+      expect(job.timings.transcribe_s).toBeGreaterThan(1);
+      const r = await call(rig, k.key, "GET", `/jobs/${s.body.id}/result`);
+      expect(r.body.timings).toEqual(job.timings);
     } finally {
       await rig.close();
     }
@@ -1047,7 +1120,7 @@ describe("SV-D1: transcribing a file is a product feature", () => {
       expect(j.code).toBe(0);
       const id = (j.json as { job_id: string }).job_id;
       expect(id).toMatch(/^job_/);
-      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(404);
+      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(410);
     } finally {
       f.cleanup();
     }
