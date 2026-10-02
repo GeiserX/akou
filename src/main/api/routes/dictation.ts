@@ -204,23 +204,23 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations/:id/audio",
     {
       id: "dictations.audio",
-      doc: "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+      doc: "A spoken dictation's audio as mono Ogg Opus (a 16 kHz WAV, `audio/wav`, for one kept before akou kept Opus), kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
       access: "admin",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,
-      type: "wav",
+      type: "audio",
     },
-    (c) => {
+    async (c) => {
       const id = c.params.id as string;
       const d = service(c);
       if (!d.log.item(id)) throw new HttpError(404, "not_found", `no dictation ${id}`);
-      if (!d.audio.has(id))
-        throw new HttpError(404, "no_audio", `dictation ${id} has no audio kept`, { id });
-      const file = Bun.file(d.audio.path(id));
+      const kept = await d.audio.file(id);
+      if (!kept) throw new HttpError(404, "no_audio", `dictation ${id} has no audio kept`, { id });
+      const file = Bun.file(kept.path);
       return new Response(file, {
         headers: {
-          "content-type": "audio/wav",
+          "content-type": kept.type,
           "content-length": String(file.size),
           "cache-control": "no-store",
         },

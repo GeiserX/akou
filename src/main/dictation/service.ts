@@ -188,6 +188,11 @@ export interface DictationServiceOptions extends TextRules {
    * without asking and exits (DC-U2, DC-N3). Absent, the grants are known only while it runs.
    */
   probe?(): readonly string[];
+  /**
+   * The capture helper's command, which keeps a dictation's audio as Opus (`encode`) and reads it
+   * back (`decode`); absent or null, the audio is kept as WAV (DC-H2).
+   */
+  helper?(): readonly string[] | null;
   /** Plays the cue for a moment of a spoken dictation, or nothing, as the settings say (DC-O3). */
   cue?(moment: CueMoment): void;
   /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
@@ -352,7 +357,10 @@ export class DictationService {
 
   constructor(private readonly o: DictationServiceOptions) {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
-    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO));
+    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO), {
+      helper: () => o.helper?.() ?? null,
+      onLog: (level, msg) => o.onLog?.(level, msg),
+    });
     this.uploadDir = join(o.configDir, DICTATION_DIR, "uploads");
     const d = o.draft ?? {};
     this.draft = new DraftBox({

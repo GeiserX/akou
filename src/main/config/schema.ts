@@ -898,7 +898,7 @@ export const SETTINGS = {
   "dictation.keepAudio": {
     type: "boolean",
     default: true,
-    doc: "Keep each dictation's audio for Retry and for checking a learned word. Off: deleted once the offer to learn is closed.",
+    doc: "Keep each dictation's audio, as Opus at about 180 KB a minute, for Retry and for checking a learned word. Off: deleted once the offer to learn is closed.",
   },
   "server.dictation_slots": {
     type: "integer",
