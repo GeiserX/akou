@@ -159,6 +159,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { name: "The template's name (`standup`), as `GET /templates` lists it." },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const t = c.app.templates().find((x) => x.name === c.params.name);

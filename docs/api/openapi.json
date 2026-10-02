@@ -310,6 +310,9 @@
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
