@@ -1383,7 +1383,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/400.bad_field.bad_json.refused.unknown_field"
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.refused.unknown_field"
           },
           "401": {
             "$ref": "#/components/responses/401.unauthorized"
@@ -1395,7 +1395,7 @@
             "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
           },
           "409": {
-            "$ref": "#/components/responses/409.locked.log_closed"
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call.locked.log_closed"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -1451,6 +1451,12 @@
           },
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -1529,7 +1535,7 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.refused.unknown_field"
           },
           "401": {
             "$ref": "#/components/responses/401.unauthorized"
@@ -1537,11 +1543,20 @@
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
           "415": {
             "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.mic_line"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
@@ -1605,6 +1620,12 @@
           },
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.folder_taken.not_trashed"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -8024,6 +8045,33 @@
           }
         }
       },
+      "400.bad_field.bad_json.bad_workspace.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_workspace",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field": {
         "description": "Bad request",
         "content": {
@@ -8748,6 +8796,58 @@
           }
         }
       },
+      "409.busy.folder_taken.live_call": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.busy.folder_taken.live_call.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call",
+                        "locked",
+                        "log_closed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.call_word.locked.log_closed.vocab_file_invalid": {
         "description": "Conflict",
         "content": {
@@ -8888,6 +8988,30 @@
                         "locked",
                         "log_closed",
                         "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.folder_taken.not_trashed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "folder_taken",
+                        "not_trashed"
                       ]
                     }
                   }
@@ -9600,6 +9724,30 @@
           }
         }
       },
+      "422.bad_field.mic_line": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "mic_line"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "422.bad_field.unknown_model": {
         "description": "Unprocessable",
         "content": {
@@ -10133,6 +10281,10 @@
             "description": "A request from a browser, refused by the desktop app."
           },
           {
+            "const": "busy",
+            "description": "The call's files are being written or cannot move now; retry in a moment."
+          },
+          {
             "const": "call_word",
             "description": "The term is the call's own word, not a vocabulary file's."
           },
@@ -10193,6 +10345,10 @@
             "description": "The final pass cannot run on this machine."
           },
           {
+            "const": "folder_taken",
+            "description": "The folder the call would move to exists already."
+          },
+          {
             "const": "forbidden",
             "description": "The key's scope does not reach this route."
           },
@@ -10237,6 +10393,10 @@
             "description": "The line changed while it was being fixed."
           },
           {
+            "const": "live_call",
+            "description": "The call is recording; stop it first."
+          },
+          {
             "const": "locked",
             "description": "Another writer holds the call's log."
           },
@@ -10247,6 +10407,10 @@
           {
             "const": "method_not_allowed",
             "description": "The path exists, with other methods."
+          },
+          {
+            "const": "mic_line",
+            "description": "A line from your microphone is always you; its speaker does not change."
           },
           {
             "const": "missing_field",
@@ -10351,6 +10515,10 @@
           {
             "const": "not_restartable",
             "description": "The call cannot get a new part in its state."
+          },
+          {
+            "const": "not_trashed",
+            "description": "The call is not in the trash."
           },
           {
             "const": "pass_running",

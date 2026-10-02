@@ -397,7 +397,11 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "title?": "string", "workspace?": "string" },
       ok: 200,
-      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field"] }),
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_workspace"],
+        409: ["busy", "folder_taken", "live_call"],
+        422: ["bad_field"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ title?: string; workspace?: string }>();
@@ -444,6 +448,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID, sid: "The line's segment id (`l000031`)." },
       body: { spk: "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field", "mic_line"] }),
     },
     async (c) => {
       const b = await c.body<{ spk: string }>();
@@ -490,6 +495,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: CALL_ID },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 409: ["busy", "folder_taken", "live_call"] }),
     },
     async (c) => {
       const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
@@ -509,6 +515,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: {},
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["folder_taken", "not_trashed"] },
     },
     async (c) => {
       await c.body();
