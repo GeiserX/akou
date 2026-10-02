@@ -153,6 +153,11 @@ export type AppToHelper =
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }
+  /**
+   * Enter came after insert `id` went out with no send key, before its receipt (DC-A4): the helper
+   * presses `send_key` after the receipt. Nothing for an insert no longer waiting.
+   */
+  | { type: "send"; id: string; send_key: Exclude<SendKey, "none"> }
   | { type: "focus"; target: Target }
   /** The tray's and the CLI's door (DC-G1, DC-G3): a latched session, as if the key were tapped. */
   | { type: "session.start" }

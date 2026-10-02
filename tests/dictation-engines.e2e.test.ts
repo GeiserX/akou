@@ -286,7 +286,13 @@ describe("DC-E2: best gives way to a final pass holding the GPU on Metal", () =>
 });
 
 describe("DC-L3: the audio check on the warm best", () => {
-  const chipless = { open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} };
+  const chipless = {
+    open: () => {},
+    chip: () => {},
+    append: () => {},
+    showInactive: () => {},
+    hide: () => {},
+  };
 
   /** A spoken "deploy to kubernetes" through the fake helper, fixed in the box with Fix. */
   async function fixed(engine: string) {

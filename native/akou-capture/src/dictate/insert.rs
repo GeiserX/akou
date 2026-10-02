@@ -337,6 +337,18 @@ impl Inserter {
         self.tx.is_some()
     }
 
+    /// A send key for paste `id` still waiting for its receipt (DC-A4's late Enter): pressed after
+    /// the receipt as the insert's own would be. False when no such paste waits.
+    pub fn late_send(&mut self, id: &str, send_key: &str) -> bool {
+        match self.tx.as_mut() {
+            Some(tx) if tx.id == id && tx.failed.is_none() => {
+                tx.send_key = send_key.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Runs an insert; what is decided now goes to `done` as `(id, outcome)`. A paste reports
     /// from `tick`. A paste still waiting settles first, since the newer text is about to take
     /// the clipboard.
@@ -702,6 +714,30 @@ mod tests {
         r.until(600);
         assert!(!r.posted().iter().any(|p| p.contains("Return")));
         assert_eq!(r.done, [("1".into(), Outcome::Failed("no-v-key".into()))]);
+    }
+
+    /// DC-A4's late Enter: a send key given while the paste waits for its receipt is pressed
+    /// after the read, once; for another id, or once the paste settled, it does nothing.
+    #[test]
+    fn dc_a4_a_late_send_presses_the_key_after_the_receipt() {
+        let mut r = Rig::new(Os::Mac);
+        r.insert(&req("paste", "none"), &cap());
+        assert!(!r.ins.late_send("2", "Enter"), "another insert");
+        assert!(r.ins.late_send("1", "Enter"));
+        assert!(
+            !r.posted().iter().any(|p| p.contains("Return")),
+            "not before the read"
+        );
+        r.read_at(50);
+        r.until(600);
+        assert_eq!(r.posted(), ["Command+Code(9)", "Named(\"Return\")"]);
+        assert!(!r.ins.late_send("1", "Enter"), "settled: nothing waits");
+        // Positive control: the same paste with no late send presses no Return.
+        let mut r = Rig::new(Os::Mac);
+        r.insert(&req("paste", "none"), &cap());
+        r.read_at(50);
+        r.until(600);
+        assert_eq!(r.posted(), ["Command+Code(9)"]);
     }
 
     /// A held Right Option is released before the chord and pressed again after it.

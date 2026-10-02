@@ -204,7 +204,13 @@ describe("DC-H2: dictation.keepAudio off, the learning check", () => {
     [800, RC, true],
     [2600, RC, false],
   ];
-  const chipless = { open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} };
+  const chipless = {
+    open: () => {},
+    chip: () => {},
+    append: () => {},
+    showInactive: () => {},
+    hide: () => {},
+  };
 
   test("the audio survives the insert, the check runs on it, and it goes when the window closes; the text stays", async () => {
     const heard: number[] = [];
@@ -272,7 +278,13 @@ describe("DC-H2: dictation.keepAudio off, a drafted dictation", () => {
     const r = rig(HOLD, { keepAudio: () => false, learnWindowMs: 50, learns: () => false }, [
       "--focus-change",
     ]);
-    r.svc.draft.attach({ open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} });
+    r.svc.draft.attach({
+      open: () => {},
+      chip: () => {},
+      append: () => {},
+      showInactive: () => {},
+      hide: () => {},
+    });
     await settledAs(r, "drafted");
     const id = first(r);
     await Bun.sleep(200);
@@ -415,6 +427,7 @@ describe("DC-O1, DC-R3: the buttons of the pill's error sheet", () => {
     r.svc.draft.attach({
       open: (d) => opens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });

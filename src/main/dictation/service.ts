@@ -869,6 +869,8 @@ export class DictationService {
       saveAudio: (id, samples) => this.audio.write(id, samples),
       onDraft: (id, _reason, focus, rule) =>
         this.draft.open(id, { focus, ...(rule ? { rule } : {}) }).ok,
+      draftFocused: () => this.draft.takesDictation(),
+      onAppend: (text) => this.draft.append(text),
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
       appRule: (app) => this.o.apps?.().find((r) => r.app === app),
       onBusy: () => this.tell({ kind: "busy" }),

@@ -58,6 +58,8 @@ export interface DraftWindow {
   /** Shows the page on `d`: taking the keyboard with `d.focus`, else without. */
   open(d: DraftOpen): void;
   chip(c: Chip): void;
+  /** Adds a dictation's text at the end of the field (DC-A4). */
+  append(text: string): void;
   /** Shows the window again without the keyboard, for a chip after an insert. */
   showInactive(): void;
   hide(): void;
@@ -226,6 +228,8 @@ export class DraftBox {
   private readonly learner: Learner;
   /** Whether the window is up, so it is hidden once. */
   private up = false;
+  /** Whether the window has the keyboard, as its page says (DC-A4). */
+  private focus = false;
   readonly handlers: { [K in keyof Requests]: Handler<K> };
 
   constructor(private readonly o: DraftBoxOptions) {
@@ -252,13 +256,34 @@ export class DraftBox {
       retry: (p) => this.retry(p.id, p.engine),
       language: (p) => this.switchLanguage(p.id),
       chip: (a) => this.learner.answer(a),
+      focused: async (p) => {
+        this.focus = p.on;
+        return true;
+      },
     };
+  }
+
+  /**
+   * Whether a dictation made now goes into the box (DC-A4): it shows a draft not yet answered,
+   * not a fix, and has the keyboard.
+   */
+  takesDictation(): boolean {
+    const c = this.cur;
+    return this.up && this.focus && c !== null && !c.answered && !c.fix;
+  }
+
+  /** Appends `text` to the draft in the box; false when it takes no dictation now. */
+  append(text: string): boolean {
+    if (!this.takesDictation() || !this.win) return false;
+    this.win.append(text);
+    return true;
   }
 
   /** The shell's window, or null when it closes. */
   attach(w: DraftWindow | null): void {
     this.win = w;
     this.up = false;
+    this.focus = false;
     if (!w) {
       this.cur = null;
       this.learner.clear();
@@ -415,6 +440,7 @@ export class DraftBox {
   private hide(): void {
     if (!this.up) return;
     this.up = false;
+    this.focus = false;
     this.win?.hide();
   }
 

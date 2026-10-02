@@ -3344,6 +3344,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     rig.app.dictation()?.draft.attach({
       open: (d) => draftOpens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });

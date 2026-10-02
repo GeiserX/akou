@@ -137,6 +137,7 @@ async function draftRig(o: { press?: boolean; switches?: string[] } = {}): Promi
           chips.push({ chip: c, terms: terms() });
           push("chip", c);
         },
+        append: (text) => push("append", { text }),
       },
     };
   };
@@ -351,6 +352,29 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       expect(log.events().at(-1)).toMatchObject({ type: "dictation.discarded", id: "d-esc" });
       expect(g.inserted()).toHaveLength(before);
       expect(g.calls.at(-1)).toBe("hide");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a dictation made while the box has the keyboard goes at the end of its field (DC-A4)",
+    async () => {
+      seed(g, "d-more", "see you at the standup");
+      await openBox(g, "d-more");
+      const box = dictation(g).draft;
+      // The page says its window has the keyboard, as its focus listener does.
+      expect(await box.handlers.focused({ on: true })).toBe(true);
+      expect(box.append("and bring the slides")).toBe(true);
+      await g.view.page.waitForFunction(
+        () =>
+          (document.getElementById("draft-text") as HTMLTextAreaElement).value ===
+          "see you at the standup and bring the slides",
+      );
+      // Positive control: without the keyboard the box takes no dictation.
+      expect(await box.handlers.focused({ on: false })).toBe(true);
+      expect(box.append("never")).toBe(false);
+      await g.view.page.press("#draft-text", "Escape");
+      await until(() => g.answered.at(-1) === "discard", 5000, "the discard");
     },
     UI_TIMEOUT,
   );

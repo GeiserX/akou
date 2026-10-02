@@ -352,6 +352,7 @@ describe("DC-U9: the draft box a rule opened", () => {
     b.attach({
       open: (d) => opens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });

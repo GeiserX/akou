@@ -520,6 +520,11 @@ impl Dictate {
                 self.report(done, t_ns, out);
             }
             Command::Settled { .. } => self.act(t_ns, out, |a, _| a.settled()),
+            Command::Send { id, send_key } => {
+                if let Some(ins) = self.inserter.as_mut() {
+                    ins.late_send(&id, &send_key);
+                }
+            }
             Command::Focus { target } => self.targets.focus(&target),
             Command::SessionStart => self.act(t_ns, out, |a, acts| a.start(t_ns, acts)),
             Command::SessionStop => self.act(t_ns, out, |a, acts| a.end("tap", t_ns, acts)),

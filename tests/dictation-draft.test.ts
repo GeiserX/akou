@@ -64,6 +64,7 @@ function box(o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) {
   const learned: string[] = [];
   const opens: DraftOpen[] = [];
   const chips: Chip[] = [];
+  const appended: string[] = [];
   const calls: string[] = [];
   const timers = manualLater();
   const session = {
@@ -104,6 +105,7 @@ function box(o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) {
       calls.push(d.focus ? "show" : "showInactive");
     },
     chip: (c) => chips.push(c),
+    append: (text) => appended.push(text),
     showInactive: () => calls.push("showInactive"),
     hide: () => calls.push("hide"),
   });
@@ -142,6 +144,7 @@ function box(o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) {
     learned,
     opens,
     chips,
+    appended,
     calls,
     timers,
     dictation,
@@ -296,6 +299,27 @@ describe("DC-S1: the draft box's keys", () => {
     f.b.attach(null);
     const a = f.dictation();
     expect(f.b.open(a, { focus: true })).toMatchObject({ ok: false, code: "no_draft_box" });
+  });
+});
+
+describe("DC-A4: a dictation made while the box has the keyboard", () => {
+  test("goes into the open draft only while the page says the box has the keyboard", async () => {
+    const f = box();
+    const a = f.dictation();
+    expect(f.b.takesDictation()).toBe(false);
+    f.b.open(a, { focus: true });
+    expect(f.b.append("more")).toBe(false);
+    expect(await f.b.handlers.focused({ on: true })).toBe(true);
+    expect(f.b.takesDictation()).toBe(true);
+    expect(f.b.append("more")).toBe(true);
+    expect(f.appended).toEqual(["more"]);
+    await f.b.handlers.focused({ on: false });
+    expect(f.b.append("again")).toBe(false);
+    // Answered (inserted), the box takes no more even with the keyboard.
+    await f.b.handlers.focused({ on: true });
+    await f.b.handlers.insert({ id: a, text: HEARD, send: false });
+    expect(f.b.append("late")).toBe(false);
+    expect(f.appended).toEqual(["more"]);
   });
 });
 
@@ -714,6 +738,7 @@ describe("DC-S1: the shell's draft window", () => {
         send: {
           open: (d) => sent.push(`open ${d.id}`),
           chip: (c) => sent.push(`chip ${c.id}`),
+          append: () => {},
         },
       };
     };

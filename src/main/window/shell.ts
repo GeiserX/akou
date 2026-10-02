@@ -142,6 +142,7 @@ export interface DraftNativeWindow {
 export interface DraftSend {
   open(d: DraftOpen): void;
   chip(c: Chip): void;
+  append(text: string): void;
 }
 
 type DraftRequests = DraftRpc["bun"]["requests"];
@@ -1374,6 +1375,7 @@ export class Shell implements WindowShell {
           else win.showInactive();
         },
         chip: (c) => w.send.chip(c),
+        append: (text) => w.send.append(text),
         showInactive: () => win.showInactive(),
         hide: () => win.hide(),
       });

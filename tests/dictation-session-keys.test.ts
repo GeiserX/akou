@@ -121,6 +121,7 @@ function rig(
   svc.draft.attach({
     open: (d) => opened.push(d),
     chip: () => {},
+    append: () => {},
     showInactive: () => {},
     hide: () => {},
   });
@@ -376,6 +377,37 @@ describe("DC-S2: the send key after the paste receipt", () => {
     expect(r.follow.some((m) => m.kind === "event" && m.e.type === "dictation.failed")).toBe(true);
   });
 
+  test("Enter after the insert went out, before its receipt, sends after the receipt (DC-A4)", async () => {
+    // An engine that does not wait for the keys, so the insert goes out before the Enter at 3 s,
+    // and a target that reads 2.5 s after the paste, so the Enter comes before the receipt.
+    const quick = (): DictationEngine => {
+      const asr = new LiveAsr(
+        {
+          models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+          inThread: true,
+        },
+        () => undefined,
+      );
+      cleanups.push(() => asr.close());
+      return { name: "fast", decode: (x, d) => asr.decode(x, d) };
+    };
+    const slow = { switches: ["--speed", "1", "--receipt-ms", "2500"], extra: { engine: quick } };
+    const r = rig([...HOLD, ...press(3000, "Enter")], slow);
+    await r.settled();
+    expect(r.inserts().map((l) => [l.type, l.send_key ?? l.key])).toEqual([
+      ["insert", "none"],
+      ["send", "Enter"],
+    ]);
+    expect(lines(r.commands).filter((c) => c.type === "send")).toEqual([
+      { type: "send", id: "1", send_key: "Enter" },
+    ]);
+    expect(r.item()).toMatchObject({ state: "inserted", text: "hello" });
+    // Positive control: the same hold with no Enter presses no send key.
+    const quiet = rig(HOLD, slow);
+    await quiet.settled();
+    expect(quiet.inserts().map((l) => l.type)).toEqual(["insert"]);
+  });
+
   test("sendKey: none presses nothing even on Enter", async () => {
     const r = rig(enterDuringHold, { insert: { ...DEFAULT_INSERT, sendKey: "none" } });
     await r.settled();
@@ -435,13 +467,14 @@ describe("the session's own edges", () => {
     samples: new Float32Array(320),
   });
 
-  function session(o: { secure?: boolean } = {}) {
+  function session(o: { secure?: boolean; draftFocused?: boolean } = {}) {
     const t = tempDir("akou-dict-keys-unit-");
     cleanups.push(t.cleanup);
     const log = new DictationLog(t.dir);
     cleanups.push(() => log.close());
     const sent: AppToHelper[] = [];
     const logs: string[] = [];
+    const appended: string[] = [];
     const s = new DictationSession({
       log,
       engine: () => ({
@@ -461,12 +494,17 @@ describe("the session's own edges", () => {
       insertPolicy: () => SEND_ENTER,
       onLog: (_l, m) => logs.push(m),
       onDraft: () => true,
+      draftFocused: () => o.draftFocused === true,
+      onAppend: (text) => {
+        appended.push(text);
+        return true;
+      },
     });
     if (o.secure) s.onMessage({ type: "secure_input", on: true });
-    return { s, sent, log, logs };
+    return { s, sent, log, logs, appended };
   }
 
-  test("Enter after the text went to the helper does nothing, and says so", async () => {
+  test("Enter after the text went to the helper, before its receipt, still sends (DC-A4)", async () => {
     const { s, sent, logs } = session();
     s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
     s.onPacket(packet());
@@ -474,7 +512,42 @@ describe("the session's own edges", () => {
     await until(() => sent.some((c) => c.type === "insert"), 2000, "the insert");
     s.onMessage({ type: "key", name: "Enter" });
     expect(sent.filter((c) => c.type === "insert")).toMatchObject([{ send_key: "none" }]);
+    expect(sent.filter((c) => c.type === "send")).toEqual([
+      { type: "send", id: "1", send_key: "Enter" },
+    ]);
+    expect(logs).toEqual([]);
+    // Once the receipt came the text is in: a later Enter does nothing, and says so.
+    s.onMessage({ type: "inserted", id: "1", method: "paste", receipt_ms: 5 });
+    s.onMessage({ type: "key", name: "Enter" });
+    expect(sent.filter((c) => c.type === "send")).toHaveLength(1);
     expect(logs).toEqual(["dictation: Enter came after the insert began, so it did nothing"]);
+  });
+
+  test("a press while the draft box has the keyboard appends to it, and nothing goes to the app (DC-A4)", async () => {
+    const dictate = async (draftFocused: boolean) => {
+      const r = session({ draftFocused });
+      r.s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+      r.s.onPacket(packet());
+      r.s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+      await until(
+        () => r.appended.length > 0 || r.sent.some((c) => c.type === "insert"),
+        2000,
+        "the outcome",
+      );
+      await r.s.settled();
+      return r;
+    };
+    const into = await dictate(true);
+    expect(into.appended).toEqual(["hello"]);
+    expect(into.sent.filter((c) => c.type === "insert")).toEqual([]);
+    expect(into.log.items()[0]).toMatchObject({ state: "drafted", text: "hello" });
+    expect(into.log.events().find((e) => e.type === "dictation.drafted")).toMatchObject({
+      reason: "append",
+    });
+    // Positive control: with the box not focused the same session is inserted.
+    const out = await dictate(false);
+    expect(out.appended).toEqual([]);
+    expect(out.sent.filter((c) => c.type === "insert")).toHaveLength(1);
   });
 
   test("a password field: Shift+Enter never shows its text, and Enter sends nothing", async () => {
