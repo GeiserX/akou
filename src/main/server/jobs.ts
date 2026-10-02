@@ -139,6 +139,8 @@ export interface JobServiceOptions {
   shelf: ModelStore;
   /** `server.default_model`, as the settings hold it now. */
   defaultModel(): string;
+  /** What `auto` runs here now (SV-R2, `autoChoice`); absent, `fast`. */
+  auto?(): { model: string; preset: string };
   diarizer(): DiarizerKind;
   /** A key's webhook secrets (SV-E2); none for the app's token or an admin session. */
   secrets(keyId: string): string[];
@@ -486,15 +488,21 @@ export class JobService {
   // Which model (SV-S1)
 
   /**
-   * The model a request runs: its `model`, its `preset`, `server.default_model`, then the
-   * hardware's choice. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
+   * The model a request runs: its `model`, its `preset`, `server.default_model`, then what `auto`
+   * runs here. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
    */
   choose(ask: { model?: string; preset?: string }, unknownIsAuto = false): ModelChoice {
     return resolveModel(ask, {
       catalog: this.o.shelf.catalog(),
       defaultModel: this.o.defaultModel(),
       unknownIsAuto,
+      auto: () => this.auto(),
     });
+  }
+
+  /** What `auto` runs here now. */
+  private auto(): { model: string; preset: string } {
+    return this.o.auto?.() ?? hardwareChoice();
   }
 
   /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */
@@ -502,7 +510,7 @@ export class JobService {
     try {
       return this.choose({}).model;
     } catch {
-      return hardwareChoice().model;
+      return this.auto().model;
     }
   }
 
@@ -545,7 +553,7 @@ export class JobService {
     const n = named(ask.model, "request") ??
       named(ask.preset, "request") ??
       named(this.o.defaultModel(), "server_default") ?? {
-        name: hardwareChoice().preset,
+        name: this.auto().preset,
         source: "hardware" as const,
       };
     if (!this.remotes.offered([n.name])) return null;

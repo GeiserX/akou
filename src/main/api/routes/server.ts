@@ -13,6 +13,7 @@
  *   `retain_days` is `server.retain_days` (SV-K1b), so a client knows when a job's result is gone.
  *   `gpu` and `accelerator` are `asr.accelerator` as detected at start and confirmed by the
  *   llama-server build (akou-5an.94), so a client or an operator sees which GPU runs, or why none.
+ *   `auto` is what a job that names no model runs here and why (SV-R2), null in the desktop app.
  *   `queue` is the same object `/healthz` carries, so a client paces a backlog by it (SV-Q4).
  *   `dictation` is the reserved lane for dictation (DICTATION.md DC-R2): `slots`, `engine` and
  *   `served_last_hour`, null in the desktop app; `capabilities.interactive` is true while it has a
@@ -73,7 +74,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -102,6 +103,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
           hardware: p.hardware,
           speed: p.speed,
         })),
+        // SV-R2: what a job with no opinion runs here now, and why; null in the desktop app.
+        auto: jobs ? (c.app.autoChoice?.() ?? null) : null,
         // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
         // Qwen (`metal`, `vulkan`, `cuda`, `sycl`, `rocm`), or `custom` for an own llama-server
         // (`asr.llamaServer`).

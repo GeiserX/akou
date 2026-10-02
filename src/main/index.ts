@@ -215,7 +215,10 @@ import {
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
 import {
+  type AutoChoice,
+  autoChoice,
   type Held,
+  hardwareChoice,
   kindOf,
   ModelRefused,
   ModelStore,
@@ -2807,6 +2810,39 @@ export class AkouApp implements ApiApp {
     return jobs.obtainable(QWEN_ASR);
   }
 
+  /** The last `auto` verdict logged, so each change is logged once. */
+  private autoLogged = "";
+
+  /**
+   * What a job that names no model runs here, and why (SV-R2): `autoChoice` over the models on
+   * disk and the GPU `asr.accelerator` found. A recognizer given at start (tests) is `fast`.
+   */
+  autoChoice(): AutoChoice {
+    const v = this.givenRecognizer()
+      ? {
+          ...hardwareChoice(),
+          preset: "fast" as const,
+          reason: "akou was started with one recognizer.",
+        }
+      : this.autoFromDisk();
+    const line = `auto runs ${v.preset}: ${v.reason}`;
+    if (line !== this.autoLogged) {
+      this.autoLogged = line;
+      this.log("info", line);
+    }
+    return v;
+  }
+
+  private autoFromDisk(): AutoChoice {
+    const c = this.liveContext();
+    return autoChoice({
+      present: c.present,
+      catalog: c.catalog ?? [],
+      runtime: c.runtime ?? null,
+      ...(c.machine ? { machine: c.machine } : {}),
+    });
+  }
+
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
   engines(): { id: string; provider: string; installed: boolean }[] {
     const dir = this.cfg.settings["asr.modelsDir"];
@@ -3497,6 +3533,7 @@ export class AkouApp implements ApiApp {
       models: (recognizer) => this.jobModels(recognizer),
       shelf,
       defaultModel: () => s()["server.default_model"],
+      auto: () => this.autoChoice(),
       diarizer: () => this.runningDiarizer(),
       secrets: (id) => {
         const s = keys.secretOf(id);
