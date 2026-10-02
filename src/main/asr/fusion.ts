@@ -98,12 +98,15 @@ export function engineIds(model: string): string[] {
  * The fusion preset's list as the settings make it: `asr.final.engines` when it names any, else
  * the preset's three, and `asr.fusion`.
  */
-export function fusionChoice(s: { "asr.final.engines": readonly string[]; "asr.fusion": string }): {
-  fuser: string;
-  engines: readonly string[];
-} {
-  const named = s["asr.final.engines"];
-  return { fuser: s["asr.fusion"], engines: named.length > 0 ? named : FUSION_DEFAULT };
+export function fusionChoice(s: {
+  readonly "asr.final.engines"?: readonly string[];
+  readonly "asr.fusion"?: string;
+}): { fuser: string; engines: readonly string[] } {
+  const named = s["asr.final.engines"] ?? [];
+  return {
+    fuser: s["asr.fusion"] ?? "rover-conf",
+    engines: named.length > 0 ? named : FUSION_DEFAULT,
+  };
 }
 
 /**
