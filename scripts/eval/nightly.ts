@@ -4,7 +4,8 @@
  * compared with the baselines committed in docs/gates/nightly-baselines.json.
  *
  *   bun scripts/eval/nightly.ts --models <dir> --data <dir> --diarize <akou-diarize> --nemotron <onnx>
- *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen] [--out results.json]
+ *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,biasing]
+ *                               [--out results.json] [--biasing-out <json> [--machine <what>]]
  *
  * What it measures, per OS:
  *
@@ -23,6 +24,10 @@
  *   30 FLEURS clips per language within +0.5 of the benchmark, no words on 25 silent AMI
  *   stretches, and llama-server's memory flat over 150 requests. The same requests on a server
  *   that keeps its default prompt cache are the failing control: its memory must pass the bound.
+ * - Dictation biasing (DC-L7, `scripts/eval/dictation-biasing.ts`): Qwen3-ASR given the learned
+ *   terms as context against none, on FLEURS clips, silence and noise: hits, false insertions, WER
+ *   and echo rate per list size, with an overweighted positive control that must insert. With
+ *   `--biasing-out` written as `docs/gates/dictation-biasing.json`.
  *
  * Every download is pinned by revision and checked by SHA-256: the published hash where the host
  * has one, and otherwise the hash of the file as first fetched (the AMI audio).
@@ -33,6 +38,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isEcho } from "../../src/core/dictation/echo.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 import {
   llamaBuildId,
@@ -46,7 +52,23 @@ import { NemotronDiarizer } from "../../src/main/asr/nemotron.ts";
 import { QwenEngine } from "../../src/main/asr/qwen.ts";
 import { SherpaModels } from "../../src/main/asr/sherpa.ts";
 import { replay } from "../../tests/eval/replay.ts";
+import { silence as genSilence } from "../../tests/fixtures/asr-fake.ts";
+import { roomNoise } from "../../tests/fixtures/audio.ts";
 import { synthCall, synthQuestions } from "../../tests/synth.ts";
+import {
+  BIAS_CLIPS,
+  BIASING_ABOUT,
+  BIASING_SIZES,
+  type BiasClip,
+  type BiasScore,
+  biasClip,
+  listFor,
+  overweighted,
+  score,
+  verdict,
+  vocabulary,
+  wrapped,
+} from "./dictation-biasing.ts";
 import {
   compare,
   der,
@@ -513,6 +535,129 @@ async function qwenStage(
   );
 }
 
+// --- dictation biasing (DC-L7) ------------------------------------------------------------------
+
+/** What the biasing stage measured: each setting's score and WER, and the ship rule's verdict. */
+export interface BiasingResult {
+  clips: { speech: number; quiet: number; terms: number; soundAlikes: number };
+  settings: Record<string, BiasScore & { wer: number; echoRate: number }>;
+  verdict: ReturnType<typeof verdict>;
+}
+
+async function biasingStage(
+  qwenDir: string,
+  dataDir: string,
+  platform: string,
+  measures: Measure[],
+  notes: string[],
+): Promise<BiasingResult> {
+  const { make, accelerator } = await qwenServers(qwenDir, platform);
+  const clips: { c: BiasClip; samples: Float32Array; lang: string; pool: string[] }[] = [];
+  const pools: Record<string, string[]> = {};
+  for (const lang of ["en", "es"] as const) {
+    const utts = await fleurs(lang, dataDir);
+    // Common words are counted over the whole test set, read from the transcript list fleurs() keeps.
+    const tsv = readFileSync(join(dataDir, "fleurs", FLEURS.sets[lang].config, "test.tsv"), "utf8");
+    const vocab = vocabulary(tsv.split("\n").map((line) => line.split("\t")[2] ?? ""));
+    const mine = utts.slice(0, BIAS_CLIPS).map((u) => ({
+      c: biasClip(u.id, lang, u.ref, vocab),
+      samples: readWav(new Uint8Array(readFileSync(u.wav))),
+      lang,
+    }));
+    // Distractors: every term of the language's other clips, the names a user may have taught.
+    pools[lang] = utts.flatMap((u) => biasClip(u.id, lang, u.ref, vocab).terms);
+    for (const m of mine) clips.push({ ...m, pool: pools[lang] as string[] });
+  }
+  // The generated silence and noise of DC-E6's tests, which get distractors only.
+  for (let i = 0; i < 5; i++) {
+    for (const [kind, samples] of [
+      ["silence", genSilence(3)],
+      ["noise", roomNoise(3, 11 + i)],
+    ] as const) {
+      const c: BiasClip = { id: `${kind}-${i}`, lang: "en", ref: "", terms: [], soundAlikes: [] };
+      clips.push({ c, samples, lang: "auto", pool: [...(pools.en ?? []), ...(pools.es ?? [])] });
+    }
+  }
+  const lists = (size: number) => clips.map((x, i) => listFor(x.c, size, x.pool, i + 1));
+  const atCap = lists(BIASING_SIZES[BIASING_SIZES.length - 1] as number);
+  const settings: [string, (i: number) => string[], string[][]][] = [
+    ["none", () => [], atCap],
+    ...BIASING_SIZES.map((size) => {
+      const l = lists(size);
+      return [String(size), (i: number) => wrapped(l[i] as string[]), l] as [
+        string,
+        (i: number) => string[],
+        string[][],
+      ];
+    }),
+    ["control", (i: number) => overweighted(atCap[i] as string[], clips[i]?.c), atCap],
+  ];
+  const server = make(false);
+  const engine = new QwenEngine({ id: QWEN_ASR, server, allowed: ["en", "es"] });
+  const out: BiasingResult["settings"] = {};
+  try {
+    for (const [name, context, listed] of settings) {
+      const answers: string[] = [];
+      const echoed: boolean[] = [];
+      for (const [i, x] of clips.entries()) {
+        const decode = (glossary: string[]) =>
+          engine.decode({ samples: x.samples, lang: x.lang, glossary });
+        let h = await decode(context(i));
+        // The answer the app inserts: one that echoes its context is decoded again with none (DC-E6).
+        const echo = isEcho(h.text, listed[i]);
+        if (echo) h = await decode([]);
+        answers.push(h.text);
+        echoed.push(echo);
+      }
+      const s = score(
+        clips.map((x) => x.c),
+        answers,
+        listed,
+        echoed,
+      );
+      const speech = clips.flatMap((x, i) =>
+        x.c.ref === "" ? [] : [{ ref: x.c.ref, hyp: answers[i] as string }],
+      );
+      out[name] = { ...s, wer: wer(speech), echoRate: s.echoes / s.answers };
+      console.error(`biasing ${name}: ${JSON.stringify(out[name])}`);
+    }
+  } finally {
+    await server.stop();
+  }
+  const cap = String(BIASING_SIZES[BIASING_SIZES.length - 1]);
+  const v = verdict(out.none as BiasScore, out[cap] as BiasScore, out.control as BiasScore);
+  for (const [name, s] of Object.entries(out)) {
+    for (const [what, value, unit, better] of [
+      ["hits", s.hits, "terms", "higher"],
+      ["insertions", s.insertions, "terms", "lower"],
+      ["wer", s.wer, "%", "lower"],
+      ["echo_rate", s.echoRate, "share", "lower"],
+    ] as const) {
+      measures.push({
+        key: `dictation.biasing.${name}.${what}`,
+        value,
+        unit,
+        better,
+        gate: "record",
+      });
+    }
+  }
+  const speech = clips.filter((x) => x.c.ref !== "");
+  notes.push(
+    `Dictation biasing (DC-L7) on Qwen3-ASR (${accelerator}): ${speech.length} FLEURS clips and ${clips.length - speech.length} of silence and noise, lists of ${BIASING_SIZES.join(" and ")}; ${v.pass ? "passes" : `fails: ${v.reasons.join("; ")}`}`,
+  );
+  return {
+    clips: {
+      speech: speech.length,
+      quiet: clips.length - speech.length,
+      terms: speech.reduce((a, x) => a + x.c.terms.length, 0),
+      soundAlikes: speech.reduce((a, x) => a + x.c.soundAlikes.length, 0),
+    },
+    settings: out,
+    verdict: v,
+  };
+}
+
 // --- the run -----------------------------------------------------------------------------------
 
 export function platformKey(): string {
@@ -526,10 +671,10 @@ async function main(argv: string[]): Promise<number> {
   };
   const modelsDir = flag("--models");
   const dataDir = flag("--data");
-  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen").split(","));
+  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen,biasing").split(","));
   if (!modelsDir || !dataDir) {
     console.error(
-      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--qwen-models <dir>] [--only fleurs,ami,replay,qwen] [--out results.json]",
+      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,biasing] [--out results.json] [--biasing-out <json>]",
     );
     return 64;
   }
@@ -648,6 +793,31 @@ async function main(argv: string[]): Promise<number> {
     if (platform.startsWith("win32"))
       notes.push("Qwen3-ASR: not run on Windows until its own gate (ASR-12)");
     else await qwenStage(flag("--qwen-models") ?? modelsDir, dataDir, platform, measures, notes);
+  }
+
+  if (only.has("biasing")) {
+    if (platform.startsWith("win32"))
+      notes.push(
+        "Dictation biasing: not run on Windows, where Qwen3-ASR does not run yet (ASR-12)",
+      );
+    else {
+      const r = await biasingStage(
+        flag("--qwen-models") ?? modelsDir,
+        dataDir,
+        platform,
+        measures,
+        notes,
+      );
+      const file = flag("--biasing-out");
+      if (file) {
+        const day = new Date().toISOString().slice(0, 10);
+        const measured = `${day}, ${flag("--machine") ?? platform}`;
+        writeFileSync(
+          file,
+          `${JSON.stringify({ _about: BIASING_ABOUT, measured, ...r }, null, 2)}\n`,
+        );
+      }
+    }
   }
 
   notes.push(

@@ -1,0 +1,109 @@
+{
+  "_about": "Dictation's biasing gate (docs/ux/DICTATION.md DC-L7), by `bun scripts/eval/nightly.ts --only biasing --biasing-out <this file>`: Qwen3-ASR decoding FLEURS clips, silence and noise with no context (`none`), with each clip's list of learned terms wrapped as `Technical terms: A, B, C.` at 10 and 24 terms, and with the positive control (`control`, the 24 terms said to be in the audio, three times). A hit is a clip's own term written; an insertion is a listed term written where the reference does not hold it. The answer scored is the one the app inserts: one that echoes its context is decoded again with none (`echoes`). The ship rule at 24: more hits than `none` and no more insertions; the control must insert more than `none`.",
+  "measured": "2026-10-02, an Apple M4 Mac mini with 16 GB, idle",
+  "clips": {
+    "speech": 80,
+    "quiet": 10,
+    "terms": 111,
+    "soundAlikes": 585
+  },
+  "settings": {
+    "10": {
+      "hits": 81,
+      "terms": 85,
+      "insertions": 1,
+      "soundAlikeInsertions": 1,
+      "noiseInsertions": 0,
+      "inserted": [
+        "17737260257548671107: Duval"
+      ],
+      "echoes": 0,
+      "answers": 90,
+      "wer": 2.7863777089783284,
+      "echoRate": 0
+    },
+    "24": {
+      "hits": 105,
+      "terms": 109,
+      "insertions": 2,
+      "soundAlikeInsertions": 2,
+      "noiseInsertions": 0,
+      "inserted": [
+        "17737260257548671107: Duval",
+        "7946428658017781691: Handamiaje"
+      ],
+      "echoes": 0,
+      "answers": 90,
+      "wer": 3.0443756449948403,
+      "echoRate": 0
+    },
+    "none": {
+      "hits": 100,
+      "terms": 109,
+      "insertions": 1,
+      "soundAlikeInsertions": 1,
+      "noiseInsertions": 0,
+      "inserted": [
+        "17737260257548671107: Duval"
+      ],
+      "echoes": 0,
+      "answers": 90,
+      "wer": 3.0443756449948403,
+      "echoRate": 0
+    },
+    "control": {
+      "hits": 107,
+      "terms": 109,
+      "insertions": 34,
+      "soundAlikeInsertions": 34,
+      "noiseInsertions": 0,
+      "inserted": [
+        "13006273800980159403: Alcaline",
+        "2133693849393745219: Mountainearing",
+        "2133693849393745219: Skiz",
+        "2133693849393745219: Onez",
+        "2133693849393745219: Bootz",
+        "2133693849393745219: Terain",
+        "2133693849393745219: Steap",
+        "12682843461389402977: Breethe",
+        "16437430878550556483: Athletez",
+        "16437430878550556483: Pozitive",
+        "16437430878550556483: Zafe",
+        "16437430878550556483: Zame",
+        "16437430878550556483: Phollow",
+        "16437430878550556483: Dreems",
+        "14076834086577911298: Rezources",
+        "14076834086577911298: Acrosz",
+        "14076834086577911298: Uzed",
+        "17737260257548671107: Duval",
+        "14631443216784862631: Cerevral",
+        "16217310890815300034: Paíz",
+        "15212765101332127593: Hintrodujeran",
+        "15212765101332127593: Solizitado",
+        "15212765101332127593: Havía",
+        "15242091239065121494: Carreraz",
+        "15242091239065121494: Finalisar",
+        "15242091239065121494: Bueltas",
+        "15242091239065121494: Zolo",
+        "15242091239065121494: Wicketz",
+        "15242091239065121494: Derrivados",
+        "14585827064388195935: Tamvién",
+        "14585827064388195935: Havlado",
+        "14585827064388195935: Aunke",
+        "14585827064388195935: Ruzo",
+        "7946428658017781691: Handamiaje"
+      ],
+      "echoes": 0,
+      "answers": 90,
+      "wer": 3.869969040247678,
+      "echoRate": 0
+    }
+  },
+  "verdict": {
+    "pass": false,
+    "controlBreaks": true,
+    "reasons": [
+      "insertions rose: 2 against the baseline's 1"
+    ]
+  }
+}
