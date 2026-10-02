@@ -7,6 +7,10 @@
  * `AKOU_UI_BROWSER=webkit` runs the same suite in Playwright's WebKit instead, the closest stand-in
  * for the WKWebView and WebKitGTK the app ships on macOS and Linux (docs/TESTING.md TS-14).
  *
+ * `AKOU_UI_SHOTS=<folder>` saves, as each rig closes, every page its test left open in both themes,
+ * named after `UiRig.shots` (docs/TESTING.md TS-15c). The `ui` job of `ci.yml` uploads them for
+ * review; they are never compared, so they cannot fail a test.
+ *
  * Run with `bun run test:ui`; `bun run check` leaves these out (bunfig.toml).
  */
 
@@ -24,7 +28,13 @@ import {
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import { tokenize } from "../../src/core/vocab/correct.ts";
-import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type {
+  Availability,
+  CompleteRequest,
+  CompleteResult,
+  Provider,
+  ProviderErrorKind,
+} from "../../src/main/llm/provider.ts";
 import { Bridge } from "../../src/main/window/bridge.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
@@ -86,8 +96,10 @@ export class FakeProvider implements Provider {
   answer: (req: CompleteRequest) => string = () => "fine";
   delayMs = 0;
   readonly requests: CompleteRequest[] = [];
-  async available() {
-    return { ok: true as const, detail: "fake" };
+  /** Set, the provider is unavailable for this reason (not installed, signed out). */
+  unavailable: { kind: ProviderErrorKind; reason: string } | null = null;
+  async available(): Promise<Availability> {
+    return this.unavailable ? { ok: false, ...this.unavailable } : { ok: true, detail: "fake" };
   }
   async complete(
     req: CompleteRequest,
@@ -169,6 +181,8 @@ export function watchedOffenders(page: Page, o: { clear?: boolean } = {}): Promi
 
 export interface UiRig extends AppRig {
   opened: string[];
+  /** The name the pages left open are saved under at close when `AKOU_UI_SHOTS` is set. */
+  shots?: string;
   /** Opens the window in a new page, on a call when one is named. */
   open(call?: string, o?: { before?: (page: Page) => unknown }): Promise<Page>;
   /** Writes an event into a call through its one writer (a line, a note, a health change). */
@@ -221,6 +235,15 @@ export async function uiRig(
       if (p.isClosed()) continue;
       for (const o of await watchedOffenders(p).catch(() => [])) hidden.add(o);
     }
+    const open = pages.filter((p) => !p.isClosed());
+    if (ui.shots && process.env.AKOU_UI_SHOTS) {
+      for (const [i, p] of open.entries()) {
+        const name = open.length > 1 ? `${ui.shots}-${i + 1}` : ui.shots;
+        await screenshots(p, process.env.AKOU_UI_SHOTS, name).catch((err: Error) =>
+          console.warn(`[TS-15c] no screenshot of ${name}: ${err.message}`),
+        );
+      }
+    }
     for (const p of pages) await p.close().catch(() => {});
     await close();
     const errors = pageErrors.splice(0);
@@ -230,6 +253,23 @@ export async function uiRig(
     }
   };
   return ui;
+}
+
+/**
+ * Saves the page as it is now, dark then light, as `<dir>/<name>-dark.png` and `-light.png`
+ * (TS-15c), and hands the theme back to the system's. Returns the files written.
+ */
+export async function screenshots(page: Page, dir: string, name: string): Promise<string[]> {
+  mkdirSync(dir, { recursive: true });
+  const files: string[] = [];
+  for (const scheme of ["dark", "light"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    const path = join(dir, `${name}-${scheme}.png`);
+    await page.screenshot({ path, fullPage: true });
+    files.push(path);
+  }
+  await page.emulateMedia({ colorScheme: null });
+  return files;
 }
 
 /**
@@ -485,7 +525,7 @@ export async function dictationFixture(
     grants?: DictationGrants | null;
     /** The OS `GET /status` reports, so a test runs as macOS on any machine. */
     platform?: string;
-    /** `GET /devices`: its inputs, or a refusal; left out, the app answers (404 until PG-A8). */
+    /** `GET /devices`: its inputs, or a refusal; left out, the app answers from its helper. */
     devices?: DevicesFixture;
   } = {},
 ): Promise<DictationFixture> {

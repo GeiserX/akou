@@ -8,17 +8,25 @@
 //! akou-capture devices
 //! akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]
 //! akou-capture decode --in <part.opus> [--from FRAME] [--frames N] | --info
+//! akou-capture encode --out <dictation.opus>
 //! akou-capture --version
 //! ```
 //!
 //! `devices` prints one JSON line on stdout, `{"type":"devices","backend",…,"inputs":[{id,name,
-//! default}],"outputs":[…]}`: what the OS lists, read without opening a stream or asking for a
-//! permission. The ids are what `--mic <id>` takes.
+//! default}],"outputs":[…],"apps":[{id,name,pid}]}`: what the OS lists, read without opening a
+//! stream or asking for a permission. The input ids are what `--mic <id>` takes, the app ids what
+//! `--call app:<id>` takes; where one app cannot be captured, `apps` is replaced by
+//! `"apps_unavailable": "<why>"`.
 //!
 //! `decode` reads a part's Ogg Opus file back for the app's final pass (SV-P10): stereo little-endian
 //! f32 at 16 kHz on stdout, mic then call per frame, from frame `--from` for `--frames` frames (to
 //! the end without it). `--info` prints one JSON line instead, `{"type":"decoded","rate":16000,
 //! "channels":2,"frames":N,"ended":bool}`. It opens no device.
+//!
+//! `encode` writes a dictation's kept audio (DICTATION DC-H2): mono little-endian f32 at 16 kHz on
+//! stdin, to the end, becomes a mono Ogg Opus file at 24 kbps, about 180 KB a minute against the
+//! 1.9 MB of a 16-bit WAV, which `decode` reads back. It prints `{"type":"encoded","rate":16000,
+//! "channels":1,"frames":N}` and opens no device.
 //!
 //! With `--from-wav` no device is opened on any OS: the WAV's left channel is the mic and its right
 //! channel the call. Setting `AKOU_CAPTURE_FILE_ONLY=1` refuses device capture altogether, which
@@ -33,7 +41,7 @@ use akou_capture::simulate::Faults;
 use akou_capture::source::{CallMode, DeviceConfig, Frontend};
 
 const USAGE: &str = "usage: akou-capture run --out FILE --mic default|<id>|none --call system|none|app:<id>[,<id>] \
-[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices\n       akou-capture decode --in FILE [--from FRAME] [--frames N] | --info\n       akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]";
+[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices\n       akou-capture decode --in FILE [--from FRAME] [--frames N] | --info\n       akou-capture encode --out FILE\n       akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]";
 
 /// The slowest `--speed` other than 0: a hundred times slower than real time. Below it the pacing
 /// wait of a long file no longer fits a `Duration`.
@@ -179,6 +187,52 @@ fn decode_main(argv: &[String]) {
     out.flush().unwrap_or_else(|e| io_fail(e));
 }
 
+/// `akou-capture encode --out FILE`: exit 0 with the info line, 64 on a usage error, 74 when stdin
+/// cannot be read or the file cannot be written.
+fn encode_main(argv: &[String]) {
+    use akou_capture::json::Json;
+    use akou_capture::opus_reader::DECODE_RATE;
+    use akou_capture::opus_writer::OpusWriter;
+    use std::io::Read;
+    let out = match argv {
+        [flag, path] if flag == "--out" && !path.is_empty() => PathBuf::from(path),
+        _ => fail(
+            "usage",
+            &format!("encode takes only --out FILE\n{USAGE}"),
+            exit::USAGE,
+        ),
+    };
+    let io_fail =
+        |e: std::io::Error| -> ! { fail("io", &format!("{}: {e}", out.display()), exit::IO) };
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .lock()
+        .read_to_end(&mut bytes)
+        .unwrap_or_else(|e| fail("io", &format!("stdin: {e}"), exit::IO));
+    let samples: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let vendor = format!("akou-capture {}", protocol::VERSION);
+    let mut w = OpusWriter::create_mono(&out, std::process::id(), &vendor, DECODE_RATE)
+        .unwrap_or_else(|e| io_fail(e));
+    let slot = DECODE_RATE as usize / 50;
+    let whole = samples.len() / slot * slot;
+    for frame in samples[..whole].chunks(slot) {
+        w.write(frame, &[]).unwrap_or_else(|e| io_fail(e));
+    }
+    w.finish(&samples[whole..], &[])
+        .unwrap_or_else(|e| io_fail(e));
+    let line = Json::obj(vec![
+        ("type", Json::str("encoded")),
+        ("rate", Json::Int(DECODE_RATE as i64)),
+        ("channels", Json::Int(1)),
+        ("frames", Json::Int(samples.len() as i64)),
+    ])
+    .to_line();
+    println!("{line}");
+}
+
 fn fail(code: &str, msg: &str, status: i32) -> ! {
     eprintln!("{}", protocol::warn(code, msg));
     std::process::exit(status)
@@ -222,6 +276,10 @@ fn main() {
     }
     if matches!(argv.first().map(String::as_str), Some("decode")) {
         decode_main(&argv[1..]);
+        return;
+    }
+    if matches!(argv.first().map(String::as_str), Some("encode")) {
+        encode_main(&argv[1..]);
         return;
     }
     if matches!(argv.first().map(String::as_str), Some("dictate")) {

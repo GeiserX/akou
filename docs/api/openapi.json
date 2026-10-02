@@ -42,6 +42,9 @@
       "name": "calls"
     },
     {
+      "name": "devices"
+    },
+    {
       "name": "workspaces"
     },
     {
@@ -115,6 +118,18 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -142,6 +157,18 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -182,6 +209,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.bad_setting"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal.keychain"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -211,6 +256,72 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/templates/{name}": {
+      "get": {
+        "operationId": "templates.get",
+        "tags": [
+          "templates"
+        ],
+        "description": "One note template as the enhanced notes would use it: the user's own file when one of that name replaces the shipped one. `text` is the whole file, frontmatter included; `path` is where it was read from.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The template's name (`standup`), as `GET /templates` lists it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -238,6 +349,18 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -290,6 +413,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_bind.bad_expires.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.no_lan.no_tailnet.share_port"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.quitting"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -331,6 +481,27 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -376,6 +547,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.quitting"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -416,6 +611,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -443,6 +656,18 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -488,6 +713,33 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_ready.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.unknown_model"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -537,6 +789,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -585,6 +861,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -624,6 +924,27 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.model_in_use.not_ready"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -698,7 +1019,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }
@@ -708,10 +1053,61 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_term.bad_workspace.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.permission"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.already_recording.cancelled"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.capture_failed.models_missing.quitting"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -771,6 +1167,21 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -809,6 +1220,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -866,6 +1292,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -916,6 +1369,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_live"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -968,6 +1445,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_live.not_recording"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1018,6 +1519,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_live.not_paused"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1070,6 +1595,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_live.not_recording"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1120,6 +1669,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_live.not_recording"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1176,6 +1749,128 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.permission"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.already_recording.cancelled.locked.not_restartable.restart_in_progress.stale_restart"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.capture_failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "operationId": "devices.list",
+        "tags": [
+          "devices"
+        ],
+        "description": "The microphones and outputs the capture helper sees, each with `id`, `name` and `default`. An input's `id` is what calls.start takes as `mic`. Opens no stream and asks for no permission. 503 `devices_unavailable` when the helper cannot list them (file-only mode, no audio service), never an empty list.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/apps": {
+      "get": {
+        "operationId": "devices.apps",
+        "tags": [
+          "devices"
+        ],
+        "description": "The apps with audio the capture helper sees, each with `id`, `name` and `pid`; on macOS `name` is the bundle id, the same as `id`. An app's `id` is what calls.start takes as `call: \"app:<id>\"` to record that app alone. 501 `apps_unavailable` where one app cannot be captured (Linux, an older Windows), with the reason; 503 `devices_unavailable` when the helper cannot list at all.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "501": {
+            "$ref": "#/components/responses/501.apps_unavailable"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1203,6 +1898,18 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1248,6 +1955,27 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.workspace_not_folder"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1312,6 +2040,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1362,6 +2108,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1517,6 +2281,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.cursor_stale"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1578,6 +2363,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1637,6 +2443,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1698,6 +2522,33 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1761,6 +2612,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_speaker.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1823,6 +2698,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_speaker.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1884,6 +2783,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_speaker.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed.not_merged"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1922,6 +2845,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1984,6 +2922,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2052,6 +3014,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2110,6 +3096,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2167,6 +3177,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2228,6 +3262,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2266,6 +3324,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2327,6 +3400,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_memo.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2365,6 +3462,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2437,6 +3549,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_term.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2497,6 +3633,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.last_refused.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2547,6 +3707,36 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed.not_ended.pass_running"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.provider_unavailable"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2604,6 +3794,21 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_workspace"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2671,6 +3876,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_entry.bad_field.bad_json.bad_term.bad_workspace.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2731,6 +3957,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.bad_workspace.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2789,6 +4039,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.call_word.locked.log_closed.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2849,6 +4123,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.call_word.locked.log_closed.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2865,7 +4163,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word over the file's limits (50 heard forms, each at most 100 characters; a note of 1000) is imported within them and listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2901,6 +4199,27 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -2952,6 +4271,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -2998,6 +4338,27 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "501": {
+            "$ref": "#/components/responses/501.not_implemented"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3068,6 +4429,30 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_term.last_refused.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.line_changed.locked.log_closed.term_exists.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3141,6 +4526,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed.term_exists.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3199,6 +4608,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3254,6 +4687,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_multipart.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal.transcription_failed"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.models_missing"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3268,7 +4728,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
+        "description": "The dictation log, newest first: each dictation's state, the app it went to (`app`, its id, and `app_name`, its name as people know it where the OS gives one, else null), its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
         "parameters": [
           {
             "name": "q",
@@ -3323,6 +4783,24 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3348,6 +4826,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3388,6 +4884,21 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3425,6 +4936,24 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3441,7 +4970,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+        "description": "A spoken dictation's audio as mono Ogg Opus (a 16 kHz WAV, `audio/wav`, for one kept before akou kept Opus), kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
         "parameters": [
           {
             "name": "id",
@@ -3457,13 +4986,28 @@
           "200": {
             "description": "OK",
             "content": {
-              "audio/wav": {
+              "audio/ogg": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_audio.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3526,6 +5070,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_audio.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal.transcription_failed"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.models_missing"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3584,6 +5155,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.no_draft_box.no_target.no_text"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3611,6 +5206,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3656,6 +5266,36 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.dictation_busy.dictation_off.not_dictating"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.dictation_starting"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3683,6 +5323,33 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.dictation_busy.dictation_off.not_dictating"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.dictation_starting"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3712,6 +5379,33 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.dictation_busy.dictation_off.not_dictating"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.dictation_starting"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3739,6 +5433,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.no_remote"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3781,6 +5493,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -3840,6 +5570,36 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.already_final.final_running.not_ended"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "501": {
+            "$ref": "#/components/responses/501.final_unavailable"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3895,6 +5655,36 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_template.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.enhance_running.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.provider_unavailable"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -3942,6 +5732,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_template"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4008,6 +5816,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_template.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.enhance_running.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4055,6 +5887,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4104,6 +5954,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "416": {
+            "$ref": "#/components/responses/416.bad_range"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4160,6 +6028,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.export_not_configured.locked.log_closed.not_ended"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4215,6 +6107,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.last_refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_ended"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4268,6 +6184,27 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.not_imported"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4284,7 +6221,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
@@ -4295,6 +6232,15 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4326,6 +6272,18 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4343,7 +6301,21 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
+        "parameters": [
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4369,6 +6341,12 @@
                     "type": "string"
                   },
                   "keywords[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "languages[]": {
                     "type": "array",
                     "items": {
                       "type": "string"
@@ -4409,11 +6387,42 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_header.bad_multipart.bad_param.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language"
+          },
+          "429": {
+            "$ref": "#/components/responses/429.queue_full"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4494,11 +6503,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4545,11 +6573,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4601,11 +6648,36 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4638,11 +6710,30 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4654,7 +6745,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The transcript of a done job: text, segments with speakers and times, and the engines that made it. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. 409 `not_done` before the job is done.",
+        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
         "parameters": [
           {
             "name": "id",
@@ -4663,6 +6754,23 @@
             "description": "The job id.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "The result's format: json, verbose_json, text, srt or vtt.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "verbose_json",
+                "text",
+                "srt",
+                "vtt"
+              ],
+              "default": "json"
             }
           }
         ],
@@ -4677,11 +6785,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_done"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4693,7 +6823,7 @@
         "tags": [
           "events"
         ],
-        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more, feed_id}`; `wait` holds the request until one arrives. `feed_id` is made once when the job store is created: when it changes, the store was reset and its cursors started again at 0, so read again from `after=0`. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
         "parameters": [
           {
             "name": "after",
@@ -4743,11 +6873,30 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -4770,6 +6919,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4828,6 +6992,33 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4839,6 +7030,92 @@
       }
     },
     "/v1/keys/{id}": {
+      "patch": {
+        "operationId": "keys.update",
+        "tags": [
+          "keys"
+        ],
+        "description": "Replace a key's callback hosts. The key, its webhook secret, its jobs and its event feed stay; the next request with the key uses the new hosts. An empty list allows no callback.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id, `key_…`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "callback_hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "callback_hosts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
       "delete": {
         "operationId": "keys.revoke",
         "tags": [
@@ -4867,6 +7144,30 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4883,7 +7184,7 @@
         "tags": [
           "openai"
         ],
-        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `words` is an empty list even when `timestamp_granularities[]` asks for `word`, since this door does not carry the engine's words yet (akou-5an.84). `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4952,6 +7253,39 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_multipart.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.cancelled.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long.unsupported_language"
+          },
+          "429": {
+            "$ref": "#/components/responses/429.queue_full"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4995,6 +7329,18 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -5027,6 +7373,2294 @@
             }
           }
         }
+      },
+      "400.bad_bind.bad_expires.bad_field.bad_json.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_bind",
+                        "bad_expires",
+                        "bad_field",
+                        "bad_json",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_entry.bad_field.bad_json.bad_term.bad_workspace.missing_field.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_entry",
+                        "bad_field",
+                        "bad_json",
+                        "bad_term",
+                        "bad_workspace",
+                        "missing_field",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_memo.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_memo",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_speaker.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_speaker",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_template.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_template",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_template.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_template",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_term.bad_workspace.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_term",
+                        "bad_workspace",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_term.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_term",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_term.last_refused.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_term",
+                        "last_refused",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_workspace.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_workspace",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_workspace.missing_field.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_workspace",
+                        "missing_field",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "last_refused",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.last_refused.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "last_refused",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.last_refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "last_refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.missing_field.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "missing_field",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.missing_field.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "missing_field",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_header.bad_multipart.bad_param.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_header",
+                        "bad_multipart",
+                        "bad_param",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.bad_setting": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "bad_setting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.bad_workspace.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "bad_workspace",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.last_refused.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "last_refused",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.last_refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "last_refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_json.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_json",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_multipart.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_multipart",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_param": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_param"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_template": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_template"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_workspace": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_workspace"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "401.unauthorized": {
+        "description": "Unauthorized",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "unauthorized"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "403.bad_host.browser_request": {
+        "description": "Forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_host",
+                        "browser_request"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "403.bad_host.browser_request.forbidden": {
+        "description": "Forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_host",
+                        "browser_request",
+                        "forbidden"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "403.bad_host.browser_request.forbidden.permission": {
+        "description": "Forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_host",
+                        "browser_request",
+                        "forbidden",
+                        "permission"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "404.no_audio.not_found": {
+        "description": "Not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_audio",
+                        "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "404.no_calls.no_live_call.not_found": {
+        "description": "Not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_calls",
+                        "no_live_call",
+                        "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "404.no_live_call.not_found": {
+        "description": "Not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_live_call",
+                        "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "404.not_found": {
+        "description": "Not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.already_final.final_running.not_ended": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "already_final",
+                        "final_running",
+                        "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.already_recording.cancelled": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "already_recording",
+                        "cancelled"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.already_recording.cancelled.locked.not_restartable.restart_in_progress.stale_restart": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "already_recording",
+                        "cancelled",
+                        "locked",
+                        "not_restartable",
+                        "restart_in_progress",
+                        "stale_restart"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.call_word.locked.log_closed.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "call_word",
+                        "locked",
+                        "log_closed",
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.cancelled.preset_unavailable": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "cancelled",
+                        "preset_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.cursor_stale": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "cursor_stale"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.dictation_busy.dictation_off.not_dictating": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "dictation_busy",
+                        "dictation_off",
+                        "not_dictating"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.enhance_running.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "enhance_running",
+                        "locked",
+                        "log_closed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.export_not_configured.locked.log_closed.not_ended": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "export_not_configured",
+                        "locked",
+                        "log_closed",
+                        "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.key_exists.keys_busy": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "key_exists",
+                        "keys_busy"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.line_changed.locked.log_closed.term_exists.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "line_changed",
+                        "locked",
+                        "log_closed",
+                        "term_exists",
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.locked.log_closed.not_ended.pass_running": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed",
+                        "not_ended",
+                        "pass_running"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.locked.log_closed.not_merged": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed",
+                        "not_merged"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.locked.log_closed.term_exists.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed",
+                        "term_exists",
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.locked.log_closed.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed",
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.model_in_use.not_ready": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "model_in_use",
+                        "not_ready"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.no_draft_box.no_target.no_text": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_draft_box",
+                        "no_target",
+                        "no_text"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.no_lan.no_tailnet.share_port": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_lan",
+                        "no_tailnet",
+                        "share_port"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.no_remote": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_remote"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_done": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_done"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_ended": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_live": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_live"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_live.not_paused": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_live",
+                        "not_paused"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_live.not_recording": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_live",
+                        "not_recording"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.not_ready.preset_unavailable": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_ready",
+                        "preset_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.preset_unavailable": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "preset_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.workspace_not_folder": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "workspace_not_folder"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "413.body_too_large": {
+        "description": "Body too large",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "body_too_large"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "415.json_required": {
+        "description": "Unsupported media type",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "json_required"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "415.multipart_required": {
+        "description": "Unsupported media type",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "multipart_required"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "416.bad_range": {
+        "description": "Range not satisfiable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_range"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "callback_not_allowed",
+                        "idempotency_conflict",
+                        "missing_field",
+                        "unknown_model",
+                        "unsupported_language"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field.decode_failed.missing_field.too_long": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "decode_failed",
+                        "missing_field",
+                        "too_long"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field.decode_failed.missing_field.too_long.unsupported_language": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "decode_failed",
+                        "missing_field",
+                        "too_long",
+                        "unsupported_language"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field.unknown_model": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "unknown_model"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.not_imported": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_imported"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "429.queue_full": {
+        "description": "Too many requests",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "queue_full"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "499.cancelled": {
+        "description": "Cancelled",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "cancelled"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "diarize_unavailable",
+                        "internal",
+                        "interrupted",
+                        "model_download_failed",
+                        "models_missing",
+                        "remote_refused",
+                        "transcription_failed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "500.internal": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "internal"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "500.internal.keychain": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "internal",
+                        "keychain"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "500.internal.transcription_failed": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "internal",
+                        "transcription_failed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "501.apps_unavailable": {
+        "description": "Not implemented",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "apps_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "501.final_unavailable": {
+        "description": "Not implemented",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "final_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "501.not_implemented": {
+        "description": "Not implemented",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_implemented"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.capture_failed": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "capture_failed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.capture_failed.models_missing.quitting": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "capture_failed",
+                        "models_missing",
+                        "quitting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.devices_unavailable": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "devices_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.dictation_starting": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "dictation_starting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.models_missing": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "models_missing"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.provider_unavailable": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "provider_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.quitting": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "quitting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -5038,8 +9672,7 @@
         ],
         "properties": {
           "error": {
-            "type": "string",
-            "description": "A stable code, such as `not_found`."
+            "$ref": "#/components/schemas/ErrorCode"
           },
           "message": {
             "type": "string",
@@ -5047,6 +9680,392 @@
           }
         },
         "additionalProperties": true
+      },
+      "ErrorCode": {
+        "type": "string",
+        "description": "A stable code: clients may keep it, so it is never renamed. Each operation lists the codes it answers under each status.",
+        "oneOf": [
+          {
+            "const": "already_final",
+            "description": "The final pass already ran; send `force` to run it again."
+          },
+          {
+            "const": "already_recording",
+            "description": "A call is already recording; `already_recording` names it."
+          },
+          {
+            "const": "apps_unavailable",
+            "description": "One app cannot be captured on this system; the message says why."
+          },
+          {
+            "const": "bad_bind",
+            "description": "The share's `bind` is not `tailnet`, `lan` or an IPv4 address."
+          },
+          {
+            "const": "bad_entry",
+            "description": "The vocabulary entry is not valid."
+          },
+          {
+            "const": "bad_expires",
+            "description": "The share's `expires` is not one of the accepted values."
+          },
+          {
+            "const": "bad_field",
+            "description": "A body field is missing its type or value; `field` names it."
+          },
+          {
+            "const": "bad_header",
+            "description": "A request header is not valid."
+          },
+          {
+            "const": "bad_host",
+            "description": "The Host header is not one akou answers on."
+          },
+          {
+            "const": "bad_json",
+            "description": "The body is not a JSON object."
+          },
+          {
+            "const": "bad_memo",
+            "description": "The memo is not valid."
+          },
+          {
+            "const": "bad_multipart",
+            "description": "The body is not valid `multipart/form-data`."
+          },
+          {
+            "const": "bad_param",
+            "description": "A query parameter is out of range or not one of its values; `param` names it."
+          },
+          {
+            "const": "bad_range",
+            "description": "The Range header asks for bytes outside the file."
+          },
+          {
+            "const": "bad_setting",
+            "description": "A setting is unknown or its value is refused; `errors` lists why."
+          },
+          {
+            "const": "bad_speaker",
+            "description": "Not a speaker id of the call."
+          },
+          {
+            "const": "bad_template",
+            "description": "The notes template is unknown or not valid."
+          },
+          {
+            "const": "bad_term",
+            "description": "The vocabulary term is not valid."
+          },
+          {
+            "const": "bad_workspace",
+            "description": "The workspace name is not valid."
+          },
+          {
+            "const": "body_too_large",
+            "description": "The body is over its size limit."
+          },
+          {
+            "const": "browser_request",
+            "description": "A request from a browser, refused by the desktop app."
+          },
+          {
+            "const": "call_word",
+            "description": "The term is the call's own word, not a vocabulary file's."
+          },
+          {
+            "const": "callback_not_allowed",
+            "description": "The callback URL's host is not on this key's callback host list."
+          },
+          {
+            "const": "cancelled",
+            "description": "The request or the work it waited on was stopped before it finished."
+          },
+          {
+            "const": "capture_failed",
+            "description": "The capture helper could not start; `stage` says where."
+          },
+          {
+            "const": "cursor_stale",
+            "description": "The cursor is older than what the call still holds; read again from the start."
+          },
+          {
+            "const": "decode_failed",
+            "description": "The audio could not be decoded."
+          },
+          {
+            "const": "devices_unavailable",
+            "description": "The capture helper cannot list the devices; `helper` says why."
+          },
+          {
+            "const": "diarize_unavailable",
+            "description": "The job asked for speaker labels and no `akou-diarize` helper is here; the message names the settings that fix it."
+          },
+          {
+            "const": "dictation_busy",
+            "description": "A dictation is already running."
+          },
+          {
+            "const": "dictation_off",
+            "description": "Dictation is off (`dictation.enabled`)."
+          },
+          {
+            "const": "dictation_starting",
+            "description": "The dictation helper is still starting."
+          },
+          {
+            "const": "enhance_running",
+            "description": "The notes of this call are being written already."
+          },
+          {
+            "const": "export_not_configured",
+            "description": "No export folder: set `export.dir` or name one."
+          },
+          {
+            "const": "final_running",
+            "description": "The final pass of this call is running."
+          },
+          {
+            "const": "final_unavailable",
+            "description": "The final pass cannot run on this machine."
+          },
+          {
+            "const": "forbidden",
+            "description": "The key's scope does not reach this route."
+          },
+          {
+            "const": "idempotency_conflict",
+            "description": "The Idempotency-Key was used with another file or other options."
+          },
+          {
+            "const": "internal",
+            "description": "An unexpected failure inside akou."
+          },
+          {
+            "const": "interrupted",
+            "description": "The job was running when the server stopped."
+          },
+          {
+            "const": "json_required",
+            "description": "A request that changes something needs `Content-Type: application/json`."
+          },
+          {
+            "const": "key_exists",
+            "description": "A key with that name exists already."
+          },
+          {
+            "const": "keychain",
+            "description": "The system keychain refused to store a secret."
+          },
+          {
+            "const": "keys_busy",
+            "description": "The key store is busy; retry."
+          },
+          {
+            "const": "last_refused",
+            "description": "`last` is not accepted here; name the call or use `live`."
+          },
+          {
+            "const": "line_changed",
+            "description": "The line changed while it was being fixed."
+          },
+          {
+            "const": "locked",
+            "description": "Another writer holds the call's log."
+          },
+          {
+            "const": "log_closed",
+            "description": "The call's log is closed."
+          },
+          {
+            "const": "method_not_allowed",
+            "description": "The path exists, with other methods."
+          },
+          {
+            "const": "missing_field",
+            "description": "A required body field or part is missing; `field` names it."
+          },
+          {
+            "const": "model_download_failed",
+            "description": "The model the job waited on could not be downloaded."
+          },
+          {
+            "const": "model_in_use",
+            "description": "The model is in use or downloading."
+          },
+          {
+            "const": "models_missing",
+            "description": "The speech models are not downloaded yet."
+          },
+          {
+            "const": "multipart_required",
+            "description": "An upload needs `Content-Type: multipart/form-data`."
+          },
+          {
+            "const": "no_audio",
+            "description": "There is no audio to send."
+          },
+          {
+            "const": "no_calls",
+            "description": "There are no calls yet, so `last` names none."
+          },
+          {
+            "const": "no_draft_box",
+            "description": "The draft box needs the desktop window."
+          },
+          {
+            "const": "no_lan",
+            "description": "No private LAN address on this machine."
+          },
+          {
+            "const": "no_live_call",
+            "description": "Nothing is recording, so `live` names no call; `last` names the latest."
+          },
+          {
+            "const": "no_remote",
+            "description": "No remote dictation server is set."
+          },
+          {
+            "const": "no_tailnet",
+            "description": "This machine is not on a tailnet."
+          },
+          {
+            "const": "no_target",
+            "description": "There is no field to put the text into."
+          },
+          {
+            "const": "no_text",
+            "description": "The dictation has no text."
+          },
+          {
+            "const": "not_dictating",
+            "description": "No dictation is listening."
+          },
+          {
+            "const": "not_done",
+            "description": "The job has not finished; `status` says where it is."
+          },
+          {
+            "const": "not_ended",
+            "description": "The call is still recording."
+          },
+          {
+            "const": "not_found",
+            "description": "The thing named does not exist."
+          },
+          {
+            "const": "not_implemented",
+            "description": "Not built yet."
+          },
+          {
+            "const": "not_imported",
+            "description": "Nothing to import."
+          },
+          {
+            "const": "not_live",
+            "description": "The call is not recording."
+          },
+          {
+            "const": "not_merged",
+            "description": "The speaker is not merged into anyone."
+          },
+          {
+            "const": "not_paused",
+            "description": "The call is not paused."
+          },
+          {
+            "const": "not_ready",
+            "description": "akou is still starting."
+          },
+          {
+            "const": "not_recording",
+            "description": "The call is not recording."
+          },
+          {
+            "const": "not_restartable",
+            "description": "The call cannot get a new part in its state."
+          },
+          {
+            "const": "pass_running",
+            "description": "The vocabulary pass of this call is running."
+          },
+          {
+            "const": "permission",
+            "description": "The system refused the capture permission; `stage` says which."
+          },
+          {
+            "const": "preset_unavailable",
+            "description": "The preset or model cannot run now; the message says why."
+          },
+          {
+            "const": "provider_unavailable",
+            "description": "No language model provider can answer; `reason` says why."
+          },
+          {
+            "const": "queue_full",
+            "description": "The queue is full; retry after `retry_after_s` seconds."
+          },
+          {
+            "const": "quitting",
+            "description": "akou is quitting."
+          },
+          {
+            "const": "refused",
+            "description": "The log refused the event."
+          },
+          {
+            "const": "remote_refused",
+            "description": "The remote server the job was sent to refused it."
+          },
+          {
+            "const": "restart_in_progress",
+            "description": "A restart of this call is already running."
+          },
+          {
+            "const": "share_port",
+            "description": "The share could not get its port."
+          },
+          {
+            "const": "stale_restart",
+            "description": "The last audio is over an hour old; restart with `force`."
+          },
+          {
+            "const": "term_exists",
+            "description": "The vocabulary file has the term already."
+          },
+          {
+            "const": "too_long",
+            "description": "The audio is longer than the length limit."
+          },
+          {
+            "const": "transcription_failed",
+            "description": "The transcription failed."
+          },
+          {
+            "const": "unauthorized",
+            "description": "A valid bearer token is required."
+          },
+          {
+            "const": "unknown_field",
+            "description": "The body has a field the route does not take; `field` names it."
+          },
+          {
+            "const": "unknown_model",
+            "description": "No model of that name in the catalog."
+          },
+          {
+            "const": "unsupported_language",
+            "description": "A `languages[]` code is one no engine here can choose; `codes` names them."
+          },
+          {
+            "const": "vocab_file_invalid",
+            "description": "The vocabulary file could not be read."
+          },
+          {
+            "const": "workspace_not_folder",
+            "description": "The workspace's name is taken by something that is not a folder."
+          }
+        ]
       }
     }
   }

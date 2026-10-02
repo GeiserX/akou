@@ -203,8 +203,13 @@ export class ChildCaptureSession implements CaptureSession, ChildControl {
   send(cmd: HelperCommand | string): void {
     if (!this.stdinOpen || this.exitInfo) return;
     try {
-      this.proc.stdin.write(`${cmd}\n`);
-      this.proc.stdin.flush();
+      // A write the pipe cannot take at once answers with a promise, and a helper that has exited
+      // but is not yet reaped rejects it later with EPIPE: caught here, the exit watcher says why.
+      const off = () => {
+        this.stdinOpen = false;
+      };
+      void Promise.resolve(this.proc.stdin.write(`${cmd}\n`)).catch(off);
+      void Promise.resolve(this.proc.stdin.flush()).catch(off);
     } catch {
       this.stdinOpen = false;
     }
@@ -214,7 +219,7 @@ export class ChildCaptureSession implements CaptureSession, ChildControl {
     if (!this.stdinOpen) return;
     this.stdinOpen = false;
     try {
-      this.proc.stdin.end();
+      void Promise.resolve(this.proc.stdin.end()).catch(() => {});
     } catch {
       // Already closed by the child's exit.
     }

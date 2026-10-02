@@ -1,5 +1,6 @@
 //! The part's audio file (DESIGN section 2): Ogg Opus, 48 kHz stereo, mic on the left and call on
-//! the right, 48 kbps, 20 ms packets, one Ogg page a second.
+//! the right, 48 kbps, 20 ms packets, one Ogg page a second. A dictation's kept audio (`encode`,
+//! DICTATION DC-H2) is the same stream in mono from 16 kHz input at half the bitrate.
 //!
 //! Granules follow RFC 7845 (4.1, 4.3): a page's granule is the number of samples its packets
 //! decode to so far, pre-skip included, so granule minus pre-skip is the playable length. The
@@ -30,8 +31,14 @@ pub struct OpusWriter {
     pw: PacketWriter<'static, BufWriter<File>>,
     enc: Encoder,
     serial: u32,
+    /// In 48 kHz samples, as the header and the granules count (RFC 7845 4.2).
     pre_skip: u16,
-    /// Samples per channel written (not counting pre-skip).
+    /// The input rate.
+    rate: u32,
+    /// Input samples per channel in one 20 ms packet.
+    slot: usize,
+    stereo: bool,
+    /// Samples per channel written at the input rate (not counting pre-skip).
     samples: u64,
     /// Packets encoded; each decodes to one slot.
     packets: u64,
@@ -48,21 +55,46 @@ fn io_err(e: impl std::fmt::Display) -> io::Error {
 impl OpusWriter {
     /// Creates (or truncates) the file and writes both Opus headers on their own pages.
     pub fn create(path: &Path, serial: u32, vendor: &str) -> io::Result<OpusWriter> {
+        Self::open(path, serial, vendor, RATE, Channels::Stereo, BITRATE)
+    }
+
+    /// A mono file from `rate` input (16 kHz for a dictation) at half the part's bitrate; `write`
+    /// takes `rate / 50` samples and ignores its right channel.
+    pub fn create_mono(
+        path: &Path,
+        serial: u32,
+        vendor: &str,
+        rate: u32,
+    ) -> io::Result<OpusWriter> {
+        Self::open(path, serial, vendor, rate, Channels::Mono, BITRATE / 2)
+    }
+
+    fn open(
+        path: &Path,
+        serial: u32,
+        vendor: &str,
+        rate: u32,
+        channels: Channels,
+        bitrate: i32,
+    ) -> io::Result<OpusWriter> {
+        if rate == 0 || !RATE.is_multiple_of(rate) {
+            return Err(io_err(format!("Opus takes no {rate} Hz input")));
+        }
         let file = File::create(path)?;
-        let mut enc = Encoder::new(RATE, Channels::Stereo, Application::Voip).map_err(io_err)?;
-        enc.set_bitrate(Bitrate::Bits(BITRATE)).map_err(io_err)?;
-        let pre_skip = enc
-            .get_lookahead()
-            .map_err(io_err)?
-            .clamp(0, u16::MAX as i32) as u16;
+        let mut enc = Encoder::new(rate, channels, Application::Voip).map_err(io_err)?;
+        enc.set_bitrate(Bitrate::Bits(bitrate)).map_err(io_err)?;
+        // libopus counts its lookahead at the input rate; the header counts 48 kHz samples.
+        let pre_skip = (enc.get_lookahead().map_err(io_err)? as i64 * (RATE / rate) as i64)
+            .clamp(0, u16::MAX as i64) as u16;
+        let stereo = matches!(channels, Channels::Stereo);
         let mut pw = PacketWriter::new(BufWriter::new(file));
 
         let mut head = Vec::with_capacity(19);
         head.extend_from_slice(b"OpusHead");
         head.push(1); // version
-        head.push(2); // channels
+        head.push(if stereo { 2 } else { 1 }); // channels
         head.extend_from_slice(&pre_skip.to_le_bytes());
-        head.extend_from_slice(&RATE.to_le_bytes()); // input rate, informational
+        head.extend_from_slice(&rate.to_le_bytes()); // input rate, informational
         head.extend_from_slice(&0i16.to_le_bytes()); // output gain
         head.push(0); // mapping family 0: mono or stereo
         pw.write_packet(head, serial, PacketWriteEndInfo::EndPage, 0)?;
@@ -81,6 +113,9 @@ impl OpusWriter {
             enc,
             serial,
             pre_skip,
+            rate,
+            slot: rate as usize / 50,
+            stereo,
             samples: 0,
             packets: 0,
             in_page: 0,
@@ -96,14 +131,16 @@ impl OpusWriter {
 
     /// Seconds written.
     pub fn seconds(&self) -> f64 {
-        self.samples as f64 / RATE as f64
+        self.samples as f64 / self.rate as f64
     }
 
     fn encode(&mut self, left: &[f32], right: &[f32]) -> io::Result<usize> {
         self.frame.clear();
-        for i in 0..SLOT {
+        for i in 0..self.slot {
             self.frame.push(left.get(i).copied().unwrap_or(0.0));
-            self.frame.push(right.get(i).copied().unwrap_or(0.0));
+            if self.stereo {
+                self.frame.push(right.get(i).copied().unwrap_or(0.0));
+            }
         }
         let n = self
             .enc
@@ -113,16 +150,16 @@ impl OpusWriter {
         Ok(n)
     }
 
-    /// Samples the packets so far decode to, pre-skip included (RFC 7845 4.1).
+    /// 48 kHz samples the packets so far decode to, pre-skip included (RFC 7845 4.1).
     fn decoded(&self) -> u64 {
         self.packets * SLOT as u64
     }
 
-    /// Writes one 20 ms frame (960 samples per channel).
+    /// Writes one 20 ms frame (960 samples per channel at 48 kHz, `rate / 50` in general).
     pub fn write(&mut self, left: &[f32], right: &[f32]) -> io::Result<()> {
-        debug_assert_eq!(left.len(), SLOT);
+        debug_assert_eq!(left.len(), self.slot);
         let n = self.encode(left, right)?;
-        self.samples += SLOT as u64;
+        self.samples += self.slot as u64;
         self.in_page += 1;
         let end = if self.in_page >= PACKETS_PER_PAGE {
             PacketWriteEndInfo::EndPage
@@ -143,12 +180,13 @@ impl OpusWriter {
         Ok(())
     }
 
-    /// Ends the stream. `tail` holds up to 959 more samples per channel; they are padded with
-    /// silence until the encoder's lookahead is out too, and the final granule trims the padding.
+    /// Ends the stream. `tail` holds up to 959 more samples per channel (one frame less one); they
+    /// are padded with silence until the encoder's lookahead is out too, and the final granule
+    /// trims the padding.
     pub fn finish(mut self, tail_left: &[f32], tail_right: &[f32]) -> io::Result<f64> {
-        let tail = tail_left.len().min(SLOT - 1);
+        let tail = tail_left.len().min(self.slot - 1);
         self.samples += tail as u64;
-        let end = self.pre_skip as u64 + self.samples;
+        let end = self.pre_skip as u64 + self.samples * (RATE / self.rate) as u64;
         let mut n = self.encode(
             &tail_left[..tail],
             &tail_right[..tail.min(tail_right.len())],
@@ -172,7 +210,7 @@ impl OpusWriter {
         let mut inner = self.pw.into_inner();
         inner.flush()?;
         inner.get_ref().sync_all()?;
-        Ok(self.samples as f64 / RATE as f64)
+        Ok(self.samples as f64 / self.rate as f64)
     }
 }
 
