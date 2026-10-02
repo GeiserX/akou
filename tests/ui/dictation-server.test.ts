@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { BrowserContext, Page } from "playwright-core";
+import { RECOGNIZER } from "../../src/main/asr/models.ts";
 import { NO_MIC_NOTICE } from "../../src/ui/dictation-page.ts";
 import { type AppRig, appRig } from "../api-helpers.ts";
 import { clip, newKey, SERVER } from "../server-helpers.ts";
@@ -155,6 +156,17 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         5000,
         "the value saved",
       );
+      // The engine is a select in words: Automatic, the presets, each model by its name.
+      const engine = "#page-dictation select[data-key='server.dictation_engine']";
+      expect(
+        await page.$eval(engine, (x) => (x as HTMLSelectElement).selectedOptions[0]?.text),
+      ).toBe("Automatic");
+      const words = await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent));
+      expect(words).toContain("Parakeet v3");
+      expect(words).not.toContain(RECOGNIZER);
+      await page.selectOption(engine, "fast");
+      await until(() => patches.length === 2, 5000, "the engine saved");
+      expect(patches[1]).toEqual({ "server.dictation_engine": "fast" });
     },
     UI_TIMEOUT,
   );
