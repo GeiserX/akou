@@ -92,6 +92,10 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # ffmpeg on the Linux check, so the tests that read audio and subtitles through the real
+      # ffmpeg (SV-P6, SV-J5) run in CI instead of skipping; the floor's maxSkip counts on it.
+      - if: runner.os == 'Linux'
+        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
       # The pinned Bun, Biome, tsc twice, bun test, then the job's floor.
       - run: bun run check
       # A dispatch with `repeat` proves the flake fixes that live in the check: the capture traps
@@ -124,8 +128,31 @@ jobs:
       - run: bun install --frozen-lockfile
       # The browser build pinned by playwright-core, headless shell only, with its system libraries.
       - run: bunx playwright-core install --with-deps --only-shell chromium
+      # Every parity screen in both themes, for review (TS-15c): saved, never compared. A repeat
+      # dispatch saves none.
       - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
+        env:
+          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && 'ui-shots' || '' }}
       - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+      - id: shots
+        if: always() && hashFiles('ui-shots/*.png') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-screenshots
+          path: ui-shots/*.png
+          retention-days: 14
+      - if: always() && steps.shots.outputs.artifact-url != ''
+        shell: bash
+        env:
+          URL: ${{ steps.shots.outputs.artifact-url }}
+        run: |
+          {
+            echo "### Screenshots for review"
+            echo
+            echo "Every parity screen, dark and light: $URL"
+            echo
+            ls ui-shots | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
   # release builds, then the app's capture trap scenarios against the real binary in file mode.
@@ -751,8 +778,11 @@ jobs:
       - run: bun install --frozen-lockfile
       # cargo test writes no JUnit on stable Rust, so its own result lines become one: each
       # `test <name> ... ok|FAILED|ignored` line of both builds is a test case, and the `helper`
-      # floor counts them (DC-T2), so a Rust test that stops running fails the job.
+      # floor counts them (DC-T2), so a Rust test that stops running fails the job. cargo test runs
+      # once even in a `repeat` dispatch, so its floor is not scaled by the job's TEST_REPEAT.
       - name: cargo test floor
+        env:
+          TEST_REPEAT: 1
         run: |
           awk '
             function esc(v) { gsub(/&/, "\\&amp;", v); gsub(/</, "\\&lt;", v); gsub(/>/, "\\&gt;", v); gsub(/"/, "\\&quot;", v); return v }

@@ -15,11 +15,19 @@
  */
 
 import { SCOPES, type Scope } from "../access.ts";
+import type { RouteErrors } from "../errors.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
 import { KeyError, type KeyStore } from "../keys.ts";
 import type { ApiApp } from "../server.ts";
 
 const KEY_ROUTE = { access: "admin", modes: ["server"] } as const;
+
+/** What a change to the keys refuses: no key store here, or the store's `refused` reasons. */
+const KEY_REFUSALS: RouteErrors = {
+  404: ["not_found"],
+  409: ["key_exists", "keys_busy"],
+  422: ["bad_field"],
+};
 
 function storeOf(c: RouteContext<ApiApp>): KeyStore {
   const keys = c.app.keys?.();
@@ -56,6 +64,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
       doc: "Every API key: id, name, scopes, callback hosts, when it was created and last used. Never a key or a webhook secret.",
       ...KEY_ROUTE,
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => json(200, { keys: storeOf(c).list() }),
   );
@@ -69,6 +78,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
       ...KEY_ROUTE,
       body: { name: "string", "scopes?": "string[]", "callback_hosts?": "string[]" },
       ok: 201,
+      errors: KEY_REFUSALS,
     },
     async (c) => {
       const keys = storeOf(c);
@@ -119,6 +129,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
       ...KEY_ROUTE,
       params: { id: "The key id, `key_…`." },
       ok: 200,
+      errors: KEY_REFUSALS,
     },
     (c) => {
       const id = c.params.id as string;
