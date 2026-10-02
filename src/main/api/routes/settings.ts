@@ -18,9 +18,10 @@ import {
   type SettingSpec,
 } from "../../config/schema.ts";
 import { STORED_SECRETS } from "../../config/secrets.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { resolveRef } from "./common.ts";
+import { CALL_REF_ERRORS, resolveRef } from "./common.ts";
 
 export function settingsRoutes(r: Router<ApiApp>): void {
   r.add(
@@ -93,6 +94,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: OPEN_BODY,
       ok: 200,
+      errors: { 400: ["bad_setting"], 500: ["keychain"] },
     },
     async (c) => {
       const body = await c.body<Record<string, unknown>>();
@@ -172,6 +174,11 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string", "bind?": "string", "notes?": "boolean", "expires?": "string" },
       ok: 201,
+      errors: errorsOf(CALL_REF_ERRORS, {
+        400: ["bad_bind", "bad_expires"],
+        409: ["no_lan", "no_tailnet", "share_port"],
+        503: ["quitting"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ call?: string; bind?: string; notes?: boolean; expires?: string }>();
@@ -191,6 +198,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string" },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const b = await c.body<{ call?: string }>();
@@ -211,6 +219,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 503: ["quitting"] }),
     },
     async (c) => {
       const b = await c.body<{ call?: string }>();

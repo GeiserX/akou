@@ -508,6 +508,9 @@ describe("after the call", () => {
         headers: { authorization: `Bearer ${rig.token}`, range: "bytes=500-" },
       });
       expect(bad.status).toBe(416);
+      // PG-A7: the one error shape, even for a range refusal.
+      expect(bad.headers.get("content-range")).toBe("bytes */100");
+      expect(((await bad.json()) as { error: string }).error).toBe("bad_range");
       expect((await rig.api("GET", `/calls/${id}/audio/9`)).status).toBe(404);
     },
     LONG,

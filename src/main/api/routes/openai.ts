@@ -377,6 +377,21 @@ export function openaiRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
+      errors: {
+        400: ["unknown_field"],
+        404: ["not_found"],
+        409: ["cancelled", "preset_unavailable"],
+        422: ["bad_field", "decode_failed", "missing_field", "too_long"],
+        429: ["queue_full"],
+        499: ["cancelled"],
+        500: [
+          "interrupted",
+          "model_download_failed",
+          "models_missing",
+          "remote_refused",
+          "transcription_failed",
+        ],
+      },
     },
     transcriptions,
   );

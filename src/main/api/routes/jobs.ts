@@ -417,6 +417,19 @@ export function jobRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 202,
+      errors: {
+        400: ["bad_header", "unknown_field"],
+        404: ["not_found"],
+        409: ["preset_unavailable"],
+        422: [
+          "bad_field",
+          "callback_not_allowed",
+          "idempotency_conflict",
+          "missing_field",
+          "unknown_model",
+        ],
+        429: ["queue_full"],
+      },
     },
     submit,
   );
@@ -447,6 +460,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         limit: { type: "integer", min: 1, max: 200, default: 50, doc: "Jobs per page." },
       },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const jobs = jobsOf(c);
@@ -483,6 +497,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       params: { id: JOB_ID },
       query: { wait: WAIT },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
@@ -504,6 +519,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       params: { id: JOB_ID },
       body: { title: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
@@ -524,6 +540,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["not_done"] },
     },
     (c) => {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
@@ -547,6 +564,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const gone = jobsOf(c).remove(caller(c), c.params.id as string);
@@ -574,6 +592,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         wait: WAIT,
       },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
