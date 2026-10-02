@@ -221,6 +221,45 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/templates/{name}": {
+      "get": {
+        "operationId": "templates.get",
+        "tags": [
+          "templates"
+        ],
+        "description": "One note template as the enhanced notes would use it: the user's own file when one of that name replaces the shipped one. `text` is the whole file, frontmatter included; `path` is where it was read from.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The template's name (`standup`), as `GET /templates` lists it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/share": {
       "get": {
         "operationId": "share.get",
@@ -698,7 +737,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }
@@ -708,7 +771,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }

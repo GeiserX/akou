@@ -13,7 +13,7 @@ import { buildRouter } from "../../src/main/api/server.ts";
 import { COMMANDS } from "../../src/main/cli/cli.ts";
 import type { ApiClient } from "../../src/main/cli/client.ts";
 import { createMcpServer } from "../../src/main/mcp/server.ts";
-import { type Doors, PARITY, parityProblems } from "./parity.ts";
+import { type Doors, PARITY, parityProblems, rpcMethods, WINDOW_RPC } from "./parity.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 
@@ -39,8 +39,11 @@ function mcpTools(drop: readonly string[] = []): Set<string> {
   return names;
 }
 
+const PROTOCOL = readFileSync(join(ROOT, "src", "ui", "protocol.ts"), "utf8");
+
 function doors(o: { dropTool?: string[] } = {}): Doors {
   return {
+    rpc: new Set(rpcMethods(PROTOCOL)),
     cli: new Set(COMMANDS.map((c) => c.name)),
     api: new Set(
       buildRouter()
@@ -62,6 +65,7 @@ describe("[TS-13] door parity", () => {
     expect(d.cli.size).toBeGreaterThan(30);
     expect(d.api.size).toBeGreaterThan(50);
     expect(d.mcp.has("akou_ask")).toBe(true);
+    expect([...d.rpc]).toEqual(expect.arrayContaining(["api", "follow", "status", "zoomWindow"]));
     expect(parityProblems(PARITY, d)).toEqual([]);
   });
 
@@ -77,9 +81,11 @@ describe("[TS-13] door parity", () => {
     expect(parityProblems(PARITY, { ...d, api })).toEqual([
       "the api door has POST /calls/:id/rename, which no row maps",
     ]);
-    const silent = PARITY.map((r) => (r.action === "Final pass" ? { ...r, mcp: { none: "" } } : r));
+    const silent = PARITY.map((r) =>
+      r.action === "Run the hooks again" ? { ...r, mcp: { none: "" } } : r,
+    );
     expect(parityProblems(silent, d)).toEqual([
-      "Final pass: the mcp door lacks it and gives no reason",
+      "Run the hooks again: the mcp door lacks it and gives no reason",
     ]);
     const source = (file: string) =>
       file === "src/ui/app.ts"
@@ -87,6 +93,35 @@ describe("[TS-13] door parity", () => {
         : d.source(file);
     expect(parityProblems(PARITY, { ...d, source })).toEqual([
       'Restart: the window no longer does it (src/ui/app.ts lacks this.control("restart")',
+    ]);
+  });
+
+  test("[PG-A1] every method of the window's RPC has a route or a written reason", () => {
+    const d = doors();
+    // Read from the type: every request the page can make of the main side, none missed.
+    expect([...d.rpc].sort()).toEqual(Object.keys(WINDOW_RPC).sort());
+    expect(d.rpc.size).toBeGreaterThan(10);
+  });
+
+  test("[PG-A1] positive controls: an RPC method with no row, one with no reason, and a route gone each fail", () => {
+    const d = doors();
+    // A method added to AkouRpc, as the window would gain one, read from the edited source.
+    const added = PROTOCOL.replace(
+      "      zoomWindow: {",
+      "      renameCall: { params: { call: string; title: string }; response: boolean };\n      zoomWindow: {",
+    );
+    expect(added).not.toBe(PROTOCOL);
+    const rpc = new Set(rpcMethods(added));
+    expect(parityProblems(PARITY, { ...d, rpc })).toEqual([
+      "the window's RPC has renameCall, which neither names a route nor says why none",
+    ]);
+    expect(parityProblems(PARITY, d, { ...WINDOW_RPC, zoomWindow: { none: "" } })).toEqual([
+      "the window's RPC zoomWindow has no route and gives no reason",
+    ]);
+    const api = new Set([...d.api].filter((r) => r !== "POST /quit"));
+    expect(parityProblems(PARITY, { ...d, api })).toEqual([
+      "the window's RPC answerQuit: the api door has no POST /quit",
+      "Quit: the api door has no POST /quit",
     ]);
   });
 });
