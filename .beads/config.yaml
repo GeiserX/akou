@@ -65,6 +65,7 @@
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-sync.remote: "git+https://github.com/GeiserX/akou.git"
+sync.remote: "git+ssh://git@gitea.geiser.cloud:2222/giteaer/akou-beads.git"
 export:
     auto: true
+dolt.auto-commit: "on"
