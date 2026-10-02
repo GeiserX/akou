@@ -21,7 +21,7 @@ const read = (name: string) =>
 
 test("every line the Rust helper writes is a trusted message, never log text", () => {
   const lines = read("helper-lines.jsonl");
-  expect(lines.length).toBe(24);
+  expect(lines.length).toBe(26);
   for (const line of lines) {
     const m = parseHelperLine(line);
     expect({ line, kind: m.kind }).toEqual({ line, kind: "msg" });

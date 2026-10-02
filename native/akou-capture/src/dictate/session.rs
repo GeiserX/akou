@@ -73,6 +73,10 @@ pub struct Dictate {
     next_id: u64,
     /// The live session: its id and what it saw at key-down.
     live: Option<(String, Captured)>,
+    /// The live session was pressed with the draft key (DC-S3); the next one will be, once
+    /// `Draft` came before its `Start`.
+    live_draft: bool,
+    next_draft: bool,
     /// The last ended session, whose text the app inserts next.
     last: Option<(String, Captured)>,
     /// The Accessibility grant as `ready` reported it, until `grant.lost`.
@@ -107,6 +111,8 @@ impl Dictate {
             inserter,
             next_id: 1,
             live: None,
+            live_draft: false,
+            next_draft: false,
             last: None,
             accessibility: "not-needed".into(),
             secure_on: false,
@@ -429,24 +435,53 @@ impl Dictate {
                 }
                 return false;
             }
-            Command::Rebind { hotkey, activation } => {
-                let parsed = Hotkey::parse(&hotkey).and_then(|h| {
+            Command::Rebind {
+                hotkey,
+                activation,
+                draft,
+                fix_last,
+                paste_last,
+            } => {
+                // The other keys first: a refused one refuses the whole binding, which stays.
+                let extra = |what: &str, k: &Option<String>| {
+                    k.as_deref()
+                        .map(Hotkey::parse_extra)
+                        .transpose()
+                        .map_err(|e| format!("{what}: {e}"))
+                };
+                let more = extra("the draft key", &draft).and_then(|d| {
+                    let mut shortcuts = Vec::new();
+                    for (name, what, k) in [
+                        ("fixLast", "fix last", &fix_last),
+                        ("pasteLast", "paste last", &paste_last),
+                    ] {
+                        if let Some(h) = extra(what, k)? {
+                            shortcuts.push((name, h));
+                        }
+                    }
+                    Ok((d, shortcuts))
+                });
+                let parsed = more.and_then(|more| {
+                    let h = Hotkey::parse(&hotkey)?;
                     let mode = activation
                         .as_deref()
                         .map_or(Ok(Mode::HoldOrToggle), Mode::parse)?;
-                    Ok((h, mode))
+                    Ok((h, mode, more))
                 });
-                let parsed = parsed.and_then(|(h, mode)| match self.binder.as_mut() {
-                    Some(b) => b.bind(&h).map(|()| (h, mode)),
-                    None => Ok((h, mode)),
+                let parsed = parsed.and_then(|(h, mode, more)| match self.binder.as_mut() {
+                    Some(b) => b.bind(&h).map(|()| (h, mode, more)),
+                    None => Ok((h, mode, more)),
                 });
                 match parsed {
-                    Ok((h, mode)) => {
+                    Ok((h, mode, (draft, shortcuts))) => {
                         if let Some(g) = self.globe.as_mut() {
                             g.follow(&h);
                         }
                         self.hotkey = h.clone();
-                        self.act(t_ns, out, |a, acts| a.rebind(h, mode, acts));
+                        self.act(t_ns, out, |a, acts| {
+                            a.rebind(h, mode, acts);
+                            a.bind_more(draft, shortcuts);
+                        });
                         out.line(p::rebound(&hotkey));
                     }
                     Err(e) => out.line(p::rebind_failed(&hotkey, &e)),
@@ -560,9 +595,15 @@ impl Dictate {
                     out.line(p::press(false, None));
                     self.mic.disarm(t_ns, &mut ev);
                 }
+                Note::Act(Action::Draft) => self.next_draft = true,
+                Note::Act(Action::Shortcut(name)) => {
+                    let target = self.targets.target(t_ns);
+                    out.line(p::hotkey(name, &target));
+                }
                 Note::Act(Action::Start { t_ns: at }) => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
+                    self.live_draft = std::mem::take(&mut self.next_draft);
                     let cap = Captured {
                         target: self.targets.target(at),
                         secure_input: self.targets.secure_input(),
@@ -590,6 +631,7 @@ impl Dictate {
                             id,
                             &cap.target,
                             capture_ns,
+                            self.live_draft,
                             self.device.as_ref(),
                         ));
                     }
@@ -892,6 +934,72 @@ mod tests {
             .unwrap();
         d.command(good, 300 * MS, &mut out);
         assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+    }
+
+    /// DC-A5 and DC-S3 through the core: a rebind binds fix last and the draft key. Shift then
+    /// Right Command says `hotkey fixLast` with what has the keyboard and starts no session; the
+    /// draft key's session says `draft: true` and the dictation key's does not. A bad fix last
+    /// refuses the whole rebind, naming it.
+    #[test]
+    fn dc_a5_dc_s3_a_rebind_binds_fix_last_and_the_draft_key() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        let rebind = |fix: &str| {
+            Command::parse(&format!(
+                r#"{{"type":"rebind","hotkey":"RightCommand","draft":"RightOption","fixLast":"{fix}","pasteLast":""}}"#
+            ))
+            .unwrap()
+        };
+        d.command(rebind("Shift+Command"), 0, &mut out);
+        let last = out.lines.last().unwrap().clone();
+        assert!(
+            last.contains("rebind.failed") && last.contains("fix last"),
+            "{last}"
+        );
+        d.command(rebind("Shift+RightCommand"), 0, &mut out);
+        assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+        d.key(true, "LeftShift", 100 * MS, &mut out);
+        d.key(true, "RightCommand", 150 * MS, &mut out);
+        d.key(false, "RightCommand", 250 * MS, &mut out);
+        d.key(false, "LeftShift", 300 * MS, &mut out);
+        run(&mut d, &mut out, 300, 600);
+        let shortcuts: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"hotkey""#))
+            .collect();
+        assert_eq!(shortcuts.len(), 1, "{:?}", out.lines);
+        let v = p::Value::parse(shortcuts[0]).unwrap();
+        assert_eq!(v.get("name").unwrap().as_str(), Some("fixLast"));
+        assert_eq!(
+            Target::from_value(v.get("target").unwrap()).unwrap(),
+            w.borrow().target
+        );
+        assert!(!types(&out).contains(&"session.started".to_string()));
+
+        d.key(true, "RightOption", 1000 * MS, &mut out);
+        d.key(false, "RightOption", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1000, 1300);
+        d.key(true, "RightOption", 1300 * MS, &mut out);
+        d.key(false, "RightOption", 1350 * MS, &mut out);
+        run(&mut d, &mut out, 1300, 1800);
+        d.command(
+            Command::parse(r#"{"type":"settled","id":"1"}"#).unwrap(),
+            1800 * MS,
+            &mut out,
+        );
+        d.key(true, "RightCommand", 2000 * MS, &mut out);
+        d.key(false, "RightCommand", 2100 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2300);
+        let started: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"session.started""#))
+            .collect();
+        assert_eq!(started.len(), 2, "{:?}", out.lines);
+        assert!(started[0].contains(r#""draft":true"#), "{}", started[0]);
+        assert!(!started[1].contains("draft"), "{}", started[1]);
     }
 
     /// DC-N1: a backend that binds the key itself (the portal) is told each binding; one it
