@@ -30,6 +30,12 @@
  *    `speaker.suggest` per final cluster (names carry over from the live layer), then one
  *    `final.done` with the parts, the skipped spans and a warning when the call channel had energy
  *    but produced no text.
+ *
+ * Both passes decode a piece through `decodeUnit(engine, unit, samples, from, to, options, skip)`:
+ * one engine, one span, and the engine's whole `Hypothesis` back (text, words with confidences, word
+ * times in seconds on the timeline of `samples`, language, unit confidence), the refused-span halving
+ * included. Parakeet goes through it as `hotwordEngine(prepared)`. A call's lines keep the text
+ * only; a file job's result carries the words too (`jobWord`, SV-J4).
  */
 
 import { closeSync, openSync, readSync } from "node:fs";
@@ -45,10 +51,12 @@ import {
   ASR_RATE,
   type DiarizedSpan,
   type FinalEngine,
+  type Hypothesis,
   loadModelSet,
   type ModelSet,
   type ModelSpec,
   type PreparedHotwords,
+  type WordHyp,
 } from "./engine.ts";
 import type { FinalStep } from "./final-text.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
@@ -565,6 +573,7 @@ export async function runFinalPass(
     for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
     for (const w of hw?.warnings ?? []) log("warn", w);
     const unit = { lang: input.language ?? "auto", glossary };
+    const decoder = engine ?? hotwordEngine(hw as PreparedHotwords);
 
     // 3. Diarization over the call channel of all parts, concatenated.
     step = "diarize";
@@ -630,9 +639,8 @@ export async function runFinalPass(
           const skip = (from: number, to: number, error: string) =>
             skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error });
           // Qwen: an engine that stays down (it failed twice) fails the pass, never falls back.
-          const r = engine
-            ? await decodeHalvingWith(engine, unit, samples, piece.from, piece.to, o, skip)
-            : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
+          // The words come back with the text; the log keeps the text only.
+          const r = await decodeUnit(decoder, unit, samples, piece.from, piece.to, o, skip);
           progress(piece.to);
           if (r.lang) languages.add(r.lang);
           if (r.text === "") continue;
@@ -717,57 +725,103 @@ export async function runFinalPass(
 }
 
 /**
- * `decodeHalving` over a `FinalEngine` (Qwen through llama-server): the same halving of a span the
- * engine refuses, but an error marked `fatal` (the engine is down) ends the pass instead of costing
- * one span, so a job never comes back done with its text missing.
+ * Decodes `samples[from, to)` with one engine and returns the engine's whole `Hypothesis`: the text
+ * trimmed, the words with their confidences, the language, the unit confidence and the decode time.
+ * The span is gained and padded by `prepareSpan` first. Word times come back in seconds on the
+ * timeline of `samples` (the span's start added) and clamped into the span, since the padding after
+ * a short span is no audio; a word the engine gave no times (Qwen gives none) keeps none.
+ *
+ * A span the engine refuses is halved while longer than `minSplitSeconds`, and the halves are
+ * joined (`joinHalves`); only the smallest refused piece is skipped, reported to `skip` and decoded
+ * as an empty hypothesis. An error marked `fatal` (the engine is down: Qwen's llama-server failed
+ * twice) ends the caller's pass instead of costing one span, so a job never comes back done with its
+ * text missing.
  */
-async function decodeHalvingWith(
+export async function decodeUnit(
   engine: FinalEngine,
   unit: { lang: string; glossary: readonly string[] },
   samples: Float32Array,
   from: number,
   to: number,
-  o: FinalOptions,
-  skip: (from: number, to: number, error: string) => void,
-): Promise<{ text: string; lang?: string }> {
+  o: Pick<FinalOptions, "minSplitSeconds">,
+  skip: (from: number, to: number, error: string) => void = () => {},
+): Promise<Hypothesis> {
   try {
     const h = await engine.decode({ ...unit, samples: prepareSpan(samples.subarray(from, to)) });
-    return { text: h.text.trim(), lang: h.lang };
+    const a = from / ASR_RATE;
+    const b = to / ASR_RATE;
+    const at = (t: number) => Math.min(b, a + Math.max(0, t));
+    const out: Hypothesis = {
+      engine: h.engine,
+      text: h.text.trim(),
+      words: h.words.map((w) => {
+        const x: WordHyp = { ...w };
+        if (w.t0 !== undefined) x.t0 = at(w.t0);
+        if (w.t1 !== undefined) x.t1 = at(w.t1);
+        return x;
+      }),
+      ms: h.ms,
+    };
+    if (h.lang) out.lang = h.lang;
+    if (h.conf !== undefined) out.conf = h.conf;
+    return out;
   } catch (err) {
     if ((err as { fatal?: boolean }).fatal) throw err;
     if (to - from > o.minSplitSeconds * ASR_RATE) {
       const mid = from + Math.floor((to - from) / 2);
-      const a = await decodeHalvingWith(engine, unit, samples, from, mid, o, skip);
-      const b = await decodeHalvingWith(engine, unit, samples, mid, to, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+      const x = await decodeUnit(engine, unit, samples, from, mid, o, skip);
+      const y = await decodeUnit(engine, unit, samples, mid, to, o, skip);
+      return joinHalves(x, y);
     }
     skip(from, to, (err as Error).message);
-    return { text: "" };
+    return { engine: engine.id, text: "", words: [], ms: 0 };
   }
 }
 
-/** Decodes `[from, to)`; a refused span is halved while longer than `minSplitSeconds`. */
-function decodeHalving(
-  samples: Float32Array,
-  from: number,
-  to: number,
-  hw: PreparedHotwords,
-  o: FinalOptions,
-  skip: (from: number, to: number, error: string) => void,
-): { text: string; lang?: string } {
-  try {
-    const r = hw.recognizer.decode(prepareSpan(samples.subarray(from, to)), streamHotwords(hw));
-    return { text: r.text.trim(), lang: r.lang };
-  } catch (err) {
-    if (to - from > o.minSplitSeconds * ASR_RATE) {
-      const mid = from + Math.floor((to - from) / 2);
-      const a = decodeHalving(samples, from, mid, hw, o, skip);
-      const b = decodeHalving(samples, mid, to, hw, o, skip);
-      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
-    }
-    skip(from, to, (err as Error).message);
-    return { text: "" };
-  }
+/**
+ * Two halves of a refused span as one hypothesis: the texts joined with a space (an empty half adds
+ * nothing), the words in order, the first language either half heard, the decode times summed and
+ * the unit confidences averaged.
+ */
+export function joinHalves(a: Hypothesis, b: Hypothesis): Hypothesis {
+  const out: Hypothesis = {
+    engine: a.engine,
+    text: [a.text, b.text].filter((t) => t !== "").join(" "),
+    words: [...a.words, ...b.words],
+    ms: a.ms + b.ms,
+  };
+  const lang = a.lang ?? b.lang;
+  if (lang) out.lang = lang;
+  const confs = [a.conf, b.conf].filter((c) => c !== undefined);
+  if (confs.length > 0) out.conf = confs.reduce((x, y) => x + y, 0) / confs.length;
+  return out;
+}
+
+/**
+ * The prepared recognizer (Parakeet on sherpa-onnx, or the CI fake) as a `FinalEngine` that decodes
+ * with the decode list's hotwords where the decoding takes them (`streamHotwords`), so the call and
+ * job passes decode it through `decodeUnit` as they do Qwen. Loading is `prepare`'s, done already.
+ */
+export function hotwordEngine(hw: PreparedHotwords): FinalEngine {
+  const rec = hw.recognizer;
+  return {
+    id: rec.model,
+    features: { confidence: true, timestamps: true, glossary: false, languageId: false },
+    load: async () => {},
+    unload: async () => {},
+    decode: async (u) => {
+      const t = performance.now();
+      const r = rec.decode(u.samples, streamHotwords(hw));
+      const h: Hypothesis = {
+        engine: rec.model,
+        text: r.text,
+        words: r.words ?? [],
+        ms: performance.now() - t,
+      };
+      if (r.lang) h.lang = r.lang;
+      return h;
+    },
+  };
 }
 
 function round3(x: number): number {
@@ -1080,15 +1134,44 @@ export interface JobSegment {
   speaker: string | null;
 }
 
+/** One word of a job's result (SV-J4). */
+export interface JobWord {
+  w: string;
+  /** Seconds into the file; null when the engine gives no word times (Qwen). */
+  s: number | null;
+  e: number | null;
+  /** 0 to 1, or null when the engine gives no confidence for the word. */
+  c: number | null;
+}
+
+/** Whether a job's segments carry speaker labels (SV-J4). */
+export interface JobSpeakers {
+  /** The job asked for `diarize`. */
+  asked: boolean;
+  /** The speaker model ran and found turns, so every segment carries a label. */
+  labelled: boolean;
+  /** Why the speaker model failed (it crashed, was missing or missed its deadline), else null. */
+  error: string | null;
+}
+
 export interface JobPassResult {
   text: string;
   segments: JobSegment[];
+  /** Every word of the segments, in order (`jobWord`). */
+  words: JobWord[];
+  /**
+   * Mean of the words' confidences; with none, the mean of the units' own confidences (Qwen's mean
+   * token log-probability); else null.
+   */
+  confidence: number | null;
   /** Detected by the engine, when it detects one (Parakeet does not). */
   language: string | null;
   duration_s: number;
   /** The recognizer's registry name, or null when nothing was decoded. */
   model: string | null;
-  skipped: { s: number; e: number; error: string }[];
+  /** Pieces the engine still refused at `minSplitSeconds`, seconds into the file. */
+  skipped: { s: number; e: number; reason: string }[];
+  speakers: JobSpeakers;
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
@@ -1117,16 +1200,20 @@ export async function runJobPass(
   const empty: JobPassResult = {
     text: "",
     segments: [],
+    words: [],
+    confidence: null,
     language: null,
     duration_s,
     model: null,
     skipped: [],
+    speakers: { asked: input.diarize, labelled: false, error: null },
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
   // With an engine the model set's recognizer is never prepared, so it never loads.
   const hw = engine ? null : models.prepare(input.decode);
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
   const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
+  const decoder = engine ?? hotwordEngine(hw as PreparedHotwords);
   const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
   const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
@@ -1140,19 +1227,21 @@ export async function runJobPass(
   const from = w0 * window;
   const samples = x.subarray(from, Math.min(x.length, w1 * window));
   let spans: DiarizedSpan[] = [];
+  let diarizeError: string | null = null;
   if (input.diarize) {
     // A diarizer that fails costs the labels, not the job, as on a call.
     try {
       spans = await models.diarizer().process(samples);
     } catch (err) {
-      log(
-        "error",
-        `speaker labels failed, the job goes on without them: ${(err as Error).message}`,
-      );
+      diarizeError = (err as Error).message;
+      log("error", `speaker labels failed, the job goes on without them: ${diarizeError}`);
     }
   }
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
+  const words: JobWord[] = [];
+  const unitConfs: number[] = [];
+  const offset = from / ASR_RATE;
   // Characters of text per detected language: the job's language is the one most of it is in, so
   // a filler the model hears as another language at the start does not name the whole file.
   const heard = new Map<string, number>();
@@ -1172,13 +1261,13 @@ export async function runJobPass(
     ) {
       continue;
     }
-    const skip = (a: number, b: number, error: string) =>
-      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), error });
-    const r = engine
-      ? await decodeHalvingWith(engine, unit, samples, piece.from, piece.to, o, skip)
-      : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
+    const skip = (a: number, b: number, reason: string) =>
+      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), reason });
+    const r = await decodeUnit(decoder, unit, samples, piece.from, piece.to, o, skip);
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
+    for (const w of r.words) words.push(jobWord(w, offset));
+    if (r.conf !== undefined) unitConfs.push(r.conf);
     segments.push({
       s: round3((from + piece.from) / ASR_RATE),
       e: round3((from + piece.to) / ASR_RATE),
@@ -1192,14 +1281,45 @@ export async function runJobPass(
   let language: string | null = null;
   for (const [lang, n] of heard)
     if (language === null || n > (heard.get(language) as number)) language = lang;
+  const cs = words.flatMap((w) => (w.c === null ? [] : [w.c]));
+  const confs = cs.length > 0 ? cs : unitConfs.flatMap((c) => clampConf(c) ?? []);
   return {
     text: segments.map((s) => s.text).join(" "),
     segments,
+    words,
+    confidence: confs.length > 0 ? round3(confs.reduce((a, b) => a + b, 0) / confs.length) : null,
     language,
     duration_s,
     model: modelId,
     skipped,
+    speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
     decode_s,
+  };
+}
+
+/**
+ * A confidence as a result carries it: clamped into 0..1 and rounded to three places, so an engine
+ * that reports more than certainty gives 1, never 1.5, and one below 0 gives 0. A value that is no
+ * number (NaN, infinite) or absent is null.
+ */
+export function clampConf(c: number | undefined): number | null {
+  if (c === undefined || !Number.isFinite(c)) return null;
+  return round3(Math.min(1, Math.max(0, c)));
+}
+
+/**
+ * One word of a hypothesis (times in seconds into the decoded samples, as `decodeUnit` gives them)
+ * as a job's result word: `offset` seconds added and rounded to milliseconds, null times for an
+ * engine that gives none (both, when it gives no start), the confidence through `clampConf`. A word
+ * with a start and no end ends where it starts.
+ */
+export function jobWord(w: WordHyp, offset: number): JobWord {
+  const s = w.t0 === undefined ? null : round3(offset + w.t0);
+  return {
+    w: w.w,
+    s,
+    e: s === null || w.t1 === undefined ? s : round3(offset + w.t1),
+    c: clampConf(w.conf),
   };
 }
 

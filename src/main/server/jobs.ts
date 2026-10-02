@@ -243,12 +243,13 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // No built engine gives word times yet.
-    words: [],
+    // Parakeet gives word times; Qwen gives none, so its words' `s` and `e` are null.
+    words: pass.words,
     segments: pass.segments,
     engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    // Neither words nor segments carry an engine confidence yet.
-    confidence: null,
+    confidence: pass.confidence,
+    skipped: pass.skipped,
+    speakers: pass.speakers,
     metadata: job.metadata,
   };
 }

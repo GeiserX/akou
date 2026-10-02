@@ -24,11 +24,13 @@ import type {
   LiveToken,
   ModelSet,
   PreparedHotwords,
+  Recognized,
   Recognizer,
   SpeakerTurn,
   StreamDiarizer,
   StreamListener,
   Vad,
+  WordHyp,
 } from "../../src/main/asr/engine.ts";
 import type { FinalAudio } from "../../src/main/asr/finalize-worker.ts";
 import { GREEDY_NO_HOTWORDS } from "../../src/main/asr/sherpa.ts";
@@ -208,6 +210,13 @@ export interface FakeOptions {
    * sentence on noise, as Qwen3, Moonshine and Cohere did before sherpa-onnx 1.13.8 (SV-R5).
    */
   hallucinate?: string;
+  /**
+   * The recognizer reports words as sherpa-onnx does: each word's burst as its times (seconds into
+   * the span) and how much of the burst's energy is the word's tone as its confidence.
+   */
+  words?: boolean;
+  /** The speaker-label pass throws this, as a missing or crashed `akou-diarize` would. */
+  diarizeFails?: string;
   /** The fake streaming engine's chunk, ms: how long after a word ends it is emitted (560). */
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
@@ -246,7 +255,7 @@ export class FakeRecognizer implements Recognizer {
     this.kind = modelKind(model);
   }
 
-  decode(samples: Float32Array, hotwords?: string): { text: string } {
+  decode(samples: Float32Array, hotwords?: string): Recognized {
     this.calls.push({
       samples: samples.length,
       hotwords,
@@ -281,17 +290,21 @@ export class FakeRecognizer implements Recognizer {
     );
     const freqs = WORDS.map((_, i) => wordFreq(i));
     const out: string[] = [];
+    const words: WordHyp[] = [];
     for (const [a, b] of bursts(samples)) {
       const k = argmax(samples, a, b, freqs);
       // A sound that is no word (a hum between the word tones) gives no text.
       let energy = 0;
       for (let i = a; i < b; i++) energy += (samples[i] as number) ** 2;
-      if (goertzel(samples, a, b, freqs[k] as number) / (energy * ((b - a) / 2)) < 0.3) continue;
+      const tone = goertzel(samples, a, b, freqs[k] as number) / (energy * ((b - a) / 2));
+      if (tone < 0.3) continue;
       const w = WORDS[k] as (typeof WORDS)[number];
-      out.push(w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound));
+      const said = w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound);
+      out.push(said);
+      words.push({ w: said, conf: Math.min(1, tone), t0: a / RATE, t1: b / RATE });
     }
     if (out.length === 0 && this.o.hallucinate) return { text: this.o.hallucinate };
-    return { text: out.join(" ") };
+    return { text: out.join(" "), ...(this.o.words ? { words } : {}) };
   }
 }
 
@@ -347,10 +360,14 @@ export class FakeEmbedder implements Embedder {
 
 export class FakeDiarizer implements Diarizer {
   calls = 0;
-  constructor(private readonly busyMs = 0) {}
+  constructor(
+    private readonly busyMs = 0,
+    private readonly fails?: string,
+  ) {}
   process(samples: Float32Array): DiarizedSpan[] {
     this.calls++;
     busyWait(this.busyMs);
+    if (this.fails !== undefined) throw new Error(this.fails);
     const freqs = Array.from({ length: VOICES }, (_, k) => voiceFreq(k));
     const spans: DiarizedSpan[] = [];
     // Clusters are numbered by first appearance, as sherpa-onnx numbers them.
@@ -565,7 +582,7 @@ export class FakeModels implements ModelSet {
   }
 
   diarizer(): Diarizer {
-    const d = new FakeDiarizer(this.o.diarizeMs);
+    const d = new FakeDiarizer(this.o.diarizeMs, this.o.diarizeFails);
     this.diarizers.push(d);
     this.count("fake-segmentation");
     return d;

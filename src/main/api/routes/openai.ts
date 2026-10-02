@@ -163,7 +163,7 @@ export function renderOpenAI(
         language: r.language ?? "unknown",
         duration: r.duration,
         text: r.text,
-        // No built engine gives word times yet: asked-for words are an empty list, never guesses.
+        // The job's words are not carried into this shape yet: asked-for words are an empty list.
         ...(granularities.includes("word") ? { words: [] } : {}),
         ...(granularities.includes("segment")
           ? {

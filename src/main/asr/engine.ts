@@ -37,6 +37,11 @@ export interface Hypothesis {
   text: string;
   words: WordHyp[];
   lang?: string;
+  /**
+   * 0 to 1: the engine's confidence in the whole unit, when it reports one (Qwen: exp of the mean
+   * log-probability of the text's tokens). Kept for a unit whose words carry no confidence.
+   */
+  conf?: number;
   /** Decode time, milliseconds. */
   ms: number;
 }

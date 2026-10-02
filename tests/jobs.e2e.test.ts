@@ -150,12 +150,20 @@ function audioFiles(rig: AppRig): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
+const WORD_MODELS: ModelSpec = {
+  kind: "module",
+  path: FAKE_MODELS,
+  model: "fake-parakeet",
+  options: { words: true },
+};
+
 let server: AppRig;
 let app: AppRig;
 let admin: Key;
 
 beforeAll(async () => {
-  server = await appRig({ settings: SERVER });
+  // The fake recognizer reports word times and confidences, as Parakeet on sherpa-onnx does.
+  server = await appRig({ settings: SERVER, models: WORD_MODELS });
   app = await appRig();
   admin = await newKey(server, "ops", [], "admin");
 });
@@ -613,7 +621,14 @@ const RESULT = z
     language_confidence: z.number().nullable(),
     duration_s: z.number().nonnegative(),
     words: z.array(
-      z.object({ w: z.string(), s: z.number(), e: z.number(), c: z.number() }).strict(),
+      z
+        .object({
+          w: z.string(),
+          s: z.number().nullable(),
+          e: z.number().nullable(),
+          c: z.number().min(0).max(1).nullable(),
+        })
+        .strict(),
     ),
     segments: z.array(
       z
@@ -628,7 +643,11 @@ const RESULT = z
         models: z.array(z.string()).min(1),
       })
       .strict(),
-    confidence: z.number().nullable(),
+    confidence: z.number().min(0).max(1).nullable(),
+    skipped: z.array(z.object({ s: z.number(), e: z.number(), reason: z.string() }).strict()),
+    speakers: z
+      .object({ asked: z.boolean(), labelled: z.boolean(), error: z.string().nullable() })
+      .strict(),
     metadata: z.unknown(),
   })
   .strict();
@@ -647,6 +666,56 @@ describe("SV-J4: the result shape", () => {
       expect(RESULT.safeParse({ ...renamed, txt: text }).success).toBe(false);
     });
   }
+
+  test("[akou-5an.24.1] the fast preset's words spell the text, with times that never go back", async () => {
+    const k = await newKey(server, "j4-words");
+    const { result } = await transcribe(server, k.key, NOTE, { preset: "fast" });
+    expect(result.text).toBe("hello world");
+    expect(result.words.map((w: { w: string }) => w.w).join(" ")).toBe(result.text);
+    let last = 0;
+    for (const w of result.words as { s: number; e: number; c: number }[]) {
+      expect(w.s).toBeGreaterThanOrEqual(last);
+      expect(w.e).toBeGreaterThanOrEqual(w.s);
+      expect(w.e).toBeLessThanOrEqual(result.duration_s);
+      expect(w.c).toBeGreaterThan(0);
+      expect(w.c).toBeLessThanOrEqual(1);
+      last = w.e;
+    }
+    // NOTE speaks its first word 0.4 s into the file.
+    expect(result.words[0].s).toBeCloseTo(0.4, 1);
+    expect(result.confidence).toBeGreaterThan(0);
+    expect(result.skipped).toEqual([]);
+    expect(result.speakers).toEqual({ asked: false, labelled: false, error: null });
+    // Positive control: the schema refuses a word confidence above 1.
+    const bad = { ...result, words: [{ ...result.words[0], c: 1.5 }] };
+    expect(RESULT.safeParse(bad).success).toBe(false);
+  });
+
+  test("[akou-5an.24.1] with the speaker helper unavailable the job is done, labelled false, with the reason", async () => {
+    const rig = await appRig({
+      settings: SERVER,
+      models: {
+        kind: "module",
+        path: FAKE_MODELS,
+        model: "fake-parakeet",
+        options: { diarizeFails: "no akou-diarize command" },
+      },
+    });
+    try {
+      const k = await newKey(rig, "j4-no-diarize");
+      const { result } = await transcribe(rig, k.key, NOTE, { diarize: "true" });
+      expect(RESULT.safeParse(result).error?.issues ?? []).toEqual([]);
+      expect(result.text).toBe("hello world");
+      expect(result.speakers).toEqual({
+        asked: true,
+        labelled: false,
+        error: "no akou-diarize command",
+      });
+      for (const s of result.segments) expect(s.speaker).toBeNull();
+    } finally {
+      await rig.close();
+    }
+  });
 
   for (const preset of ["lite", "fusion"]) {
     test(`the ${preset} preset is not built: 409 preset_unavailable, and nothing is queued`, async () => {

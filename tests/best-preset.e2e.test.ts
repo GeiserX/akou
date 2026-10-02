@@ -96,6 +96,22 @@ describe("akou-5an.93: preset best", () => {
     expect(res.text).toBe("hello world ok great");
     expect(res.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
     expect(res.metadata).toEqual({ chat: 1 });
+    expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
+  });
+
+  test("[akou-5an.24.1] the words carry Qwen's confidences in 0..1, and no times, since Qwen gives none", async () => {
+    const s = await submit(rig, key.key, DIALOGUE, { preset: "best", language: "auto" });
+    const res = await done(s.body.id);
+    expect(res.words.length).toBeGreaterThan(0);
+    expect(res.words.map((w: { w: string }) => w.w).join(" ")).toBe(res.text);
+    for (const w of res.words as { s: null; e: null; c: number }[]) {
+      expect([w.s, w.e]).toEqual([null, null]);
+      expect(w.c).toBeGreaterThan(0);
+      expect(w.c).toBeLessThanOrEqual(1);
+    }
+    // The fake llama-server gives every word token a log-probability of -0.05.
+    expect(res.confidence).toBeCloseTo(Math.exp(-0.05), 3);
+    expect(res.skipped).toEqual([]);
   });
 
   test("a Spanish note: the language is forced, and comes back as es", async () => {

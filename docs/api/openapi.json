@@ -4654,7 +4654,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The transcript of a done job: text, segments with speakers and times, and the engines that made it. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. 409 `not_done` before the job is done.",
+        "description": "The transcript of a done job: text, words, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null when the engine gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null when the engine gives none. `confidence` is the mean word confidence, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null. `skipped` lists `{s, e, reason}` for each piece the engine refused even at 20 s. 409 `not_done` before the job is done.",
         "parameters": [
           {
             "name": "id",
