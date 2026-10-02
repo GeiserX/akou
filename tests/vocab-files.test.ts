@@ -430,6 +430,37 @@ describe("importing the older list formats", () => {
   });
 });
 
+describe("importing a call archive's glossary", () => {
+  test("(ctx) and (refused) variants are left out, banners are skipped, and a term over the cap keeps its first forms", () => {
+    const many = Array.from({ length: 60 }, (_, n) => `form${n}`);
+    const text = [
+      "=== CALL 2026-09-28 planning ===",
+      "Kubernetes <= kubernetis | cubernetes(ctx) | kuber nets (refused)",
+      `Hetzner <= ${many.join(" | ")}`,
+      "=== CALL 2026-09-29 ===",
+      "Vercel <= versal (CTX)",
+    ].join("\n");
+    const r = importGlossary(text, { source: "import:glossary.txt", date: "2026-09-28" });
+    expect(r.entries.map((e) => [e.term, e.heard.length])).toEqual([
+      ["Kubernetes", 1],
+      ["Hetzner", MAX_HEARD],
+      ["Vercel", 0],
+    ]);
+    expect(r.entries[0]?.heard).toEqual(["kubernetis"]);
+    expect(r.entries[1]?.heard).toEqual(many.slice(0, MAX_HEARD));
+    expect(r.skipped.map((s) => [s.line, s.reason])).toEqual([
+      [3, `"Hetzner" has 60 heard forms; kept the first ${MAX_HEARD}`],
+    ]);
+    // The cap is the file's own: the import writes a file that loads, not one refused whole.
+    expect(parseVocab(serializeVocab(file(...r.entries))).errors).toEqual([]);
+    // Positive control: the same entry with all 60 forms is refused by the file's check.
+    const whole = { ...(r.entries[1] as VocabEntry), heard: many };
+    expect(parseVocab(serializeVocab(file(whole))).errors[0]?.message).toContain(
+      `at most ${MAX_HEARD} heard forms`,
+    );
+  });
+});
+
 describe("the per-call decode list (DESIGN 3)", () => {
   const callAdd = (term: string, seq: number, decode = true) => ({
     id: `v${seq}`,

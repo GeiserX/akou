@@ -556,6 +556,19 @@ describe("the vocabulary files", () => {
       workspace: "work",
     });
     expect(imp.body.imported).toBe(1);
+    // A term over the heard-form cap keeps its first forms and is named in `skipped`; the import
+    // is never refused whole.
+    const forms = Array.from({ length: 60 }, (_, n) => `form${n}`).join(" | ");
+    const long = await rig.api("POST", "/vocab/import", {
+      text: `Hetzner <= ${forms}`,
+      workspace: "work",
+    });
+    expect([long.status, long.body.imported, long.body.skipped.length]).toEqual([200, 1, 1]);
+    const hetzner = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Hetzner",
+    );
+    expect(hetzner.heard.length).toBe(50);
+    expect((await rig.api("DELETE", "/vocab/Hetzner?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(404);
     const bad = await rig.api("POST", "/vocab", { term: "" });

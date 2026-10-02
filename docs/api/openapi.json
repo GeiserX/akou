@@ -2865,7 +2865,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word with more than 50 heard forms keeps its first 50 and is listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
         "requestBody": {
           "required": true,
           "content": {

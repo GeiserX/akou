@@ -16,7 +16,9 @@
  *    dictionary there is no fuzzy matching at all. Each word of 4 or more characters in a speaker
  *    name is its own fuzzy term (`Anika Ruiz` corrects `Anikaa` to `Anika`). A vocabulary term of
  *    several words is not split: its words on their own are often ordinary words (`Visual
- *    Studio`), so such a term needs heard forms to correct anything.
+ *    Studio`), so such a term needs heard forms to correct anything. The term with a regular
+ *    English ending (`sandboxing`, `sandboxed` for `sandbox`) is never fuzzy-corrected either: it is
+ *    the term's own word, even when the dictionary does not list it.
  *
  * The raw text is never changed; the caller gets the corrected text, the annotated form for packs
  * and exports (`Anika (heard: "annika")`) and the list of corrections.
@@ -316,6 +318,25 @@ function matchesAt(tokens: readonly Token[], i: number, words: readonly string[]
   return true;
 }
 
+/** Regular English endings: a word that is a term plus one of these is the term's own word. */
+const INFLECTIONS = ["s", "es", "ed", "ing", "er", "ers"];
+
+/**
+ * Whether `word` is `term` with a regular ending: `sandbox` + `ing`, `code` + `d` or `-e` + `ing`
+ * (`coded`, `coding`), or a doubled last letter (`shipped`). Both are folded.
+ */
+export function isInflectionOf(word: string, term: string): boolean {
+  for (const end of INFLECTIONS) {
+    if (!word.endsWith(end)) continue;
+    const stem = word.slice(0, -end.length);
+    if (stem === term) return true;
+    if (term.endsWith("e") && stem === term.slice(0, -1)) return true;
+    if (stem.length === term.length + 1 && stem.startsWith(term) && stem.at(-1) === term.at(-1))
+      return true;
+  }
+  return false;
+}
+
 function bestFuzzy(
   folded: string,
   terms: readonly FuzzyTerm[],
@@ -326,8 +347,9 @@ function bestFuzzy(
   let best: FuzzyTerm | undefined;
   let bestScore = FUZZY_THRESHOLD;
   for (const t of terms) {
-    // Already the term apart from case or accents: nothing was misheard.
-    if (t.folded === folded) return undefined;
+    // Already the term apart from case or accents, or the term with a regular ending: nothing
+    // was misheard.
+    if (t.folded === folded || isInflectionOf(folded, t.folded)) return undefined;
     const score = jaroWinkler(folded, t.folded);
     if (score >= bestScore && (best === undefined || score > bestScore)) {
       best = t;

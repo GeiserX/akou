@@ -5,6 +5,7 @@ import {
   foldText,
   formatCorrection,
   heardFormApplies,
+  isInflectionOf,
   jaroWinkler,
   tokenize,
   type VocabRule,
@@ -220,6 +221,37 @@ describe("read-time correction (DESIGN 5.4)", () => {
   test("fuzzy: a token that already is the term (case aside) is not a correction", () => {
     const rule: VocabRule = { term: "Kubernetes", heard: [], scope: "file" };
     expect(correctText("kubernetes", [rule], opts).corrections).toEqual([]);
+  });
+
+  test("fuzzy: the term with a regular ending is its own word, never corrected to the bare term", () => {
+    const sandbox: VocabRule = { term: "sandbox", heard: [], scope: "file" };
+    // Close enough to fuzzy-match, and missing from the dictionary: only the ending guards them.
+    for (const w of ["sandboxing", "sandboxed"]) {
+      expect(jaroWinkler(w, "sandbox")).toBeGreaterThanOrEqual(FUZZY_THRESHOLD);
+      expect(isDictionaryWord(w)).toBe(false);
+    }
+    for (const line of [
+      "the sandboxing layer",
+      "it runs sandboxed",
+      "two sandboxes, one sandboxer",
+    ])
+      expect(correctText(line, [sandbox], opts)).toMatchObject({ text: line, corrections: [] });
+    // With the plural as a word of its own too, "sandboxed" is not pulled to "sandboxes".
+    const both = [sandbox, { ...sandbox, term: "sandboxes" }];
+    expect(jaroWinkler("sandboxed", "sandboxes")).toBeGreaterThanOrEqual(FUZZY_THRESHOLD);
+    expect(correctText("it runs sandboxed, sandboxing", both, opts).corrections).toEqual([]);
+    // Positive controls: a mishearing of the term is still fuzzy-corrected, and "sand box" with
+    // its heard form still becomes the term (fuzzy matching is one word at a time).
+    expect(correctText("the sandbx layer", [sandbox], opts).text).toBe("the sandbox layer");
+    const heard: VocabRule = { term: "sandbox", heard: ["sand box"], scope: "call" };
+    expect(correctText("a sand box, sandboxing", [heard], opts).text).toBe("a sandbox, sandboxing");
+    // The endings the guard knows, and what it does not take for one.
+    expect(isInflectionOf("coded", "code")).toBe(true);
+    expect(isInflectionOf("coding", "code")).toBe(true);
+    expect(isInflectionOf("shipped", "ship")).toBe(true);
+    expect(isInflectionOf("sandboxes", "sandbox")).toBe(true);
+    expect(isInflectionOf("sandboxy", "sandbox")).toBe(false);
+    expect(isInflectionOf("annelise", "anneliese")).toBe(false);
   });
 
   test("fuzzy: speaker names are matched too", () => {
