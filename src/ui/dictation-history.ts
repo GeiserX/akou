@@ -35,6 +35,8 @@ export interface DictationRow {
   state: string;
   /** The app it went to; null for a clip sent to the API. */
   app: string | null;
+  /** That app's name as people know it (`Slack`), where the OS gives one. */
+  app_name?: string | null;
   text: string | null;
   /** The language the engine heard or was told (`es`); null when it named none. */
   language?: string | null;
@@ -330,7 +332,7 @@ export class DictationHistory {
         { attrs: { datetime: new Date(d.at).toISOString() } },
         hourMinute(d.at, localZone()),
       ),
-      ` · ${d.app ?? "No app"}`,
+      ` · ${d.app_name || d.app || "No app"}`,
     ];
     // The engine asked for could not run: the one that heard it instead, as a retry says.
     if (d.fallback_from)

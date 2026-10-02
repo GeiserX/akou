@@ -7,6 +7,7 @@
  * to a call (default `live`), `DELETE /share` stops it.
  */
 
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   isSettingKey,
@@ -18,9 +19,10 @@ import {
   type SettingSpec,
 } from "../../config/schema.ts";
 import { STORED_SECRETS } from "../../config/secrets.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { resolveRef } from "./common.ts";
+import { CALL_REF_ERRORS, resolveRef } from "./common.ts";
 
 export function settingsRoutes(r: Router<ApiApp>): void {
   r.add(
@@ -93,6 +95,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: OPEN_BODY,
       ok: 200,
+      errors: { 400: ["bad_setting"], 500: ["keychain"] },
     },
     async (c) => {
       const body = await c.body<Record<string, unknown>>();
@@ -148,6 +151,38 @@ export function settingsRoutes(r: Router<ApiApp>): void {
 
   r.add(
     "GET",
+    "/templates/:name",
+    {
+      id: "templates.get",
+      doc: "One note template as the enhanced notes would use it: the user's own file when one of that name replaces the shipped one. `text` is the whole file, frontmatter included; `path` is where it was read from.",
+      access: "admin",
+      modes: ["app"],
+      params: { name: "The template's name (`standup`), as `GET /templates` lists it." },
+      ok: 200,
+      errors: { 404: ["not_found"] },
+    },
+    (c) => {
+      const t = c.app.templates().find((x) => x.name === c.params.name);
+      if (!t) throw new HttpError(404, "not_found", `no template "${c.params.name}"`);
+      let text: string;
+      try {
+        text = readFileSync(t.source, "utf8");
+      } catch {
+        throw new HttpError(404, "not_found", `template "${t.name}" is gone from ${t.source}`);
+      }
+      return json(200, {
+        name: t.name,
+        match: t.match,
+        sections: t.sections.map((s) => s.heading),
+        bundled: t.bundled,
+        path: t.source,
+        text,
+      });
+    },
+  );
+
+  r.add(
+    "GET",
     "/share",
     {
       id: "share.get",
@@ -172,6 +207,11 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string", "bind?": "string", "notes?": "boolean", "expires?": "string" },
       ok: 201,
+      errors: errorsOf(CALL_REF_ERRORS, {
+        400: ["bad_bind", "bad_expires"],
+        409: ["no_lan", "no_tailnet", "share_port"],
+        503: ["quitting"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ call?: string; bind?: string; notes?: boolean; expires?: string }>();
@@ -191,6 +231,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string" },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const b = await c.body<{ call?: string }>();
@@ -211,6 +252,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { "call?": "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 503: ["quitting"] }),
     },
     async (c) => {
       const b = await c.body<{ call?: string }>();

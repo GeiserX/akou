@@ -551,12 +551,20 @@ export interface ImportResult {
 }
 
 const CAUTION = /\bcaution\b|\bdo not auto\b/i;
+/** A variant right only on the line it was heard on, or one never to apply: not a heard form. */
+const SCOPED_VARIANT = /\(\s*(?:ctx|refused)\s*\)$/i;
+/** A call archive's `=== CALL ... ===` banner between its calls' rows. */
+const BANNER = /^===.*===$/;
 
 /**
  * Converts the predecessor's list formats: `Canonical <= variant | variant  # comment` lines, and
  * a plain list of one name per line. A line marked `CAUTION` or `do not auto` imports with
- * `decode: false` and no heard forms: the old list said not to apply it automatically. Blank lines
- * and `#` comments are skipped. The user asked for the import, so entries are confirmed.
+ * `decode: false` and no heard forms: the old list said not to apply it automatically. A variant
+ * marked `(ctx)` (right only where it was heard) or `(refused)` is left out. Blank lines, `#`
+ * comments and `=== ... ===` banners are skipped. An entry over the file's limits is imported
+ * within them and listed in `skipped`: a heard form over `MAX_TERM_LENGTH` is left out, only the
+ * first `MAX_HEARD` forms are kept, and a note is cut to `MAX_NOTE_LENGTH`. The user asked for the
+ * import, so entries are confirmed.
  */
 export function importGlossary(
   text: string,
@@ -565,9 +573,10 @@ export function importGlossary(
   const entries: VocabEntry[] = [];
   const byKey = new Map<string, VocabEntry>();
   const skipped: ImportResult["skipped"] = [];
+  const lineOf = new Map<VocabEntry, { line: number; text: string }>();
   text.split(/\r?\n/).forEach((rawLine, i) => {
     const line = rawLine.trim();
-    if (line === "" || line.startsWith("#")) return;
+    if (line === "" || line.startsWith("#") || BANNER.test(line)) return;
     // A comment is a `#` after whitespace, so a term such as `C#` keeps its `#`.
     const hash = line.search(/\s#/);
     const body = (hash >= 0 ? line.slice(0, hash) : line).trim();
@@ -586,7 +595,7 @@ export function importGlossary(
       : (right ?? "")
           .split("|")
           .map((h) => h.trim())
-          .filter((h) => h !== "" && termKey(h) !== key);
+          .filter((h) => h !== "" && termKey(h) !== key && !SCOPED_VARIANT.test(h));
     const existing = byKey.get(key);
     if (existing) {
       for (const h of heard) if (!existing.heard.includes(h)) existing.heard.push(h);
@@ -606,7 +615,35 @@ export function importGlossary(
     if (caution) entry.decode = false;
     if (comment && !/^caution$/i.test(comment)) entry.note = comment;
     byKey.set(key, entry);
+    lineOf.set(entry, { line: i + 1, text: rawLine });
     entries.push(entry);
   });
+  // The file's own limits, met here so a long list imports what fits instead of failing whole.
+  const chars = (s: string) => [...s].length;
+  for (const e of entries) {
+    const at = lineOf.get(e) as { line: number; text: string };
+    const long = e.heard.filter((h) => chars(h) > MAX_TERM_LENGTH).length;
+    if (long > 0) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}": left out ${long} heard ${long === 1 ? "form" : "forms"} over ${MAX_TERM_LENGTH} characters`,
+      });
+      e.heard = e.heard.filter((h) => chars(h) <= MAX_TERM_LENGTH);
+    }
+    if (e.heard.length > MAX_HEARD) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}" has ${e.heard.length} heard forms; kept the first ${MAX_HEARD}`,
+      });
+      e.heard = e.heard.slice(0, MAX_HEARD);
+    }
+    if (e.note !== undefined && chars(e.note) > MAX_NOTE_LENGTH) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}": its note was cut to ${MAX_NOTE_LENGTH} characters`,
+      });
+      e.note = [...e.note].slice(0, MAX_NOTE_LENGTH).join("");
+    }
+  }
   return { entries, skipped };
 }

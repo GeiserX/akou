@@ -17,6 +17,9 @@ name: nightly
 # - clock-shift: the unit and e2e suites (`bun test`) once a year ahead and once each in two
 #   unusual time zones (TS-5), so a fixture pinned to the calendar, or code that assumes the zone,
 #   is red here before it turns a pull request red on its own a day later.
+# - dictation-timing: DC-R6's wall-clock bound, a 20 s hold's release-to-text within 200 ms of a
+#   3 s hold's over a slow link (`AKOU_TIMING=1`). The PR check counts the bytes sent after release
+#   instead, since a shared runner's stall moved the wall clock by up to 1.8 s.
 
 on:
   schedule:
@@ -144,6 +147,21 @@ jobs:
       # The same suite as check's Linux leg, so the same pass floor; six more may skip, the tests
       # that compare a file's mtime with `Date.now()` a year ahead (CLOCK_SHIFTED).
       - run: bun scripts/ci/test-floor.ts clock-shift .junit-check.xml
+
+  dictation-timing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AKOU_TIMING: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/dictation-remote.e2e.test.ts -t "after release"
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).

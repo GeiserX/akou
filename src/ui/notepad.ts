@@ -28,6 +28,12 @@ const MARKER: Partial<Record<ReturnType<typeof noteKind>, { prefix: RegExp; said
   section: { prefix: /^# /, said: "Section: " },
 };
 
+/** The small label under a note of these kinds. */
+const TAG: Partial<Record<ReturnType<typeof noteKind>, string>> = {
+  action: "Action",
+  question: "Open question",
+};
+
 export interface NotepadDeps {
   t: Transport;
   call(): string | null;
@@ -160,11 +166,18 @@ export class NotepadPane {
       h(
         "button",
         { class: "gutter", type: "button", title: "Show and play the call from here" },
-        formatWall(n.w, tz),
+        formatWall(n.w, tz, { seconds: false }),
       ),
       h("span", { class: "mark", attrs: { "aria-hidden": "true" } }),
       marker?.said ? h("span", { class: "vh" }, marker.said) : null,
-      h("span", { class: "note-text" }, shown),
+      h(
+        "span",
+        { class: "note-body" },
+        h("span", { class: "note-text" }, shown),
+        // The kind under an action or an open question, as b2 draws it; the marker's hidden
+        // words already say it to a screen reader.
+        TAG[kind] ? h("span", { class: "tag", attrs: { "aria-hidden": "true" } }, TAG[kind]) : null,
+      ),
       agent ? h("span", { class: "author" }, `agent ${n.client ?? n.by.slice(6)}`) : null,
       n.from === "fix" ? h("span", { class: "author" }, "from a fix") : null,
       h(

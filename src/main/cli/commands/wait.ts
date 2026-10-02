@@ -43,8 +43,6 @@ export type WaitStage = (typeof WAIT_STAGES)[number];
 export const WAIT_TIMEOUT_S = 30 * 60;
 /** The API's longest long poll. */
 const POLL_S = 25;
-/** What Ctrl-C returns, as a shell reports a process ended by SIGINT. */
-const INTERRUPTED = 130;
 
 export type StageState = { state: "pending" } | { state: "done" | "failed"; event: Body };
 
@@ -103,7 +101,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
   let cursor = 0;
   let wait = 0;
   while (true) {
-    if (ctx.io.signal?.aborted) return INTERRUPTED;
+    if (ctx.io.signal?.aborted) return EXIT.interrupted;
     const r = await api(ctx, "GET", `/calls/${enc(id)}/events`, {
       query: { after: cursor, wait },
       timeoutMs: (wait + 15) * 1000,
@@ -112,7 +110,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
       if (ctx.io.signal?.aborted) return null;
       throw err;
     });
-    if (r === null) return INTERRUPTED;
+    if (r === null) return EXIT.interrupted;
     if (r.status !== 200) return finish(ctx, r, () => "");
     s = stageAfter(stage as WaitStage, s, r.body.events);
     cursor = r.body.cursor;

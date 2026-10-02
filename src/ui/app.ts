@@ -50,7 +50,7 @@ import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protoc
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { SetupWizard } from "./setup-wizard.ts";
-import { TranscriptPane } from "./transcript.ts";
+import { jumpText, TranscriptPane } from "./transcript.ts";
 import { WorkspacePicker } from "./workspaces.ts";
 
 /** The answer of `POST /calls/{id}/fix`: what each changed word did, and how to take it back. */
@@ -442,7 +442,10 @@ class App {
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "ask" || e.type === "answer") asked = true;
         }
-        if (notes) this.notepad.render();
+        if (notes) {
+          this.notepad.render();
+          this.player.marks();
+        }
         if (speakers) this.askPane.renderPresets();
         if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
@@ -737,6 +740,7 @@ class App {
     const other = !!live && live.call !== this.callId;
     const body = document.body;
     body.classList.toggle("busy", mine || other);
+    byId("jump").textContent = jumpText(mine);
     byId("stop-label").textContent = other && !mine ? "Stop the other call" : "Stop";
     // Record waits for the speech models with its reason, so the page never sends a start that
     // the app refuses with 503 models_missing.

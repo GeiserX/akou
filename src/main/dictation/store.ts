@@ -72,9 +72,12 @@ export function expiredDictations(
     .map((it) => it.id);
 }
 
-/** A new dictation id: time-ordered, unique across runs. */
+/**
+ * A new dictation id: time-ordered, unique across runs. 64 random bits after the millisecond, so
+ * ids made in the same millisecond never meet (24 bits collided once in about 840 runs of 200).
+ */
 export function newDictationId(now: number): string {
-  return `d${now.toString(36)}${randomBytes(3).toString("hex")}`;
+  return `d${now.toString(36)}${randomBytes(8).toString("hex")}`;
 }
 
 export interface LogOpenReport {

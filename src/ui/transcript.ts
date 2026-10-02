@@ -109,7 +109,15 @@ export function fillRow(
 }
 
 /**
- * Auto-scroll while pinned to the bottom, and "Back to live" (`#jump`) once the reader scrolled up
+ * What `#jump` says: "Back to live" while the call records, "Back to the end" on a saved call,
+ * where nothing is live (principle 12).
+ */
+export function jumpText(live: boolean): string {
+  return live ? "↓ Back to live" : "↓ Back to the end";
+}
+
+/**
+ * Auto-scroll while pinned to the bottom, and `#jump` (see jumpText) once the reader scrolled up
  * more than 80 px. Shared by the window and the share viewer, so neither yanks a reader down.
  */
 export class ScrollPin {

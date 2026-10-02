@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
@@ -89,6 +89,17 @@ export class LogBuilder {
 export function tempDir(prefix = "akou-test-"): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/**
+ * The JSON lines a fake process has appended to `file` so far. A line still being written has no
+ * newline yet and is left for the next read: parsed, it threw `JSON Parse error: Unexpected EOF`.
+ */
+export function jsonLines(file: string): Record<string, unknown>[] {
+  if (!existsSync(file)) return [];
+  const lines = readFileSync(file, "utf8").split("\n");
+  lines.pop();
+  return lines.filter((l) => l.trim() !== "").map((l) => JSON.parse(l) as Record<string, unknown>);
 }
 
 /** A tiny English dictionary for the read-time rules. */

@@ -46,6 +46,11 @@ export interface FinalUnit {
   samples: Float32Array;
   lang: "auto" | string;
   glossary: readonly string[];
+  /**
+   * The ISO codes an `auto` decode may choose among, over the engine's own list (`asr.languages`):
+   * a job's `languages[]`. Absent or empty: the engine's list.
+   */
+  allowed?: readonly string[];
 }
 
 /** An engine of the final pass (`asr.final.engines`). */
@@ -58,6 +63,11 @@ export interface FinalEngine {
     glossary: boolean;
     languageId: boolean;
   };
+  /**
+   * Memory it holds while loaded, MB, for the final pass's budget; absent for the measured
+   * figure by its id (final-model.ts).
+   */
+  readonly memoryMb?: number;
   load(): Promise<void>;
   unload(): Promise<void>;
   decode(unit: FinalUnit): Promise<Hypothesis>;
@@ -284,7 +294,14 @@ export type ModelSpec = (
       diarizeHelper?: readonly string[];
     }
   | { kind: "module"; path: string; model: string; options?: unknown }
-) & { final?: LlamaEngineSpec };
+) & {
+  final?: LlamaEngineSpec;
+  /**
+   * A final pass over several engines (`asr.final.engines`): their ids in order, each either
+   * `final`'s engine or the model set's recognizer. Absent: `final` alone, else the recognizer.
+   */
+  finals?: readonly string[];
+};
 
 export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
   if (spec.kind === "module") {
@@ -300,31 +317,36 @@ export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
 /**
  * A model set's recognizer as a `FinalEngine`: Parakeet on sherpa-onnx in the app, the fake
  * recognizer in CI. It decodes through `prepare`, so the recognizer still loads once per app run
- * whichever path asks for it. It takes no glossary: Parakeet decodes greedy, which takes no
- * hotwords, and the vocabulary applies when reading and after the call.
+ * whichever path asks for it. It takes no glossary: it decodes with the call's decode list as its
+ * hotwords where the decoding takes them (beam, as the single-Parakeet pass does), and with none
+ * under greedy, the default.
  */
 export class RecognizerEngine implements FinalEngine {
   readonly id: string;
   readonly features = { confidence: true, timestamps: true, glossary: false, languageId: false };
-  private rec: Recognizer | null = null;
+  private hw: PreparedHotwords | null = null;
 
-  constructor(private readonly models: Pick<ModelSet, "recognizerModel" | "prepare">) {
+  constructor(
+    private readonly models: Pick<ModelSet, "recognizerModel" | "prepare">,
+    private readonly list: DecodeList | null = null,
+  ) {
     this.id = models.recognizerModel;
   }
 
   async load(): Promise<void> {
-    this.rec ??= this.models.prepare(null).recognizer;
+    this.hw ??= this.models.prepare(this.list);
   }
 
   async unload(): Promise<void> {
-    this.rec = null;
+    this.hw = null;
   }
 
   async decode(unit: FinalUnit): Promise<Hypothesis> {
     await this.load();
-    const rec = this.rec as Recognizer;
+    const { recognizer: rec, arg } = this.hw as PreparedHotwords;
     const t = performance.now();
-    const r = rec.decode(unit.samples);
+    // Hotwords only reach a transducer (live-worker.ts `streamHotwords`).
+    const r = rec.decode(unit.samples, rec.kind === "transducer" && arg ? arg : undefined);
     const ms = performance.now() - t;
     const h: Hypothesis = { engine: this.id, text: r.text, words: r.words ?? [], ms };
     if (r.lang) h.lang = r.lang;

@@ -18,9 +18,10 @@ import type { CallView } from "../../../core/log/fold.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import { type AskOptions, ask } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId } from "./common.ts";
+import { CALL_ID, CALL_REF_ERRORS, callId, WRITE_ERRORS } from "./common.ts";
 import { KEEPALIVE_MS } from "./follow.ts";
 
 export const MAX_BUDGET = 32_000;
@@ -39,6 +40,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { question: "string", "budget?": "integer" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 400: ["bad_field"] }),
     },
     async (c) => {
       const b = await c.body<{ question: string; budget?: number }>();
@@ -83,6 +85,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
         k: { type: "integer", min: 1, max: 50, default: SEARCH_K, doc: "At most this many hits." },
       },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 400: ["bad_param"] }),
     },
     async (c) => {
       const query = c.query.raw("q") ?? "";
@@ -116,6 +119,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { question: "string", "stream?": "boolean" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 400: ["bad_field"], 499: ["cancelled"] }),
     },
     async (c) => {
       const b = await c.body<{ question: string; stream?: boolean }>();
