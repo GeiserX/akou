@@ -770,6 +770,7 @@ export class JobService {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
     for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
+    this.store.scrubCancelled(before);
     if (n > 0)
       this.o.log(
         "info",
@@ -780,6 +781,11 @@ export class JobService {
 
   // -------------------------------------------------------------------------
   // The feed
+
+  /** The feed's id (SV-E1): a new one means a new jobs.db, whose cursors start at 0 again. */
+  get feedId(): string {
+    return this.store.feedId;
+  }
 
   events(who: Identity, after: number, limit: number): FeedEvent[] {
     return this.store.events(who.scopes.includes("admin") ? null : who.id, after, limit);
@@ -1019,7 +1025,7 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
-    const e =
+    const r =
       end.status === "done"
         ? this.store.finish(job.id, end, {
             type: "transcription.completed",
@@ -1032,7 +1038,7 @@ export class JobService {
             deliverTo: job.callback_url,
           });
     if (job.audio) rmSync(job.audio, { force: true });
-    if (!e) return;
+    if (!r) return;
     this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
@@ -1041,7 +1047,8 @@ export class JobService {
         : `job.${end.status} ${job.id} key ${job.key_id} model ${job.model ?? job.preset} on ${remote}`,
     );
     this.notify(job.id, end.status);
-    for (const fn of [...this.feedWatchers]) fn(e);
+    const e = r.event;
+    if (e) for (const fn of [...this.feedWatchers]) fn(e);
     if (job.callback_url) this.deliverer.kick();
   }
 

@@ -15,7 +15,7 @@
  * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
  * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
- *   first, as JSON `{events, cursor, has_more}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
+ *   first, as JSON `{events, cursor, has_more, feed_id}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
  *   `Last-Event-ID`.
  */
 
@@ -560,7 +560,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/events",
     {
       id: "events.list",
-      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more, feed_id}`; `wait` holds the request until one arrives. `feed_id` is made once when the job store is created: when it changes, the store was reset and its cursors started again at 0, so read again from `after=0`. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
       ...JOB_ROUTE,
       query: {
         after: {
@@ -610,6 +610,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         events: events.map(eventView),
         cursor,
         has_more: jobs.hasEventsAfter(who, cursor),
+        feed_id: jobs.feedId,
       });
     },
   );

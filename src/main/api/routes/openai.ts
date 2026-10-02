@@ -311,6 +311,8 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
       title: titleIn(metadata),
       idempotency_key: null,
       interactive,
+      // The caller has the answer in the response; the feed never hears of the job (SV-E1).
+      quiet: true,
       file_sha256: file.sha256,
       audio: file.path,
     });

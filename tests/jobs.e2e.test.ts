@@ -8,7 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
@@ -713,7 +713,7 @@ describe("SV-J6: delete and retention", () => {
     try {
       const k = await newKey(rig, "j6-queued");
       await submit(rig, k.key, NOTE);
-      const q = await submit(rig, k.key, OTHER_NOTE);
+      const q = await submit(rig, k.key, OTHER_NOTE, { metadata: '{"content_hash": "abc"}' });
       expect(audioFiles(rig).length).toBe(2);
       const del = await call(rig, k.key, "DELETE", `/jobs/${q.body.id}`);
       expect(del.body).toMatchObject({ id: q.body.id, status: "cancelled" });
@@ -722,6 +722,13 @@ describe("SV-J6: delete and retention", () => {
       expect(feed.body.events.map((e: { type: string }) => e.type)).toEqual([
         "transcription.cancelled",
       ]);
+      // SV-E3: it carries the job's metadata, as a failed event does, so the client can match it;
+      // it never carried a result, so it is not marked deleted.
+      expect(feed.body.events[0].data).toEqual({
+        job_id: q.body.id,
+        status: "cancelled",
+        metadata: { content_hash: "abc" },
+      });
     } finally {
       g.open();
       await rig.close();
@@ -865,7 +872,40 @@ describe("SV-E1: the per-key event feed", () => {
     expect(later.body.cursor).toBe(all.body.cursor);
     // Nothing new: the same cursor comes back.
     const none = await call(server, k.key, "GET", `/events?after=${all.body.cursor}`);
-    expect(none.body).toEqual({ events: [], cursor: all.body.cursor, has_more: false });
+    expect(none.body).toEqual({
+      events: [],
+      cursor: all.body.cursor,
+      has_more: false,
+      feed_id: all.body.feed_id,
+    });
+  });
+
+  test("the page names its feed: the same across a restart, a new one once jobs.db is reset", async () => {
+    const home = tempDir("akou-feed-id-");
+    let rig: AppRig | null = await appRig({ settings: SERVER, home: home.dir });
+    try {
+      const k = await newKey(rig, "e1-feed-id");
+      await transcribe(rig, k.key, NOTE);
+      const first = (await call(rig, k.key, "GET", "/events")).body;
+      expect(first.feed_id).toMatch(/^feed_[0-9a-f]{8}$/);
+      expect(first.cursor).toBeGreaterThan(0);
+      const db = join(rig.app.configDir, "jobs", JOBS_DB);
+      await rig.app.quit();
+      rig = null;
+      rig = await appRig({ settings: SERVER, home: home.dir });
+      expect((await call(rig, k.key, "GET", "/events")).body.feed_id).toBe(first.feed_id);
+      await rig.app.quit();
+      rig = null;
+      for (const f of [db, `${db}-wal`, `${db}-shm`]) rmSync(f, { force: true });
+      rig = await appRig({ settings: SERVER, home: home.dir });
+      // The reset feed starts again at 0: a client holding the old cursor sees the id change.
+      const reset = (await call(rig, k.key, "GET", `/events?after=${first.cursor}`)).body;
+      expect(reset.feed_id).toMatch(/^feed_[0-9a-f]{8}$/);
+      expect(reset.feed_id).not.toBe(first.feed_id);
+    } finally {
+      await rig?.close();
+      home.cleanup();
+    }
   });
 
   test("wait holds the request until the key's next outcome", async () => {
