@@ -6988,11 +6988,20 @@
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
           "415": {
             "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
