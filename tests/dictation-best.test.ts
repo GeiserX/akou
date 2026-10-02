@@ -33,6 +33,18 @@ afterEach(async () => {
 
 const HELLO = concat(silence(0.3), speak(["hello"]), silence(0.3));
 
+/**
+ * The fake server's JSONL log, one object per complete line. The fake appends while the test
+ * polls, so a last line with no newline yet is still being written: it is left for the next read.
+ */
+function logLines(text: string): Record<string, unknown>[] {
+  return text
+    .split("\n")
+    .slice(0, -1)
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
 const FAST: DictationEngine = {
   name: "fast",
   decode: async () => ({
@@ -97,13 +109,7 @@ function rig(
     onLog: (level, msg) => logs.push(`${level} ${msg}`),
   });
   cleanups.push(() => best.stop());
-  const log = () =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((l) => JSON.parse(l) as Record<string, unknown>)
-      : [];
+  const log = () => (existsSync(logFile) ? logLines(readFileSync(logFile, "utf8")) : []);
   return {
     best,
     clock,
@@ -116,6 +122,12 @@ function rig(
         .map((l) => l.body as { messages: { role: string; content: unknown }[] }),
   };
 }
+
+test("the fake log reader leaves a half-written last line for the next read", () => {
+  expect(logLines('{"argv":[]}\n{"body":{"mess')).toEqual([{ argv: [] }]);
+  expect(logLines('{"argv":[]}\n')).toEqual([{ argv: [] }]);
+  expect(logLines("")).toEqual([]);
+});
 
 describe("DC-E2: best is kept warm", () => {
   test("the first dictation after warm waits for health; the second starts nothing", async () => {
@@ -462,10 +474,7 @@ describe("DC-L3: the audio check on best", () => {
     };
     await expect(best.check(HELLO, ["Kubernetes"])).rejects.toThrow(/no warm Qwen/);
     await Bun.sleep(200);
-    const starts = readFileSync(logFile, "utf8")
-      .trim()
-      .split("\n")
-      .filter((l) => (JSON.parse(l) as { argv?: unknown }).argv).length;
+    const starts = logLines(readFileSync(logFile, "utf8")).filter((l) => l.argv).length;
     expect(starts).toBe(1);
     expect(best.pid()).toBe(first);
   });

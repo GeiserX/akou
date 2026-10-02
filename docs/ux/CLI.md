@@ -76,10 +76,10 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `workspaces` · `workspace add NAME` · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
-| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|delete MODEL\|import\|select` (`pull` and `import` need no running app, SV-P3; `delete` asks the running akou, which refuses the default model and one in use) · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
+| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|delete MODEL\|import\|select` (`pull` and `import` need no running app, SV-P3; `delete` asks the running akou, which refuses the default model and one in use) · `devices` · `apps` · `templates list\|show` (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `demo`, `completion` |
 | Dictation | `dictate FILE [--engine E] [--language L]` **new** (DICTATION.md DC-G3: a clip through the dictation path) · `dictate start\|stop\|toggle\|cancel` · `dictations list\|show\|retry\|delete` **new** (DC-G3) | has every command in this row ([dictate.ts](../../src/main/cli/commands/dictate.ts)) |
 | Agents | `skill install\|uninstall [--harness claude\|codex] [--dir DIR]` · `mcp` · `webhook test` **new** (PG-W2) · `api METHOD PATH` **new** (CLI-11) | has, except `webhook test`, `api` |
-| Server | `serve` (SV-P8: the server in the foreground, exit 78 when the settings refuse its bind) · `jobs list [--status STATE]` (SV-J8) · `transcribe FILE [--preset P]` · `keys create\|list\|revoke` · `admin set-password` | has |
+| Server | `serve` (SV-P8: the server in the foreground, exit 78 when the settings refuse its bind) · `jobs list [--status STATE]` (SV-J8) · `transcribe FILE [--preset P]` (both against the desktop app too, with its token) · `keys create\|list\|update\|revoke` · `admin set-password` | has |
 | App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | has, except `self-update` |
 
 ### Naming a call
@@ -156,8 +156,8 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-16 | Exit 3 for "no call to act on" in every command | P0 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | bug |
-| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | partial: `tail -f` stops on the first Ctrl-C and exits 130 on the second |
+| CLI-16 | Exit 3 for "no call to act on" in every command | P1 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | has: `tests/cli-exit-codes.e2e.test.ts` lists every command in the registry and runs each call command with no calls, with `-c` naming no call, and each command that defaults to `live` with nothing live; a missing call answers `not_found` with `call` in the body, so a missing key or model stays 64 |
+| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | has: `tests/cli-terminal.e2e.test.ts` types Ctrl-C into `tail -f` and `ask` on a pty |
 
 ## 7. Errors that say what to do
 
@@ -393,26 +393,26 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Ask | `ask` | `POST …/ask` | `akou_ask` (hidden when the client is the provider) | Ask pane | none |
 | Search one call | `search` | `GET …/search` | `akou_search` | none | window find is in [WINDOW.md](WINDOW.md) |
 | Speakers | `name` | `POST …/speakers…` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | speaker chip | none |
-| Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes` | notepad | MCP lacks edit and delete (PG-M4) |
+| Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes`, `akou_edit_note`, `akou_delete_note` | notepad | none |
 | Mark a moment | `mark` | notes route | `akou_add_note` | mark key | `mark` missing (CLI-34) |
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |
 | Memo | none | `GET/PUT …/memo` | `akou_memo_get`, `akou_memo_put` | memo pane | CLI-28 |
 | Vocabulary | `vocab …` | `/vocab…`, `…/vocab…`, `…/fix` | `akou_vocab_*` | Fix on a line, review pill | none |
 | Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | none: hidden on purpose | none |
 | Agent-written notes | none | `GET …/enhance/context`, `PUT …/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none | CLI-28 |
-| Final pass | `finalize` | `POST …/finalize` | none | Retry on a failed pass only | MCP lacks it (PG-M4); window has no run-again row yet in [WINDOW.md](WINDOW.md) |
+| Final pass | `finalize` | `POST …/finalize` | `akou_finalize` | Retry on a failed pass only | window has no run-again row yet in [WINDOW.md](WINDOW.md) |
 | Export, hooks | `export`, `hooks run` | `POST …/export`, `…/hooks` | `akou_export` | hand-off status | none for the CLI |
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | sidebar | none |
 | Rename a call | `calls rename` | `PATCH /calls/{id}` | `akou_rename_call` | the title in the call header | none |
 | List and add workspaces | `workspaces`, `workspace add` | `GET /workspaces`, `POST /workspaces` | none | the workspace menu in the Record row, New workspace in the sidebar | MCP: `akou_start` names the workspace and makes its folder |
 | Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | all missing (CLI-26) |
 | Edit a line | `edit` | PG-A5 | none yet | inline edit | all missing (CLI-29) |
-| Share | `share` | `/share` | none | share pill | MCP (PG-M4) |
-| Templates | `templates` | `GET /templates` | none | none: the window always uses the automatic choice | CLI and MCP (PG-F3); the window on purpose |
-| Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | MCP read (PG-M4) |
+| Share | `share` | `/share` | `akou_share_on`, `akou_share_off`, `akou_share_status`; no `bind`, a setting | share pill | none |
+| Templates | `templates list\|show` | `GET /templates`, `GET /templates/{name}` | `akou_template_list`, `akou_template_get` | none: the window always uses the automatic choice | the window on purpose |
+| Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | none |
 | Devices, apps | `devices`, `apps` | route to add (CLI-07) | none | device pickers | CLI and route missing (CLI-07) |
 | Import | `import hark-viewer` | `POST /import/hark-viewer` | none, by design | none | none |
-| Window | `open` | `POST /window` | none | n/a | PG-M4 adds open window |
+| Window | `open` | `POST /window` | `akou_open_window` | n/a | none |
 | Quit | `quit` | `POST /quit` | none, by design | tray Quit | none |
 | Transcribe a file as a job (server mode) | `transcribe`, `jobs list` | `POST /jobs`, `GET /jobs` … | none, by design | none | window: no jobs until SV-U4 |
 | Name or rename a job (server mode) | none: the program that submits a job names it; `jobs list` shows the name | `PATCH /jobs/{id}` | none, by design | the Jobs page shows and searches the name | none |
@@ -438,7 +438,6 @@ The jobs that run them and the minimum test counts are in [CI-CD.md](../CI-CD.md
 
 ## P0 list
 
-- **CLI-16** Exit 3 for "no call to act on" in every command; today four commands exit 64 for the same situation.
 - **CLI-17** Every command, flag or setting named in a message exists, and nothing tells the user to run `akou start` (which records) just to launch the app.
 
 Not a CLI P0, but the agent path depends on it: PG-M1 in [PROGRAMMABILITY.md](PROGRAMMABILITY.md). The skill tells the agent to use the MCP tools, and nothing registers them today.

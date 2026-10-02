@@ -215,7 +215,10 @@ import {
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
 import {
+  type AutoChoice,
+  autoChoice,
   type Held,
+  hardwareChoice,
   kindOf,
   ModelRefused,
   ModelStore,
@@ -652,7 +655,7 @@ export class AkouApp implements ApiApp {
   private readonly runMode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
-  /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
+  /** File jobs (docs/ux/SERVER.md section 5), in both modes: the app takes them with its token. */
   private jobService: JobService | null = null;
   /**
    * The models on disk, their per-model downloads, last use, measured speed and the unused-days
@@ -699,7 +702,13 @@ export class AkouApp implements ApiApp {
     this.headless = o.headless ?? cfg.settings["app.headless"];
     this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
     this.keyStore =
-      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+      this.runMode === "server"
+        ? new KeyStore(
+            this.configDir,
+            () => Date.now(),
+            (line) => this.log("info", line),
+          )
+        : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.appLog = o.supervise ? new AppLog(join(this.configDir, APP_LOG)) : null;
@@ -2229,7 +2238,7 @@ export class AkouApp implements ApiApp {
 
   async call(id: string): Promise<CallController> {
     const c = await this.manager.open(id);
-    if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    if (!c) throw new HttpError(404, "not_found", `no call ${id}`, { call: id });
     await this.readyRead(c);
     return c;
   }
@@ -2805,6 +2814,39 @@ export class AkouApp implements ApiApp {
     const jobs = this.jobService;
     if (name !== "best" || !jobs) return undefined;
     return jobs.obtainable(QWEN_ASR);
+  }
+
+  /** The last `auto` verdict logged, so each change is logged once. */
+  private autoLogged = "";
+
+  /**
+   * What a job that names no model runs here, and why (SV-R2): `autoChoice` over the models on
+   * disk and the GPU `asr.accelerator` found. A recognizer given at start (tests) is `fast`.
+   */
+  autoChoice(): AutoChoice {
+    const v = this.givenRecognizer()
+      ? {
+          ...hardwareChoice(),
+          preset: "fast" as const,
+          reason: "akou was started with one recognizer.",
+        }
+      : this.autoFromDisk();
+    const line = `auto runs ${v.preset}: ${v.reason}`;
+    if (line !== this.autoLogged) {
+      this.autoLogged = line;
+      this.log("info", line);
+    }
+    return v;
+  }
+
+  private autoFromDisk(): AutoChoice {
+    const c = this.liveContext();
+    return autoChoice({
+      present: c.present,
+      catalog: c.catalog ?? [],
+      runtime: c.runtime ?? null,
+      ...(c.machine ? { machine: c.machine } : {}),
+    });
   }
 
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
@@ -3384,7 +3426,18 @@ export class AkouApp implements ApiApp {
    */
   private modelsHeld(): Held {
     const jobs = this.jobService;
-    if (jobs) return jobs.held();
+    if (jobs && this.runMode === "server") return jobs.held();
+    const app = this.appModelsHeld();
+    // What the app's queued and running file jobs and their Workers need is in use; the job
+    // service's default model is not one of the app's defaults.
+    return {
+      defaults: app.defaults,
+      inUse: new Set([...app.inUse, ...(jobs?.held().inUse ?? [])]),
+    };
+  }
+
+  /** What the app's own settings and running recognizer hold, without its file jobs. */
+  private appModelsHeld(): Held {
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
     const ctx = this.liveContext();
     const next = chooseLiveSetup(ctx);
@@ -3471,7 +3524,7 @@ export class AkouApp implements ApiApp {
    */
   sweepModels(): void {
     const jobs = this.jobService;
-    if (jobs) {
+    if (jobs && this.runMode === "server") {
       jobs.sweepModels();
       return;
     }
@@ -3479,16 +3532,20 @@ export class AkouApp implements ApiApp {
     this.shelf?.sweep(new Set([...held.defaults, ...held.inUse]));
   }
 
-  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
+  /**
+   * The job queue, in `<config>/jobs`, started behind the API in both modes. The desktop app takes
+   * a file job with its own token (`akou transcribe FILE`) through the same Worker and presets as
+   * server mode; what server mode adds is keys, webhook secrets, remotes and the dictation lane,
+   * which the app leaves out: its dictation runs on its own engines.
+   */
   private startJobs(): void {
     const shelf = this.startShelf();
     const keys = this.keyStore;
-    if (this.runMode !== "server" || !keys) {
-      this.sweepModels();
+    const server = this.runMode === "server" && keys !== null;
+    if (!server) {
       // clock: the hourly sweep of SV-M5, as server mode's job service runs it.
       this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
       this.modelSweep.unref?.();
-      return;
     }
     const { modelStore: _store, ...jobSeams } = this.o.jobs ?? {};
     const s = () => this.cfg.settings;
@@ -3498,26 +3555,30 @@ export class AkouApp implements ApiApp {
       models: (recognizer) => this.jobModels(recognizer),
       shelf,
       defaultModel: () => s()["server.default_model"],
+      auto: () => this.autoChoice(),
       diarizer: () => this.runningDiarizer(),
       secrets: (id) => {
-        const s = keys.secretOf(id);
+        const s = keys?.secretOf(id);
         return s ? [s] : [];
       },
       hostListed: (id, host) =>
-        keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
+        !!keys?.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
       retainDays: () => this.cfg.settings["server.retain_days"],
+      sweepsModels: server,
       maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
-      remotes: () => this.cfg.settings["server.remotes"],
+      remotes: () => (server ? this.cfg.settings["server.remotes"] : []),
       env: this.o.env ?? process.env,
       concurrency: () => this.cfg.settings["server.concurrency"],
       queueMax: () => this.cfg.settings["server.queue_max"],
       queueMaxPerKey: () => this.cfg.settings["server.queue_max_per_key"],
-      dictationSlots: () => this.cfg.settings["server.dictation_slots"],
+      dictationSlots: () => (server ? this.cfg.settings["server.dictation_slots"] : 0),
       dictationEngine: () => this.cfg.settings["server.dictation_engine"],
       ...jobSeams,
       log: (level, msg) => this.log(level, msg),
     });
     this.jobService.start();
+    // The app's sweep, now that it also knows what its jobs hold.
+    if (!server) this.sweepModels();
   }
 
   recognizer(): "loading" | "ready" | "unavailable" {
