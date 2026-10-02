@@ -105,6 +105,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
       params: { id: "The key id, `key_…`." },
       body: { callback_hosts: "string[]" },
       ok: 200,
+      errors: KEY_REFUSALS,
     },
     async (c) => {
       const id = c.params.id as string;
