@@ -76,6 +76,15 @@ export function isRecognizer(m: ModelSpecEntry): boolean {
   return serves ? serves.includes("final") : !HELPER_MODELS.has(m.id);
 }
 
+/**
+ * A recognizer a file job can run. transcribe-cpp's engines (Whisper, Canary) are final-pass
+ * engines no job runs in this version, so a job that names one is refused before anything
+ * downloads, instead of fetching gigabytes and then failing.
+ */
+export function runsJobs(m: ModelSpecEntry): boolean {
+  return isRecognizer(m) && (m as Partial<CatalogEntry>).runtime !== "transcribe-cpp";
+}
+
 // ---------------------------------------------------------------------------
 // Which model a job runs (SV-S1)
 
@@ -118,8 +127,8 @@ export function hardwareChoice(): { model: string; preset: string } {
 
 /**
  * What one value names: a preset, a recognizer, or nothing (`auto`, or a name the OpenAI door
- * ignores). Refused: an unbuilt preset or an engine only an unbuilt preset lists (409), any other
- * name (422, or 409 when it is the server's own setting).
+ * ignores). Refused: an unbuilt preset, an engine only an unbuilt preset lists, or a recognizer
+ * no job runs (409), any other name (422, or 409 when it is the server's own setting).
  */
 function pick(
   value: string | undefined,
@@ -141,11 +150,12 @@ function pick(
     }
     return { model: p.engines[0] as string, preset: v, source };
   }
-  if (o.catalog.some((m) => m.id === v && isRecognizer(m))) {
+  const entry = o.catalog.find((m) => m.id === v);
+  if (entry && runsJobs(entry)) {
     const p = PRESETS.find((x) => x.built && x.engines[0] === v);
     return { model: v, preset: p?.name ?? "custom", source };
   }
-  const helper = o.catalog.some((m) => m.id === v);
+  const helper = entry !== undefined && !isRecognizer(entry);
   const unbuilt = PRESETS.find((p) => !p.built && p.engines.includes(v));
   if (unbuilt && !helper) {
     throw new ModelRefused(
@@ -153,6 +163,14 @@ function pick(
       "preset_unavailable",
       `${v} belongs to the ${unbuilt.name} preset, whose engines are not built in this version; use fast or auto`,
       { preset: unbuilt.name, model: v },
+    );
+  }
+  if (entry && !helper) {
+    throw new ModelRefused(
+      409,
+      "preset_unavailable",
+      `${v} is an engine of a call's final pass, which no job runs in this version; use fast or auto`,
+      { model: v },
     );
   }
   if (source === "server_default") {
