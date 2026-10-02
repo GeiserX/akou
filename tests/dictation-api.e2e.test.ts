@@ -202,4 +202,25 @@ describe("DC-L6: a dictation goes through its vocabulary", () => {
       text: "hello @ example",
     });
   });
+
+  test("DC-U5: an import with `scope: dictation` takes a symbol alone; without it the line is skipped", async () => {
+    const r = await rig();
+    // The control: an import for calls skips the symbol, as `POST /vocab` refuses it.
+    const plain = await r.api("POST", "/vocab/import", { text: "& <= and sign\n" });
+    expect([plain.body.imported, plain.body.skipped.length]).toEqual([0, 1]);
+    const dict = await r.api("POST", "/vocab/import", {
+      text: "& <= and sign\n",
+      scope: "dictation",
+    });
+    expect([dict.body.imported, dict.body.skipped]).toEqual([1, []]);
+    const listed = (await r.api("GET", "/vocab")).body.entries as {
+      term: string;
+      heard: string[];
+      entryScope?: string;
+    }[];
+    expect(listed.find((e) => e.term === "&")).toMatchObject({
+      heard: ["and sign"],
+      entryScope: "dictation",
+    });
+  });
 });

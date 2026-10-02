@@ -694,7 +694,11 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       const b = await c.body<{ text: string; workspace?: string; scope?: string }>();
       const workspace = checkWorkspace(b.workspace);
       const scope = checkScope(b.scope);
-      const res = importGlossary(b.text, { source: "import:api", date: today(c.app.now()) });
+      const res = importGlossary(b.text, {
+        source: "import:api",
+        date: today(c.app.now()),
+        scope,
+      });
       const path = targetPath(c.app, workspace);
       if (res.entries.length > 0) {
         await editFile(path, (file) => {
@@ -703,7 +707,8 @@ export function vocabRoutes(r: Router<ApiApp>): void {
             const had = next.entries.find((x) => termKey(x.term) === termKey(e.term));
             // A word the file holds keeps who added it, when, its forms, note, scope and decode
             // flag: the import adds its new heard forms and confirms it, as `POST /vocab` keeps
-            // `source` and `added_at`. A caution line still turns decoding off.
+            // `source` and `added_at`. The line's note fills in only when the word has none. A
+            // caution line still turns decoding off.
             const merged = had && {
               ...had,
               heard: [
@@ -711,6 +716,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
                 ...e.heard.filter((h) => !had.heard.some((x) => termKey(x) === termKey(h))),
               ],
               confirmed: true,
+              ...(had.note === undefined && e.note !== undefined ? { note: e.note } : {}),
               ...(e.decode === false ? { decode: false } : {}),
             };
             next = upsertEntry(next, merged || (scope ? { ...e, entryScope: scope } : e));

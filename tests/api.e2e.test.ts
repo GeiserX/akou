@@ -581,6 +581,20 @@ describe("the vocabulary files", () => {
     });
     // The control: the import's own source is not the one kept.
     expect(after.source).not.toBe("import:api");
+    // A word held with no note takes the import line's note; a held note is never replaced.
+    await rig.api("POST", "/vocab/import", { text: "Vercel # the host\n", workspace: "work" });
+    await rig.api("POST", "/vocab/import", {
+      text: "Kubernetes # another note\n",
+      workspace: "work",
+    });
+    const notes = (await rig.api("GET", "/vocab?workspace=work")).body.entries as {
+      term: string;
+      note?: string;
+    }[];
+    expect(notes.filter((e) => e.term !== "Anika").map((e) => [e.term, e.note])).toEqual([
+      ["Kubernetes", "the cluster"],
+      ["Vercel", "the host"],
+    ]);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(404);
     const bad = await rig.api("POST", "/vocab", { term: "" });

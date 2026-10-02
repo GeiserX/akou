@@ -561,11 +561,12 @@ const CAUTION = /\bcaution\b|\bdo not auto\b/i;
  * Converts the predecessor's list formats: `Canonical <= variant | variant  # comment` lines, and
  * a plain list of one name per line. A line marked `CAUTION` or `do not auto` imports with
  * `decode: false` and no heard forms: the old list said not to apply it automatically. Blank lines
- * and `#` comments are skipped. The user asked for the import, so entries are confirmed.
+ * and `#` comments are skipped. The user asked for the import, so entries are confirmed. With
+ * `scope: "dictation"` a line may be a symbol alone (`@ <= at sign`), as `validateTerm` allows.
  */
 export function importGlossary(
   text: string,
-  opts: { source: string; date: string; confirmed?: boolean },
+  opts: { source: string; date: string; confirmed?: boolean; scope?: "dictation" },
 ): ImportResult {
   const entries: VocabEntry[] = [];
   const byKey = new Map<string, VocabEntry>();
@@ -580,7 +581,7 @@ export function importGlossary(
     const caution = CAUTION.test(line);
     const [left, right] = body.includes("<=") ? body.split("<=", 2) : [body, undefined];
     const term = (left ?? "").trim();
-    const err = validateTerm(term);
+    const err = validateTerm(term, opts.scope);
     if (err) {
       skipped.push({ line: i + 1, text: rawLine, reason: err });
       return;
