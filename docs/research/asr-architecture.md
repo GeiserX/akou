@@ -19,9 +19,9 @@ Versions read for this: sherpa-onnx-node 1.13.8 (`package.json:27`), llama.cpp r
 
 ```mermaid
 flowchart LR
-  classDef live fill:#e3f2fd,stroke:#1565c0,color:#0d2a4a
-  classDef up fill:#fff3e0,stroke:#e65100,color:#3e1c00
-  classDef final fill:#e8f5e9,stroke:#2e7d32,color:#14321c
+  classDef live stroke:#1565c0,stroke-width:2px
+  classDef up stroke:#e65100,stroke-width:2px
+  classDef final stroke:#2e7d32,stroke-width:2px
 
   Mic["channel audio"] --> AGC["causal gain"]:::live --> Str["streaming Nemotron<br/>one stream per channel"]:::live
   Str -->|"append-only tokens"| Line["live line, seg rev 1"]:::live

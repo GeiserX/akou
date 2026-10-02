@@ -25,11 +25,11 @@ The call is an append-only **event log**. Every transcript line, correction, spe
 
 ```mermaid
 flowchart LR
-  classDef app fill:#e8f5e9,stroke:#2e7d32,color:#14321c
-  classDef helper fill:#fff3e0,stroke:#e65100,color:#4a2400
-  classDef client fill:#e3f2fd,stroke:#1565c0,color:#0d2a4a
-  classDef disk fill:#eceff1,stroke:#37474f,color:#1b2429
-  classDef ext fill:#f3e5f5,stroke:#6a1b9a,color:#2e0b40
+  classDef app stroke:#2e7d32,stroke-width:2px
+  classDef helper stroke:#e65100,stroke-width:2px
+  classDef client stroke:#1565c0,stroke-width:2px
+  classDef disk stroke:#37474f,stroke-width:2px
+  classDef ext stroke:#6a1b9a,stroke-width:2px
 
   UI["Window (webview)"]:::client
   CLI["akou CLI"]:::client

@@ -30,7 +30,7 @@ flowchart LR
   own -->|"openai-compatible, anthropic: on"| P["API or local model"]
   asked --> H
   asked --> P
-  classDef box fill:#eef3fb,stroke:#3b5b92,color:#1b2a44
+  classDef box stroke:#3b5b92,stroke-width:2px
   class A,E,V,M,R,H,P box
 ```
 

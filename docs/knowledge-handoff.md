@@ -16,7 +16,7 @@ flowchart LR
   K --> S
   W --> S
   P --> S
-  classDef box fill:#eef3fb,stroke:#3b5b92,color:#1b2a44
+  classDef box stroke:#3b5b92,stroke-width:2px
   class C,X,K,W,P,S box
 ```
 

@@ -15,9 +15,9 @@ The moat decides the shape. akou gives the user's own agent and the user's own k
 
 ```mermaid
 flowchart LR
-  classDef door fill:#e3f2fd,stroke:#1565c0,color:#0d2a4a
-  classDef core fill:#e8f5e9,stroke:#2e7d32,color:#14321c
-  classDef out fill:#f3e5f5,stroke:#6a1b9a,color:#2e0b40
+  classDef door stroke:#1565c0,stroke-width:2px
+  classDef core stroke:#2e7d32,stroke-width:2px
+  classDef out stroke:#6a1b9a,stroke-width:2px
 
   Skill["Skills: akou, akou-vocab"]:::door
   MCP["akou mcp"]:::door
