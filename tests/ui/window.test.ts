@@ -1213,8 +1213,45 @@ describe("the sidebar at 1024 px wide", () => {
           await page.waitForSelector("body.paged");
           expect(await width()).toBe(13.75 * rem);
           expect((await titleFit()).inside).toBe(true);
+          // Under 900 px the page itself needs the room, so the sidebar narrows again.
+          await page.setViewportSize({ width: 899, height: 700 });
+          expect(await width()).toBe(10 * rem);
         },
       );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a page opened over the welcome, with the speech models missing, gives the sidebar its full width too",
+    async () => {
+      // One model file that is not on disk: the welcome shows its models step.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      await withRig({ modelRegistry }, async (rig) => {
+        const page = await rig.open(undefined, { before: setupDone });
+        await page.setViewportSize({ width: 1024, height: 700 });
+        await page.waitForSelector("#welcome:not([hidden])");
+        const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+        const rem = await page.evaluate(() =>
+          Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        );
+        expect(await width()).toBe(10 * rem);
+        await page.click("#models-open");
+        await page.waitForSelector("body.paged");
+        // The welcome's class stays on the body under the page; the page's width wins.
+        expect(await page.$eval("body", (b) => b.className)).toContain("welcoming");
+        expect(await width()).toBe(13.75 * rem);
+      });
     },
     UI_TIMEOUT,
   );

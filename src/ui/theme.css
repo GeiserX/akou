@@ -1273,12 +1273,12 @@ body.shell:not(.server) > #pages {
 }
 /* Below 1248 px the full side columns would leave the transcript less than half the window. A
    page has no side pane, so its sidebar keeps its full width down to 900 px; under that the page
-   itself needs the room. */
+   itself needs the room. A page opened over the welcome is still a page. */
 @media (max-width: 1247px) {
   body.shell:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr) 18rem;
   }
-  body.shell.welcoming:not(.server) {
+  body.shell.welcoming:not(.paged):not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
 }
