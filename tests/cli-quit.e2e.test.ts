@@ -170,4 +170,50 @@ describe("[DK-M8] akou quit takes every process of the app down (akou-m23)", () 
     },
     45_000,
   );
+  test.skipIf(process.platform === "win32")(
+    "a helper left over from an ended call, its file not growing, does not keep a stuck app alive",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const a = await startApp(t.dir, [
+        "--linger",
+        "600000",
+        "--stale-helper",
+        join(t.dir, "old.opus"),
+      ]);
+      try {
+        const quit = await cliChild({ ...process.env, AKOU_HOME: t.dir }, ["quit"]);
+        expect(quit.err).toContain("akou did not finish quitting within 20 s; stopped it");
+        expect(quit.code).toBe(0);
+        expect(processAlive(a.app)).toBe(false);
+        expect(processAlive(a.helper)).toBe(false);
+      } finally {
+        a.kill();
+        t.cleanup();
+      }
+    },
+    45_000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a process list that cannot be read stops nothing: quit says so and names the kill",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const a = await startApp(t.dir, ["--linger", "600000"]);
+      try {
+        // No `ps` on this PATH: the list cannot be read.
+        const empty = join(t.dir, "no-bin");
+        mkdirSync(empty);
+        const quit = await cliChild({ ...process.env, AKOU_HOME: t.dir, PATH: empty }, ["quit"]);
+        expect(quit.code).toBe(70);
+        expect(quit.err).toContain(
+          `akou: akou did not finish quitting within 20 s, and the processes below it could not be listed (ps failed), so nothing was stopped; kill -KILL ${a.app} stops it by hand`,
+        );
+        expect(processAlive(a.app)).toBe(true);
+      } finally {
+        a.kill();
+        t.cleanup();
+      }
+    },
+    45_000,
+  );
 });

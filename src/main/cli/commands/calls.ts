@@ -424,7 +424,7 @@ const quit: Command = {
     // process's children taken for its helpers.
     const found = ctx.client.runtime();
     const rt = found && found.pid !== process.pid ? found : null;
-    const rows = rt ? await processTable() : [];
+    const rows = (rt ? await processTable() : []) ?? [];
     // Never this command, nor the processes between it and the app: a harness the app started may
     // be the one running `akou quit`.
     const others = rt ? stopList(rows, rt.pid).filter((p) => p !== rt.pid) : [];
@@ -456,8 +456,23 @@ const quit: Command = {
     if (appAlive() && rt) {
       // The app answered 202 and has not finished quitting: it is stopped, as the quit promised,
       // unless a call is still recording, which nothing here ever ends.
-      const rec = await recordingBelow(await processTable(), rt.pid);
-      if (rec) {
+      const now = await processTable();
+      if (now === null) {
+        // A list that cannot be read may hide a recording helper: nothing is stopped.
+        const how =
+          process.platform === "win32"
+            ? `end akou (pid ${rt.pid}) in Task Manager`
+            : `kill -KILL ${rt.pid} stops it by hand`;
+        const why = process.platform === "win32" ? "on Windows" : "ps failed";
+        const message = `akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s, and the processes below it could not be listed (${why}), so nothing was stopped; ${how}`;
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: false, running: true, message }));
+        else ctx.io.err(`akou: ${message}`);
+        return EXIT.software;
+      }
+      // A recording is a helper whose audio file grows, or one whose file cannot be read (a path
+      // `ps` cut at a space). A helper left over from an ended call, its file still, is not one.
+      const rec = await recordingBelow(now, rt.pid);
+      if (rec && rec.growing !== false) {
         const message = `akou did not finish quitting within ${QUIT_WAIT_MS / 1000} s and a call is still recording (capture helper pid ${rec.pid}), so nothing was stopped; kill -KILL ${rt.pid} stops it by hand, the audio so far stays`;
         if (ctx.json) ctx.io.out(JSON.stringify({ ok: false, running: true, message }));
         else ctx.io.err(`akou: ${message}`);

@@ -47,15 +47,22 @@ writeFileSync(
 );
 // `--recording FILE`: the helper records like a capture helper (`run --out FILE`).
 const recording = arg("--recording");
-const helper = recording
-  ? spawn(
-      process.execPath,
-      [join(import.meta.dir, "growing-helper.ts"), "run", "--out", recording],
-      {
-        stdio: "ignore",
-      },
-    )
-  : spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+// `--stale-helper FILE`: a capture helper left over from an ended call, its file never growing.
+const stale = arg("--stale-helper");
+if (stale) writeFileSync(stale, "");
+const helper = stale
+  ? spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "run", "--out", stale], {
+      stdio: "ignore",
+    })
+  : recording
+    ? spawn(
+        process.execPath,
+        [join(import.meta.dir, "growing-helper.ts"), "run", "--out", recording],
+        {
+          stdio: "ignore",
+        },
+      )
+    : spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 const out = arg("--harness");
 if (out) {
   const cli = join(import.meta.dir, "..", "..", "src", "main", "cli", "cli.ts");
