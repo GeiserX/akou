@@ -142,11 +142,19 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     expect(r.speakers.labelled).toBe(false);
     expect(r.speakers.error).not.toBeNull();
     expect(jobWarnings(r)).toEqual([expect.stringContaining(r.speakers.error as string)]);
-    const ran = r.speakers.asked && r.speakers.error === null;
-    expect(jobModels("fake-parakeet", ran, "nemotron")).toEqual(["fake-parakeet", "silero-vad"]);
+    expect(r.diarized).toBe(false);
+    expect(jobModels("fake-parakeet", r.diarized, "nemotron")).toEqual([
+      "fake-parakeet",
+      "silero-vad",
+    ]);
+    // A file with no speech never reaches the speaker model, so it is not named either.
+    const quiet = await runJobPass({ samples: silence(1), diarize: true, decode: null }, models);
+    expect(quiet.speakers).toEqual({ asked: true, labelled: false, error: null });
+    expect(quiet.diarized).toBe(false);
     // Positive control: a speaker model that answers labels the lines, and warns of nothing.
     const ok = await job(concat(silence(0.3), speak(["hello", "world"]), silence(0.5)), {}, true);
     expect(ok.result.speakers).toEqual({ asked: true, labelled: true, error: null });
+    expect(ok.result.diarized).toBe(true);
     expect(jobWarnings(ok.result)).toEqual([]);
   });
 

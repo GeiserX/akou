@@ -1145,6 +1145,8 @@ export interface JobPassResult {
   /** Spans the engine refused even after halving to `minSplitSeconds`: their words are missing. */
   skipped: { s: number; e: number; error: string }[];
   speakers: JobSpeakers;
+  /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
+  diarized: boolean;
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
@@ -1180,6 +1182,7 @@ export async function runJobPass(
     skipped: [],
     // Nothing to label: no speech, so no speaker model runs.
     speakers: { asked: input.diarize, labelled: false, error: null },
+    diarized: false,
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
   // With an engine the model set's recognizer is never prepared, so it never loads.
@@ -1269,6 +1272,7 @@ export async function runJobPass(
     words,
     skipped,
     speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
+    diarized: input.diarize && diarizeError === null,
     decode_s,
   };
 }

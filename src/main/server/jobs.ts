@@ -1020,12 +1020,9 @@ export class JobService {
         status: "done",
         result: jobResult(job, pass, {
           version: this.o.version,
-          // The speaker models are named only when they ran (a missing helper, a missed deadline).
-          models: jobModels(
-            recognizer,
-            pass.speakers.asked && pass.speakers.error === null,
-            this.o.diarizer(),
-          ),
+          // The speaker models are named only when they ran: not after a missing helper or a missed
+          // deadline, nor on a file with no speech for them.
+          models: jobModels(recognizer, pass.diarized, this.o.diarizer()),
         }),
       };
     } catch (err) {

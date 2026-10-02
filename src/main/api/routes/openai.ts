@@ -220,7 +220,8 @@ export function renderOpenAI(
         language: r.language ?? "unknown",
         duration: r.duration,
         text: r.text,
-        // No built engine gives word times yet: asked-for words are an empty list, never guesses.
+        // This door does not carry the engine's words yet (akou-5an.84): asked-for words are an
+        // empty list, never guesses.
         ...(granularities.includes("word") ? { words: [] } : {}),
         ...(granularities.includes("segment")
           ? {
