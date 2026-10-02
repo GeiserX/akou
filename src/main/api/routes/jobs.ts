@@ -1,6 +1,7 @@
 /**
- * The job routes of server mode (docs/ux/SERVER.md sections 5 and 6). Any key reaches them and
- * sees its own jobs and events only; an admin sees every key's.
+ * The job routes (docs/ux/SERVER.md sections 5 and 6), in both modes. In server mode any key
+ * reaches them and sees its own jobs and events only; an admin sees every key's. In the desktop
+ * app the one local token reaches them, and owns every job as the key id `app`.
  *
  * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `title`, `preset`, `model`, `language`,
  *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
@@ -73,10 +74,10 @@ export function requireQueueRoom(jobs: JobService, key: string, idem: string | n
   if (full) throw queueFullError(full);
 }
 
-/** The job service, or 404 where there is none (the desktop app). */
+/** The job service, or 404 where there is none. */
 export function jobsOf(c: RouteContext<ApiApp>): JobService {
   const j = c.app.jobs?.();
-  if (!j) throw new HttpError(404, "not_found", "jobs exist in server mode only");
+  if (!j) throw new HttpError(404, "not_found", "this akou has no job queue");
   return j;
 }
 
@@ -390,8 +391,8 @@ function waitParam(c: RoutedContext<ApiApp>): number {
   return wait;
 }
 
-/** Every job route: any key, server mode only (the desktop app has no job queue). */
-const JOB_ROUTE = { access: "jobs", modes: ["server"] } as const satisfies Partial<RouteDoc>;
+/** Every job route: any key in server mode, the one token in the desktop app. */
+const JOB_ROUTE = { access: "jobs", modes: ["app", "server"] } as const satisfies Partial<RouteDoc>;
 
 export function jobRoutes(r: Router<ApiApp>): void {
   r.add(

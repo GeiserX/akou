@@ -13,6 +13,7 @@ import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
 import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
@@ -235,6 +236,58 @@ describe("lidc on the server: asr.languages", () => {
     } finally {
       await r.close();
       t.cleanup();
+    }
+  });
+});
+
+describe("akou-5an.119: a best job in the desktop app takes its turn on the one Qwen line", () => {
+  /** Holds the app's Qwen line as a call's final pass would, until `free()`. */
+  function holdLine(r: AppRig, call: string): { free: () => void } {
+    let free = () => {};
+    const done = new Promise<void>((res) => {
+      free = res;
+    });
+    // biome-ignore lint/suspicious/noExplicitAny: the line is private; the test stands in for a final pass.
+    (r.app as any).qwenLine = { call, done };
+    return { free };
+  }
+  // biome-ignore lint/suspicious/noExplicitAny: the line is private; the test reads whose turn it is.
+  const lineOwner = (r: AppRig) => ((r.app as any).qwenLine?.call ?? null) as string | null;
+
+  test("it waits behind a final pass, then holds the line so a pass started meanwhile waits for it", async () => {
+    const r = await appRig({ settings: { "asr.llamaServer": [process.execPath, FAKE_LLAMA] } });
+    try {
+      const pass = holdLine(r, "call-ahead");
+      const s = await submit(r, r.token, DIALOGUE, { preset: "best" });
+      expect(s.status).toBe(202);
+      // The job is the line's tail now: a final pass that starts next waits for it (the reverse).
+      await until(() => lineOwner(r) === s.body.id, 10_000, "the job joined the line");
+      const held = await asKey(r, r.token, "GET", `/jobs/${s.body.id}?wait=2`);
+      expect(held.body.status).toBe("running");
+      pass.free();
+      const j = await asKey(r, r.token, "GET", `/jobs/${s.body.id}?wait=30`);
+      expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+      // Its turn ends with its pass: the line is free again.
+      await until(() => lineOwner(r) === null, 10_000, "the line freed");
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("positive control: a server's best job does not wait on the line", async () => {
+    const r = await appRig({
+      settings: { ...SERVER, "asr.llamaServer": [process.execPath, FAKE_LLAMA] },
+    });
+    try {
+      const pass = holdLine(r, "call-ahead");
+      const k = await newKey(r, "control");
+      const s = await submit(r, k.key, DIALOGUE, { preset: "best" });
+      const j = await asKey(r, k.key, "GET", `/jobs/${s.body.id}?wait=30`);
+      expect(j.body.status).toBe("done");
+      expect(lineOwner(r)).toBe("call-ahead");
+      pass.free();
+    } finally {
+      await r.close();
     }
   });
 });

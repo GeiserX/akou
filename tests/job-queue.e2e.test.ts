@@ -187,9 +187,10 @@ describe("SV-Q1, SV-Q2, SV-Q4: concurrency, priority and the queue's numbers", (
     const h = await open(rig, "/healthz");
     expect(h.body.queue_depth).toBe(0);
     expect(h.body.queue).toEqual(s.body.queue);
-    // The desktop app has no job queue.
-    expect((await open(app, "/v1/server")).body.queue).toBeNull();
-    expect((await open(app, "/healthz")).body.queue).toBeNull();
+    // The desktop app has a job queue too, for `akou transcribe` (akou-5an.119), the same object.
+    const appQueue = (await open(app, "/v1/server")).body.queue;
+    expect(appQueue).toMatchObject({ concurrency: 1, depth: 0, queued: 0, running: 0 });
+    expect((await open(app, "/healthz")).body.queue).toEqual(appQueue);
   });
 });
 

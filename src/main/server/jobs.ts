@@ -164,6 +164,26 @@ export interface JobServiceOptions {
   dictationSlots?(): number;
   /** `server.dictation_engine`: what an interactive job runs when it names no model; `auto` or absent, the server's default. */
   dictationEngine?(): string;
+  /**
+   * Whether an idle Worker holding the default's model stays loaded for the next job. Absent:
+   * yes (a server keeps it warm). The desktop app says no: an idle Worker is closed, so its
+   * memory is free again once the queue is empty.
+   */
+  keepIdleWorkers?(): boolean;
+  /**
+   * The owner's own models, in place of the default model's set: the desktop app's (its
+   * recognizer, its final pass, dictation), whose `defaults` are what its settings name, so a job
+   * queue's fallback recognizer never reads as its default. Its `inUse` adds to what the queue's
+   * jobs and Workers hold. Absent: the default model's set (a server).
+   */
+  ownerHeld?(): Held;
+  /**
+   * The owner's one-at-a-time line for a llama-server engine (Qwen): the desktop app's, which a
+   * call's final pass also waits on, since a second llama-server on Metal stops the first. A job
+   * on such an engine waits for its turn after its audio is read, and calls the function it gets
+   * once its pass ends. Absent: no wait (a server's jobs share the GPU through `concurrency`).
+   */
+  gpuTurn?(jobId: string, signal: AbortSignal): Promise<() => void>;
   /** Test seams: the upload decoder and the delivery's network. */
   decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
@@ -742,11 +762,15 @@ export class JobService {
     return n;
   }
 
-  /** The default's set, and what a queued or running job or the live worker needs. */
+  /**
+   * The default's set (or the owner's own, `ownerHeld`), and what a queued or running job or the
+   * live worker needs.
+   */
   held(): Held & { defaults: Set<string>; inUse: Set<string> } {
     const shelf = this.o.shelf;
-    const defaults = new Set(shelf.needs(this.defaultRecognizer()));
-    const inUse = new Set<string>();
+    const owner = this.o.ownerHeld?.();
+    const defaults = new Set(owner ? owner.defaults : shelf.needs(this.defaultRecognizer()));
+    const inUse = new Set<string>(owner?.inUse ?? []);
     for (const j of [...this.store.queued(), ...this.store.running()]) {
       for (const id of this.localNeeds(j)) inUse.add(id);
     }
@@ -835,19 +859,21 @@ export class JobService {
 
   /**
    * Idle Workers are closed when they hold a model other than the default's that no queued job
-   * needs, so an idle worker never pins a model the sweep should free (SV-M4), and when there are
-   * more of them than `server.concurrency` allows.
+   * needs, so an idle worker never pins a model the sweep should free (SV-M4), when there are
+   * more of them than `server.concurrency` allows, and, where idle Workers are not kept warm (the
+   * desktop app), when no queued job needs their model.
    */
   private releaseWorkers(): void {
     let kept = this.slots.filter((s) => s.job).length;
     const room = this.concurrency();
     const queued = this.store.queued();
     const fallback = this.defaultRecognizer();
+    const warm = this.o.keepIdleWorkers?.() ?? true;
     for (const s of this.slots) {
       if (s.job || !s.worker) continue;
       const wanted =
         s.model !== null &&
-        (s.model === fallback || queued.some((j) => this.modelOf(j) === s.model));
+        ((warm && s.model === fallback) || queued.some((j) => this.modelOf(j) === s.model));
       if (wanted && kept < room) {
         kept++;
         continue;
@@ -946,6 +972,8 @@ export class JobService {
     const needs = this.o.shelf.needs(model);
     // A model is used when a job on it starts and when it ends (SV-M4).
     this.o.shelf.touch(needs);
+    // The GPU line's turn, once taken (`gpuTurn`); given back however the run ends.
+    let release: (() => void) | null = null;
     try {
       const spec = this.o.models(model);
       if (!spec)
@@ -983,6 +1011,11 @@ export class JobService {
       // A model that takes no hotwords gets none (the engine would refuse them).
       // Read before the run: the samples' buffer is handed to the Worker, which empties it here.
       const audioS = samples.length / ASR_RATE;
+      // A llama-server engine waits for the owner's GPU line (the desktop app's final passes).
+      if (spec.final && this.o.gpuTurn) {
+        release = await this.o.gpuTurn(job.id, abort.signal);
+        if (abort.signal.aborted) return;
+      }
       const pass = await this.workerFor(slot, spec, model).run({
         samples,
         diarize: job.diarize,
@@ -1006,6 +1039,7 @@ export class JobService {
       const code = (err as { code?: string }).code ?? "transcription_failed";
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
+      release?.();
       this.o.shelf.touch(needs);
     }
     this.conclude(job, end);

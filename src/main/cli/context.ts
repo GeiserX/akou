@@ -87,6 +87,8 @@ export interface Command {
   summary: string;
   usage: string;
   flags?: FlagSpecs;
+  /** Lines help prints between the flags and the examples: what the flags alone do not say. */
+  notes?: readonly string[];
   /** At least one runnable example, printed in help (CLI-05). */
   examples: readonly string[];
   /**
