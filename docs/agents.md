@@ -70,6 +70,6 @@ The app serves a local API on `http://127.0.0.1:8476/v1`, on this machine's loop
 
 ## MCP
 
-`akou mcp` serves MCP on standard input and output, as a thin client of the local API; `akou skill install` and the plugin register it for you. The tools include `akou_start`, `akou_stop`, `akou_pause`, `akou_resume`, `akou_mute`, `akou_unmute`, `akou_status`, `akou_context`, `akou_read`, `akou_search`, `akou_ask`, `akou_add_note`, `akou_get_notes`, `akou_name_speaker`, `akou_merge_speakers`, `akou_vocab_add`, `akou_vocab_propose`, `akou_remember`, `akou_list_calls`, `akou_get_call`, `akou_rename_call` and `akou_export`.
+`akou mcp` serves MCP on standard input and output, as a thin client of the local API; `akou skill install` and the plugin register it for you. Every tool, its parameters and the annotations a harness reads to decide what it may run without asking are in [MCP tools](reference/mcp.md), a page generated from the server's own tool list.
 
 The same commands drive a server when `AKOU_URL` is set: see [The command line against a server](server.md#the-command-line-against-a-server).
