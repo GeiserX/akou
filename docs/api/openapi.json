@@ -6209,7 +6209,7 @@
             "$ref": "#/components/responses/415.multipart_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model"
+            "$ref": "#/components/responses/422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language"
           },
           "429": {
             "$ref": "#/components/responses/429.queue_full"
@@ -6982,7 +6982,7 @@
             "$ref": "#/components/responses/415.multipart_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long.unsupported_language"
           },
           "429": {
             "$ref": "#/components/responses/429.queue_full"
@@ -6991,7 +6991,7 @@
             "$ref": "#/components/responses/499.cancelled"
           },
           "500": {
-            "$ref": "#/components/responses/500.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+            "$ref": "#/components/responses/500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -8863,7 +8863,7 @@
           }
         }
       },
-      "422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model": {
+      "422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language": {
         "description": "Unprocessable",
         "content": {
           "application/json": {
@@ -8880,7 +8880,8 @@
                         "callback_not_allowed",
                         "idempotency_conflict",
                         "missing_field",
-                        "unknown_model"
+                        "unknown_model",
+                        "unsupported_language"
                       ]
                     }
                   }
@@ -8907,6 +8908,33 @@
                         "decode_failed",
                         "missing_field",
                         "too_long"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "422.bad_field.decode_failed.missing_field.too_long.unsupported_language": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "decode_failed",
+                        "missing_field",
+                        "too_long",
+                        "unsupported_language"
                       ]
                     }
                   }
@@ -9009,6 +9037,35 @@
           }
         }
       },
+      "500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "diarize_unavailable",
+                        "internal",
+                        "interrupted",
+                        "model_download_failed",
+                        "models_missing",
+                        "remote_refused",
+                        "transcription_failed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "500.internal": {
         "description": "Internal error",
         "content": {
@@ -9023,34 +9080,6 @@
                     "error": {
                       "enum": [
                         "internal"
-                      ]
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "500.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
-        "description": "Internal error",
-        "content": {
-          "application/json": {
-            "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/Error"
-                },
-                {
-                  "properties": {
-                    "error": {
-                      "enum": [
-                        "internal",
-                        "interrupted",
-                        "model_download_failed",
-                        "models_missing",
-                        "remote_refused",
-                        "transcription_failed"
                       ]
                     }
                   }
@@ -9422,6 +9451,10 @@
             "description": "The audio could not be decoded."
           },
           {
+            "const": "diarize_unavailable",
+            "description": "The job asked for speaker labels and no `akou-diarize` helper is here; the message names the settings that fix it."
+          },
+          {
             "const": "dictation_busy",
             "description": "A dictation is already running."
           },
@@ -9672,6 +9705,10 @@
           {
             "const": "unknown_model",
             "description": "No model of that name in the catalog."
+          },
+          {
+            "const": "unsupported_language",
+            "description": "A `languages[]` code is one no engine here can choose; `codes` names them."
           },
           {
             "const": "vocab_file_invalid",
