@@ -87,6 +87,9 @@ jobs:
           fi
       - name: the bundled word lists are what the build script makes from its pinned source
         run: bun scripts/build-dictionaries.ts --check
+      # ffmpeg, as ci.yml's Linux check installs it: the tests that read audio and subtitles through
+      # the real ffmpeg (SV-P6, SV-J5) run instead of skipping, and tests/floors.json counts on it.
+      - run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
       - run: bun run check
 
   app:
