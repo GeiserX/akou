@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   akouCaptureDialect,
@@ -31,6 +32,7 @@ import {
   stoppedWithinBudgetBroken,
   useRigCleanups,
 } from "./capture-scenarios.ts";
+import { tempDir } from "./helpers.ts";
 
 const LATE_STOPPED = join(import.meta.dir, "fixtures", "late-stopped.ts");
 
@@ -374,6 +376,44 @@ describe("a helper's last stderr line", () => {
       const { exit, steps } = await lateStopped(1_500, () => true);
       expect(exit.stopped).toEqual({ fileSeconds: 7.5, reason: "stop" });
       expect(drainBroken(steps)).toEqual(["the drain grace never fired"]);
+    },
+    LONG,
+  );
+});
+
+describe("a command to a helper that has just exited", () => {
+  test(
+    "a write the pipe cannot take at once never escapes as an unhandled broken pipe",
+    async () => {
+      // The helper exits while the event loop is held, so it is gone but not yet reaped when the
+      // command is written. A write the pipe cannot take at once answers with a promise that
+      // rejects with EPIPE while flush() answers 0; dropped, it failed the run between tests.
+      // On Windows every pipe write answers that way, so a short `stop` was enough there.
+      const t = tempDir();
+      try {
+        const mark = join(t.dir, "exited");
+        const session = new ChildCaptureSession(
+          {
+            argv: [
+              process.execPath,
+              "-e",
+              `require("node:fs").writeFileSync(${JSON.stringify(mark)}, ""); process.exit(0)`,
+            ],
+          },
+          { packet: () => {}, message: () => {}, exit: () => {} },
+          akouCaptureDialect,
+        );
+        const deadline = Date.now() + 10_000;
+        while (!existsSync(mark) && Date.now() < deadline) Bun.sleepSync(5);
+        Bun.sleepSync(200);
+        session.send("x".repeat(1 << 20));
+        const exit = await session.exited;
+        expect(exit.code).toBe(0);
+        // Rejections are reported once the turn that dropped them ends.
+        await Bun.sleep(50);
+      } finally {
+        t.cleanup();
+      }
     },
     LONG,
   );

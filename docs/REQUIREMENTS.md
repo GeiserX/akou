@@ -7,7 +7,7 @@ Status words:
 - **carried (M#)**: akou has it, first shipped in that milestone.
 - **changed (M#)**: akou has the need, met a different way; the line says how.
 - **dropped**: akou does not have it; the line says why.
-- **designed**: akou needs it and the design names its owning id; it is not built yet.
+- **designed**: akou means to have it and has not built it yet; the line names the id or milestone that owns it, or says that nothing owns it yet.
 
 ## Capture sources and channels
 
@@ -42,7 +42,7 @@ Status words:
 ## Controls and interactive use
 
 - F0.10, F1.43 mute keeps the timeline, pause drops audio: **carried (M1)** with the same semantics; both are app concerns recorded as events with anchors.
-- F1.42, F4.14 interactive terminal keys: **changed (M1)**. The window, tray, hotkey and CLI replace terminal keys. "Copy transcript so far" is a window action.
+- F1.42, F4.14 interactive terminal keys: **changed (M1)**. The window, tray, hotkey and CLI replace terminal keys. "Copy transcript so far" is a window action: a key and a button in the call header ([WINDOW](ux/WINDOW.md) W12.2).
 - F4.15 signal watcher: **changed (M1)**, see F0.18.
 
 ## Capture health
@@ -57,8 +57,8 @@ Status words:
 
 ## Devices and permissions
 
-- F0.19, I0.6 `hark devices`, `hark apps`: **carried (M1)** as `akou devices` and `akou apps` with `--json`, on every OS.
-- F0.26 three TCC services with a bounded microphone wait: **changed (M1)**. Two grants (microphone, system audio), both prompted by the signed app; `akou doctor --grant` checks them.
+- F0.19, I0.6 `hark devices`, `hark apps`: **designed** as `akou devices` and `akou apps` with `--json`, on every OS ([CLI](ux/CLI.md) CLI-07). Both commands exist today and exit 69 with a "not built yet" message.
+- F0.26 three TCC services with a bounded microphone wait: **changed (M1)**. Two grants (microphone, system audio), both prompted by the app; `akou doctor --grant` checks them and asks for a missing one.
 - I0.13, I1.16, F1.45 sysexits exit codes: **carried (M1)**, plus 3 (nothing live) and 75 (already recording).
 
 ## Engines and models
@@ -116,7 +116,7 @@ Status words:
 ## Configuration
 
 - F1.39, I1.5, I1.7 config file with precedence and `config show | set | unset | path`: **carried (M1)** as `akou config`, one JSON file validated by the same schema that validates `config set` and API bodies.
-- I1.6 `HARK_*` environment variables: **dropped**. Only `AKOU_HEADLESS` and `AKOU_HOME` (tests) exist.
+- I1.6 `HARK_*` environment variables: **changed (M1)**. akou reads its own `AKOU_*` variables instead, listed in [configuration.md](configuration.md).
 - F1.44 startup status block: **changed (M1)**. `akou status` and the window header report the same fields.
 
 ## hark-viewer page server
@@ -176,7 +176,7 @@ Status words:
 - F2.46 final transcript note: **carried (M1)** with a progress bar.
 - F2.47 Record, Mute, Pause, Stop, Restart behaviour, "Stop the other call": **carried (M1)**.
 - F2.48 workspace picker: **carried (M1)**, plus template picker.
-- F2.49, I2.16 follow the live or last call, `?call=` pin: **changed (M1)**. A sidebar of calls by date and title; deep links `akou://call/<id>` and `akou open`.
+- F2.49, I2.16 follow the live or last call, `?call=` pin: **changed (M1)**. A sidebar of calls by date and title, and `akou open` opens a call in the window. The `akou://call/<id>` links the API hands out open nothing; **designed**: they stop being handed out ([PROGRAMMABILITY](ux/PROGRAMMABILITY.md) PG-U1).
 - F2.50 poll every second: **changed (M1)**. RPC push from the main process; SSE with a cursor for other clients.
 - F2.51 pinned auto-scroll, back-to-live, font size keys: **carried (M1)**.
 - F2.52 empty state: **carried (M1)**.
@@ -197,12 +197,12 @@ Status words:
 
 ## Distribution, CI and validation
 
-- F2.54, F4.9, F4.17 test suites with fakes, minimum test counts, CI on pull requests: **carried (M1)**; every job asserts a minimum executed-test count and the report lists gated tests as skipped.
+- F2.54, F4.9, F4.17 test suites with fakes, minimum test counts, CI on pull requests: **carried (M1)**; every job asserts a minimum executed-test count and the report lists gated tests as skipped ([TESTING](TESTING.md) TS-2).
 - F0.28, F4.16 validation scripts (60-minute drift test, per-app isolation, live pipeline checks): **carried (M0)** as `scripts/drift-test.ts` and the hardware release checklist, run on real devices, never through speakers.
-- F4.7, I4.3 Homebrew one-repo tap and `brew services`: **changed (M1)**. A formula-only tap with a cask; the app registers its own login item. No `brew services`.
-- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **carried (M1)** with the `Info.plist` patch and nested signing added.
-- F4.10, I4.5 Makefile targets and demo: **dropped**; `bun` and `cargo` are the interface. A demo recording ships in the README.
-- F4.11 export-control self-classification: **carried (M1)** in `docs/legal.md`, updated for the new dependencies.
+- F4.7, I4.3 Homebrew one-repo tap and `brew services`: **changed (M1)**. The app registers its own login item; no `brew services`. The cask in a formula-only tap is **designed** ([CI-CD](CI-CD.md) CI-25).
+- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **designed**. The release pipeline exists, with the `Info.plist` patch and nested signing; builds are unsigned for now (ad-hoc signed on macOS), and Developer ID signing and notarization belong to a later milestone ([ROADMAP](ROADMAP.md#later-on-demand)).
+- F4.10, I4.5 Makefile targets and demo: **dropped**; `bun` and `cargo` are the interface. A demo recording in the README is **designed**, and nothing owns it yet.
+- F4.11 export-control self-classification: **designed**, in a `docs/legal.md` updated for the new dependencies. The doc does not exist, and nothing owns it yet.
 - F4.12 third-party notices: **carried (M1)** in `NOTICE`.
 - F4.13 project conventions: **changed (M1)**; `AGENTS.md` states akou's own.
 - F4.18 requirements and install notes: **carried (M1)** in the README per OS.

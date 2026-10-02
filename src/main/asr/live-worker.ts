@@ -1228,6 +1228,8 @@ export class WorkerSide {
   private queue: Promise<void> = Promise.resolve();
   /** Reviews given up (`review.cancel`): their next utterance is not decoded. */
   private readonly cancelled = new Set<number>();
+  /** Reviews still decoding: a cancel for any other token came after its answer and is dropped. */
+  private readonly reviewing = new Set<number>();
   private callId = "";
 
   constructor(private readonly reply: (m: FromWorker) => void) {}
@@ -1264,7 +1266,7 @@ export class WorkerSide {
           this.review(p, m);
           break;
         case "review.cancel":
-          this.cancelled.add(m.token);
+          if (this.reviewing.has(m.token)) this.cancelled.add(m.token);
           break;
         case "speech":
           this.reply({
@@ -1358,10 +1360,16 @@ export class WorkerSide {
     let ms = 0;
     let slowest = 0;
     let model = p.recognizerModel;
+    this.reviewing.add(m.token);
+    const reply = (r: FromWorker): void => {
+      this.reviewing.delete(m.token);
+      this.cancelled.delete(m.token);
+      this.reply(r);
+    };
     const step = (i: number) => (): void => {
       try {
-        if (this.cancelled.delete(m.token)) {
-          this.reply({ type: "decode.failed", token: m.token, error: "the review was given up" });
+        if (this.cancelled.has(m.token)) {
+          reply({ type: "decode.failed", token: m.token, error: "the review was given up" });
           return;
         }
         const part = m.parts[i];
@@ -1376,7 +1384,7 @@ export class WorkerSide {
           }, 0);
           return;
         }
-        this.reply({
+        reply({
           type: "decoded",
           token: m.token,
           text: texts.join(" "),
@@ -1388,7 +1396,7 @@ export class WorkerSide {
           slowest: Math.round(slowest),
         });
       } catch (err) {
-        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
+        reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
       }
     };
     step(0)();
