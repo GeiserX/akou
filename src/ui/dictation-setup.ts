@@ -97,6 +97,7 @@ export class DictationSetup {
     this.stop();
     this.step = step;
     if (step === "mic" || step === "accessibility") {
+      // clock: polls the OS for a grant given in System Settings.
       this.timer = setInterval(() => void this.poll(), GRANT_POLL_MS);
     }
     this.draw();

@@ -66,6 +66,7 @@ const tail: Command = {
     const query = {
       format: "json",
       since: int(p, "since", 0, Number.MAX_SAFE_INTEGER),
+      // clock: `--last` counts back from the moment the command runs.
       from: last !== undefined ? Date.now() - last * 1000 : undefined,
       // A one-off read gets the second pass's text first; a follower does not wait on each event.
       review: follow ? "skip" : undefined,

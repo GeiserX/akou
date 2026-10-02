@@ -394,6 +394,7 @@ export class SettingsPage {
     this.search.addEventListener("keydown", (e) => this.searchKey(e));
     this.search.addEventListener("blur", () => {
       // A click on a result lands before the list goes.
+      // clock: lets a click on a result land before the list goes.
       setTimeout(() => {
         this.results.hidden = true;
       }, 150);
@@ -1660,6 +1661,7 @@ function controlId(controls: (Node | null)[]): string | null {
 function flash(el: HTMLElement): void {
   el.scrollIntoView({ block: "center" });
   el.classList.add("pg-flash");
+  // clock: how long a setting's highlight shows.
   setTimeout(() => el.classList.remove("pg-flash"), 1200);
 }
 

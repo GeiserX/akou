@@ -881,6 +881,7 @@ export class Shell implements WindowShell {
   private notify(e: NotifyEvent): void {
     const n = notifyFor(e, { windowFocused: this.focused, platform: this.o.platform });
     if (!n) return;
+    // clock: the default of the injected `now`; tests pass their own.
     const now = this.o.now?.() ?? Date.now();
     const last = this.shown.get(n.key);
     if (last !== undefined && now - last < DEDUP_MS) return;
@@ -1239,6 +1240,7 @@ export class Shell implements WindowShell {
       platform: this.o.platform,
       hotkey: () => d.hotkey(),
       label: hotkeyLabel,
+      // clock: the default of the injected `now`; tests pass their own.
       now: () => this.o.now?.() ?? Date.now(),
       onVisible: (visible) => {
         if (visible) win?.showInactive();

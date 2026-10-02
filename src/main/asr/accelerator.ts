@@ -283,6 +283,7 @@ export async function listDevices(
       stderr: "pipe",
       stdin: "ignore",
     });
+    // clock: a deadline on a probe process that may hang.
     const timer = setTimeout(() => proc.kill(), 15_000);
     const [output, err, code] = await Promise.all([
       new Response(proc.stdout).text(),

@@ -498,6 +498,7 @@ export class ApiClient {
       // A probe never runs past the wait: a slow answer is cut at the deadline.
       const rt = await this.running(Math.min(2000, deadline - performance.now()));
       if (rt) return rt;
+      // clock: polling a real app while it starts, bounded by the deadline.
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(

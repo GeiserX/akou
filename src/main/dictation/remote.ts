@@ -504,6 +504,7 @@ export class RemoteUpload {
       this.o.timeoutSeconds ?? REMOTE_TIMEOUT_SECONDS,
       samples.length / ASR_RATE,
     );
+    // clock: a deadline on a request to another machine.
     const timer = setTimeout(() => this.abort.abort(), this.timeoutMs);
     try {
       const r = await this.outcome;
@@ -851,6 +852,7 @@ export class RemoteEngine {
     this.failures++;
     if (this.failures >= REMOTE_DOWN_AFTER && this.probe === null) {
       this.o.onLog?.("warn", `dictation: the remote is down (${e.message}); probing it`);
+      // clock: probing a remote that went down, real time between machines.
       this.probe = setInterval(() => void this.probeOnce(), this.o.probeMs ?? REMOTE_PROBE_MS);
       this.probe.unref?.();
     }

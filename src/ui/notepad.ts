@@ -69,9 +69,11 @@ export class NotepadPane {
     const v = this.d.view();
     if (!v) return;
     if (!this.draft && this.input.value.trim() !== "") {
+      // clock: a note is placed at the moment the user starts typing it.
       this.draft = { w: Date.now(), afterSeq: v.lastSeq };
     }
     if (this.pause) clearTimeout(this.pause);
+    // clock: a pause in typing saves the note.
     this.pause = setTimeout(() => void this.commit(false), PAUSE_SAVES_MS);
   }
 
@@ -249,6 +251,7 @@ export class NotepadPane {
     };
     input.addEventListener("input", () => {
       if (pause) clearTimeout(pause);
+      // clock: a pause in typing saves the note.
       pause = setTimeout(() => void save(), PAUSE_SAVES_MS);
     });
     input.addEventListener("keydown", (e) => {

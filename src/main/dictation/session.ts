@@ -812,6 +812,7 @@ export class DictationSession {
         if (!c || c.helperId !== m.id || c.end) return;
         // The helper ends the app's `session.stop` as a tap: the log says why the app asked.
         const reason = c.stopping && m.reason === "tap" ? c.stopping : m.reason;
+        // clock: the helper's last audio drains in real time.
         c.end = { reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }

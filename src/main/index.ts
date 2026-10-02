@@ -699,6 +699,7 @@ export class AkouApp implements ApiApp {
     this.headless = o.headless ?? cfg.settings["app.headless"];
     this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
     this.keyStore =
+      // clock: the key store's injected clock, real in the app.
       this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
@@ -1155,6 +1156,7 @@ export class AkouApp implements ApiApp {
           pull.done.set(pull.file, p.bytes);
           // The progress rides the status push (DESKTOP DK-E2), at most once a second, so the
           // window's welcome follows it without polling `GET /models`.
+          // clock: throttles a progress push to once a second of real time.
           const now = Date.now();
           if (now - pushedAt < 1000) return;
           pushedAt = now;
@@ -1470,6 +1472,7 @@ export class AkouApp implements ApiApp {
     if (this.cfg.settings["export.dir"] === "") return;
     const t = this.reexports.get(id);
     if (t) clearTimeout(t);
+    // clock: debounces a re-export after edits, in real time.
     const timer = setTimeout(() => {
       this.reexports.delete(id);
       if (this.quitting || this.finals.has(id)) return;
@@ -3664,6 +3667,7 @@ export class AkouApp implements ApiApp {
     this.quitting ??= (async () => {
       this.appLog?.line("info", "quitting");
       // Let the answer to `POST /quit` go out first.
+      // clock: lets the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
       try {
         await this.window?.close();

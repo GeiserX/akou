@@ -178,8 +178,10 @@ export function nextDictatedApp(
         found(hit.app as string);
         return;
       }
+      // clock: polls the app that has the keyboard while the user picks one.
       timer = setTimeout(() => void poll(), every);
     };
+    // clock: polls the app that has the keyboard while the user picks one.
     timer = setTimeout(() => void poll(), every);
   })();
   return {

@@ -433,6 +433,7 @@ const quit: Command = {
     // Returns once the app is gone, so a script can start it again straight after.
     const deadline = performance.now() + 20_000;
     while (ctx.client.runtime() && performance.now() < deadline) {
+      // clock: polling a real app while it quits, bounded by the deadline.
       await new Promise((res) => setTimeout(res, 50));
     }
     const gone = ctx.client.runtime() === null;

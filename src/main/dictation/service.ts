@@ -405,6 +405,7 @@ export class DictationService {
       this.tell({ kind: "event", e });
     };
     this.sweep();
+    // clock: the hourly sweep of old dictation audio.
     this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
     this.sweeper.unref?.();
   }
@@ -469,6 +470,7 @@ export class DictationService {
       this.dropAudio(id);
       return;
     }
+    // clock: how long a dictation's text is watched for the user's corrections, in real time.
     const t = setTimeout(() => this.closeLearnWindow(id), this.o.learnWindowMs ?? LEARN_WINDOW_MS);
     t.unref?.();
     this.windows.set(id, t);
@@ -537,6 +539,7 @@ export class DictationService {
     const later =
       this.o.draft?.later ??
       ((ms: number, fn: () => void) => {
+        // clock: the real timer behind the injected `later`; tests pass their own.
         const t = setTimeout(fn, ms);
         t.unref?.();
         return () => clearTimeout(t);
@@ -784,7 +787,9 @@ export class DictationService {
     }
     s.command(action, action === "start" && o.language ? { language: o.language } : {});
     const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
+    // clock: waiting on a real session to change state, bounded by `waitMs`.
     const t0 = Date.now();
+    // clock: waiting on a real session to change state, bounded by `waitMs`.
     while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);
     const state = this.helper?.session.state ?? "off";
     // The helper can drop the command (still settling an insert, say): a script must not be told
@@ -1008,6 +1013,7 @@ export class DictationService {
   private probeGrants(): Promise<Grants | null> {
     const argv = this.o.probe?.();
     if (!argv) return Promise.resolve(null);
+    // clock: a probe's answer is reused for `PROBE_MS` of real time.
     const at = Date.now();
     if (this.probed && at - this.probed.at < PROBE_MS) return this.probed.grants;
     const grants = (async (): Promise<Grants | null> => {
@@ -1045,6 +1051,7 @@ export class DictationService {
     this.tell({ kind: "grant-lost", name });
 
     if (h.regrant) return;
+    // clock: polling the OS for a grant given back in System Settings.
     h.regrant = setInterval(() => {
       if (this.helper !== h || h.session.lost.size === 0) {
         clearInterval(h.regrant);

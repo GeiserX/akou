@@ -84,6 +84,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
     return usage(ctx, `--for is one of ${WAIT_STAGES.join(", ")}`);
   }
   const timeoutS = duration(p, "timeout") ?? WAIT_TIMEOUT_S;
+  // clock: `--timeout` is real seconds from the moment the command runs.
   const deadline = Date.now() + timeoutS * 1000;
   const ref = objectCall(p, p.positional[0]) ?? "last";
   const head = await api(ctx, "GET", `/calls/${enc(ref)}`);
@@ -120,6 +121,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
       const code = s.event.step === "unavailable" ? EXIT.unavailable : EXIT.software;
       return report("failed", code, failure(s.event), s.event);
     }
+    // clock: `--timeout` is real seconds from the moment the command runs.
     const left = Math.ceil((deadline - Date.now()) / 1000);
     if (left <= 0) {
       return report(

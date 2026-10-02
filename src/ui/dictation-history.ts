@@ -121,6 +121,7 @@ export class DictationHistory {
   constructor(private readonly t: Transport) {
     this.search.addEventListener("input", () => {
       clearTimeout(this.timer);
+      // clock: debounces the search box while the user types.
       this.timer = setTimeout(() => void this.load(), SEARCH_MS);
     });
     this.more.addEventListener("click", () => void this.load(true));
@@ -181,6 +182,7 @@ export class DictationHistory {
       return;
     }
     const days = new Map<string, HTMLElement[]>();
+    // clock: the history groups by day against the page's own clock.
     const now = Date.now();
     // The same days and times as the calls in the sidebar.
     const tz = localZone();

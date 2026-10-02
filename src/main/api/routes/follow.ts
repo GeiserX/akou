@@ -65,6 +65,7 @@ function eventWaiter(
         signal.removeEventListener("abort", finish);
         resolve();
       };
+      // clock: the long-poll's own bound, `wait` seconds.
       const timer = setTimeout(finish, ms);
       signal.addEventListener("abort", finish);
       wake = finish;
@@ -199,6 +200,7 @@ export async function openFollow(
     }
     if (lines.length > 0) sink.read({ all: false, lines });
   };
+  // clock: the stream's push tick to a reader over the network.
   const tick = setInterval(() => {
     sendRead();
     const tz = call.view.call?.tz ?? "UTC";
@@ -230,6 +232,7 @@ export async function openFollow(
       }
     }
   }, STREAM_TICK_MS);
+  // clock: a keep-alive comment, so a reader can tell a quiet stream from a dead connection.
   const keepalive = setInterval(() => {
     if (!stopped) sink.keepalive();
   }, KEEPALIVE_MS);

@@ -257,6 +257,7 @@ export class ModelsPage {
       m.state === "downloading" ||
       this.rows.some((r) => r.state === "downloading") ||
       (this.live?.setups.some((s) => s.models.some((x) => x.state === "downloading")) ?? false);
+    // clock: polls model downloads while the page shows them.
     if (busy && this.shown) this.timer ??= setInterval(() => void this.read(), 1000);
     else this.stop();
   }
@@ -987,6 +988,7 @@ export class ModelsPage {
     input?.focus();
     if (r) {
       r.classList.add("pg-flash");
+      // clock: how long a row's highlight shows.
       setTimeout(() => r.classList.remove("pg-flash"), 1600);
     }
   }

@@ -415,6 +415,7 @@ export async function renameReplacing(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code ?? "";
       if (i >= tries - 1 || !RENAME_BUSY.has(code)) throw err;
+      // clock: a short backoff while another process holds the file.
       await new Promise((r) => setTimeout(r, Math.min(100, 5 * 2 ** i)));
     }
   }

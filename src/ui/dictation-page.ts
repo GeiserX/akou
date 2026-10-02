@@ -1669,6 +1669,7 @@ export class DictationPage {
     if (flash) {
       r.scrollIntoView({ block: "center" });
       r.classList.add("pg-flash");
+      // clock: how long a row's highlight shows.
       setTimeout(() => r.classList.remove("pg-flash"), 1200);
     }
     r.querySelector<HTMLElement>(
