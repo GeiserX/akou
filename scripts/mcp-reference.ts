@@ -99,7 +99,7 @@ function renderTool(t: Tool): string {
     for (const [name, p] of props) {
       const desc = typeof p.description === "string" ? cell(p.description) : "";
       out.push(
-        `| \`${name}\` | \`${typeOf(p).replace(/\|/g, "\\|")}\` | ${required.has(name) ? "yes" : "no"} | ${desc} |`,
+        `| \`${name}\` | \`${pipeSafe(typeOf(p))}\` | ${required.has(name) ? "yes" : "no"} | ${desc} |`,
       );
     }
     out.push("");
