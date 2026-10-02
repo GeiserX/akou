@@ -368,10 +368,21 @@ describe("the Settings page", () => {
         await page.selectOption(engine, RECOGNIZER);
         await until(() => sent.length === 3, 5000, "the engine saved");
         expect(sent[2]).toEqual({ "server.dictation_engine": RECOGNIZER });
-        const saved = (await rig.api("GET", "/config")).body.settings;
-        expect(saved["server.default_language"]).toBe("es");
-        expect(saved["server.default_model"]).toBe("best");
-        expect(saved["server.dictation_engine"]).toBe(RECOGNIZER);
+        // Sent is not saved yet: wait for the file to hold all three.
+        const saved = async () => (await rig.api("GET", "/config")).body.settings;
+        const three = async () => {
+          const v = await saved();
+          return [
+            v["server.default_language"],
+            v["server.default_model"],
+            v["server.dictation_engine"],
+          ];
+        };
+        await until(
+          async () => (await three()).join() === ["es", "best", RECOGNIZER].join(),
+          5000,
+          "all three in the file",
+        );
       });
     },
     UI_TIMEOUT,
