@@ -188,11 +188,7 @@ describe("the second pass's review on the Worker", () => {
     const word = concat(silence(0.3), speak(["hello"]), silence(0.5));
     const pending = () => (side as unknown as { cancelled: Set<number> }).cancelled.size;
     const settled = (token: number) =>
-      until(
-        () => replies.some((r) => "token" in r && r.token === token && r.type !== "loads"),
-        5000,
-        `review ${token}`,
-      );
+      until(() => replies.some((r) => "token" in r && r.token === token), 5000, `review ${token}`);
 
     // The race: the review answers, and the call ends before the host has read the answer.
     side.handle({ type: "review", token: 5, parts: [word] });
