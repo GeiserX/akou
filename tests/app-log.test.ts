@@ -108,4 +108,43 @@ describe("[DK-M8] app.log", () => {
       t.cleanup();
     }
   });
+  test("the cap counts bytes, not characters: accented text never carries the file past it", () => {
+    const t = tempDir();
+    try {
+      const file = join(t.dir, "app.log");
+      const log = new AppLog(file, 250, () => new Date(2026, 9, 1, 9, 5, 3, 7));
+      log.line("info", "short");
+      // About 140 characters but 240 bytes once written.
+      log.line("info", "é".repeat(100));
+      expect(statSync(file).size).toBeLessThanOrEqual(250);
+      expect(existsSync(`${file}.1`)).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("with app.log on, a line goes to app.log and not to a stderr that is not a terminal", async () => {
+    const seen: string[] = [];
+    const real = console.error;
+    console.error = (...a: unknown[]) => void seen.push(a.join(" "));
+    const on = await appRig({ supervise: true });
+    const off = await appRig();
+    try {
+      // The rigs pass onLog; the entry points do not, which is the case under test.
+      for (const r of [on, off])
+        (r.app as unknown as { o: { onLog?: unknown } }).o.onLog = undefined;
+      on.app.logLine("warn", "Zq7-supervised");
+      off.app.logLine("warn", "Zq7-plain");
+      expect(readFileSync(join(on.home, ".config", "akou", "app.log"), "utf8")).toContain(
+        "warn Zq7-supervised",
+      );
+      if (!process.stderr.isTTY) expect(seen.join("\n")).not.toContain("Zq7-supervised");
+      // Positive control: without app.log the line still goes to stderr.
+      expect(seen.join("\n")).toContain("akou warn: Zq7-plain");
+    } finally {
+      console.error = real;
+      await on.close();
+      await off.close();
+    }
+  });
 });
