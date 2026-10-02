@@ -17,6 +17,7 @@ const rpc = Electroview.defineRPC<DraftRpc>({
     messages: {
       open: (d: DraftOpen) => sink?.open(d),
       chip: (c: Chip) => sink?.chip(c),
+      append: ({ text }: { text: string }) => sink?.append(text),
     },
   },
 });
@@ -31,3 +32,6 @@ sink = mountDraft({
   language: (p) => rpc.request.language(p).catch(() => false),
   chip: (a) => quiet(rpc.request.chip(a)),
 });
+// While the box has the keyboard, a dictation key press appends to it (DC-A4).
+window.addEventListener("focus", () => quiet(rpc.request.focused({ on: true })));
+window.addEventListener("blur", () => quiet(rpc.request.focused({ on: false })));

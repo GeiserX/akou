@@ -49,7 +49,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models",
     {
       id: "models.get",
-      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`) and `next` (the id the next pass runs, never one that is not downloaded; null when neither is).",
+      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`), `next` (the id the next pass runs, never one that is not downloaded; null when neither is; `rover-conf(<ids>)` when it fuses several) and `engines` (`asr.final.engines` as ids, empty for one model).",
       access: "admin",
       modes: ["app", "server"],
       ok: 200,
@@ -75,6 +75,11 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { "model?": "string" },
       ok: 202,
+      errors: {
+        404: ["not_found"],
+        409: ["not_ready", "preset_unavailable"],
+        422: ["bad_field", "unknown_model"],
+      },
     },
     async (c) => {
       const b = await c.body<{ model?: unknown }>();
@@ -102,6 +107,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { model: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const b = await c.body<{ model?: unknown }>();
@@ -125,6 +131,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: { dir: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const b = await c.body<{ dir?: unknown }>();
@@ -146,6 +153,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       params: { id: "The model id, from models.get." },
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["model_in_use", "not_ready"] },
     },
     (c) => {
       const del = c.app.deleteModel;

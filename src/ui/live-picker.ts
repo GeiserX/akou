@@ -184,6 +184,7 @@ export class LivePicker {
     // A model on its way: its bar moves every second while the panel is open, and it lands in its
     // slot when done.
     if (downloading)
+      // clock: polls a model download while it runs.
       this.poll = setTimeout(() => void this.load(), this.panel.hidden ? 3000 : 1000);
     if (!this.panel.hidden && this.drawn() !== was) this.redraw();
     return read;
@@ -582,6 +583,7 @@ export class LivePicker {
       .request<{ copied?: string[] }>("POST", "/models/import", { dir })
       .catch(() => null);
     // A model being copied reads as downloading: its bar moves and Cancel stops it.
+    // clock: polls a model copy while it runs.
     const follow = setInterval(() => void this.load(), 1000);
     const res = await copying.finally(() => clearInterval(follow));
     if (!res || res.status >= 400) {

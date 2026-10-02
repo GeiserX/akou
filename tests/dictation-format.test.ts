@@ -250,6 +250,7 @@ describe("DC-U6: a spoken dictation goes through the pass before it is inserted"
   /** A session whose engine hears "um three apples", with `format` as its formatting pass. */
   function session(
     format: (text: string) => Promise<{ text: string; skipped: string | null } | null>,
+    said: string[] = [],
   ) {
     const t = tempDir("akou-dict-format-");
     cleanups.push(t.cleanup);
@@ -285,6 +286,7 @@ describe("DC-U6: a spoken dictation goes through the pass before it is inserted"
         return format(text);
       },
       onNotice: (_id, n) => notices.push(n),
+      onLog: (_l, m) => said.push(m),
     });
     const dictate = async (field: "editable" | "secure" = "editable") => {
       s.onMessage({
@@ -305,7 +307,11 @@ describe("DC-U6: a spoken dictation goes through the pass before it is inserted"
   test('with the fake harness, "um three apples" is inserted as "Three apples." and the raw text is kept', async () => {
     const r = session((raw) => formatDictation({ raw, provider: fakeHarness() }));
     expect((await r.dictate())?.text).toBe("Three apples.");
-    expect(r.log.items()[0]).toMatchObject({ raw: "um three apples", text: "Three apples." });
+    expect(r.log.items()[0]).toMatchObject({
+      raw: "um three apples",
+      text: "Three apples.",
+      formatted: true,
+    });
     expect(r.notices).toEqual([]);
   });
 
@@ -313,6 +319,8 @@ describe("DC-U6: a spoken dictation goes through the pass before it is inserted"
     const r = session(async (text) => ({ text, skipped: "no answer within 4 s" }));
     expect((await r.dictate())?.text).toBe("um three apples");
     expect(r.notices).toEqual([FORMAT_SKIPPED]);
+    // The tidy did not write it, so the draft box shows no second reading.
+    expect(r.log.items()[0]?.formatted).toBe(false);
   });
 
   test("a pass that throws is a skip, never a lost dictation", async () => {
@@ -321,6 +329,17 @@ describe("DC-U6: a spoken dictation goes through the pass before it is inserted"
     });
     expect((await r.dictate())?.text).toBe("um three apples");
     expect(r.notices).toEqual([FORMAT_SKIPPED]);
+  });
+
+  test("a pass that throws an error quoting the words logs none of them", async () => {
+    const said: string[] = [];
+    const r = session(async (text) => {
+      throw new Error(`the model refused: ${text}`);
+    }, said);
+    expect((await r.dictate())?.text).toBe("um three apples");
+    const skipped = said.filter((m) => m.startsWith("format.skipped"));
+    expect(skipped).toEqual(["format.skipped: error (Error)"]);
+    expect(said.join("\n")).not.toMatch(/three|apples/);
   });
 
   test("a password field's text never reaches the provider", async () => {

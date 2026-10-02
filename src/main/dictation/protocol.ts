@@ -15,7 +15,7 @@
  * keys and audio, and inserts what it is told to.
  */
 
-import type { Activation } from "../../core/dictation/activation.ts";
+import type { Activation, ShortcutName } from "../../core/dictation/activation.ts";
 import type { Target } from "../../core/dictation/events.ts";
 
 export const DICTATE_PROTOCOL = "akou-dictate/1";
@@ -94,7 +94,19 @@ export type HelperToApp =
   /** The answer to `rebind`; on a refusal the old binding stays (DC-A7). */
   | { type: "rebound"; hotkey: string }
   | { type: "rebind.failed"; hotkey: string; reason: string }
-  | { type: "session.started"; id: string; target: Target; capture_ns: string | number }
+  /** `draft`: the draft key started it, so its text goes to the draft box (DC-S3). */
+  | {
+      type: "session.started";
+      id: string;
+      target: Target;
+      capture_ns: string | number;
+      draft?: boolean;
+    }
+  /**
+   * Fix last or paste last was pressed, with what had the keyboard then; no session started
+   * (DC-A5).
+   */
+  | { type: "hotkey"; name: ShortcutName; target: Target }
   /**
    * The session `id` is latched now (tapped on, or a chord released before `HOLD_MS`), so the app
    * may end it after silence (DC-A3). A held session never gets one.
@@ -153,6 +165,11 @@ export type AppToHelper =
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }
+  /**
+   * Enter came after insert `id` went out with no send key, before its receipt (DC-A4): the helper
+   * presses `send_key` after the receipt. Nothing for an insert no longer waiting.
+   */
+  | { type: "send"; id: string; send_key: Exclude<SendKey, "none"> }
   | { type: "focus"; target: Target }
   /** The tray's and the CLI's door (DC-G1, DC-G3): a latched session, as if the key were tapped. */
   | { type: "session.start" }
@@ -165,6 +182,11 @@ export type AppToHelper =
   | { type: "rebuild_mic"; device: string; prefer_built_in?: boolean }
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
+  /**
+   * `dictation.muteMedia` (DC-U8): while on, a session pauses the media players that are playing
+   * and its end plays again only those. Off until it arrives.
+   */
+  | { type: "pause_media"; on: boolean }
   /**
    * The Dictation page's meter (DC-U4, DC-N3): while on, the helper keeps the mic open and sends
    * `level` 20 times a second with no session.
@@ -192,7 +214,12 @@ function isTarget(v: unknown): v is Target {
   if (typeof v !== "object" || v === null) return false;
   const t = v as Record<string, unknown>;
   return (
-    isStr(t.app) && isNum(t.pid) && isStr(t.window) && isStr(t.field) && FIELDS.includes(t.field)
+    isStr(t.app) &&
+    (t.name === undefined || isStr(t.name)) &&
+    isNum(t.pid) &&
+    isStr(t.window) &&
+    isStr(t.field) &&
+    FIELDS.includes(t.field)
   );
 }
 
@@ -232,7 +259,16 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
     case "rebind.failed":
       return isStr(o.hotkey) && isStr(o.reason) ? null : "rebind.failed";
     case "session.started":
-      return isId(o.id) && isTarget(o.target) && isNs(o.capture_ns) ? null : "session.started";
+      return isId(o.id) &&
+        isTarget(o.target) &&
+        isNs(o.capture_ns) &&
+        (o.draft === undefined || isBool(o.draft))
+        ? null
+        : "session.started";
+    case "hotkey":
+      return (o.name === "fixLast" || o.name === "pasteLast") && isTarget(o.target)
+        ? null
+        : "hotkey";
     case "latched":
       return isId(o.id) ? null : "latched";
     case "level":
