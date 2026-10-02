@@ -1750,7 +1750,7 @@ describe("DC-U1: the Dictation page in the window", () => {
         await old.page.click("#dictation-open");
         await old.page.waitForSelector("#dictation-live-words");
         for (const [, help] of await helps(old.page))
-          expect(help).not.toContain("after you let go");
+          expect(help).not.toContain("of 10 s of speech");
       } finally {
         await old.close();
       }

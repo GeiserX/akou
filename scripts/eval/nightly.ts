@@ -53,7 +53,14 @@ import {
   LlamaServer,
   resolveAccelerator,
 } from "../../src/main/asr/llama-server.ts";
-import { downloadModels, MODELS, modelFile, RECOGNIZER } from "../../src/main/asr/models.ts";
+import {
+  downloadModels,
+  hostPlatform,
+  MODELS,
+  modelFile,
+  modelsFor,
+  RECOGNIZER,
+} from "../../src/main/asr/models.ts";
 import { NemotronDiarizer } from "../../src/main/asr/nemotron.ts";
 import { QwenEngine } from "../../src/main/asr/qwen.ts";
 import { SherpaModels } from "../../src/main/asr/sherpa.ts";
@@ -637,14 +644,19 @@ async function remoteDictate(
   modelsDir: string,
   dataDir: string,
 ): Promise<{ model: string; dictate: Dictate; close(): Promise<void> }> {
-  await downloadModels(modelsDir, [RECOGNIZER, "silero-vad"], { env: {} });
+  // A job on `akou serve` waits for every model of the machine's set, the speaker labels' too, and
+  // the server downloads nothing under CI: they are fetched here. The labels are not timed (the
+  // dictation asks for no speakers), so the small `embeddings` set stands in for Nemotron's 400 MB.
+  const diarizer = "embeddings";
+  const set = modelsFor({ "asr.diarizer": diarizer }, hostPlatform()).map((m) => m.id);
+  await downloadModels(modelsDir, set, { env: {} });
   const home = join(dataDir, "dictation-remote-home");
   rmSync(home, { recursive: true, force: true });
   mkdirSync(join(home, ".config", "akou"), { recursive: true });
   const port = freePort();
   writeFileSync(
     join(home, ".config", "akou", "config.json"),
-    JSON.stringify({ "api.bind": "127.0.0.1", "api.port": port }),
+    JSON.stringify({ "api.bind": "127.0.0.1", "api.port": port, "asr.diarizer": diarizer }),
   );
   const env = { ...process.env, AKOU_HOME: home, AKOU_MODELS_DIR: modelsDir };
   const cli = [process.execPath, join(ROOT, "src", "main", "cli", "cli.ts")];
