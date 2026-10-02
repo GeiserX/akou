@@ -67,6 +67,8 @@ async function dictationPage(
           server: { slots: 1, engine: "auto", served_last_hour: 3 },
           proxy: origin ? { from: origin, to: local } : undefined,
         });
+  // The registry's default, which the fixture's schema does not carry.
+  if (fx) fx.settings["server.dictation_engine"] = "auto";
   await page.goto(`${origin ?? local}/#dictation`);
   await page.waitForSelector("#login", { state: "visible" });
   await page.fill("#login-secret", PASSWORD);
@@ -114,6 +116,29 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       await until(() => fx.patches.length === 1, 5000, "the save");
       expect(fx.patches).toEqual([{ "server.dictation_slots": 2 }]);
 
+      // The engine is a choice in words, never the raw value in a text field, with a way to name
+      // a model by its id, which the setting takes too.
+      const engine = "#page-dictation select#set-server-dictation-engine";
+      const choices = await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent));
+      expect(choices[0]).toBe("Automatic");
+      expect(choices).toContain("Fast");
+      expect(choices).toContain("Best");
+      expect(choices.at(-1)).toBe("A model, by its id…");
+      expect(await page.inputValue(engine)).toBe("auto");
+      await page.selectOption(engine, "best");
+      await until(() => fx.patches.length === 2, 5000, "the engine saved");
+      expect(fx.patches[1]).toEqual({ "server.dictation_engine": "best" });
+      const typed = "#page-dictation #set-server-dictation-engine-typed";
+      expect(await page.isVisible(typed)).toBe(false);
+      await page.selectOption(engine, "~");
+      await page.waitForSelector(typed, { state: "visible" });
+      // Choosing to type saves nothing until a model is named.
+      expect(fx.patches).toHaveLength(2);
+      await page.fill(typed, "qwen3-asr-1.7b");
+      await page.press(typed, "Tab");
+      await until(() => fx.patches.length === 3, 5000, "the model saved");
+      expect(fx.patches[2]).toEqual({ "server.dictation_engine": "qwen3-asr-1.7b" });
+
       // The count is read again each time the page is shown.
       fx.server = { slots: 2, engine: "auto", served_last_hour: 4 };
       await page.click("#server-nav [data-page='jobs']");
@@ -121,6 +146,8 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       await page.waitForFunction(() =>
         document.getElementById("dictation-served")?.textContent?.endsWith(": 4"),
       );
+      // Drawn again, the model named is the choice shown, by its id.
+      expect(await page.inputValue(engine)).toBe("qwen3-asr-1.7b");
     },
     UI_TIMEOUT,
   );
@@ -157,16 +184,28 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         "the value saved",
       );
       // The engine is a select in words: Automatic, the presets, each model by its name.
-      const engine = "#page-dictation select[data-key='server.dictation_engine']";
+      const engine = "#page-dictation select#set-server-dictation-engine";
       expect(
         await page.$eval(engine, (x) => (x as HTMLSelectElement).selectedOptions[0]?.text),
       ).toBe("Automatic");
       const words = await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent));
       expect(words).toContain("Parakeet v3");
       expect(words).not.toContain(RECOGNIZER);
-      await page.selectOption(engine, "fast");
-      await until(() => patches.length === 2, 5000, "the engine saved");
-      expect(patches[1]).toEqual({ "server.dictation_engine": "fast" });
+      await page.selectOption(engine, "best");
+      await until(
+        async () =>
+          (await rig.api("GET", "/config")).body.settings["server.dictation_engine"] === "best",
+        5000,
+        "the engine saved",
+      );
+      expect(patches).toEqual([
+        { "server.dictation_slots": 2 },
+        { "server.dictation_engine": "best" },
+      ]);
+      // The next test dictates with no model named: back to the server's default.
+      expect(
+        (await rig.api("PATCH", "/config", { "server.dictation_engine": "auto" })).status,
+      ).toBe(200);
     },
     UI_TIMEOUT,
   );

@@ -51,6 +51,7 @@ import {
   section,
   segmented,
   selectBox,
+  selectOrTyped,
   toggle,
   unit,
 } from "./rows.ts";
@@ -211,6 +212,31 @@ export const HISTORY_KEYS: readonly string[] = ["dictation.retainDays", "dictati
 export const SERVER_GROUPS: readonly DictationGroup[] = [
   { title: "For other computers", keys: ["server.dictation_slots", "server.dictation_engine"] },
 ];
+
+/** The setting a dictating client's request runs when it names no engine (server mode). */
+export const SERVER_ENGINE_KEY = "server.dictation_engine";
+
+/**
+ * The engine for other computers' dictation: Automatic, a preset or a model by name (`choices`,
+ * the server's own list when it answered, else the presets in words), or a model named by its id,
+ * which the setting takes too. The Settings page draws it the same way.
+ */
+export function serverEngineControl(
+  id: string,
+  value: string,
+  choices?: readonly (readonly [value: string, label: string])[],
+): HTMLElement {
+  const w = wordsFor(SERVER_ENGINE_KEY);
+  return selectOrTyped({
+    id,
+    key: SERVER_ENGINE_KEY,
+    label: w.label,
+    options: choices?.length ? choices : (w.choices ?? []),
+    value,
+    other: "A model, by its id…",
+    placeholder: "Its id, such as qwen3-asr-1.7b",
+  });
+}
 
 /** Every key the app-mode page and its Advanced page place. */
 export function dictationKeys(): string[] {
@@ -618,10 +644,8 @@ export class DictationPage {
     else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
     else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
     else if (key === FORMAT_WAIT_KEY) controls = [formatWait(id, w.label, spec, value)];
-    else if (key === "server.dictation_engine" && this.engines.length > 0)
-      controls = [
-        selectBox({ id, label: w.label, options: this.engines, value: String(value ?? "auto") }),
-      ];
+    else if (key === SERVER_ENGINE_KEY)
+      controls = [serverEngineControl(id, String(value ?? "auto"), this.engines)];
     else if (key === "dictation.language")
       controls = [
         selectBox({
@@ -1305,7 +1329,10 @@ export class DictationPage {
    * Waits for the next dictation's app for the per-app rules (DC-U9). With dictation off no
    * dictation comes, so the page says so rather than wait for nothing.
    */
-  private nextApp(found: (app: string) => void, failed: (why: string) => void): { stop(): void } {
+  private nextApp(
+    found: (app: string, name?: string) => void,
+    failed: (why: string) => void,
+  ): { stop(): void } {
     this.stopNextApp();
     const on =
       this.col.querySelector<HTMLInputElement>(`input[data-key="${ENABLE_KEY}"]`)?.checked ??

@@ -4528,7 +4528,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
+        "description": "The dictation log, newest first: each dictation's state, the app it went to (`app`, its id, and `app_name`, its name as people know it where the OS gives one, else null), its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
         "parameters": [
           {
             "name": "q",

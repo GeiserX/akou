@@ -322,6 +322,12 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.dictation_engine": {
     label: "Engine for other computers' dictation",
+    help: "When their dictation names none. Automatic is the server's default.",
+    choices: [
+      ["auto", "Automatic"],
+      ["fast", "Fast"],
+      ["best", "Best"],
+    ],
   },
 
   // The Dictation page (docs/ux/design-explorations/sd-a-dictation.html).

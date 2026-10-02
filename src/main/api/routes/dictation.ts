@@ -57,6 +57,7 @@ export function dictationBody(it: DictationItem) {
     state: it.state,
     by: it.by,
     app: it.target?.app ?? null,
+    app_name: it.target?.name || null,
     seconds: it.seconds,
     text: it.text,
     raw: it.raw,
@@ -151,7 +152,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.list",
-      doc: "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
+      doc: "The dictation log, newest first: each dictation's state, the app it went to (`app`, its id, and `app_name`, its name as people know it where the OS gives one, else null), its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
       access: "admin",
       modes: ["app"],
       query: {
