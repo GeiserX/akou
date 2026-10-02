@@ -5,6 +5,7 @@ target/
 *.log
 tests/.tmp/
 .junit-*.xml
+coverage/
 # ElectroBun and Hutch build output (scripts/build-app.ts)
 build/
 artifacts/
