@@ -17,7 +17,7 @@ import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
-import { asKey, type Key, newKey, SERVER, submit } from "./server-helpers.ts";
+import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helpers.ts";
 
 setDefaultTimeout(60_000);
 
@@ -96,6 +96,17 @@ describe("akou-5an.93: preset best", () => {
     expect(res.text).toBe("hello world ok great");
     expect(res.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
     expect(res.metadata).toEqual({ chat: 1 });
+    // akou-5an.24.1: SV-J4's shape, with Qwen's words: a confidence each, no times.
+    expect(RESULT.safeParse(res).error?.issues ?? []).toEqual([]);
+    expect(res.words.map((w: { w: string }) => w.w)).toEqual(["hello", "world", "ok", "great"]);
+    for (const w of res.words) {
+      expect(w.c).toBeGreaterThan(0);
+      expect(w.c).toBeLessThanOrEqual(1);
+      expect([w.s, w.e]).toEqual([null, null]);
+    }
+    expect(res.confidence).toBeGreaterThan(0);
+    expect(res.confidence).toBeLessThanOrEqual(1);
+    expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
   });
 
   test("a Spanish note: the language is forced, and comes back as es", async () => {

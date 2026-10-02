@@ -2229,7 +2229,7 @@ export class AkouApp implements ApiApp {
 
   async call(id: string): Promise<CallController> {
     const c = await this.manager.open(id);
-    if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    if (!c) throw new HttpError(404, "not_found", `no call ${id}`, { call: id });
     await this.readyRead(c);
     return c;
   }

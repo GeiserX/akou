@@ -213,7 +213,10 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
   };
 }
 
-/** The model ids a job ran, as the engine registry names them (SV-J4). */
+/**
+ * The model ids a job ran, as the engine registry names them (SV-J4): the speaker models only when
+ * they ran, so a job whose labels failed does not name them.
+ */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
   const out = [recognizer, "silero-vad"];
   if (diarize) {
@@ -227,6 +230,24 @@ export function jobModels(recognizer: string, diarize: boolean, diarizer: Diariz
 /** Every id in `jobModels`'s answer for the built engine is in the registry. */
 export function registryKnows(id: string): boolean {
   return MODELS.some((m) => m.id === id);
+}
+
+/** What a client is told about a result that is less than it asked for. */
+export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">): string[] {
+  const { asked, labelled, error } = pass.speakers;
+  if (!asked || labelled || pass.segments.length === 0) return [];
+  return [
+    error === null
+      ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
+      : `speaker labels were asked for and failed: every speaker is null (${error})`,
+  ];
+}
+
+/** The mean of the words' confidences, or null when no word has one. */
+function meanConfidence(words: JobPassResult["words"]): number | null {
+  const cs = words.map((w) => w.c).filter((c): c is number => c !== null);
+  if (cs.length === 0) return null;
+  return Math.round((cs.reduce((a, b) => a + b, 0) / cs.length) * 1000) / 1000;
 }
 
 /** The result of a job (SV-J4). */
@@ -243,12 +264,13 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // No built engine gives word times yet.
-    words: [],
+    words: pass.words,
     segments: pass.segments,
     engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    // Neither words nor segments carry an engine confidence yet.
-    confidence: null,
+    confidence: meanConfidence(pass.words),
+    skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
+    speakers: pass.speakers,
+    warnings: jobWarnings(pass),
     metadata: job.metadata,
   };
 }
@@ -1004,7 +1026,9 @@ export class JobService {
         status: "done",
         result: jobResult(job, pass, {
           version: this.o.version,
-          models: jobModels(recognizer, job.diarize, this.o.diarizer()),
+          // The speaker models are named only when they ran: not after a missing helper or a missed
+          // deadline, nor on a file with no speech for them.
+          models: jobModels(recognizer, pass.diarized, this.o.diarizer()),
         }),
       };
     } catch (err) {

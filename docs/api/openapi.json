@@ -4654,7 +4654,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The transcript of a done job: text, segments with speakers and times, and the engines that made it. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. 409 `not_done` before the job is done.",
+        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
         "parameters": [
           {
             "name": "id",
@@ -4663,6 +4663,23 @@
             "description": "The job id.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "The result's format: json, verbose_json, text, srt or vtt.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "verbose_json",
+                "text",
+                "srt",
+                "vtt"
+              ],
+              "default": "json"
             }
           }
         ],
