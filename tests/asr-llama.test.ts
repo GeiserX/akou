@@ -589,6 +589,38 @@ describe("the Qwen engine's protocol", () => {
     expect(h3.lang).toBe("zh");
   });
 
+  test("lidc: a unit's own list (a job's languages[]) wins over the engine's", async () => {
+    const lps = [
+      "--fake-lang",
+      "Chinese",
+      "--fake-lp",
+      "English=-0.2",
+      "--fake-lp",
+      "Spanish=-0.9",
+    ];
+    // The engine's list says English; the unit's says Spanish only, so Spanish it is.
+    const a = fakeServer(lps);
+    const h = await new QwenEngine({ id: QWEN_ASR, server: a.server, allowed: ["en"] }).decode({
+      ...unit(["hello"]),
+      allowed: ["es"],
+    });
+    expect(h.lang).toBe("es");
+    // With no engine list, the unit's bounds it alone.
+    const b = fakeServer(lps);
+    const h2 = await new QwenEngine({ id: QWEN_ASR, server: b.server }).decode({
+      ...unit(["hello"]),
+      allowed: ["en", "es"],
+    });
+    expect(h2.lang).toBe("en");
+    // An empty unit list is none: the engine's applies.
+    const c = fakeServer(lps);
+    const h3 = await new QwenEngine({ id: QWEN_ASR, server: c.server, allowed: ["es"] }).decode({
+      ...unit(["hello"]),
+      allowed: [],
+    });
+    expect(h3.lang).toBe("es");
+  });
+
   test("the unit is sent as a 16 kHz 16-bit mono WAV", () => {
     const bytes = wavBytes(new Float32Array([0, 0.5, -1, 1.5]));
     const v = new DataView(bytes.buffer);

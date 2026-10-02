@@ -282,7 +282,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.default_language": {
     label: "Language when a job names none",
-    help: "A language tag such as es or en-US, or auto to detect it.",
+    help: "Detect it finds each job's language from its audio.",
   },
   "server.default_diarize": {
     label: "Label speakers when a job does not say",
