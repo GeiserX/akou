@@ -215,7 +215,10 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
   };
 }
 
-/** The model ids a job ran, as the engine registry names them (SV-J4). */
+/**
+ * The model ids a job ran, as the engine registry names them (SV-J4): the speaker models only when
+ * they ran, so a job whose labels failed does not name them.
+ */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
   const out = [recognizer, "silero-vad"];
   if (diarize) {
@@ -229,6 +232,24 @@ export function jobModels(recognizer: string, diarize: boolean, diarizer: Diariz
 /** Every id in `jobModels`'s answer for the built engine is in the registry. */
 export function registryKnows(id: string): boolean {
   return MODELS.some((m) => m.id === id);
+}
+
+/** What a client is told about a result that is less than it asked for. */
+export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">): string[] {
+  const { asked, labelled, error } = pass.speakers;
+  if (!asked || labelled || pass.segments.length === 0) return [];
+  return [
+    error === null
+      ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
+      : `speaker labels were asked for and failed: every speaker is null (${error})`,
+  ];
+}
+
+/** The mean of the words' confidences, or null when no word has one. */
+function meanConfidence(words: JobPassResult["words"]): number | null {
+  const cs = words.map((w) => w.c).filter((c): c is number => c !== null);
+  if (cs.length === 0) return null;
+  return Math.round((cs.reduce((a, b) => a + b, 0) / cs.length) * 1000) / 1000;
 }
 
 /** The result of a job (SV-J4). */
@@ -245,12 +266,13 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // No built engine gives word times yet.
-    words: [],
+    words: pass.words,
     segments: pass.segments,
     engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    // Neither words nor segments carry an engine confidence yet.
-    confidence: null,
+    confidence: meanConfidence(pass.words),
+    skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
+    speakers: pass.speakers,
+    warnings: jobWarnings(pass),
     metadata: job.metadata,
   };
 }
@@ -778,6 +800,7 @@ export class JobService {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
     for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
+    this.store.scrubCancelled(before);
     if (n > 0)
       this.o.log(
         "info",
@@ -788,6 +811,11 @@ export class JobService {
 
   // -------------------------------------------------------------------------
   // The feed
+
+  /** The feed's id (SV-E1): a new one means a new jobs.db, whose cursors start at 0 again. */
+  get feedId(): string {
+    return this.store.feedId;
+  }
 
   events(who: Identity, after: number, limit: number): FeedEvent[] {
     return this.store.events(who.scopes.includes("admin") ? null : who.id, after, limit);
@@ -1006,7 +1034,9 @@ export class JobService {
         status: "done",
         result: jobResult(job, pass, {
           version: this.o.version,
-          models: jobModels(recognizer, job.diarize, this.o.diarizer()),
+          // The speaker models are named only when they ran: not after a missing helper or a missed
+          // deadline, nor on a file with no speech for them.
+          models: jobModels(recognizer, pass.diarized, this.o.diarizer()),
         }),
       };
     } catch (err) {
@@ -1027,7 +1057,7 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
-    const e =
+    const r =
       end.status === "done"
         ? this.store.finish(job.id, end, {
             type: "transcription.completed",
@@ -1040,7 +1070,7 @@ export class JobService {
             deliverTo: job.callback_url,
           });
     if (job.audio) rmSync(job.audio, { force: true });
-    if (!e) return;
+    if (!r) return;
     this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
@@ -1049,7 +1079,8 @@ export class JobService {
         : `job.${end.status} ${job.id} key ${job.key_id} model ${job.model ?? job.preset} on ${remote}`,
     );
     this.notify(job.id, end.status);
-    for (const fn of [...this.feedWatchers]) fn(e);
+    const e = r.event;
+    if (e) for (const fn of [...this.feedWatchers]) fn(e);
     if (job.callback_url) this.deliverer.kick();
   }
 
