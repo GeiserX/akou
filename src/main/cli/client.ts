@@ -116,7 +116,13 @@ export class StoppedHung extends Hung {
 
 /** What a program the CLI launches prints, in the config folder. */
 export const LAUNCH_LOG = "launch.log";
-/** At this size `launch.log` becomes `launch.log.1`, replacing the older one. */
+/**
+ * At this size `launch.log` becomes `launch.log.1`, replacing the older one, checked at each
+ * launch only: once the CLI exits, nothing of akou's stands between the launched program and the
+ * file. It stays small because the app logs to `app.log` and echoes nothing to a stderr that is
+ * not a terminal, so `launch.log` holds only what is printed before the app can log (a start that
+ * fails) or instead of it (a crash).
+ */
 export const LAUNCH_LOG_MAX_BYTES = 1024 * 1024;
 
 /** Moves `file` to `file.1` once it reaches `max` bytes. Never throws. */

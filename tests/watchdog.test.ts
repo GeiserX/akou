@@ -230,4 +230,42 @@ describe("[DK-M8] the watchdog inside the app", () => {
     expect(relaunchCommand("/usr/local/bin/bun", "darwin")).toBeNull();
     expect(relaunchCommand("/Applications/akou.app/Contents/MacOS/bun", "linux")).toBeNull();
   });
+  test.skipIf(process.platform === "win32")(
+    "a recording helper spawned after the last beat is never ended, though the live flag still says no call (no process tree on Windows)",
+    async () => {
+      const t = tempDir("akou-wd-");
+      const audio = join(t.dir, "part-1.opus");
+      try {
+        const r = await run(["--block", "30000", "--late-helper", audio], t.dir);
+        expect(await r.exitWithin(SILENCE + 4000)).toBeNull();
+        const log = r.log();
+        expect(log).toMatch(/no call is recording/);
+        expect(log).toMatch(
+          /warn watchdog: a capture helper is recording \(pid \d+\), so akou keeps running/,
+        );
+        expect(log).not.toContain("ending akou");
+        const size = statSync(audio).size;
+        await Bun.sleep(400);
+        expect(statSync(audio).size).toBeGreaterThan(size);
+        r.cleanup();
+      } finally {
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a call that goes live is published at once by touch, not at the next beat",
+    async () => {
+      const r = await run(["--block", "30000", "--touch-recording"]);
+      try {
+        expect(await r.exitWithin(SILENCE + 4000)).toBeNull();
+        expect(r.log()).toMatch(/the app's thread has not answered for \d+ s; a call is recording/);
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
 });

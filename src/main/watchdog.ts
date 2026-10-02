@@ -71,6 +71,8 @@ export function relaunchCommand(
 
 export interface Watchdog {
   stop(): void;
+  /** Publishes the live state now, not at the next beat: a call went live or ended. */
+  touch(): void;
 }
 
 /** The Worker. `workerData`: `{ beats, cfg }`; `beats` is an Int32Array over shared memory. */
@@ -106,16 +108,26 @@ function sample() {
     for (const f of old) rmSync(join(cfg.hangsDir, f), { force: true });
   } catch {}
 }
+// Every process below root, with its arguments.
 function below(root) {
-  const r = spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
-  const rows = (r.stdout || "").split("\n").map((l) => l.trim().split(/\s+/).map(Number)).filter((x) => x.length === 2);
+  const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8" });
+  const rows = [];
+  for (const l of (r.stdout || "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), args: m[3] });
+  }
   const out = [];
   const queue = [root];
   while (queue.length) {
     const p = queue.shift();
-    for (const [pid, ppid] of rows) if (ppid === p && !out.includes(pid)) { out.push(pid); queue.push(pid); }
+    for (const row of rows) if (row.ppid === p && !out.some((o) => o.pid === row.pid)) { out.push(row); queue.push(row.pid); }
   }
   return out;
+}
+// A capture helper that records: started with "run" and "--out FILE" (src/main/cli/heal.ts).
+function records(args) {
+  const words = args.trim().split(/\s+/);
+  return words.includes("run") && words.includes("--out");
 }
 // Opens akou again after it ends, when its window was open, at most once per REOPEN_MS: a person
 // who uses only the window would otherwise see it vanish. The stamp file is what bounds it, so a
@@ -163,8 +175,16 @@ setInterval(() => {
     return;
   }
   if (!cfg.end) return;
+  const rows = process.platform === "win32" ? [] : below(cfg.pid);
+  // The last guard: the flag can lag a start whose helper was spawned after the last beat, but a
+  // recording helper below the app is always there to see. It is never ended.
+  const helper = rows.find((r) => records(r.args));
+  if (helper) {
+    line("warn", "a capture helper is recording (pid " + helper.pid + "), so akou keeps running; kill -KILL " + cfg.pid + " restarts it by hand, the audio so far stays");
+    return;
+  }
   line("warn", "ending akou (pid " + cfg.pid + "), so the next command starts a fresh one");
-  if (process.platform !== "win32") for (const pid of below(cfg.pid)) { try { process.kill(pid, "SIGKILL"); } catch {} }
+  for (const r of rows) { try { process.kill(r.pid, "SIGKILL"); } catch {} }
   // After the helpers go and before akou does: the opener must not be among what is ended.
   reopen();
   try { process.kill(cfg.pid, "SIGKILL"); } catch {}
@@ -174,8 +194,8 @@ setInterval(() => {
 /** Starts the watchdog: the beat on this thread, and the Worker that watches it. */
 export function startWatchdog(o: WatchdogOptions): Watchdog {
   const beats = new Int32Array(new SharedArrayBuffer(12));
-  const beat = () => {
-    Atomics.add(beats, 0, 1);
+  // The live state, published at every beat and by `touch`.
+  const publish = () => {
     let rec = false;
     try {
       rec = o.recording();
@@ -186,6 +206,10 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
       open = o.windowOpen?.() ?? false;
     } catch {}
     Atomics.store(beats, 2, open ? 1 : 0);
+  };
+  const beat = () => {
+    Atomics.add(beats, 0, 1);
+    publish();
   };
   beat();
   const cfg = {
@@ -211,6 +235,10 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
       clearInterval(timer);
       worker.terminate();
       URL.revokeObjectURL(url);
+    },
+    touch() {
+      // The live state only: the beat counter moves on the timer, so a touch never hides a stall.
+      publish();
     },
   };
 }

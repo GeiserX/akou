@@ -244,6 +244,15 @@ import { MAC_PANES, PageServer, type SettingsPane } from "./window/page-server.t
 export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
 
+/** The events after which the watchdog reads the live state again at once (DK-M8). */
+const LIVE_CHANGES: ReadonlySet<string> = new Set([
+  "call.created",
+  "part.started",
+  "part.ended",
+  "call.ended",
+  "call.failed",
+]);
+
 /** The call events `app.log` names, by id only, with the words it uses (DK-M8). */
 const LOGGED_EVENTS: Partial<Record<LogEvent["type"], string>> = {
   "call.created": "started",
@@ -547,6 +556,8 @@ export class AkouApp implements ApiApp {
   /** `app.log` (DK-M8), when the entry point asked for it. */
   private readonly appLog: AppLog | null;
   private watchdog: Watchdog | null = null;
+  /** Starts under way, which the watchdog counts as recording from before the helper spawns. */
+  private starting = 0;
   server: ApiServer | null = null;
   window: WindowShell | null = null;
   asr: LiveAsr | null = null;
@@ -1189,7 +1200,9 @@ export class AkouApp implements ApiApp {
   private log(level: "info" | "warn" | "error", msg: string): void {
     this.appLog?.line(level, msg);
     if (this.o.onLog) this.o.onLog(level, msg);
-    else console.error(`akou ${level}: ${msg}`);
+    // With app.log on, a line goes to the terminal only when there is one: launched by the CLI,
+    // stderr is `launch.log`, which the CLI rotates only at a launch and must not grow for days.
+    else if (!this.appLog || process.stderr.isTTY) console.error(`akou ${level}: ${msg}`);
   }
 
   /**
@@ -1286,6 +1299,8 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // The watchdog learns at once that a call went live or ended, not at the next beat (DK-M8).
+    if (LIVE_CHANGES.has(e.type)) this.watchdog?.touch();
     // `app.log` (DK-M8): what happened to which call, by id only.
     const happened = LOGGED_EVENTS[e.type];
     if (happened && this.appLog) this.appLog.line("info", `call ${id}: ${happened}`);
@@ -2201,7 +2216,15 @@ export class AkouApp implements ApiApp {
     await this.loadVocab(ws);
     // The call's own live setup rides on its controller (`liveAsked`), never a shared slot: a
     // concurrent start that is refused cannot touch the call that is starting.
-    return this.manager.start(req);
+    // The watchdog counts the start as a recording before the helper is spawned (DK-M8).
+    this.starting++;
+    this.watchdog?.touch();
+    try {
+      return await this.manager.start(req);
+    } finally {
+      this.starting--;
+      this.watchdog?.touch();
+    }
   }
 
   async call(id: string): Promise<CallController> {
@@ -3607,7 +3630,9 @@ export class AkouApp implements ApiApp {
     this.watchdog = startWatchdog({
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
-      recording: () => this.manager.live() !== null,
+      // A start counts from before its helper is spawned, so a stall in between never reads as
+      // "no call is recording" (`starting`); every live change is published at once (`touch`).
+      recording: () => this.starting > 0 || this.manager.live() !== null,
       windowOpen: () => this.window?.isOpen?.() ?? false,
       relaunch: relaunchCommand(),
     });

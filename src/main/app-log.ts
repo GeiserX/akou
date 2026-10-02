@@ -50,12 +50,14 @@ export class AppLog {
           this.size = 0;
         }
       }
-      if (this.size > 0 && this.size + text.length > this.maxBytes) {
+      // Bytes, not characters: a path or a name with accents is longer on disk than in text.
+      const bytes = Buffer.byteLength(text);
+      if (this.size > 0 && this.size + bytes > this.maxBytes) {
         renameSync(this.file, `${this.file}.1`);
         this.size = 0;
       }
       appendFileSync(this.file, text, { mode: 0o600 });
-      this.size += Buffer.byteLength(text);
+      this.size += bytes;
     } catch {
       // Measure again next time: another writer (the watchdog) may have rotated or removed it.
       this.size = null;

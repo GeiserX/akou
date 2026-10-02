@@ -4,42 +4,61 @@
  * child that stands in for a helper, prints `ready`, then does what the arguments say.
  *
  *   bun tests/fixtures/watchdog-app.ts LOG HANGS --silence MS [--recording] [--no-watchdog]
- *     [--sample] [--window --reopen MARKER] (--block MS | --busy MS)
+ *     [--sample] [--window --reopen MARKER] [--late-helper FILE | --touch-recording]
+ *     (--block MS | --busy MS)
  *
  * `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
  * silence, for MS, then exits 0. `--window` says the window is open; `--reopen MARKER` is what
- * opens the app again: a process that writes MARKER.
+ * opens the app again: a process that writes MARKER. Just before the thread blocks,
+ * `--late-helper FILE` spawns a helper that records into FILE (`run --out FILE`) with the live
+ * flag still false, as a start whose helper comes after the last beat; `--touch-recording` turns
+ * the flag on and publishes it with `touch`, as the app does when a call goes live.
  */
 
 import { spawn } from "node:child_process";
+import { join } from "node:path";
 import { startWatchdog } from "../../src/main/watchdog.ts";
 
 const [logFile, hangsDir] = process.argv.slice(2) as [string, string];
 const num = (flag: string) => Number(process.argv[process.argv.indexOf(flag) + 1]);
 const has = (flag: string) => process.argv.includes(flag);
-if (!has("--no-watchdog")) {
-  startWatchdog({
-    logFile,
-    hangsDir,
-    recording: () => has("--recording"),
-    sample: has("--sample"),
-    silenceMs: num("--silence"),
-    tickMs: 100,
-    beatMs: 100,
-    windowOpen: () => has("--window"),
-    relaunch: has("--reopen")
-      ? [
-          process.execPath,
-          "-e",
-          `require("node:fs").appendFileSync(${JSON.stringify(process.argv[process.argv.indexOf("--reopen") + 1])}, "x")`,
-        ]
-      : null,
-  });
-}
+let live = has("--recording");
+const wd = has("--no-watchdog")
+  ? null
+  : startWatchdog({
+      logFile,
+      hangsDir,
+      recording: () => live,
+      sample: has("--sample"),
+      silenceMs: num("--silence"),
+      tickMs: 100,
+      beatMs: 100,
+      windowOpen: () => has("--window"),
+      relaunch: has("--reopen")
+        ? [
+            process.execPath,
+            "-e",
+            `require("node:fs").appendFileSync(${JSON.stringify(process.argv[process.argv.indexOf("--reopen") + 1])}, "x")`,
+          ]
+        : null,
+    });
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 process.stdout.write(`child ${child.pid}\nready\n`);
 if (has("--block")) {
   setTimeout(() => {
+    if (has("--late-helper")) {
+      const out = process.argv[process.argv.indexOf("--late-helper") + 1] as string;
+      const h = spawn(
+        process.execPath,
+        [join(import.meta.dir, "growing-helper.ts"), "run", "--out", out],
+        { stdio: "ignore" },
+      );
+      process.stdout.write(`helper ${h.pid}\n`);
+    }
+    if (has("--touch-recording")) {
+      live = true;
+      wd?.touch();
+    }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, num("--block"));
     process.stdout.write("unblocked\n");
   }, 300);
