@@ -686,7 +686,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab/import",
     doc({
       id: "vocab.import",
-      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word with more than 50 heard forms keeps its first 50 and is listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word over the file's limits (50 heard forms, each at most 100 characters; a note of 1000) is imported within them and listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
       body: { text: "string", "workspace?": "string", "scope?": "string" },
       ok: 200,
     }),

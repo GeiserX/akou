@@ -330,6 +330,8 @@ export function isInflectionOf(word: string, term: string): boolean {
     if (!word.endsWith(end)) continue;
     const stem = word.slice(0, -end.length);
     if (stem === term) return true;
+    // The dropped e and the doubled letter come only before a vowel: `coded` for `code`, never `cods`.
+    if (end.startsWith("s")) continue;
     if (term.endsWith("e") && stem === term.slice(0, -1)) return true;
     if (stem.length === term.length + 1 && stem.startsWith(term) && stem.at(-1) === term.at(-1))
       return true;

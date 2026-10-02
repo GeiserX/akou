@@ -560,9 +560,10 @@ const BANNER = /^===.*===$/;
  * a plain list of one name per line. A line marked `CAUTION` or `do not auto` imports with
  * `decode: false` and no heard forms: the old list said not to apply it automatically. A variant
  * marked `(ctx)` (right only where it was heard) or `(refused)` is left out. Blank lines, `#`
- * comments and `=== ... ===` banners are skipped. An entry with more than `MAX_HEARD` forms keeps
- * the first ones and is listed in `skipped`. The user asked for the import, so entries are
- * confirmed.
+ * comments and `=== ... ===` banners are skipped. An entry over the file's limits is imported
+ * within them and listed in `skipped`: a heard form over `MAX_TERM_LENGTH` is left out, only the
+ * first `MAX_HEARD` forms are kept, and a note is cut to `MAX_NOTE_LENGTH`. The user asked for the
+ * import, so entries are confirmed.
  */
 export function importGlossary(
   text: string,
@@ -616,14 +617,32 @@ export function importGlossary(
     lineOf.set(entry, { line: i + 1, text: rawLine });
     entries.push(entry);
   });
+  // The file's own limits, met here so a long list imports what fits instead of failing whole.
+  const chars = (s: string) => [...s].length;
   for (const e of entries) {
-    if (e.heard.length <= MAX_HEARD) continue;
     const at = lineOf.get(e) as { line: number; text: string };
-    skipped.push({
-      ...at,
-      reason: `"${e.term}" has ${e.heard.length} heard forms; kept the first ${MAX_HEARD}`,
-    });
-    e.heard = e.heard.slice(0, MAX_HEARD);
+    const long = e.heard.filter((h) => chars(h) > MAX_TERM_LENGTH).length;
+    if (long > 0) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}": left out ${long} heard ${long === 1 ? "form" : "forms"} over ${MAX_TERM_LENGTH} characters`,
+      });
+      e.heard = e.heard.filter((h) => chars(h) <= MAX_TERM_LENGTH);
+    }
+    if (e.heard.length > MAX_HEARD) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}" has ${e.heard.length} heard forms; kept the first ${MAX_HEARD}`,
+      });
+      e.heard = e.heard.slice(0, MAX_HEARD);
+    }
+    if (e.note !== undefined && chars(e.note) > MAX_NOTE_LENGTH) {
+      skipped.push({
+        ...at,
+        reason: `"${e.term}": its note was cut to ${MAX_NOTE_LENGTH} characters`,
+      });
+      e.note = [...e.note].slice(0, MAX_NOTE_LENGTH).join("");
+    }
   }
   return { entries, skipped };
 }

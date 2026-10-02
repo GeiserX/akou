@@ -369,10 +369,12 @@ describe("following and questioning", () => {
       expect((await run(["vocab", "remove", "Kubernetes", "-w", "work"])).code).toBe(0);
       expect((await run(["vocab", "check", "Hetzner"])).code).toBe(EXIT.unavailable);
       const imp = join(wavDir.dir, "glossary.txt");
-      writeFileSync(imp, "Anika\nVercel\n");
+      writeFileSync(imp, `Anika\nVercel\n${"x".repeat(101)}\n`);
       const imported = await run(["vocab", "import", imp, "-w", "work"]);
       expect(imported.code).toBe(0);
       expect(imported.out).toMatch(/^Imported 2 into /);
+      // Each line left out is named with its reason, not only counted.
+      expect(imported.out).toContain("\n  line 3: a term is at most 100 characters");
       expect((await run(["vocab"])).code).toBe(EXIT.usage);
       await stopAll();
     },

@@ -252,6 +252,11 @@ describe("read-time correction (DESIGN 5.4)", () => {
     expect(isInflectionOf("sandboxes", "sandbox")).toBe(true);
     expect(isInflectionOf("sandboxy", "sandbox")).toBe(false);
     expect(isInflectionOf("annelise", "anneliese")).toBe(false);
+    // A plain -s never drops an e or doubles a letter, so these stay mishearings to correct.
+    expect(isInflectionOf("anns", "anne")).toBe(false);
+    expect(isInflectionOf("sandboxxs", "sandbox")).toBe(false);
+    const steve: VocabRule = { term: "Steve", heard: [], scope: "name" };
+    expect(correctText("ask stevs", [steve], opts).text).toBe("ask Steve");
   });
 
   test("fuzzy: speaker names are matched too", () => {
