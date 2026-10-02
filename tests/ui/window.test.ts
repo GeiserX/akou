@@ -1642,13 +1642,13 @@ describe("playback and Fix this line", () => {
           await page.hover('#lines .row[data-id="l000003"]');
           await page.click('#lines .row[data-id="l000003"] .play');
           await until(async () => (await player()).at > 0.3, 8000, "the line playing");
-          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Pause");
           // Space, with focus still on the row's Play button, pauses: it does not restart the line.
           await page.keyboard.press("Space");
           const paused = await player();
           expect(paused.paused).toBe(true);
           expect(paused.at).toBeGreaterThan(0.3);
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           await page.waitForTimeout(400);
           expect((await player()).at).toBe(paused.at);
           await page.keyboard.press("Space");
@@ -1713,7 +1713,7 @@ describe("playback and Fix this line", () => {
             5000,
             "the player cleared",
           );
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
           await page.click("#scroller");
           await page.keyboard.press("Space");
@@ -2099,7 +2099,7 @@ describe("copy the transcript so far (W12.2)", () => {
 
 describe("the share viewer (DESIGN 8.3)", () => {
   test(
-    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to live, + and -, the offset tooltip",
+    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to the end, + and -, the offset tooltip",
     async () => {
       let id = "";
       await withRig(
@@ -2124,6 +2124,8 @@ describe("the share viewer (DESIGN 8.3)", () => {
             s.scrollTop = 0;
           });
           await viewer.waitForSelector("#jump", { state: "visible" });
+          // The shared call has ended: nothing is live, so the button does not say so.
+          expect(await viewer.textContent("#jump")).toBe("↓ Back to the end");
           const top = () =>
             viewer.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
           await rig.write(id, seg("l000061", "a brand new line", { w0: T0 + 61 * 4000 }));
@@ -2141,7 +2143,7 @@ describe("the share viewer (DESIGN 8.3)", () => {
           );
           await Bun.sleep(300);
           expect(await top()).toBeLessThan(10);
-          // Back to live, then pinned again.
+          // Back to the end, then pinned again.
           await viewer.click("#jump");
           await until(async () => (await gapOf(viewer)) < 2, 3000, "back at the bottom");
           await viewer.waitForSelector("#jump", { state: "hidden" });

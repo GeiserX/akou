@@ -18,7 +18,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
-import { DictationService } from "../src/main/dictation/service.ts";
+import { DictationService, type DictationServiceOptions } from "../src/main/dictation/service.ts";
 import { DEFAULT_INSERT, type DictationEngine } from "../src/main/dictation/session.ts";
 import { FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -44,7 +44,7 @@ const jsonLines = (path: string): Record<string, unknown>[] =>
         .map((l) => JSON.parse(l))
     : [];
 
-function fastEngine(): DictationEngine {
+function fakeAsr(): LiveAsr {
   const asr = new LiveAsr(
     {
       models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
@@ -53,6 +53,11 @@ function fastEngine(): DictationEngine {
     () => undefined,
   );
   cleanups.push(() => asr.close());
+  return asr;
+}
+
+function fastEngine(): DictationEngine {
+  const asr = fakeAsr();
   return { name: "fast", decode: (s, o) => asr.decode(s, o) };
 }
 
@@ -94,12 +99,16 @@ function rig(
   return rigWith(bin, keys, tree);
 }
 
-/** `rig` with Enter as `dictation.sendKey`, as the settings' default (DC-S2). */
+/**
+ * `rig` with Enter as `dictation.sendKey`, as the settings' default (DC-S2); `more` adds helper
+ * switches and service options.
+ */
 function rigWith(
   bin: string,
   keys: [number, string, boolean][],
   tree: [number, Record<string, unknown>][] = [[0, NOTES]],
   sendKey: "Enter" | "none" = "none",
+  more: { args?: string[]; options?: Partial<DictationServiceOptions> } = {},
 ): Rig {
   const t = tempDir("akou-dict-helper-");
   cleanups.push(t.cleanup);
@@ -124,6 +133,7 @@ function rigWith(
     now: () => Date.now(),
     onLog: (level, msg) => said.push(`${level}: ${msg}`),
     insert: () => ({ ...DEFAULT_INSERT, sendKey }),
+    ...more.options,
   });
   cleanups.push(() => svc.close());
   svc.start(
@@ -143,6 +153,7 @@ function rigWith(
       "fake",
       "--inserter",
       `fake:${inserter}`,
+      ...(more.args ?? []),
     ],
     () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
   );
@@ -306,6 +317,52 @@ if (!BIN) {
         await waitFor(r, () => r.svc.log.items()[0]?.state === "drafted", "the draft");
         expect(opened).toMatchObject([{ focus: true }]);
         expect(jsonLines(r.inserter).some((e) => e.type === "publish")).toBe(false);
+      },
+      SLOW,
+    );
+
+    /**
+     * DC-A3 over the helper's `latched`: the press comes at 2 s, so "world" (from 2.2 s) is all it
+     * hears, then silence to the end of the timeline at 10 s (an idle key-up at 9 s holds it
+     * open). Paced in real time, so the app's `session.stop` lands while the helper still runs,
+     * and the app's `rebind`, which drops a press still pending, lands before the press.
+     */
+    const silenceStop = (keys: [number, string, boolean][]) => {
+      const vad = fakeAsr();
+      return rigWith(bin, [...keys, [9000, "F13", false]], [[0, NOTES]], "none", {
+        args: ["--speed", "1"],
+        options: {
+          speech: (x) => vad.speech(x),
+          autoStop: () => ({ silenceSeconds: 3, maxMinutes: 20 }),
+        },
+      });
+    };
+
+    test(
+      "a tapped key session with silenceStopSeconds 3 ends as silence (DC-A3)",
+      async () => {
+        const r = silenceStop([
+          [2000, RC, true],
+          [2120, RC, false],
+        ]);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        const ended = r.svc.log.events().find((e) => e.type === "dictation.ended");
+        expect(ended).toMatchObject({ reason: "silence" });
+        expect(r.svc.log.items()[0]).toMatchObject({ text: "world" });
+      },
+      SLOW,
+    );
+
+    test(
+      "positive control: the same silence in a push-to-talk hold never stops it",
+      async () => {
+        const r = silenceStop([
+          [2000, RC, true],
+          [8500, RC, false],
+        ]);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        const ended = r.svc.log.events().find((e) => e.type === "dictation.ended");
+        expect(ended).toMatchObject({ reason: "release" });
       },
       SLOW,
     );
