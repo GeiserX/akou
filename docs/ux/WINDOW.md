@@ -64,7 +64,7 @@ Columns:
 | Player bar | under the transcript, only for a saved call with a recorded part (never with no call or during a live call): play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | the call's words to review, share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
-Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, so the transcript keeps at least half the window. A page of the sidebar (Settings, Models, Dictation) has no side column, so there the sidebar keeps its full 13.75 rem. The calls column collapsing under 900 px and the side column becoming a drawer under 640 px are W1.3, not built.
+Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, so the transcript keeps at least half the window. A page of the sidebar (Settings, Models, Dictation) has no side column, so there the sidebar keeps its full 13.75 rem down to 900 px wide; under that it narrows to 10 rem too, so the page keeps its room. The calls column collapsing under 900 px and the side column becoming a drawer under 640 px are W1.3, not built.
 
 On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row, the ask row and a page's header start 28 px down; a page keeps that strip at its top as it scrolls. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
 
