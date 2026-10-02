@@ -159,7 +159,8 @@ describe("SV-U7: the server-mode page", () => {
       await page.click(`#jobs-table tr[data-id="${id}"] button.cancel`);
       expect((await waiting).body.status).toBe("cancelled");
       await until(
-        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 404,
+        // A cancel from the dashboard deletes the job: its id answers 410 gone from then on.
+        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 410,
         3000,
         "the job to be gone",
       );
