@@ -32,6 +32,8 @@ import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
 import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "../asr/nemotron.ts";
+import { findHelper } from "../capture/helper.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
 import { readUploadAudio } from "./audio.ts";
 import {
@@ -169,6 +171,18 @@ export interface JobServiceOptions {
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
   now?: () => number;
   log(level: "info" | "warn" | "error", msg: string): void;
+}
+
+/**
+ * Why a job that asks for speaker labels cannot have them, or null when it can: Nemotron runs in
+ * the `akou-diarize` helper, which the app carries but a source checkout does not. Without it the
+ * labels would be lost in silence, so the job fails and says what to do.
+ */
+export function diarizeHelperMissing(spec: ModelSpec): string | null {
+  if (spec.kind !== "sherpa" || (spec.diarizer ?? "nemotron") !== "nemotron") return null;
+  const helper = findHelper(spec.diarizeHelper ?? [], undefined, { name: DIARIZE_HELPER_NAME });
+  if (helper.found) return null;
+  return `speaker labels need the ${DIARIZE_HELPER_NAME} helper, and ${helper.command[0]} is not there: put it on PATH or set asr.diarizeHelper to it (docs/server.md says where to get it), set asr.diarizer to embeddings, or send the job without diarize`;
 }
 
 /** A job as a client sees it (SV-J3), with the download it waits on while queued (SV-M1). */
@@ -953,6 +967,8 @@ export class JobService {
           new Error("the speech models are not downloaded; run `akou models pull`"),
           { code: "models_missing" },
         );
+      const helperless = job.diarize ? diarizeHelperMissing(spec) : null;
+      if (helperless) throw Object.assign(new Error(helperless), { code: "diarize_unavailable" });
       let samples: Float32Array;
       try {
         const maxSamples = this.o.maxAudioMinutes() * 60 * ASR_RATE;
