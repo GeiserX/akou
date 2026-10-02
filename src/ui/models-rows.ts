@@ -93,6 +93,26 @@ export function modelName(r: Pick<ModelRow, "id" | "job"> & { name?: string | nu
   return r.id;
 }
 
+/** What `GET /server` lists that a job may name. */
+export interface JobModels {
+  presets?: readonly { name: string }[];
+  engines?: readonly { id: string }[];
+}
+
+/**
+ * The choices of a setting that names the model a job runs (`server.default_model`,
+ * `server.dictation_engine`, SV-S1): Automatic for `auto`, each preset by its name, each engine by
+ * its model's name, never a raw catalog id where the page has a name for it.
+ */
+export function jobModelChoices(s: JobModels): [value: string, label: string][] {
+  const out = new Map<string, string>([["auto", "Automatic"]]);
+  for (const p of s.presets ?? [])
+    if (!out.has(p.name)) out.set(p.name, p.name.charAt(0).toUpperCase() + p.name.slice(1));
+  for (const e of s.engines ?? [])
+    if (!out.has(e.id)) out.set(e.id, modelName({ id: e.id, job: "" }));
+  return [...out];
+}
+
 /** A live model's name on the page: Automatic, or the model's own name (`Nemotron 3.5`). */
 export function liveName(id: string, title = id): string {
   return id === "auto" ? "Automatic" : title;
@@ -185,6 +205,14 @@ export function autoHelp(v: LiveView, here: string): string {
 }
 
 /** The After the call row's facts: what it does, its accuracy, and how fast. */
+/** The Automatic row of the Jobs section: what `auto` runs here now and why, when the server says. */
+export function autoJobsHelp(auto: { preset: string; reason: string } | null): string {
+  const base = "Chosen for each job by what this server has.";
+  if (!auto) return base;
+  const name = auto.preset.charAt(0).toUpperCase() + auto.preset.slice(1);
+  return `${base} Now ${name}: ${auto.reason}`;
+}
+
 export function afterCallHelp(r: ModelRow, here: string): string {
   return [
     "Writes the accurate transcript when a call ends.",

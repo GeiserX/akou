@@ -204,13 +204,18 @@ export function readHarkViewerFolder(dir: string): HvFolder {
 
   // The accurate pass counts only when it finished.
   const status = readJson(join(dir, "postprocess.json")) as Record<string, unknown> | null;
-  const steps = (status?.steps ?? {}) as Record<string, Record<string, unknown> | undefined>;
-  const finalStep = steps.final;
+  const steps = (status?.steps ?? {}) as Record<string, unknown>;
+  // A step that is not an object (null, a number) reads as no step at all.
+  const asStep = (v: unknown) =>
+    typeof v === "object" && v !== null && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : undefined;
+  const finalStep = asStep(steps.final);
   const finalPath = join(dir, "transcript.final.json");
   const finalOk =
     existsSync(finalPath) &&
     (status === null || finalStep === undefined || finalStep.state === "done");
-  const langStep = steps.languages;
+  const langStep = asStep(steps.languages);
   const verdict =
     langStep?.state === "done" ? (langStep.languages as Record<string, unknown>) : null;
   const present = Array.isArray(verdict?.present)
