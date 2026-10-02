@@ -42,6 +42,9 @@
       "name": "calls"
     },
     {
+      "name": "devices"
+    },
+    {
       "name": "workspaces"
     },
     {
@@ -1670,6 +1673,101 @@
           },
           "503": {
             "$ref": "#/components/responses/503.capture_failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "operationId": "devices.list",
+        "tags": [
+          "devices"
+        ],
+        "description": "The microphones and outputs the capture helper sees, each with `id`, `name` and `default`. An input's `id` is what calls.start takes as `mic`. Opens no stream and asks for no permission. 503 `devices_unavailable` when the helper cannot list them (file-only mode, no audio service), never an empty list.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/apps": {
+      "get": {
+        "operationId": "devices.apps",
+        "tags": [
+          "devices"
+        ],
+        "description": "The apps with audio the capture helper sees, each with `id`, `name` and `pid`. An app's `id` is what calls.start takes as `call: \"app:<id>\"` to record that app alone. 501 `apps_unavailable` where one app cannot be captured (Linux, an older Windows), with the reason; 503 `devices_unavailable` when the helper cannot list at all.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "501": {
+            "$ref": "#/components/responses/501.apps_unavailable"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -9067,6 +9165,29 @@
           }
         }
       },
+      "501.apps_unavailable": {
+        "description": "Not implemented",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "apps_unavailable"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "501.final_unavailable": {
         "description": "Not implemented",
         "content": {
@@ -9152,6 +9273,29 @@
                         "capture_failed",
                         "models_missing",
                         "quitting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.devices_unavailable": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "devices_unavailable"
                       ]
                     }
                   }
@@ -9285,6 +9429,10 @@
             "description": "A call is already recording; `already_recording` names it."
           },
           {
+            "const": "apps_unavailable",
+            "description": "One app cannot be captured on this system; the message says why."
+          },
+          {
             "const": "bad_bind",
             "description": "The share's `bind` is not `tailnet`, `lan` or an IPv4 address."
           },
@@ -9379,6 +9527,10 @@
           {
             "const": "decode_failed",
             "description": "The audio could not be decoded."
+          },
+          {
+            "const": "devices_unavailable",
+            "description": "The capture helper cannot list the devices; `helper` says why."
           },
           {
             "const": "dictation_busy",

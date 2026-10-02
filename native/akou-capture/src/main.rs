@@ -12,8 +12,10 @@
 //! ```
 //!
 //! `devices` prints one JSON line on stdout, `{"type":"devices","backend",…,"inputs":[{id,name,
-//! default}],"outputs":[…]}`: what the OS lists, read without opening a stream or asking for a
-//! permission. The ids are what `--mic <id>` takes.
+//! default}],"outputs":[…],"apps":[{id,name,pid}]}`: what the OS lists, read without opening a
+//! stream or asking for a permission. The input ids are what `--mic <id>` takes, the app ids what
+//! `--call app:<id>` takes; where one app cannot be captured, `apps` is replaced by
+//! `"apps_unavailable": "<why>"`.
 //!
 //! `decode` reads a part's Ogg Opus file back for the app's final pass (SV-P10): stereo little-endian
 //! f32 at 16 kHz on stdout, mic then call per frame, from frame `--from` for `--frames` frames (to

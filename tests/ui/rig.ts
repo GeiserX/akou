@@ -485,7 +485,7 @@ export async function dictationFixture(
     grants?: DictationGrants | null;
     /** The OS `GET /status` reports, so a test runs as macOS on any machine. */
     platform?: string;
-    /** `GET /devices`: its inputs, or a refusal; left out, the app answers (404 until PG-A8). */
+    /** `GET /devices`: its inputs, or a refusal; left out, the app answers from its helper. */
     devices?: DevicesFixture;
   } = {},
 ): Promise<DictationFixture> {

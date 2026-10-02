@@ -94,6 +94,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_export: { call: "last" },
   akou_dictation_list: {},
   akou_dictation_get: { id: "d1" },
+  akou_devices: {},
 };
 
 /**
@@ -251,6 +252,19 @@ export function sampleApi(n = 3): ApiClient {
       model: "fake",
       ms: 12,
     });
+    // A machine has a handful of devices, however long its calls are.
+    if (path === "/devices") {
+      return {
+        backend: "fake",
+        inputs: [
+          { id: "mic-1", name: "Built-in Microphone", default: true },
+          { id: "mic-2", name: "Desk Mic", default: false },
+        ],
+        outputs: [{ id: "out-1", name: "Speakers", default: true }],
+      };
+    }
+    if (path === "/apps")
+      return { backend: "fake", apps: [{ id: "us.zoom.xos", name: "zoom", pid: 3 }] };
     if (path === "/dictations") {
       return { items: Array.from({ length: n }, (_, i) => dictation(i)), next_cursor: null };
     }

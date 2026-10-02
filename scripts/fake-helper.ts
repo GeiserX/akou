@@ -125,6 +125,12 @@
  * the session did in real time.
  *
  * A remote that times out is the remote's trap, not the helper's: lane D's server rig has it.
+ *
+ * `devices` prints the device list of `akou-capture devices` (`FAKE_DEVICES`): two inputs, an
+ * output and two apps, or with `--no-apps` an `apps_unavailable` reason as on Linux.
+ * `AKOU_CAPTURE_FILE_ONLY=1` refuses it as the real helper does. `run` reads the same list: a
+ * `--mic` id names its input in `capturing` (an unknown one falls back to the default, as the real
+ * helper does), and `--call app:<id>` with no app of that id exits 66 `no running app matches`.
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -186,6 +192,34 @@ function slice(x: Float32Array, start: number, n: number): Float32Array {
 
 const stdout = Bun.stdout.writer();
 const say = (o: Record<string, unknown>) => process.stderr.write(`${JSON.stringify(o)}\n`);
+
+/** What the fake `devices` lists, and what `run` resolves `--mic` and `--call app:` against. */
+const FAKE_DEVICES = {
+  type: "devices",
+  backend: "fake",
+  inputs: [
+    { id: "fake-mic-1", name: "Fake Microphone", default: true },
+    { id: "fake-usb-2", name: "Fake USB Microphone", default: false },
+  ],
+  outputs: [{ id: "fake-out-1", name: "Fake Speakers", default: true }],
+  apps: [
+    { id: "com.example.call", name: "Example Call", pid: 4242 },
+    { id: "com.example.music", name: "Example Music", pid: 4343 },
+  ],
+};
+
+function runDevices(): never {
+  if (process.env.AKOU_CAPTURE_FILE_ONLY === "1") {
+    say({ type: "warn", code: "file-only", msg: "AKOU_CAPTURE_FILE_ONLY=1 refuses device access" });
+    process.exit(EXIT.unavailable);
+  }
+  const { apps, ...rest } = FAKE_DEVICES;
+  const line = flag("--no-apps")
+    ? { ...rest, apps_unavailable: "capturing one app is not available on this fake" }
+    : FAKE_DEVICES;
+  process.stdout.write(`${JSON.stringify(line)}\n`);
+  process.exit(EXIT.ok);
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
 const hostNs = () => process.hrtime.bigint();
 
@@ -277,12 +311,25 @@ async function runAkou(): Promise<void> {
     });
     process.exit(exitCode);
   }
+  if (callMode.startsWith("app:")) {
+    const missing = callMode
+      .slice(4)
+      .split(",")
+      .find((id) => !FAKE_DEVICES.apps.some((a) => a.id.toLowerCase() === id.trim().toLowerCase()));
+    if (missing !== undefined) {
+      say({ type: "warn", code: "no-device", msg: `no running app matches ${missing}` });
+      process.exit(EXIT.noDevice);
+    }
+  }
   if (stopRequested && !flag("--hang-on-stop")) finish("stop");
   if (out) writeFileSync(out, "");
   const anchor = hostNs();
+  const input =
+    FAKE_DEVICES.inputs.find((d) => d.id === micMode) ??
+    (FAKE_DEVICES.inputs[0] as (typeof FAKE_DEVICES.inputs)[number]);
   say({
     type: "capturing",
-    mic: micMode === "none" ? null : { id: micMode, name: "Fake Microphone", rate: 48000 },
+    mic: micMode === "none" ? null : { id: micMode, name: input.name, rate: 48000 },
     call: callMode === "none" ? null : { mode: callMode, rate: 48000 },
     exclude: ["akou Graphics and Media"],
     capture_ns: anchor.toString(),
@@ -788,7 +835,9 @@ function axRefusal(cap: Target, now: Target): string | null {
   return null;
 }
 
-if (argv.includes("dictate")) {
+if (argv.includes("devices")) {
+  runDevices();
+} else if (argv.includes("dictate")) {
   await runDictate();
 } else {
   // Switches may come before `run` too, so a configured command prefix (`capture.helper`) can

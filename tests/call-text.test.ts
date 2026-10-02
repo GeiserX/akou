@@ -281,6 +281,7 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_rename_call: "the call id and the title the agent gave",
   akou_list_calls: "titles, dates and states, no content",
   akou_export: "file paths",
+  akou_devices: "device and app names the OS reports",
 };
 
 describe("[PG-Z1] every MCP answer that carries call text quotes it", () => {
