@@ -73,6 +73,10 @@ pub struct Dictate {
     next_id: u64,
     /// The live session: its id and what it saw at key-down.
     live: Option<(String, Captured)>,
+    /// The live session's `session.started` went out, and it latched (DC-A3): `latched` is said
+    /// once both are true, so the app always knows the id it names.
+    live_said: bool,
+    live_latched: bool,
     /// The last ended session, whose text the app inserts next.
     last: Option<(String, Captured)>,
     /// The Accessibility grant as `ready` reported it, until `grant.lost`.
@@ -107,6 +111,8 @@ impl Dictate {
             inserter,
             next_id: 1,
             live: None,
+            live_said: false,
+            live_latched: false,
             last: None,
             accessibility: "not-needed".into(),
             secure_on: false,
@@ -568,15 +574,32 @@ impl Dictate {
                         secure_input: self.targets.secure_input(),
                     };
                     self.live = Some((id, cap));
+                    self.live_said = false;
+                    self.live_latched = false;
                     self.mic.start(at, &mut ev);
                     self.media_pause();
                 }
                 Note::Act(Action::End { reason }) => self.mic.end(t_ns, reason, &mut ev),
                 Note::Act(Action::Key(name)) => out.line(p::key(&name)),
+                Note::Act(Action::Latched) => {
+                    self.live_latched = true;
+                    self.say_latched(out);
+                }
                 Note::Commit => self.finish_watch(out),
                 Note::Disabled => self.recheck_grant(out),
             }
             self.mic_events(ev, out);
+        }
+    }
+
+    /// `latched {id}` once the live session has both latched and said `session.started`.
+    fn say_latched(&mut self, out: &mut dyn Out) {
+        if let Some((id, _)) = &self.live
+            && self.live_said
+            && self.live_latched
+        {
+            out.line(p::latched(id));
+            self.live_latched = false;
         }
     }
 
@@ -592,6 +615,8 @@ impl Dictate {
                             capture_ns,
                             self.device.as_ref(),
                         ));
+                        self.live_said = true;
+                        self.say_latched(out);
                     }
                 }
                 MicEvent::Audio {
@@ -715,7 +740,7 @@ mod tests {
         assert!(!d.key(true, "Escape", 1600 * MS, &mut out));
         assert!(!d.key(false, "Escape", 1610 * MS, &mut out));
         run(&mut d, &mut out, 1610, 2000);
-        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
         d.key(true, "RightCommand", 2000 * MS, &mut out);
         d.key(false, "RightCommand", 2100 * MS, &mut out);
         run(&mut d, &mut out, 2100, 2500);
@@ -847,6 +872,40 @@ mod tests {
         assert_eq!(
             out.lines.last().unwrap(),
             r#"{"type":"inserted","id":"1","method":"clipboard","receipt_ms":0,"reason":"secure"}"#
+        );
+    }
+
+    /// DC-A3: a tapped session says `latched` with its id right after `session.started`, and so
+    /// does the door's start; the hold of the test above says no such line.
+    #[test]
+    fn dc_a3_a_tap_or_the_door_says_latched_after_session_started() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        run(&mut d, &mut out, 1000, 1100);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 1500);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l == r#"{"type":"latched","id":"1"}"#)
+        );
+        d.key(true, "RightCommand", 1500 * MS, &mut out);
+        d.key(false, "RightCommand", 1600 * MS, &mut out);
+        run(&mut d, &mut out, 1600, 2000);
+        d.command(Command::Settled { id: "1".into() }, 2000 * MS, &mut out);
+        d.command(Command::SessionStart, 2000 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2200);
+        let after: Vec<String> = types(&out).into_iter().skip(5).collect();
+        assert_eq!(after, ["session.started", "latched"], "{:?}", out.lines);
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l == r#"{"type":"latched","id":"2"}"#)
         );
     }
 
@@ -1166,7 +1225,7 @@ mod tests {
             !d.tap_started("simulate", "granted", &mut out),
             "a session is live"
         );
-        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        assert_eq!(types(&out), ["ready", "mic", "session.started", "latched"]);
         d.key(true, "RightCommand", 1500 * MS, &mut out);
         d.key(false, "RightCommand", 1600 * MS, &mut out);
         run(&mut d, &mut out, 1600, 2000);

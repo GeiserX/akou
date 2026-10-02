@@ -8,8 +8,8 @@
  * server that never transcribes. `best` is Qwen3-ASR-1.7B, the llama-server build that runs it on
  * this machine (none when `asr.llamaServer` names an own one), and the same VAD and speaker models,
  * without Parakeet. `lite` and `fusion` wait for their engines and say so instead of pulling
- * something else. `auto` resolves to `fast` until hardware detection (SV-R2) can pick `best` on a
- * GPU or `lite` on a small arm64 board.
+ * something else. `auto` is resolved before it gets here (`autoChoice` in server/model-store.ts,
+ * SV-R2) to the preset a job that names no model would run; given unresolved, it is `fast`.
  */
 
 import { QWEN_ASR } from "./llama-catalog.ts";
