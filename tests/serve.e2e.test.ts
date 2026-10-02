@@ -7,8 +7,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
+import { dirname, join } from "node:path";
+import { boundUrl, compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
 import { notWritableMessage } from "../src/main/server/writable.ts";
 import { until } from "./capture-helpers.ts";
 import { CLI } from "./cli-helpers.ts";
@@ -118,6 +118,41 @@ describe("[SV-P8] akou serve", () => {
     expect(existsSync(join(h.configDir, "akou.lock"))).toBe(false);
   }, 30_000);
 
+  test("[SV-P5] boundUrl names the bound address, brackets an IPv6 one, and keeps the port and path", () => {
+    expect(boundUrl("0.0.0.0", "http://127.0.0.1:8476/v1")).toBe("http://0.0.0.0:8476/v1");
+    expect(boundUrl("::", "http://127.0.0.1:8476/v1")).toBe("http://[::]:8476/v1");
+    expect(boundUrl("127.0.0.1", "http://127.0.0.1:8476/v1")).toBe("http://127.0.0.1:8476/v1");
+  });
+
+  test("[SV-P5] bound to every address, the startup line names 0.0.0.0, not the loopback", async () => {
+    const h = home();
+    writeFileSync(
+      join(h.configDir, "config.json"),
+      JSON.stringify({ "api.port": 0, "api.bind": "0.0.0.0", "server.behind_proxy": true }),
+    );
+    const proc = serve(h.env);
+    await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+    const rt = runtime(h.configDir) as { port: number };
+    // It does answer on loopback, which the old line named; the line now says what was bound.
+    const health = await fetch(`http://127.0.0.1:${rt.port}/healthz`);
+    expect(health.status).toBeLessThan(600);
+    await health.body?.cancel();
+    if (process.platform === "win32") {
+      const token = readFileSync(join(h.configDir, "token"), "utf8").trim();
+      await fetch(`http://127.0.0.1:${rt.port}/v1/quit`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: "{}",
+      });
+    } else {
+      proc.kill("SIGTERM");
+    }
+    await proc.exited;
+    const err = await new Response(proc.stderr).text();
+    expect(err).toContain(`serving on http://0.0.0.0:${rt.port}/v1`);
+    expect(err).not.toContain("serving on http://127.0.0.1");
+  }, 30_000);
+
   test("a second akou serve on the same home is refused with 69 and names the running one", async () => {
     const h = home();
     serve(h.env);
@@ -152,6 +187,41 @@ describe("[SV-P8] akou serve", () => {
     expect(code).toBe(78);
     expect(runtime(h.configDir)).toBeNull();
   }, 30_000);
+
+  // SIGTERM is the clean stop the log is read after; Windows has none (see above).
+  test.skipIf(process.platform === "win32")(
+    "[SV-P7] on a box with no display, no sound server and no xdg-open, the log says nothing about any of them",
+    async () => {
+      const h = home();
+      // Only the directory Bun is in on PATH: no xdg-open, no pactl, no capture helper.
+      const env: Record<string, string> = { ...h.env, PATH: dirname(process.execPath) };
+      for (const k of [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "PULSE_SERVER",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+      ]) {
+        delete env[k];
+      }
+      const proc = serve(env);
+      await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+      const rt = runtime(h.configDir) as { port: number };
+      expect((await fetch(`http://127.0.0.1:${rt.port}/healthz`)).status).toBe(200);
+      proc.kill("SIGTERM");
+      expect(await proc.exited).toBe(0);
+      const err = await new Response(proc.stderr).text();
+      // The log is really read: the start line is in it.
+      expect(err).toContain("serving on");
+      const DESKTOP =
+        /display|pulse|pipewire|sound server|xdg-open|capture helper|akou-capture|tailnet|tailscale/i;
+      // Positive control: the pattern catches the lines it is there for.
+      expect(DESKTOP.test("akou warn: capture helper not found on PATH")).toBe(true);
+      expect(DESKTOP.test("akou warn: no tailnet: tailscale is not running")).toBe(true);
+      expect(err.split("\n").filter((l) => DESKTOP.test(l))).toEqual([]);
+    },
+    30_000,
+  );
 
   test("[SV-P11] AKOU_BEHIND_PROXY=true starts the default bind with no proxy setting in the file", async () => {
     const h = home();

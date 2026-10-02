@@ -4,7 +4,7 @@ We measured which Parakeet build akou should ship, and whether Qwen3-ASR should 
 
 - akou ships Parakeet TDT 0.6B v3 in full precision (fp32). With beam search it makes a third fewer word errors in English than the int8 build akou shipped before (5.85 % against 9.04 % on FLEURS) and a fifth fewer in Spanish (3.12 % against 3.99 %), and it finds more names under decode biasing. The cost is a larger first download (2.55 GB for the recognizer instead of 670 MB) and about 0.6 GB more memory.
 - fp16 is not an option today. The upstream fp16 repository is empty. A build we converted ourselves gave the same output as fp32 on every test utterance, and it used more memory, not less.
-- akou stays on Parakeet. [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) is more accurate in English. It ties in Spanish and on names, sometimes misreads the spoken language, copies words from its context list, and needs three times the memory. The one Qwen build that runs on every OS through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) is the 0.6B int8 export, and it loses to fp32 Parakeet in Spanish and on names.
+- akou stayed on Parakeet then; [What akou runs today](#what-akou-runs-today) says what changed. [Qwen3-ASR 1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) is more accurate in English. It ties in Spanish and on names, sometimes misreads the spoken language, copies words from its context list, and needs three times the memory. The one Qwen build that runs on every OS through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) is the 0.6B int8 export, and it loses to fp32 Parakeet in Spanish and on names.
 
 The numbers for public data are in [asr-benchmark.json](asr-benchmark.json).
 
@@ -117,7 +117,7 @@ The official Transformers path runs out of memory on 16 GB with its default 20-m
 
 On FLEURS, Qwen3-ASR 1.7B on MLX ran at a real-time factor of 0.19 (English) and 0.25 (Spanish) in 8.1 GB, against fp32 Parakeet's 0.021 and 0.019 in 2.5 to 2.7 GB. That is 9 to 13 times slower on short utterances, 3 times slower on the long recording, and about 3 times the memory.
 
-## Why akou stays on Parakeet
+## Why akou stayed on Parakeet then
 
 FLEURS, first run, greedy Parakeet against Qwen without context:
 
@@ -147,3 +147,7 @@ Qwen 1.7B wins English by 2.4 points, a real difference. Everything else points 
 - The 1.7B model runs well only through MLX, which is Apple silicon only, or PyTorch. The one Qwen path that runs through sherpa-onnx on every OS akou supports is the 0.6B int8 export. It ties fp32 Parakeet in English and loses clearly in Spanish (by 3.3 points) and on names (7 against 27 of 30).
 
 Switching would buy 2.4 points of English WER on a Mac. It would cost Spanish, names, memory, speed, and the single engine akou runs on every OS. Moving from int8 to fp32 Parakeet already cut the English gap to Qwen 1.7B from 5.1 points to 2.4, for 0.6 GB of memory and a bigger download.
+
+## What akou runs today
+
+The measurements above stand; the decision does not. Qwen3-ASR 1.7B now runs at full accuracy on every OS through llama.cpp's llama-server, so the reason that only the 0.6B int8 build runs everywhere is gone ([asr-architecture.md](asr-architecture.md)). Streaming Nemotron writes the live lines (`asr.live` `auto`), and Qwen3-ASR 1.7B writes the final transcript wherever its model and llama-server are downloaded (`asr.final.model` `auto`). Parakeet fp32 is the fallback for both jobs on a machine without those models, and a machine with them needs no Parakeet. Memory and speed are never a veto for an engine the user chose ([PRINCIPLES.md quality bars](../ux/PRINCIPLES.md#quality-bars)), so Qwen's three times the memory decides nothing on its own.

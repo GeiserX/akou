@@ -63,6 +63,8 @@ export const EXIT = {
   config: 78,
   /** `akou wait` ran out of time, as `timeout(1)` reports it. */
   timeout: 124,
+  /** Ctrl-C ended a one-shot command, as a shell reports a process ended by SIGINT. */
+  interrupted: 130,
 } as const;
 
 /** The design's wait for a cold app: `201` within 3 s of `akou start`. */
@@ -498,6 +500,7 @@ export class ApiClient {
       // A probe never runs past the wait: a slow answer is cut at the deadline.
       const rt = await this.running(Math.min(2000, deadline - performance.now()));
       if (rt) return rt;
+      // clock: polling a real app while it starts, bounded by the deadline.
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(
@@ -543,6 +546,12 @@ export class ApiClient {
   /** The recovery itself: `answering` runs one at a time per client. */
   private async heal(rt: Runtime, launch: boolean, t0: number): Promise<Runtime> {
     const rows = await processTable();
+    // A list that cannot be read may hide a recording helper: nothing is stopped.
+    if (rows === null) {
+      throw new Hung(
+        `akou is not answering, and the processes below it could not be listed (ps failed), so nothing was stopped; kill -KILL ${rt.pid} restarts it by hand, then run the command again`,
+      );
+    }
     const rec = await recordingBelow(rows, rt.pid);
     if (rec) throw new Hung(recordingMessage(rt.pid, rec));
     await sampleHung(rt.pid, join(this.configDir, HANGS_DIR));
@@ -634,10 +643,21 @@ function isConnectionError(err: unknown, idempotent: boolean): boolean {
   );
 }
 
-/** The exit code for an API answer (DESIGN 6.1). */
-export function exitFor(status: number, code?: string): number {
+/**
+ * The exit code for an API answer (DESIGN 6.1). `body` tells a missing call (`not_found` with
+ * `call`) from another missing thing (a key, a model, a note), which stays a usage error.
+ */
+export function exitFor(
+  status: number,
+  code?: string,
+  body?: Record<string, unknown> | null,
+): number {
   if (status >= 200 && status < 300) return EXIT.ok;
   if (code === "no_live_call" || code === "not_live" || code === "not_recording") {
+    return EXIT.notLive;
+  }
+  // No call to act on: none at all for `last`, or `-c` names one that does not exist.
+  if (code === "no_calls" || (code === "not_found" && typeof body?.call === "string")) {
     return EXIT.notLive;
   }
   if (code === "already_recording") return EXIT.alreadyRecording;

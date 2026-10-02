@@ -2,6 +2,9 @@
  * Following a call (docs/DESIGN.md sections 5.5 and 6.2):
  *
  * - `GET /calls/{id}/events?after=SEQ&wait=25`: the raw log after a cursor, long-polled.
+ * - Both take `types=health,seg,…` (PG-S2): only those log events, while the cursor still moves
+ *   past the others, so a reconnect does not replay them; the stream also takes `ephemeral=none`,
+ *   no `partial`, `level` or `read`. A monitor is not flooded by what it does not read.
  * - `GET /calls/{id}/stream?after=SEQ`: Server-Sent Events. Every log event after the cursor, in
  *   `seq` order and each exactly once (the backlog from disk, then live events), plus the
  *   ephemeral `partial` (the provisional line, never in the log), `level` and `read` events.
@@ -22,14 +25,15 @@
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
-import type { LogEvent } from "../../../core/log/events.ts";
+import { EVENT_TYPES, type LogEvent } from "../../../core/log/events.ts";
 import type { Line, View } from "../../../core/log/fold.ts";
 import { learnedItem } from "../../../core/vocab/learned.ts";
 import { renderTranscriptSection } from "../../handoff/export.ts";
 import { estimateTokens, renderLine } from "../../query/render.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Query, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf } from "./common.ts";
+import { CALL_ID, CALL_REF_ERRORS, callId, callOf } from "./common.ts";
 
 /** Longest a long poll waits, seconds. */
 export const MAX_WAIT_SECONDS = 30;
@@ -65,6 +69,7 @@ function eventWaiter(
         signal.removeEventListener("abort", finish);
         resolve();
       };
+      // clock: the long-poll's own bound, `wait` seconds.
       const timer = setTimeout(finish, ms);
       signal.addEventListener("abort", finish);
       wake = finish;
@@ -199,6 +204,7 @@ export async function openFollow(
     }
     if (lines.length > 0) sink.read({ all: false, lines });
   };
+  // clock: the stream's push tick to a reader over the network.
   const tick = setInterval(() => {
     sendRead();
     const tz = call.view.call?.tz ?? "UTC";
@@ -230,6 +236,7 @@ export async function openFollow(
       }
     }
   }, STREAM_TICK_MS);
+  // clock: a keep-alive comment, so a reader can tell a quiet stream from a dead connection.
   const keepalive = setInterval(() => {
     if (!stopped) sink.keepalive();
   }, KEEPALIVE_MS);
@@ -257,8 +264,24 @@ export async function openFollow(
   return stop;
 }
 
-/** A follower as Server-Sent Events: `event` (id = seq), `partial`, `level`, keep-alive comments. */
-export function sseFollow(app: ApiApp, id: string, after: number, signal: AbortSignal): Response {
+/** Which messages a follower wants (PG-S2): null `types` is every log event. */
+export interface FollowFilter {
+  types: ReadonlySet<string> | null;
+  ephemeral: boolean;
+}
+
+/**
+ * A follower as Server-Sent Events: `event` (id = seq), `partial`, `level`, keep-alive comments.
+ * A log event the filter leaves out is sent as its id alone, which delivers nothing to the reader
+ * but moves its `Last-Event-ID`, so a reconnect resumes after it.
+ */
+export function sseFollow(
+  app: ApiApp,
+  id: string,
+  after: number,
+  signal: AbortSignal,
+  filter: FollowFilter = { types: null, ephemeral: true },
+): Response {
   const enc = new TextEncoder();
   let cleanup = () => {};
   const stream = new ReadableStream<Uint8Array>({
@@ -286,11 +309,15 @@ export function sseFollow(app: ApiApp, id: string, after: number, signal: AbortS
       signal.addEventListener("abort", stop);
       send("retry: 1000\n\n");
       try {
+        const eph = filter.ephemeral;
         stopFollow = await openFollow(app, id, after, {
-          event: (e) => send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`),
-          partial: (p) => send(`event: partial\ndata: ${JSON.stringify(p)}\n\n`),
-          level: (l) => send(`event: level\ndata: ${JSON.stringify(l)}\n\n`),
-          read: (r) => send(`event: read\ndata: ${JSON.stringify(r)}\n\n`),
+          event: (e) =>
+            filter.types && !filter.types.has(e.type)
+              ? send(`id: ${e.seq}\n\n`)
+              : send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`),
+          partial: (p) => eph && send(`event: partial\ndata: ${JSON.stringify(p)}\n\n`),
+          level: (l) => eph && send(`event: level\ndata: ${JSON.stringify(l)}\n\n`),
+          ...(eph ? { read: (r) => send(`event: read\ndata: ${JSON.stringify(r)}\n\n`) } : {}),
           keepalive: () => send(": keep-alive\n\n"),
         });
       } catch {
@@ -327,35 +354,72 @@ const WAIT = {
   doc: `Seconds to hold the request while nothing is past the cursor, up to ${MAX_WAIT_SECONDS}.`,
 } as const;
 
+const TYPES = {
+  type: "string",
+  doc: "Only these log event types, comma-separated (`health,seg,answer,share.started`). The cursor still moves past the others, so a reconnect does not replay them. Default: every type.",
+} as const;
+
+const EPHEMERAL = {
+  type: "string",
+  values: ["all", "none"],
+  default: "all",
+  doc: "`none`: no `partial`, `level` or `read` messages, the log events alone.",
+} as const;
+
+/** `types`, checked against the log's event types; null when absent: every type. */
+function typesParam(query: Query): ReadonlySet<string> | null {
+  const raw = query.raw("types");
+  if (raw === null || raw.trim() === "") return null;
+  const types = raw
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
+  const unknown = types.find((t) => !(EVENT_TYPES as readonly string[]).includes(t));
+  if (unknown !== undefined) {
+    throw new HttpError(400, "bad_param", `types: "${unknown}" is not a log event type`, {
+      param: "types",
+    });
+  }
+  return new Set(types);
+}
+
 export function followRoutes(r: Router<ApiApp>): void {
   r.add(
     "GET",
     "/calls/:id/events",
     {
       id: "calls.events",
-      doc: "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll.",
+      doc: "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll. With `types`, only those events, and the wait lasts until one of them arrives; `cursor` still moves past the others.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
-      query: { after: AFTER, wait: WAIT },
+      query: { after: AFTER, wait: WAIT, types: TYPES },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     },
     async (c) => {
       const id = callId(c);
-      const after = c.query.int("after") as number;
+      const types = typesParam(c.query);
       const wait = c.query.int("wait") as number;
-      const waiter = wait > 0 ? eventWaiter(c.app, id, after, c.req.signal) : null;
-      let events: LogEvent[];
-      try {
-        events = await c.app.events(id, after);
-        if (events.length === 0 && waiter) {
-          await waiter.wait(wait * 1000);
-          events = await c.app.events(id, after);
+      const until = performance.now() + wait * 1000;
+      // The cursor moves past every event read, kept or not (PG-S2).
+      let cursor = c.query.int("after") as number;
+      let events: LogEvent[] = [];
+      for (;;) {
+        const waiter = wait > 0 ? eventWaiter(c.app, id, cursor, c.req.signal) : null;
+        try {
+          const read = await c.app.events(id, cursor);
+          cursor = read.at(-1)?.seq ?? cursor;
+          events = types ? read.filter((e) => types.has(e.type)) : read;
+          const left = until - performance.now();
+          if (events.length > 0 || !waiter || left <= 0 || c.req.signal.aborted) break;
+          // Something arrived that the filter left out: read it, then wait on.
+          if (read.length === 0) await waiter.wait(left);
+        } finally {
+          waiter?.stop();
         }
-      } finally {
-        waiter?.stop();
       }
-      return json(200, { call: id, events, cursor: events.at(-1)?.seq ?? after });
+      return json(200, { call: id, events, cursor });
     },
   );
 
@@ -364,20 +428,23 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/stream",
     {
       id: "calls.stream",
-      doc: "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it.",
+      doc: "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it. `types` keeps only those events: one left out comes as its `id` alone, which moves `Last-Event-ID` and delivers nothing. `ephemeral=none` drops the spoken line, the levels and `read`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
-      query: { after: AFTER },
+      query: { after: AFTER, types: TYPES, ephemeral: EPHEMERAL },
       ok: 200,
+      errors: CALL_REF_ERRORS,
       type: "sse",
     },
     async (c) => {
       const id = callId(c);
+      const types = typesParam(c.query);
+      const ephemeral = c.query.oneOf<"all" | "none">("ephemeral") === "all";
       // A reconnecting client repeats the URL and names the last event it got: resume after that.
       const after = Math.max(c.query.int("after") as number, lastEventId(c.req));
       await c.app.call(id);
-      return sseFollow(c.app, id, after, c.req.signal);
+      return sseFollow(c.app, id, after, c.req.signal, { types, ephemeral });
     },
   );
 
@@ -437,6 +504,7 @@ export function followRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 409: ["cursor_stale"] }),
     },
     async (c) => {
       const call = await callOf(c);

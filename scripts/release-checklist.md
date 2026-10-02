@@ -28,6 +28,16 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
 
    The `app` job prints one `ok` line per smoke check (both `Info.plist` files, both signatures, the files beside the main process, sherpa-onnx-node loaded from the bundle, the Workers, the helper's `--from-wav` run). The artifacts are on the run page.
 
+5. Before a stable release (1.0.0 or later), on the reference Mac: the 8-hour soak, at real time, with a busy process on every core, through the Rust helper in file mode, which writes a real Opus file and opens no device (TS-24, [TRAPS](../docs/TRAPS.md) T3.8):
+
+   ```sh
+   cargo build --release --manifest-path native/akou-capture/Cargo.toml
+   bun scripts/soak.ts --speed 1 --minutes 480 --burner \
+     --helper native/akou-capture/target/release/akou-capture --out "docs/gates/soak-$(bun -p "require('./package.json').version").json"
+   ```
+
+   Every check prints `ok`. The JSON is named after the version step 3 stamped; commit it with the release. A runner job cannot do this: its limit is 6 hours.
+
 ## The tag
 
 ```sh
@@ -48,6 +58,7 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
    - The window shows the models card; the download completes and the card goes away.
    - The first recording asks for the microphone and for system audio, and the prompts name akou.
    - A 60-second call records both channels; the transcript appears live.
+   - The real harnesses answer through the packaged app (TS-27). With Claude Code logged in, `akou config set provider.kind harness`, `akou config set provider.harness claude`, then `akou ask "What was said in this call?" --call last --json` about the 60-second call: it prints `"answered": true` and Claude Code's answer. Then the same with Codex logged in and `provider.harness codex`. Put both settings back as they were. CI never runs this: it needs a logged-in subscription.
    - Install the previous release, grant, then update to this one: record 10 s and note whether macOS asked again (expected while builds are ad-hoc signed) and whether both channels have sound after allowing.
    - The Bluetooth probe-click listening test ([TRAPS](../docs/TRAPS.md) "Probe click in Bluetooth headphones").
    - The idle tray item shows its icon in a dark and a light menu bar (System Settings > Appearance). Save both screenshots under `docs/gates/` with the date, the macOS version and the akou version ([DESKTOP](../docs/ux/DESKTOP.md) DK-T1, [TRAPS](../docs/TRAPS.md) "An invisible tray").

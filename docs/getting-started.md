@@ -8,6 +8,7 @@ akou 0.x runs on Macs with Apple silicon and macOS 14.4 or later. Every release 
 | `akou-<version>-macos-arm64.zip` | The same app, zipped |
 | `akou-cli-<version>-darwin-arm64.tar.gz` | The `akou` command line for macOS |
 | `akou-cli-<version>-linux-x64.tar.gz`, `akou-cli-<version>-linux-arm64.tar.gz`, `akou-cli-<version>-windows-x64.zip` | The command line alone, for Linux and Windows. The app for those systems is not released yet, so these can manage models, the skill and the settings, but cannot record |
+| `akou-diarize-<version>-darwin-arm64.tar.gz` | The speaker-label helper on its own, for a server run from a source checkout on a Mac ([server.md](server.md#a-mac-as-the-server)) |
 | `SHA256SUMS` | A checksum for every file above |
 
 To check a download, put it next to `SHA256SUMS` and run:

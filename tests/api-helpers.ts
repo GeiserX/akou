@@ -92,6 +92,11 @@ export interface RigOptions {
   memoryGb?: number;
   /** `app.log` and the watchdog, as the entry points run the app (DK-M8). */
   supervise?: boolean;
+  /**
+   * The real models in `asr.modelsDir` and this machine's own GPU, as an install runs them: no fake
+   * recognizer and no stand-in for the accelerator probe. Only model-gated tests set it.
+   */
+  realModels?: boolean;
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -139,8 +144,9 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
   const logs: AppRig["logs"] = [];
   const app = await startApp({
     env,
-    models:
-      o.models !== undefined
+    models: o.realModels
+      ? undefined
+      : o.models !== undefined
         ? o.models
         : { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
     modelRegistry: o.modelRegistry,
@@ -154,7 +160,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     clock: o.clock,
     jobs: o.jobs,
     engine: o.engine,
-    accelerator: o.accelerator ?? NO_GPU,
+    accelerator: o.realModels ? undefined : (o.accelerator ?? NO_GPU),
     ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
     ...(o.memoryGb ? { memoryGb: o.memoryGb } : {}),

@@ -19,9 +19,10 @@
 //!   given, and the worker then says `ready` again, so a grant given while akou runs needs no
 //!   restart (akou-qpn).
 //! - **What has the keyboard** (`Screen`): the focused application from the system-wide
-//!   accessibility element, its frontmost on-screen window (`kCGWindowNumber`, a stable id, never a
-//!   title), and the focused element's kind: a secure text field is `secure`, a text role or a
-//!   settable value is `editable`, anything else `not-editable`, and a read that fails
+//!   accessibility element (its bundle id, and its `localizedName` for people), its frontmost
+//!   on-screen window (`kCGWindowNumber`, a stable id, never a title), and the focused element's
+//!   kind: a secure text field is `secure`, a text role or a settable value is `editable`,
+//!   anything else `not-editable`, and a read that fails
 //!   (a dormant tree, no grant) `unknown`. Every accessibility read times out at 200 ms
 //!   (`AXUIElementSetMessagingTimeout` on the system-wide element). Nothing here writes to another
 //!   process's accessibility tree.
@@ -274,6 +275,18 @@ fn bundle_id(pid: i32) -> String {
     })
 }
 
+/// The app's name as the Dock and the menu bar show it (`localizedName`), empty when it has none.
+fn display_name(pid: i32) -> String {
+    autoreleasepool(|_| {
+        let Some(app) = running_app(pid) else {
+            return String::new();
+        };
+        // SAFETY: `localizedName` returns an NSString or nil.
+        let name: Option<Retained<NSString>> = unsafe { msg_send![&app, localizedName] };
+        name.map(|s| s.to_string()).unwrap_or_default()
+    })
+}
+
 /// The focused element of the application `pid`.
 fn focused(pid: i32) -> Option<CFRetained<AXUIElement>> {
     // SAFETY: any pid; returns a +1 reference.
@@ -335,6 +348,7 @@ impl Targets for Screen {
         };
         Target {
             app: bundle_id(pid),
+            name: display_name(pid),
             pid: i64::from(pid),
             window,
             field: field.into(),
