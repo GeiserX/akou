@@ -42,6 +42,9 @@
       "name": "calls"
     },
     {
+      "name": "devices"
+    },
+    {
       "name": "workspaces"
     },
     {
@@ -1165,6 +1168,34 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "operationId": "devices.list",
+        "tags": [
+          "devices"
+        ],
+        "description": "The microphones and outputs the OS lists, from the capture helper, read without opening a stream or asking for a permission: `{backend, inputs, outputs}`, each device `{id, name, default}`. An input's `id` is what `POST /calls` takes as `mic` and `dictation.mic` names. A helper that cannot list them answers `503` with its reason (`file-only` when `AKOU_CAPTURE_FILE_ONLY=1`, `no_helper` when it is not installed), never an empty list.",
         "responses": {
           "200": {
             "description": "OK",

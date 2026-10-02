@@ -31,6 +31,9 @@
  *
  * Times are seconds of audio (the file timeline), so a test at `--speed 20` is deterministic.
  *
+ * `devices` prints the fake's device list as `akou-capture devices` does (PG-A8), or under
+ * `AKOU_CAPTURE_FILE_ONLY=1` the same refusal.
+ *
  * `dictate` speaks `akou-dictate/1` instead (docs/ux/DICTATION.md section 9, DC-T1), the same
  * lines as `akou-capture dictate` (tests/fixtures/akou-dictate/): scripted keys through the port
  * of the real helper's activation rule (`src/core/dictation/activation.ts`), a WAV as the mic, and
@@ -788,7 +791,27 @@ function axRefusal(cap: Target, now: Target): string | null {
   return null;
 }
 
-if (argv.includes("dictate")) {
+/** The devices `devices` lists: two microphones, the built-in one the default, and one output. */
+const FAKE_DEVICES = {
+  type: "devices",
+  backend: "fake",
+  inputs: [
+    { id: "fake-built-in", name: "Built-in Microphone", default: true },
+    { id: "fake-usb", name: "USB Microphone", default: false },
+  ],
+  outputs: [{ id: "fake-speakers", name: "Speakers", default: true }],
+};
+
+if (argv.at(-1) === "devices") {
+  // As `akou-capture devices`: one line on stdout, or the file-only refusal and exit 69.
+  if (process.env.AKOU_CAPTURE_FILE_ONLY === "1") {
+    process.stderr.write(
+      `${JSON.stringify({ type: "warn", code: "file-only", msg: "AKOU_CAPTURE_FILE_ONLY=1 refuses device access" })}\n`,
+    );
+    process.exit(EXIT.unavailable);
+  }
+  process.stdout.write(`${JSON.stringify(FAKE_DEVICES)}\n`);
+} else if (argv.includes("dictate")) {
   await runDictate();
 } else {
   // Switches may come before `run` too, so a configured command prefix (`capture.helper`) can

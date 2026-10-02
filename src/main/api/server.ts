@@ -38,6 +38,7 @@ import {
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
+import { deviceRoutes } from "./routes/devices.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
 import { fixRoutes } from "./routes/fix.ts";
 import { followRoutes } from "./routes/follow.ts";
@@ -89,6 +90,8 @@ export interface ApiApp {
   templates(): Template[];
   /** The speech models on disk, or the download in progress (`GET /models`). */
   models(): ModelsStatus;
+  /** The capture helper's device query (`GET /devices`, PG-A8); absent with no helper. */
+  devices?(): Promise<import("../capture/devices.ts").DevicesAnswer>;
   /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
   accelerator?(): AcceleratorState | null;
   /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
@@ -264,6 +267,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   settingsRoutes(r);
   modelRoutes(r);
   callRoutes(r);
+  deviceRoutes(r);
   workspaceRoutes(r);
   followRoutes(r);
   queryRoutes(r);

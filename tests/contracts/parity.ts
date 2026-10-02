@@ -420,11 +420,17 @@ export const PARITY: readonly Row[] = [
     window: { none: "a one-time migration; the CLI is enough" },
   },
   {
-    action: "Devices and apps",
-    cli: ["devices", "apps"],
-    api: {
-      none: "missing: PG-A8 adds GET /devices and GET /apps; the commands exit 69 until then",
-    },
+    action: "List capture devices",
+    cli: ["devices"],
+    api: ["GET /devices"],
+    mcp: { none: "missing: PG-A8's akou_devices tool" },
+    window: [ui("dictation-mic.ts", '"GET", "/devices"')],
+    note: "`akou devices` still exits 69 until it reads the route (CLI-07)",
+  },
+  {
+    action: "List audio apps",
+    cli: ["apps"],
+    api: { none: "missing: PG-A8 adds GET /apps; the command exits 69 until then" },
     mcp: { none: "missing: PG-A8" },
     window: { none: "the source picker (W3.3) waits on PG-A8" },
   },
