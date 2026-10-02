@@ -70,7 +70,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 |---|---|---|
 | Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
-| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
+| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` (PG-S3) · `wait --for STAGE [--timeout 30m]` (PG-S5) | has |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
@@ -387,7 +387,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Restart | `restart` | `POST …/restart` | `akou_restart` | Restart | none |
 | Status | `status` | `GET /status` | `akou_status` | header, tray | none |
 | Read the transcript | `tail`, `show` | `GET …/transcript` | `akou_read`, `akou_get_call` | transcript | `show` lacks time and speaker filters (CLI-27) |
-| Event stream | `tail -f`, `events -f` | `GET …/stream`, `…/events` | (monitor, PG-K3) | pushed | `events` missing (PG-S3) |
+| Event stream | `tail -f`, `events -f` | `GET …/stream`, `…/events` | (monitor, PG-K3) | pushed | none |
 | Wait for a stage | `wait` | long poll on `…/events` | none, by design: an agent is told by the monitor | status | `wait` missing (PG-S5) |
 | Context pack | `context` | `POST …/context` | `akou_context` | "Copy context for my agent" | none |
 | Ask | `ask` | `POST …/ask` | `akou_ask` (hidden when the client is the provider) | Ask pane | none |

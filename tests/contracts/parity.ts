@@ -96,6 +96,13 @@ export const PARITY: readonly Row[] = [
     window: [rpc("follow"), app("/transcript?format=export")],
   },
   {
+    action: "Follow the event log as JSON lines",
+    cli: ["events"],
+    api: ["GET /calls/:id/events", "GET /calls/:id/stream"],
+    mcp: { none: "an agent is pushed the events by the plugin monitor (PG-K3), which runs it" },
+    window: { none: "the raw log is for programs; the window shows the call it describes" },
+  },
+  {
     action: "Wait for a stage after the call",
     cli: ["wait"],
     api: ["GET /calls/:id/events"],

@@ -236,6 +236,10 @@ function stdinKeys(): Keys {
 }
 
 if (import.meta.main) {
+  // A reader that closed stdout (`akou events -f | head -3`) has what it wanted: stop, exit 0.
+  process.stdout.on("error", (e: NodeJS.ErrnoException) => {
+    if (e.code === "EPIPE") process.exit(EXIT.ok);
+  });
   const ac = new AbortController();
   process.on("SIGINT", () => {
     if (ac.signal.aborted) process.exit(130);
