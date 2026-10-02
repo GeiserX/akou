@@ -302,7 +302,14 @@ describe("akou-5an.119: a best job in the desktop app takes its turn on the one 
       // The pass ahead still runs: the cancelled job's turn is not over, so nothing behind it starts.
       await new Promise((res) => setTimeout(res, 500));
       expect(lineOwner(r)).toBe(s.body.id);
+      // A job behind the cancelled one waits too: it is done only once the pass ahead has ended.
+      const later = await submit(r, r.token, DIALOGUE, { preset: "best" });
+      expect(later.status).toBe(202);
+      const beforeRelease = await asKey(r, r.token, "GET", `/jobs/${later.body.id}?wait=2`);
+      expect(beforeRelease.body.status).not.toBe("done");
       pass.free();
+      const afterRelease = await asKey(r, r.token, "GET", `/jobs/${later.body.id}?wait=30`);
+      expect(afterRelease.body.status).toBe("done");
       await until(() => lineOwner(r) === null, 10_000, "the line freed once the pass ahead ended");
     } finally {
       await r.close();
