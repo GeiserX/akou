@@ -7,6 +7,7 @@ Status words:
 - **carried (M#)**: akou has it, first shipped in that milestone.
 - **changed (M#)**: akou has the need, met a different way; the line says how.
 - **dropped**: akou does not have it; the line says why.
+- **designed**: akou means to have it and has not built it yet; the line names the id or milestone that owns it, or says that nothing owns it yet.
 
 ## Capture sources and channels
 
@@ -41,7 +42,7 @@ Status words:
 ## Controls and interactive use
 
 - F0.10, F1.43 mute keeps the timeline, pause drops audio: **carried (M1)** with the same semantics; both are app concerns recorded as events with anchors.
-- F1.42, F4.14 interactive terminal keys: **changed (M1)**. The window, tray, hotkey and CLI replace terminal keys. "Copy transcript so far" is a window action.
+- F1.42, F4.14 interactive terminal keys: **changed (M1)**. The window, tray, hotkey and CLI replace terminal keys. "Copy transcript so far" is a window action: a key and a button in the call header ([WINDOW](ux/WINDOW.md) W12.2).
 - F4.15 signal watcher: **changed (M1)**, see F0.18.
 
 ## Capture health
@@ -56,23 +57,23 @@ Status words:
 
 ## Devices and permissions
 
-- F0.19, I0.6 `hark devices`, `hark apps`: **carried (M1)** as `akou devices` and `akou apps` with `--json`, on every OS.
-- F0.26 three TCC services with a bounded microphone wait: **changed (M1)**. Two grants (microphone, system audio), both prompted by the signed app; `akou doctor --grant` checks them.
+- F0.19, I0.6 `hark devices`, `hark apps`: **designed** as `akou devices` and `akou apps` with `--json`, on every OS ([CLI](ux/CLI.md) CLI-07). Both commands exist today and exit 69 with a "not built yet" message.
+- F0.26 three TCC services with a bounded microphone wait: **changed (M1)**. Two grants (microphone, system audio), both prompted by the app; `akou doctor --grant` checks them and asks for a missing one.
 - I0.13, I1.16, F1.45 sysexits exit codes: **carried (M1)**, plus 3 (nothing live) and 75 (already recording).
 
 ## Engines and models
 
-- F1.0, I1.0 engine registry (whisper, apple, whisperkit, parakeet, cloud): **changed (M1)**. One engine layer, sherpa-onnx, with Parakeet TDT v3, Moonshine and Whisper as models. Apple Speech, WhisperKit and the cloud stub are dropped; nothing platform-specific.
+- F1.0, I1.0 engine registry (whisper, apple, whisperkit, parakeet, cloud): **changed (M1)**. A registry of engines per job, over two runtimes and no Python: sherpa-onnx in the app runs streaming Nemotron, the live default (`asr.live` `auto`), and Parakeet TDT v3; a pinned llama-server, a child process akou downloads per OS, runs Qwen3-ASR 1.7B, the final pass's default wherever it and its model are downloaded (`asr.final.model` `auto`). Parakeet takes either job on a machine without the default's model. The engine interfaces and the confidence ROVER fuser are built (`src/main/asr/engine.ts`, `src/main/asr/rover.ts`); a final pass that runs several engines and fuses them is designed, not built (ASR-6 in [asr-architecture.md](research/asr-architecture.md#9-plan)). Apple Speech, WhisperKit and the cloud stub are dropped.
 - F1.1 to F1.3 whisper.cpp batch and server: **dropped**; Whisper runs through sherpa-onnx.
 - F1.4 Apple Speech: **dropped** (macOS-only).
 - F1.5 WhisperKit: **dropped** (macOS-only).
 - F1.6 Parakeet v3 through FluidAudio: **changed (M1)**. Same model family through sherpa-onnx on every OS. FluidAudio's Neural Engine speed is given up in v1.
 - F1.7 one shared engine instance: **carried (M1)**, one recognizer per model behind a queue.
 - F1.41, I1.15 model management and folders: **carried (M1)** as `akou models list | pull | import`, pinned SHA-256, one models folder.
-- F1.40 hint when a model belongs to another engine: **dropped** (one engine).
-- F1.20 to F1.22 streaming recognizer with fallbacks and ignored-flag notices: **dropped**. Live text comes from segmented Parakeet plus a re-decoded provisional line, which was better in Spanish. A streaming model stays a later option behind the same interface.
+- F1.40 hint when a model belongs to another engine: **changed (M1)**. Each job's setting (`asr.live`, `asr.review.model`, `asr.final.model`) takes only the models that can do that job, and any other value is refused with the allowed ones listed. A chosen model that is not downloaded never runs: the live model and the final pass fall back to the other one, a second pass is off for the call, and the log says why.
+- F1.20 to F1.22 streaming recognizer with fallbacks and ignored-flag notices: **changed (M1)**. Streaming is the live-engine choice: `asr.live` `auto` picks streaming Nemotron when its model is downloaded, else Parakeet re-decoding the stretch between pauses, and a named model that cannot run falls back the same way and logs why. Measured in Spanish on FLEURS through akou's own live path: 6.31 to 6.36 % WER, no word ever taken back ([asr-architecture.md section 3.1](research/asr-architecture.md#31-what-replaces-the-12-s-windows)). The Spanish floor from real calls is not recorded yet (TRN-02 in [COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md)).
 - F1.23 to F1.25 streaming sink runtime, line cutting, open-line publishing: **changed (M1)**. The provisional line has the same contract (sequence, newest wins, cleared on close, 3 s expiry).
-- F1.6 language auto-detection: **changed (M1)**. Parakeet transcribes 25 languages with no language switch, but sherpa-onnx does not report which language it heard for this model, so akou fills the segment's `lang` only when the model reports it (Whisper). A separate language-id step is an open item.
+- F1.6 language auto-detection: **designed**, and required: the per-call model switch depends on it. Today the user sets the call's languages (`asr.languages`), which pick the live Nemotron; Qwen's final pass names the language of each line, choosing among them when several are set, and Parakeet reports none. A language-id step that picks the models for a call and reports its other-language lines is TRN-14 in [COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md), tested by TS-18 in [TESTING.md](TESTING.md).
 
 ## Batch and file transcription
 
@@ -91,7 +92,7 @@ Status words:
 - F1.17 one continuous resampler per stream: **carried (M1)** in the helper.
 - F1.18 gain on the engine copy only: **carried (M1)**.
 - F1.19, I1.1 segment pause and window, validated ranges: **carried (M1)** in the settings schema.
-- I1.2 `--live-streaming`: **dropped** (see F1.20).
+- I1.2 `--live-streaming`: **changed (M1)**. `akou start --live` picks the live model for one call, streaming Nemotron among them (see F1.20).
 
 ## Speakers
 
@@ -115,7 +116,7 @@ Status words:
 ## Configuration
 
 - F1.39, I1.5, I1.7 config file with precedence and `config show | set | unset | path`: **carried (M1)** as `akou config`, one JSON file validated by the same schema that validates `config set` and API bodies.
-- I1.6 `HARK_*` environment variables: **dropped**. Only `AKOU_HEADLESS` and `AKOU_HOME` (tests) exist.
+- I1.6 `HARK_*` environment variables: **changed (M1)**. akou reads its own `AKOU_*` variables instead, listed in [configuration.md](configuration.md).
 - F1.44 startup status block: **changed (M1)**. `akou status` and the window header report the same fields.
 
 ## hark-viewer page server
@@ -149,7 +150,7 @@ Status words:
 - F2.27 final transcript per part, Microphone and Others, on the call's clock: **carried (M1)** as the final layer with `you` and diarized clusters, all parts diarized together.
 - F2.28 retry a refused part in halving pieces down to 20 s: **carried (M1)**.
 - F2.29 warning when every accurate line is on one channel: **carried (M1)** as a `final.done` warning.
-- F2.30, F2.31 language detection with a one-line verdict: **changed (M1)**. Languages are listed in status and the export only when a model reported them (Whisper); with Parakeet there is no verdict until a language-id step exists.
+- F2.30, F2.31 language detection with a one-line verdict: **changed (M1)**. Languages are listed in status and the export only when a model reported them (Qwen); with Parakeet there is no verdict until a language-id step exists (F1.6).
 - F2.32, I2.14 third-party comparison transcript lane: **dropped**; nothing downstream read it, and it was macOS-only.
 - F2.33, F2.34 job liveness by pid, cleanup on signals: **changed (M1)**. The final pass is a Worker; boot reconciliation restarts an unfinished one.
 - F2.35, I2.7 `relabel`: **dropped**. Whole-call diarization plus click-to-rename, merge and unmerge replace it.
@@ -175,7 +176,7 @@ Status words:
 - F2.46 final transcript note: **carried (M1)** with a progress bar.
 - F2.47 Record, Mute, Pause, Stop, Restart behaviour, "Stop the other call": **carried (M1)**.
 - F2.48 workspace picker: **carried (M1)**, plus template picker.
-- F2.49, I2.16 follow the live or last call, `?call=` pin: **changed (M1)**. A sidebar of calls by date and title; deep links `akou://call/<id>` and `akou open`.
+- F2.49, I2.16 follow the live or last call, `?call=` pin: **changed (M1)**. A sidebar of calls by date and title, and `akou open` opens a call in the window. The `akou://call/<id>` links the API hands out open nothing; **designed**: they stop being handed out ([PROGRAMMABILITY](ux/PROGRAMMABILITY.md) PG-U1).
 - F2.50 poll every second: **changed (M1)**. RPC push from the main process; SSE with a cursor for other clients.
 - F2.51 pinned auto-scroll, back-to-live, font size keys: **carried (M1)**.
 - F2.52 empty state: **carried (M1)**.
@@ -196,12 +197,12 @@ Status words:
 
 ## Distribution, CI and validation
 
-- F2.54, F4.9, F4.17 test suites with fakes, minimum test counts, CI on pull requests: **carried (M1)**; every job asserts a minimum executed-test count and the report lists gated tests as skipped.
+- F2.54, F4.9, F4.17 test suites with fakes, minimum test counts, CI on pull requests: **carried (M1)**; every job asserts a minimum executed-test count and the report lists gated tests as skipped ([TESTING](TESTING.md) TS-2).
 - F0.28, F4.16 validation scripts (60-minute drift test, per-app isolation, live pipeline checks): **carried (M0)** as `scripts/drift-test.ts` and the hardware release checklist, run on real devices, never through speakers.
-- F4.7, I4.3 Homebrew one-repo tap and `brew services`: **changed (M1)**. A formula-only tap with a cask; the app registers its own login item. No `brew services`.
-- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **carried (M1)** with the `Info.plist` patch and nested signing added.
-- F4.10, I4.5 Makefile targets and demo: **dropped**; `bun` and `cargo` are the interface. A demo recording ships in the README.
-- F4.11 export-control self-classification: **carried (M1)** in `docs/legal.md`, updated for the new dependencies.
+- F4.7, I4.3 Homebrew one-repo tap and `brew services`: **changed (M1)**. The app registers its own login item; no `brew services`. The cask in a formula-only tap is **designed** ([CI-CD](CI-CD.md) CI-25).
+- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **designed**. The release pipeline exists, with the `Info.plist` patch and nested signing; builds are unsigned for now (ad-hoc signed on macOS), and Developer ID signing and notarization belong to a later milestone ([ROADMAP](ROADMAP.md#later-on-demand)).
+- F4.10, I4.5 Makefile targets and demo: **dropped**; `bun` and `cargo` are the interface. A demo recording in the README is **designed**, and nothing owns it yet.
+- F4.11 export-control self-classification: **designed**, in a `docs/legal.md` updated for the new dependencies. The doc does not exist, and nothing owns it yet.
 - F4.12 third-party notices: **carried (M1)** in `NOTICE`.
 - F4.13 project conventions: **changed (M1)**; `AGENTS.md` states akou's own.
 - F4.18 requirements and install notes: **carried (M1)** in the README per OS.

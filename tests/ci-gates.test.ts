@@ -149,6 +149,17 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
+  test("a floor whose tests ran once is not scaled by a repeat dispatch", () => {
+    // A dispatch with repeat=50 multiplies every floor by TEST_REPEAT; `cargo test` runs once,
+    // and the helper legs failed 565 passes against a floor of 25450 until this step pinned it.
+    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const step = yaml.slice(yaml.indexOf("- name: cargo test floor"));
+    const body = step.slice(0, step.indexOf("\n      - ", 1));
+    expect(body).toContain("test-floor.ts helper");
+    expect(body).toMatch(/\n {10}TEST_REPEAT: 1\n/);
+    expect(body).not.toContain("--rerun-each");
+  });
+
   test("every floor names a job and a platform, with whole counts", () => {
     const floors = JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8"));
     for (const [key, f] of Object.entries(floors as Record<string, Record<string, unknown>>)) {

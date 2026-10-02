@@ -91,6 +91,8 @@ export interface ApiApp {
   models(): ModelsStatus;
   /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
   accelerator?(): AcceleratorState | null;
+  /** What a job that names no model runs here, and why (SV-R2). */
+  autoChoice?(): { model: string; preset: string; reason: string };
   /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
   presetAvailable?(name: string): boolean | undefined;
   /** The recognizers `GET /v1/server` lists: where each runs and whether its files are there. */

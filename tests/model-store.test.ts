@@ -8,15 +8,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
+import { MODELS, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import {
+  type AutoContext,
+  autoChoice,
   DAY_MS,
+  isRecognizer,
   ModelRefused,
   ModelStore,
   type ModelStoreOptions,
   resolveModel,
   USAGE_FILE,
 } from "../src/main/server/model-store.ts";
+import { PRESETS } from "../src/main/server/presets.ts";
 import { until } from "./capture-helpers.ts";
 import { type ModelRegistry, modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
@@ -178,6 +183,92 @@ describe("[SV-S1] which model a job runs: request, then server default, then har
     });
     // Positive control: the jobs route refuses the same name.
     expect(refusal(() => resolveModel({ model: "whisper-1" }, o(B))).code).toBe("unknown_model");
+  });
+});
+
+describe("[SV-R1] the preset table names engines the catalog has", () => {
+  test("every engine of a built preset is a catalog model, and the first is a recognizer", () => {
+    const built = PRESETS.filter((p) => p.built);
+    expect(built.map((p) => p.name)).toEqual(["fast", "best"]);
+    for (const p of built) {
+      expect(p.engines.length).toBeGreaterThan(0);
+      for (const id of p.engines)
+        expect(`${p.name}: ${id} ${MODELS.some((m) => m.id === id)}`).toBe(`${p.name}: ${id} true`);
+      const first = MODELS.find((m) => m.id === p.engines[0]) as ModelSpecEntry;
+      expect(`${p.name} runs a recognizer: ${isRecognizer(first)}`).toBe(
+        `${p.name} runs a recognizer: true`,
+      );
+    }
+  });
+});
+
+describe("[SV-R2] what auto runs: the desktop's final-pass rule over what is on disk", () => {
+  const BUILD = "llama-server-test-build";
+  const ctx = (
+    here: string[],
+    machine: { gpu: boolean; memoryGb: number },
+    o: { runtime?: string | null; qwen?: boolean } = {},
+  ): AutoContext => ({
+    present: (id) => here.includes(id),
+    catalog: [RECOGNIZER, "silero-vad", ...(o.qwen === false ? [] : [QWEN_ASR, BUILD])],
+    runtime: o.runtime === undefined ? BUILD : o.runtime,
+    machine,
+  });
+  const GPU = { gpu: true, memoryGb: 32 };
+  const CPU = { gpu: false, memoryGb: 64 };
+
+  test("Qwen with its llama-server on disk runs best, on any machine, even beside Parakeet", () => {
+    for (const m of [GPU, CPU, { gpu: true, memoryGb: 8 }])
+      expect(autoChoice(ctx([QWEN_ASR, BUILD, RECOGNIZER], m))).toEqual({
+        model: QWEN_ASR,
+        preset: "best",
+        reason: "Qwen3-ASR is downloaded here.",
+      });
+    // An own llama-server (`asr.llamaServer`, an image's): Qwen's files are all it needs.
+    expect(autoChoice(ctx([QWEN_ASR], CPU, { runtime: null })).preset).toBe("best");
+  });
+
+  test("Parakeet on disk and Qwen not: fast, even on a GPU; Qwen without its build is not here", () => {
+    expect(autoChoice(ctx([RECOGNIZER], GPU))).toEqual({
+      model: RECOGNIZER,
+      preset: "fast",
+      reason: "Parakeet is downloaded here and Qwen3-ASR is not.",
+    });
+    expect(autoChoice(ctx([RECOGNIZER, QWEN_ASR], GPU)).preset).toBe("fast");
+  });
+
+  test("nothing on disk: best on a GPU with the memory, fast on a CPU or a small GPU box", () => {
+    expect(autoChoice(ctx([], GPU))).toMatchObject({ model: QWEN_ASR, preset: "best" });
+    expect(autoChoice(ctx([], GPU)).reason).toContain("has a GPU");
+    expect(autoChoice(ctx([], CPU))).toMatchObject({
+      model: RECOGNIZER,
+      preset: "fast",
+      reason: "No speech model is downloaded yet, and this server has no GPU for Qwen3-ASR.",
+    });
+    expect(autoChoice(ctx([], { gpu: true, memoryGb: 7.6 })).reason).toBe(
+      "No speech model is downloaded yet, and this server has 8 GB of memory; Qwen3-ASR needs 16.",
+    );
+  });
+
+  test("a catalog with no Qwen for this server is fast, whatever the machine", () => {
+    expect(autoChoice(ctx([], GPU, { qwen: false }))).toEqual({
+      model: RECOGNIZER,
+      preset: "fast",
+      reason: "This version has no Qwen3-ASR for this server.",
+    });
+  });
+
+  test("resolveModel takes auto's choice last, after the request and server.default_model", () => {
+    const best = () => ({ model: QWEN_ASR, preset: "best" });
+    expect(resolveModel({ preset: "auto" }, { catalog, defaultModel: "auto", auto: best })).toEqual(
+      { model: QWEN_ASR, preset: "best", source: "hardware" },
+    );
+    expect(
+      resolveModel({ preset: "auto" }, { catalog, defaultModel: B, auto: best }),
+    ).toMatchObject({ model: B, source: "server_default" });
+    expect(
+      resolveModel({ preset: "fast" }, { catalog, defaultModel: "auto", auto: best }),
+    ).toMatchObject({ model: RECOGNIZER, source: "request" });
   });
 });
 

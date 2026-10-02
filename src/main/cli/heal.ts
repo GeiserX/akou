@@ -71,9 +71,12 @@ export interface ProcRow {
   args: string;
 }
 
-/** Every process of this machine, from `ps`; empty on Windows or when `ps` fails. */
-export function processTable(platform: string = process.platform): Promise<ProcRow[]> {
-  if (platform === "win32") return Promise.resolve([]);
+/**
+ * Every process of this machine, from `ps`; null on Windows or when `ps` cannot list them. A list
+ * that could not be read is never an empty one: a recording helper may be in it.
+ */
+export function processTable(platform: string = process.platform): Promise<ProcRow[] | null> {
+  if (platform === "win32") return Promise.resolve(null);
   return new Promise((resolve) => {
     const p = spawn("ps", ["-A", "-o", "pid=,ppid=,args="], {
       stdio: ["ignore", "pipe", "ignore"],
@@ -83,8 +86,8 @@ export function processTable(platform: string = process.platform): Promise<ProcR
     p.stdout.on("data", (d: string) => {
       out += d;
     });
-    p.on("error", () => resolve([]));
-    p.on("close", () => resolve(parsePs(out)));
+    p.on("error", () => resolve(null));
+    p.on("close", (code) => resolve(code === 0 ? parsePs(out) : null));
   });
 }
 
