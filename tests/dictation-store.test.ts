@@ -113,8 +113,9 @@ describe("the dictation log", () => {
   });
 
   test("ids are unique and time-ordered", () => {
-    const ids = new Set(Array.from({ length: 200 }, () => newDictationId(1_700_000_000_000)));
-    expect(ids.size).toBe(200);
+    // 10000 in one millisecond: 24 random bits collide here nearly every run.
+    const ids = new Set(Array.from({ length: 10_000 }, () => newDictationId(1_700_000_000_000)));
+    expect(ids.size).toBe(10_000);
     expect(newDictationId(2) > newDictationId(1)).toBe(true);
   });
 });

@@ -13,7 +13,8 @@
 //! |---|---|
 //! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`). Said again, with `swallow_keys` true and Accessibility `granted`, when the macOS key tap comes up after the start because the grant was given while the helper ran, once no session or paste is in flight |
 //! | `press` | `on`: `true` when the dictation key went down and the press may become a session, with `frame: {x, y, width, height}` of the window that has the keyboard then (screen points from the top left of the primary display) where the backend can read it, so the pill shows its dot on that display (DC-O1); `false` when the press was not a dictation after all (another key during a modifier-only hold, a rebind). A press that becomes a session says nothing more: `session.started` follows |
-//! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
+//! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), `draft: true` when the draft key started it (DC-S3), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
+//! | `hotkey` | `name` (`fixLast` or `pasteLast`), `target: {app, pid, window, field}` (what had the keyboard at the press): fix last or paste last was pressed, and no session started (DC-A5) |
 //! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs or `meter` is on |
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |
 //! | `grant.lost` | `name` |
@@ -28,7 +29,8 @@
 //! | `warn` | `code`, `msg` |
 //! | `stopped` | `reason` |
 //!
-//! App to helper: `rebind {hotkey, activation, draft, fixLast, pasteLast}`, `insert {id, text,
+//! App to helper: `rebind {hotkey, activation, draft, fixLast, pasteLast}` (the last three empty
+//! or absent when not bound), `insert {id, text,
 //! method, send_key, target, restore, read_field, smart_spacing, trailing_space}` (`method`
 //! `paste`, `type` or `clipboard`, default `paste`; `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`,
 //! `Shift+Enter` or `none`, the default; `restore` is `dictation.restoreClipboard`, default true;
@@ -53,6 +55,9 @@ pub const PROTOCOL: &str = "akou-dictate/1";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Target {
     pub app: String,
+    /// The app's name as people know it (`Slack`), empty where the OS gives none: what a per-app
+    /// rule is called on the Dictation page (DC-U9). Never matched on, unlike `app`.
+    pub name: String,
     pub pid: i64,
     pub window: String,
     /// `editable`, `not-editable`, `unknown` or `secure`.
@@ -70,6 +75,7 @@ impl Target {
     fn json(&self) -> Json {
         Json::obj(vec![
             ("app", Json::str(&self.app)),
+            ("name", Json::str(&self.name)),
             ("pid", Json::Int(self.pid)),
             ("window", Json::str(&self.window)),
             ("field", Json::str(&self.field)),
@@ -86,6 +92,7 @@ impl Target {
         }
         Ok(Target {
             app: v.str_or("app", ""),
+            name: v.str_or("name", ""),
             pid: v.get("pid").and_then(Value::as_i64).unwrap_or(0),
             window: v.str_or("window", ""),
             field,
@@ -150,6 +157,7 @@ pub fn session_started(
     id: &str,
     target: &Target,
     capture_ns: u64,
+    draft: bool,
     mic: Option<&super::inputs::Choice>,
 ) -> String {
     let mut f = vec![
@@ -157,10 +165,19 @@ pub fn session_started(
         ("target", target.json()),
         ("capture_ns", Json::Str(capture_ns.to_string())),
     ];
+    if draft {
+        f.push(("draft", Json::Bool(true)));
+    }
     if let Some(m) = mic {
         f.push(("mic", m.json()));
     }
     line("session.started", f)
+}
+
+/// The session `id` latched (tapped on, a chord let go before `HOLD_MS`, or `session.start`), so
+/// the app may end it after silence (DC-A3).
+pub fn latched(id: &str) -> String {
+    line("latched", vec![("id", Json::str(id))])
 }
 
 pub fn session_ended(id: &str, reason: &str) -> String {
@@ -176,6 +193,14 @@ pub fn level(rms: f64) -> String {
 
 pub fn key(name: &str) -> String {
     line("key", vec![("name", Json::str(name))])
+}
+
+/// Fix last or paste last was pressed, with what had the keyboard then (DC-A5).
+pub fn hotkey(name: &str, target: &Target) -> String {
+    line(
+        "hotkey",
+        vec![("name", Json::str(name)), ("target", target.json())],
+    )
 }
 
 pub fn mic(open: bool) -> String {
@@ -262,6 +287,10 @@ pub enum Command {
     Rebind {
         hotkey: String,
         activation: Option<String>,
+        /// The draft key, fix last and paste last (DC-S3, DC-A5); none when empty or absent.
+        draft: Option<String>,
+        fix_last: Option<String>,
+        paste_last: Option<String>,
     },
     Insert {
         id: String,
@@ -326,13 +355,25 @@ impl Command {
                 .ok_or_else(|| format!("{kind} needs {k}"))
         };
         Ok(match kind {
-            "rebind" => Command::Rebind {
-                hotkey: need("hotkey")?,
-                activation: v
-                    .get("activation")
-                    .and_then(Value::as_str)
-                    .map(String::from),
-            },
+            "rebind" => {
+                let bound = |k: &str| {
+                    v.get(k)
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                };
+                Command::Rebind {
+                    hotkey: need("hotkey")?,
+                    activation: v
+                        .get("activation")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    draft: bound("draft"),
+                    fix_last: bound("fixLast"),
+                    paste_last: bound("pasteLast"),
+                }
+            }
             "insert" => {
                 let method = v.str_or("method", "paste");
                 if !METHODS.contains(&method.as_str()) {
@@ -636,6 +677,19 @@ mod tests {
                 Command::Rebind {
                     hotkey: "RightShift".into(),
                     activation: Some("hold".into()),
+                    draft: None,
+                    fix_last: None,
+                    paste_last: None,
+                },
+            ),
+            (
+                r#"{"type":"rebind","hotkey":"RightCommand","draft":"RightOption","fixLast":"Shift+RightCommand","pasteLast":""}"#,
+                Command::Rebind {
+                    hotkey: "RightCommand".into(),
+                    activation: None,
+                    draft: Some("RightOption".into()),
+                    fix_last: Some("Shift+RightCommand".into()),
+                    paste_last: None,
                 },
             ),
             (
@@ -647,6 +701,7 @@ mod tests {
                     send_key: "Enter".into(),
                     target: Some(Target {
                         app: "Slack".into(),
+                        name: String::new(),
                         pid: 42,
                         window: "w".into(),
                         field: "editable".into(),
@@ -754,12 +809,19 @@ mod tests {
     fn helper_lines_round_trip_through_the_reader() {
         let t = Target {
             app: "Slack".into(),
+            name: "Slack".into(),
             pid: 7,
             window: "w1".into(),
             field: "editable".into(),
         };
-        let started =
-            Value::parse(&session_started("1", &t, 123_456_789_012_345_678, None)).unwrap();
+        let started = Value::parse(&session_started(
+            "1",
+            &t,
+            123_456_789_012_345_678,
+            false,
+            None,
+        ))
+        .unwrap();
         assert_eq!(
             started.get("type").unwrap().as_str(),
             Some("session.started")
@@ -852,6 +914,7 @@ mod tests {
     fn the_shared_fixture_lines_match_the_app() {
         let t = Target {
             app: "Slack".into(),
+            name: "Slack".into(),
             pid: 7,
             window: "w1".into(),
             field: "editable".into(),
@@ -868,9 +931,12 @@ mod tests {
                 }),
             ),
             press(false, None),
-            session_started("1", &t, 123_456_789_012_345_678, None),
+            session_started("1", &t, 123_456_789_012_345_678, false, None),
+            latched("1"),
+            session_started("2", &t, 123_456_789_012_345_678, true, None),
             level(0.25),
             key("Shift+Enter"),
+            hotkey("fixLast", &t),
             mic(true),
         ];
         for reason in ["release", "tap", "key", "cancel", "silence", "max", "stop"] {
@@ -917,6 +983,9 @@ mod tests {
                 Command::Rebind {
                     hotkey: "RightCommand".into(),
                     activation: Some("hold-or-toggle".into()),
+                    draft: None,
+                    fix_last: None,
+                    paste_last: None,
                 },
                 Command::Insert {
                     id: "1".into(),

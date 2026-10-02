@@ -11,9 +11,10 @@
 
 import { isAbsolute } from "node:path";
 import { HOOK_STAGES, type HookStage } from "../../config/schema.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId } from "./common.ts";
+import { CALL_ID, CALL_REF_ERRORS, callId, LIVE_REF_ERRORS, WRITE_ERRORS } from "./common.ts";
 
 export function handoffRoutes(r: Router<ApiApp>): void {
   r.add(
@@ -27,6 +28,9 @@ export function handoffRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "to?": "string" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, {
+        409: ["export_not_configured", "not_ended"],
+      }),
     },
     async (c) => {
       const b = await c.body<{ to?: string }>();
@@ -54,6 +58,7 @@ export function handoffRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { "stage?": "string" },
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, { 409: ["not_ended"] }),
     },
     async (c) => {
       const b = await c.body<{ stage?: string }>();
@@ -78,6 +83,7 @@ export function handoffRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { dirs: "string[]", "workspace?": "string" },
       ok: 200,
+      errors: { 422: ["not_imported"] },
     },
     async (c) => {
       const b = await c.body<{ dirs: string[]; workspace?: string }>();

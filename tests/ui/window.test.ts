@@ -1173,6 +1173,90 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+describe("the sidebar at 1024 px wide", () => {
+  test(
+    "a long call title ends in an ellipsis inside its row, and a page gives the sidebar its full width",
+    async () => {
+      const title = "Quarterly planning with the platform and identity teams about the rollout";
+      let id = "";
+      await withRig(
+        {
+          seed: (home) => {
+            id = seedCall(home, (b) => b.created({ title }, T0)).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1024, height: 700 });
+          await page.waitForSelector("#calls li .what");
+          expect(await page.$eval("body", (b) => b.className)).not.toContain("welcoming");
+          const titleFit = () =>
+            page.$eval("#calls li .what", (el) => {
+              const row = (el.closest("button") as HTMLElement).getBoundingClientRect();
+              const r = el.getBoundingClientRect();
+              return {
+                inside: r.right <= row.right,
+                clipped: el.scrollWidth > el.clientWidth,
+                ellipsis: getComputedStyle(el).textOverflow,
+              };
+            });
+          // On a call the side pane is there and the sidebar is narrow: the title is cut with an
+          // ellipsis at the row's edge, never drawn past it.
+          expect(await titleFit()).toEqual({ inside: true, clipped: true, ellipsis: "ellipsis" });
+          const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+          const rem = await page.evaluate(() =>
+            Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+          );
+          expect(await width()).toBe(10 * rem);
+          // A page has no side pane: the sidebar keeps the width it has in a wide window.
+          await page.click("#settings-open");
+          await page.waitForSelector("body.paged");
+          expect(await width()).toBe(13.75 * rem);
+          expect((await titleFit()).inside).toBe(true);
+          // Under 900 px the page itself needs the room, so the sidebar narrows again.
+          await page.setViewportSize({ width: 899, height: 700 });
+          expect(await width()).toBe(10 * rem);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a page opened over the welcome, with the speech models missing, gives the sidebar its full width too",
+    async () => {
+      // One model file that is not on disk: the welcome shows its models step.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      await withRig({ modelRegistry }, async (rig) => {
+        const page = await rig.open(undefined, { before: setupDone });
+        await page.setViewportSize({ width: 1024, height: 700 });
+        await page.waitForSelector("#welcome:not([hidden])");
+        const width = () => page.$eval("#sidebar", (el) => el.getBoundingClientRect().width);
+        const rem = await page.evaluate(() =>
+          Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        );
+        expect(await width()).toBe(10 * rem);
+        await page.click("#models-open");
+        await page.waitForSelector("body.paged");
+        // The welcome's class stays on the body under the page; the page's width wins.
+        expect(await page.$eval("body", (b) => b.className)).toContain("welcoming");
+        expect(await width()).toBe(13.75 * rem);
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the workspace menu (WINDOW 3.1)", () => {
   const chip = (page: Page) => text(page, "#workspace-name");
   const listed = (page: Page) =>
@@ -1642,13 +1726,13 @@ describe("playback and Fix this line", () => {
           await page.hover('#lines .row[data-id="l000003"]');
           await page.click('#lines .row[data-id="l000003"] .play');
           await until(async () => (await player()).at > 0.3, 8000, "the line playing");
-          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Pause");
           // Space, with focus still on the row's Play button, pauses: it does not restart the line.
           await page.keyboard.press("Space");
           const paused = await player();
           expect(paused.paused).toBe(true);
           expect(paused.at).toBeGreaterThan(0.3);
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           await page.waitForTimeout(400);
           expect((await player()).at).toBe(paused.at);
           await page.keyboard.press("Space");
@@ -1713,7 +1797,7 @@ describe("playback and Fix this line", () => {
             5000,
             "the player cleared",
           );
-          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
           await page.click("#scroller");
           await page.keyboard.press("Space");
@@ -2099,7 +2183,7 @@ describe("copy the transcript so far (W12.2)", () => {
 
 describe("the share viewer (DESIGN 8.3)", () => {
   test(
-    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to live, + and -, the offset tooltip",
+    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to the end, + and -, the offset tooltip",
     async () => {
       let id = "";
       await withRig(
@@ -2124,6 +2208,8 @@ describe("the share viewer (DESIGN 8.3)", () => {
             s.scrollTop = 0;
           });
           await viewer.waitForSelector("#jump", { state: "visible" });
+          // The shared call has ended: nothing is live, so the button does not say so.
+          expect(await viewer.textContent("#jump")).toBe("↓ Back to the end");
           const top = () =>
             viewer.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
           await rig.write(id, seg("l000061", "a brand new line", { w0: T0 + 61 * 4000 }));
@@ -2141,7 +2227,7 @@ describe("the share viewer (DESIGN 8.3)", () => {
           );
           await Bun.sleep(300);
           expect(await top()).toBeLessThan(10);
-          // Back to live, then pinned again.
+          // Back to the end, then pinned again.
           await viewer.click("#jump");
           await until(async () => (await gapOf(viewer)) < 2, 3000, "back at the bottom");
           await viewer.waitForSelector("#jump", { state: "hidden" });
