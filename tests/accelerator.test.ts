@@ -163,6 +163,42 @@ describe("what the machine has", () => {
   });
 });
 
+describe("[akou-5an.94] several render nodes open to llama-server", () => {
+  /** An Intel iGPU and its two SR-IOV virtual functions, as the UHD 770 box showed them. */
+  const sriov = (o: { denied?: string[]; env?: Record<string, string> } = {}) =>
+    machine("linux-x64", {
+      files: Object.fromEntries(
+        [128, 129, 130].flatMap((n) => [
+          [`/dev/dri/renderD${n}`, ""],
+          [`/sys/class/drm/renderD${n}/device/vendor`, "0x8086\n"],
+        ]),
+      ),
+      dirs: { "/dev/dri": ["card0", "renderD128", "renderD129", "renderD130"] },
+      denied: o.denied,
+      env: { AKOU_ACCELERATORS: "vulkan,cpu", ...o.env },
+    });
+
+  test("the reason says llama-server may open another, and to pass only the detected one", () => {
+    const s = detectAccelerator("auto", sriov());
+    expect(s.active).toBe("vulkan");
+    expect(s.reason).toBe(
+      "an Intel GPU at /dev/dri/renderD128; llama-server can open 3 render nodes here (/dev/dri/renderD128, /dev/dri/renderD129, /dev/dri/renderD130) and picks by its own order, which may not be this one: pass only /dev/dri/renderD128 (docker run --device /dev/dri/renderD128)",
+    );
+    // asr.accelerator vulkan runs on the same nodes, so it says the same.
+    expect(detectAccelerator("vulkan", sriov()).reason).toContain("pass only /dev/dri/renderD128");
+  });
+
+  test("positive control: one node open, or the CPU, says nothing of it", () => {
+    const one = sriov({ denied: ["/dev/dri/renderD129", "/dev/dri/renderD130"] });
+    expect(detectAccelerator("auto", one).reason).toBe("an Intel GPU at /dev/dri/renderD128");
+    expect(detectAccelerator("cpu", sriov()).reason).toBe("asr.accelerator is cpu");
+    expect(
+      detectAccelerator("auto", renderNode("0x8086", { env: { AKOU_ACCELERATORS: "vulkan,cpu" } }))
+        .reason,
+    ).not.toContain("render nodes");
+  });
+});
+
 describe("which builds can run here", () => {
   test("natively: every build the release has for the platform", () => {
     expect(availableBuilds(machine("darwin-arm64"))).toEqual(["cpu", "metal"]);

@@ -205,8 +205,32 @@ const gpuOf = (a: Accelerator): AcceleratorState["gpu"] => (a === "cpu" ? null :
 /** The choice from the setting and the machine, before llama-server is asked. */
 export function detectAccelerator(setting: AcceleratorSetting, p: Probe): AcceleratorState {
   const available = availableBuilds(p);
-  const { active, reason } = chooseAccelerator(setting, findDevices(p), available);
-  return { setting, active, gpu: gpuOf(active), device: null, verified: false, available, reason };
+  const devices = findDevices(p);
+  const { active, reason } = chooseAccelerator(setting, devices, available);
+  return {
+    setting,
+    active,
+    gpu: gpuOf(active),
+    device: null,
+    verified: false,
+    available,
+    reason: reason + severalNodes(active, devices),
+  };
+}
+
+/**
+ * llama.cpp picks among the render nodes it can open by its own device order, never by a DRI
+ * path, so with several open (an SR-IOV iGPU's virtual functions beside it) it may run on one
+ * detection did not choose: on an Intel UHD 770 it opened a virtual function, which hung. Mesa can
+ * pin a device only by PCI vendor and device id, which those functions share, so the fix is to
+ * let akou see one node. Empty when one node or none is open, or the build is not on one.
+ */
+function severalNodes(active: Accelerator, devices: readonly Device[]): string {
+  if (active !== "vulkan" && active !== "sycl" && active !== "rocm") return "";
+  const nodes = devices.filter((d) => d.usable && d.node.startsWith("/dev/dri/"));
+  const one = nodes.find((d) => d.vendor !== "nvidia") ?? nodes[0];
+  if (!one || nodes.length < 2) return "";
+  return `; llama-server can open ${nodes.length} render nodes here (${nodes.map((d) => d.node).join(", ")}) and picks by its own order, which may not be this one: pass only ${one.node} (docker run --device ${one.node})`;
 }
 
 /** ggml's device name prefixes, per backend. */
