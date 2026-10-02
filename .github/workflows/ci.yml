@@ -751,8 +751,11 @@ jobs:
       - run: bun install --frozen-lockfile
       # cargo test writes no JUnit on stable Rust, so its own result lines become one: each
       # `test <name> ... ok|FAILED|ignored` line of both builds is a test case, and the `helper`
-      # floor counts them (DC-T2), so a Rust test that stops running fails the job.
+      # floor counts them (DC-T2), so a Rust test that stops running fails the job. cargo test runs
+      # once even in a `repeat` dispatch, so its floor is not scaled by the job's TEST_REPEAT.
       - name: cargo test floor
+        env:
+          TEST_REPEAT: 1
         run: |
           awk '
             function esc(v) { gsub(/&/, "\\&amp;", v); gsub(/</, "\\&lt;", v); gsub(/>/, "\\&gt;", v); gsub(/"/, "\\&quot;", v); return v }
