@@ -51,6 +51,8 @@ export interface WatchdogOptions {
   /** What opens the app again (`relaunchCommand`); null opens nothing. */
   relaunch?: readonly string[] | null;
   reopenMs?: number;
+  /** The `ps` the Worker lists processes with (tests point it at one that fails). */
+  ps?: string;
 }
 
 /** Opening the app again after the watchdog ends it, at most this often. */
@@ -108,9 +110,10 @@ function sample() {
     for (const f of old) rmSync(join(cfg.hangsDir, f), { force: true });
   } catch {}
 }
-// Every process below root, with its arguments.
+// Every process below root, with its arguments; null when ps could not list them.
 function below(root) {
-  const r = spawnSync("ps", ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8" });
+  const r = spawnSync(cfg.ps, ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8" });
+  if (r.error || r.status !== 0) return null;
   const rows = [];
   for (const l of (r.stdout || "").split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
@@ -176,6 +179,11 @@ setInterval(() => {
   }
   if (!cfg.end) return;
   const rows = process.platform === "win32" ? [] : below(cfg.pid);
+  // A tree that cannot be read is not an empty tree: a recording helper may be in it.
+  if (rows === null) {
+    line("error", "could not list the processes below akou (ps failed), so nothing was ended; kill -KILL " + cfg.pid + " restarts it by hand");
+    return;
+  }
   // The last guard: the flag can lag a start whose helper was spawned after the last beat, but a
   // recording helper below the app is always there to see. It is never ended.
   const helper = rows.find((r) => records(r.args));
@@ -222,6 +230,7 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
     sampleSeconds: WATCHDOG_SAMPLE_SECONDS,
     pid: o.pid ?? process.pid,
     relaunch: o.relaunch ?? null,
+    ps: o.ps ?? "ps",
     reopenMs: o.reopenMs ?? REOPEN_MS,
   };
   const url = URL.createObjectURL(new Blob([SOURCE], { type: "application/javascript" }));

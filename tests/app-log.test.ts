@@ -23,11 +23,11 @@ describe("[DK-M8] app.log", () => {
       expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
       await rig.app.quit();
       const log = readFileSync(file, "utf8");
-      expect(log).toMatch(
-        new RegExp(
-          `^\\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d:\\d\\d\\.\\d{3} [+-]\\d\\d:\\d\\d info akou ${rig.app.version.replace(/\./g, "\\.")} started \\(pid ${process.pid}, app, headless, API on port ${rig.port}\\)$`,
-          "m",
-        ),
+      // The start line: a stamp, then the exact words, compared as text (no pattern built from them).
+      const started = log.split("\n").find((l) => l.includes(" info akou ")) ?? "";
+      expect(started).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} [+-]\d\d:\d\d info /);
+      expect(started.slice(started.indexOf(" info ") + 1)).toBe(
+        `info akou ${rig.app.version} started (pid ${process.pid}, app, headless, API on port ${rig.port})`,
       );
       expect(log).toContain(`info call ${id}: started`);
       expect(log).toContain(`info call ${id}: a part started`);

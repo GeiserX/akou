@@ -4,7 +4,7 @@
  * child that stands in for a helper, prints `ready`, then does what the arguments say.
  *
  *   bun tests/fixtures/watchdog-app.ts LOG HANGS --silence MS [--recording] [--no-watchdog]
- *     [--sample] [--window --reopen MARKER] [--late-helper FILE | --touch-recording]
+ *     [--sample] [--window --reopen MARKER] [--late-helper FILE | --touch-recording] [--ps-fails]
  *     (--block MS | --busy MS)
  *
  * `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
@@ -34,6 +34,7 @@ const wd = has("--no-watchdog")
       tickMs: 100,
       beatMs: 100,
       windowOpen: () => has("--window"),
+      ...(has("--ps-fails") ? { ps: "/usr/bin/false" } : {}),
       relaunch: has("--reopen")
         ? [
             process.execPath,
