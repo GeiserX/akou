@@ -175,17 +175,27 @@ describe("[akou-5an.94] several render nodes open to llama-server", () => {
       ),
       dirs: { "/dev/dri": ["card0", "renderD128", "renderD129", "renderD130"] },
       denied: o.denied,
-      env: { AKOU_ACCELERATORS: "vulkan,cpu", ...o.env },
+      env: o.env ?? { AKOU_ACCELERATORS: "vulkan,cpu" },
     });
 
   test("the reason says llama-server may open another, and to pass only the detected one", () => {
     const s = detectAccelerator("auto", sriov());
     expect(s.active).toBe("vulkan");
     expect(s.reason).toBe(
-      "an Intel GPU at /dev/dri/renderD128; llama-server can open 3 render nodes here (/dev/dri/renderD128, /dev/dri/renderD129, /dev/dri/renderD130) and picks by its own order, which may not be this one: pass only /dev/dri/renderD128 (docker run --device /dev/dri/renderD128)",
+      "an Intel GPU at /dev/dri/renderD128; llama-server can open 3 render nodes here (/dev/dri/renderD128, /dev/dri/renderD129, /dev/dri/renderD130) and picks by its own order, which may not be /dev/dri/renderD128: pass only that node (docker run --device /dev/dri/renderD128)",
     );
-    // asr.accelerator vulkan runs on the same nodes, so it says the same.
-    expect(detectAccelerator("vulkan", sriov()).reason).toContain("pass only /dev/dri/renderD128");
+    // asr.accelerator vulkan runs on the same nodes, so it says the same, naming the node.
+    expect(detectAccelerator("vulkan", sriov()).reason).toBe(
+      "asr.accelerator is vulkan; llama-server can open 3 render nodes here (/dev/dri/renderD128, /dev/dri/renderD129, /dev/dri/renderD130) and picks by its own order, which may not be /dev/dri/renderD128: pass only that node (docker run --device /dev/dri/renderD128)",
+    );
+  });
+
+  test("a native install is told which nodes llama-server may open, with no docker advice", () => {
+    const s = detectAccelerator("auto", sriov({ env: {} }));
+    expect(s.active).toBe("vulkan");
+    expect(s.reason).toBe(
+      "an Intel GPU at /dev/dri/renderD128; llama-server can open 3 render nodes here (/dev/dri/renderD128, /dev/dri/renderD129, /dev/dri/renderD130) and picks by its own order, which may not be /dev/dri/renderD128",
+    );
   });
 
   test("positive control: one node open, or the CPU, says nothing of it", () => {
