@@ -1,5 +1,6 @@
-# The image needs package.json, bun.lock, bunfig.toml, src/, skills/, the licence files and
-# native/akou-diarize; everything else stays out of the build context.
+# The image needs package.json, bun.lock, bunfig.toml, src/, skills/, the licence files,
+# native/akou-diarize and the dictation times the app imports; everything else stays out of the
+# build context.
 .git
 .github
 .beads
@@ -12,6 +13,7 @@ dist
 build
 artifacts
 docs
+!docs/gates/dictation-latency.json
 examples
 tests
 scripts

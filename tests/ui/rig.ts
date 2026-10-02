@@ -895,6 +895,8 @@ export async function windowPage(
     /** The streaming model and the resolved text inserted on `GET /dictation` (DC-E7). */
     live?: string | null;
     final?: string | null;
+    /** Each choice's time after the key is let go on `GET /dictation` (DC-T3); absent, none. */
+    latency?: Record<string, { ms: number; measured: boolean }>;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -928,6 +930,7 @@ export async function windowPage(
           lost: o.lost ?? [],
           live: o.live ?? null,
           final: o.final ?? null,
+          ...(o.latency ? { latency: o.latency } : {}),
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {

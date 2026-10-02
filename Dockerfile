@@ -58,6 +58,8 @@ COPY package.json bun.lock bunfig.toml ./
 RUN bun install --frozen-lockfile --production
 COPY src/ src/
 COPY skills/ skills/
+# The dictation times the Dictation page shows (src/main/dictation/latency.ts imports it).
+COPY docs/gates/dictation-latency.json docs/gates/
 COPY LICENSE NOTICE README.md ./
 COPY --from=diarize /src/target/release/akou-diarize /usr/local/bin/akou-diarize
 # `akou` on PATH is the CLI from source; exec makes Bun pid 1, so SIGTERM reaches `akou serve`.

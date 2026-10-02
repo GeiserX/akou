@@ -1705,6 +1705,60 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
+    "[DC-T3] each text-inserted choice says how long it takes after the key is let go, measured or estimated",
+    async () => {
+      const helps = (p: Page) =>
+        p.$$eval("#page-dictation label.pg-choice[data-final]", (l) =>
+          l.map((x) => [
+            (x as HTMLElement).dataset.final,
+            x.querySelector(".pg-help")?.textContent ?? "",
+          ]),
+        );
+      const w = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+        latency: {
+          live: { ms: 180, measured: true },
+          parakeet: { ms: 150, measured: false },
+          qwen: { ms: 1240, measured: true },
+        },
+      });
+      try {
+        await w.page.click("#dictation-open");
+        await w.page.waitForSelector("#dictation-live-words");
+        const got = Object.fromEntries(await helps(w.page));
+        expect(got.live).toEndWith(
+          "About 0.2 s after you let go of 10 s of speech, measured on this kind of computer.",
+        );
+        expect(got.parakeet).toEndWith(
+          "About 0.2 s after you let go of 10 s of speech, estimated.",
+        );
+        expect(got.qwen).toEndWith(
+          "About 1.2 s after you let go of 10 s of speech, measured on this kind of computer.",
+        );
+      } finally {
+        await w.close();
+      }
+      // An akou that sends no times shows none: the line is the choice's own, nothing invented.
+      const old = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+      });
+      try {
+        await old.page.click("#dictation-open");
+        await old.page.waitForSelector("#dictation-live-words");
+        for (const [, help] of await helps(old.page))
+          expect(help).not.toContain("after you let go");
+      } finally {
+        await old.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "in the window: another computer waits for its address, then turns on; off, the engine is local again; the AI tidy shows its instructions",
     async () => {
       const w = await windowPage(rig, {

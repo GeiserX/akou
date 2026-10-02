@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { dictationLatency } from "../src/main/dictation/latency.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli, rigCli } from "./cli-helpers.ts";
@@ -80,6 +81,7 @@ describe("DC-G1: GET /v1/dictation", () => {
       lost: [],
       backend: "fake",
       swallow_keys: true,
+      latency: dictationLatency(),
     });
   });
 
