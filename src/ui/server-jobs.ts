@@ -151,7 +151,7 @@ export class JobsPage implements ServerScreen {
     );
     this.status.addEventListener("change", () => void this.read());
     this.key.addEventListener("change", () => void this.read());
-    // Escape empties the field by itself (a search field does), and that is an input too.
+    // Escape empties the field by itself in Chromium and WebKit (a search field does there).
     this.search.addEventListener("input", () => void this.read());
   }
 
