@@ -163,7 +163,7 @@ describe("DC-U8: pausing other media reaches the helper", () => {
     await until(() => media().length === 1, 5000, "pause_media after ready");
     expect((await r.api("PATCH", "/config", { "dictation.muteMedia": true })).status).toBe(200);
     await until(() => media().length === 2, 5000, "pause_media on the change");
-    // Positive control: a change of another setting sends nothing more.
+    // Negative control: a change of another setting sends nothing more.
     await r.api("PATCH", "/config", { "dictation.sendAlways": true });
     await Bun.sleep(200);
     expect(media()).toEqual([false, true]);

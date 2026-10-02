@@ -848,7 +848,7 @@ export const SETTINGS = {
   "dictation.muteMedia": {
     type: "boolean",
     default: false,
-    doc: "Pause playing media while you dictate, through the system's media controls, and resume only what akou paused. Windows and Linux only: macOS lets no app see what another one is playing, so on a Mac it does nothing yet.",
+    doc: "Pause playing media while you dictate, through the system's media controls, and resume only what akou paused. Linux, and Windows (not yet checked with a real player); macOS lets no app see what another one is playing, so on a Mac it does nothing yet.",
   },
   "dictation.learn": {
     type: "string",

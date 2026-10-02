@@ -942,6 +942,7 @@ mod tests {
                     mode: "auto".into(),
                 },
                 Command::RecordKeys { on: true },
+                Command::PauseMedia { on: true },
                 Command::Meter { on: true },
                 Command::Stop,
             ]

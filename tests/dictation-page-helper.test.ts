@@ -163,7 +163,7 @@ describe("DC-U8: dictation.muteMedia goes to the helper", () => {
     expect(sent(r, "pause_media")[1]).toEqual({ type: "pause_media", on: true });
   });
 
-  test("positive control: with no media setting, none is sent", async () => {
+  test("negative control: with no media setting, none is sent", async () => {
     const r = rig([]);
     await started(r);
     await until(() => sent(r, "rebind").length === 1, 5000, "the rebind");
