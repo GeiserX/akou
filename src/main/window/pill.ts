@@ -231,6 +231,7 @@ export function settledWords(last: readonly string[], next: readonly string[]): 
 export const PILL_MAX_HEIGHT = 2000;
 
 const realLater = (ms: number, fn: () => void) => {
+  // clock: the real timer behind the injected one; tests pass their own.
   const t = setTimeout(fn, ms);
   return () => clearTimeout(t);
 };

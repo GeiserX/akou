@@ -4,7 +4,7 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
 
 ## Before the tag
 
-1. `main` is green on `check`, `ui` and `capture`.
+1. `main` is green on `ci-ok`. The tag runs no tests of its own: it waits for `ci-ok` on the tagged commit and stops unless it passed ([CI-CD](../docs/CI-CD.md) CI-19). If a known flake turned it red, rerun the failed legs of that CI run, then rerun the release's failed jobs.
 2. `native/akou-capture` is on `main`. Without it the workflow stops: an app without its helper cannot record.
 3. Set the version everywhere, from one place:
 
@@ -14,7 +14,7 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
    bun run check
    ```
 
-   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, `skills/akou-vocab/SKILL.md`, and the helper's `Cargo.toml` and `Cargo.lock`. Commit it (`chore(release): 0.1.0`) and merge it to `main`.
+   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, `skills/akou-vocab/SKILL.md`, and the helper's `Cargo.toml` and `Cargo.lock`. Write the version's section in [CHANGELOG.md](../CHANGELOG.md), headed `## 0.1.0`; `--check` fails without it, and the release notes start with it (CI-20). Commit both (`chore(release): 0.1.0`) and merge it to `main`.
    For a stable version (1.0.0 or later, no prerelease part), `--check` also fails until the evidence is on record ([CI-CD](../docs/CI-CD.md) CI-28). Prereleases skip both lines:
    - The terms check in [docs/providers.md](../docs/providers.md): read the current Anthropic and OpenAI terms and add a row dated after the previous stable release.
    - The gates in [docs/gates/M0-results.md](../docs/gates/M0-results.md): every gate G1 to G8 has a Pass verdict in the summary table.
@@ -34,11 +34,11 @@ git tag -a v0.1.0 -m "akou 0.1.0"
 git push origin v0.1.0
 ```
 
-The workflow checks the tag equals every version string, builds and checks everything again, and publishes the release with `SHA256SUMS`. A 0.x version is published as a prerelease. It is never a draft.
+The workflow checks the tag equals every version string and that `ci-ok` passed on the tagged commit, builds and checks every artifact, attests each one, and publishes the release with `SHA256SUMS`. A 0.x version is published as a prerelease. It is never a draft.
 
 ## After the workflow
 
-1. The release page lists the DMG, the zip, three CLI archives and `SHA256SUMS`, and its notes start with the unsigned first-open step.
+1. The release page lists the DMG, the zip, four CLI archives and `SHA256SUMS`, and its notes start with the version's changelog section, then the unsigned first-open step. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
 2. On a test Mac (never the build machine), from the downloaded DMG:
    - `shasum -a 256 -c SHA256SUMS --ignore-missing` passes.
    - The first open needs the documented step (Control-click Open on macOS 14, Open Anyway on 15 and later) and nothing else; macOS never says the app is damaged.

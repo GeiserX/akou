@@ -154,5 +154,6 @@ nav:
   - Reference:
       - How it works: how-it-works.md
       - Command-line reference: cli.md
+      - MCP tools: reference/mcp.md
       - FAQ: faq.md
       - Development: development.md

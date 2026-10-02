@@ -4,14 +4,14 @@
 
 Every `akou` command with its help page, exactly as `akou help COMMAND` prints it, then the table of what each action is called through the command line, the HTTP API, MCP and the window. The page is generated from the code, and CI fails when it differs.
 
-Exit codes: 0 ok, 3 nothing live, 64 usage, 65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission, 78 the settings refuse it, 124 timed out.
+Exit codes: 0 ok, 3 nothing live, 64 usage, 65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission, 78 the settings refuse it, 124 timed out, 130 interrupted.
 
 ## start
 
 ```text
 akou start: Start a call; answers once audio is being written
 
-usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]
+usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--engines A,B] [--without-models] [--attach] [--json]
 
   -w, --workspace WS    the workspace the call goes in
   -t, --title TITLE     the call's title
@@ -22,6 +22,7 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
       --live MODEL      the live model for this call only: auto, a model id from `akou models list`, nemotron or parakeet (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen
       --review MODEL    the second pass for this call only: none, a model id, qwen or parakeet (default: asr.review.model)
       --review-every S  how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)
+      --engines A,B     the final pass's models for this call, in order, their words combined: qwen, parakeet or model ids (default: asr.final.engines)
       --without-models  record audio now and transcribe later, before the models are downloaded
       --attach          if a call is already recording, answer with that call (exit 0) instead of exit 75
       --json            print the answer as JSON, errors included
@@ -31,6 +32,7 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
 example: akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform
 example: akou start --live nemotron
 example: akou start --live nemotron --review qwen --review-every 120
+example: akou start --engines qwen,parakeet
 example: akou start --attach --json
 ```
 
@@ -255,6 +257,21 @@ usage: akou enhance [--template T] [-c CALL] [--json]
 example: akou enhance --template standup
 ```
 
+## templates
+
+```text
+akou templates: List the note templates, or print one as the enhanced notes would use it
+
+usage: akou templates list | akou templates show NAME   [--json]
+
+      --json     print the answer as JSON, errors included
+  -h, --help     show this help
+      --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
+
+example: akou templates list
+example: akou templates show standup
+```
+
 ## quit
 
 ```text
@@ -309,14 +326,32 @@ example: akou context "what did we decide about the release?" --budget 4000
 ```text
 akou ask: Answer a question with akou's configured provider (excerpts when it cannot)
 
-usage: akou ask "QUESTION" [-c CALL] [--json]
+usage: akou ask "QUESTION" | akou ask --preset NAME [--speaker NAME]   [-c CALL] [--json]
 
-  -c, --call CALL  live, last or a call id (default: live)
-      --json       print the answer as JSON, errors included
-  -h, --help       show this help
-      --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
+  -c, --call CALL     live, last or a call id (default: live)
+      --preset NAME   ask a preset's question instead (`akou presets list` names them)
+      --speaker NAME  with --preset: the speaker a per-speaker preset asks about
+      --json          print the answer as JSON, errors included
+  -h, --help          show this help
+      --restart       if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou ask "what did we decide about the release?"
+example: akou ask --preset decisions
+example: akou ask --preset speaker --speaker Ben
+```
+
+## presets
+
+```text
+akou presets: List the ask presets: the shipped questions and your own files
+
+usage: akou presets list [--json]
+
+      --json     print the answer as JSON, errors included
+  -h, --help     show this help
+      --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
+
+example: akou presets list
 ```
 
 ## search
@@ -471,7 +506,7 @@ example: akou import hark-viewer ~/Recordings/calls/work -w work
 ## jobs
 
 ```text
-akou jobs: The server's transcription jobs your key can see
+akou jobs: The transcription jobs your key can see
 
 usage: akou jobs list [--status queued|running|done|failed|cancelled]   [--json]
 
@@ -613,33 +648,31 @@ example: akou share off
 ## devices
 
 ```text
-akou devices: Microphones and outputs
+akou devices: Microphones and outputs, with the ids --mic takes
 
-usage: akou devices
+usage: akou devices [--json]
 
       --json     print the answer as JSON, errors included
   -h, --help     show this help
       --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou devices
-
-not built yet: listing devices needs the capture helper's device query, which is not built yet
+example: akou devices --json
 ```
 
 ## apps
 
 ```text
-akou apps: Apps playing audio, for --call app:ID
+akou apps: Apps with audio, with the ids --call app:ID takes
 
-usage: akou apps
+usage: akou apps [--json]
 
       --json     print the answer as JSON, errors included
   -h, --help     show this help
       --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou apps
-
-not built yet: listing apps needs the capture helper's app query, which is not built yet
+example: akou apps --json
 ```
 
 ## self-update
@@ -661,19 +694,20 @@ not built yet: self-update exists only in the Linux CLI tarball (M4), which is n
 ## keys
 
 ```text
-akou keys: Create, list or revoke the API keys of server mode (no app needed)
+akou keys: Create, list, update or revoke the API keys of server mode (no app needed)
 
-usage: akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys revoke ID   [--json]
+usage: akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]
 
       --name NAME           create: who the key is for, shown in the audit
       --scope S             create: jobs (default) or admin
-      --callback-host HOST  create: a host its callback URLs may name; repeat it, or `*` for any public host
+      --callback-host HOST  create, update: a host its callback URLs may name; repeat it, or `*` for any public host
       --json                print the answer as JSON, errors included
   -h, --help                show this help
       --restart             if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou keys create --name archive --callback-host archive.lan
 example: akou keys list
+example: akou keys update key_0123abcd --callback-host archive.lan --callback-host viewer.lan
 example: akou keys revoke key_0123abcd
 ```
 
@@ -694,7 +728,7 @@ example: akou admin set-password < password.txt
 ## transcribe
 
 ```text
-akou transcribe: Transcribe an audio file as a server job and print the transcript
+akou transcribe: Transcribe an audio file as a job and print the transcript
 
 usage: akou transcribe FILE [--preset lite|fast|best|fusion|auto] [--language L] [--diarize]   [--json]
 
@@ -821,10 +855,11 @@ example: akou serve
 | One call's record | none: `show` prints the transcript; no command prints the record itself | `GET /calls/:id` | none: the tools read it internally (akou_vocab_propose, akou_enhanced_put); none returns it | none: the window builds its view from the call list and the followed log |
 | Context pack | `context` | `POST /calls/:id/context` | `akou_context` | `src/ui/ask.ts` |
 | Ask | `ask` | `POST /calls/:id/ask` | `akou_ask` | `src/ui/window.ts` |
+| Ask presets | `presets`, `ask` | `GET /presets` | none: the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7) | `src/ui/ask.ts` |
 | Search one call | `search` | `GET /calls/:id/search` | `akou_search` | none: find in the call is designed in docs/ux/WINDOW.md and not built |
 | Name, merge and unmerge speakers | `name` | `POST /calls/:id/speakers`, `POST /calls/:id/speakers/merge`, `POST /calls/:id/speakers/unmerge` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | `src/ui/app.ts` |
 | Add and read notes | `note` | `POST /calls/:id/notes`, `GET /calls/:id/notes` | `akou_add_note`, `akou_get_notes` | `src/ui/notepad.ts` |
-| Edit and delete a note | `note` | `PATCH /calls/:id/notes/:nid`, `DELETE /calls/:id/notes/:nid` | none: missing: PG-M4 adds note edit and delete | `src/ui/notepad.ts` |
+| Edit and delete a note | `note` | `PATCH /calls/:id/notes/:nid`, `DELETE /calls/:id/notes/:nid` | `akou_edit_note`, `akou_delete_note` | `src/ui/notepad.ts` |
 | Memory | `remember` | `POST /calls/:id/remember`, `DELETE /calls/:id/remember/:rid` | `akou_remember`, `akou_forget` | none: no row for it in docs/ux/WINDOW.md yet |
 | Memo | none: CLI-28 designs it | `GET /calls/:id/memo`, `PUT /calls/:id/memo` | `akou_memo_get`, `akou_memo_put` | none: no memo pane is built |
 | Vocabulary: add, propose, approve, reject, list | `vocab` | `GET /vocab`, `POST /vocab`, `POST /vocab/approve`, `POST /vocab/reject`, `GET /calls/:id/vocab`, `POST /calls/:id/vocab` | `akou_vocab_add`, `akou_vocab_propose`, `akou_vocab_approve`, `akou_vocab_reject`, `akou_vocab_list` | `src/ui/review.ts`, `src/ui/dictation-dictionary.ts` |
@@ -836,29 +871,30 @@ example: akou serve
 | Import a vocabulary file | `vocab` | `POST /vocab/import` | none: no tool yet, and no design item names one | none: no control yet, and no design item names one |
 | Enhance | `enhance` | `POST /calls/:id/enhance`, `GET /calls/:id/enhanced` | `akou_enhance` | none: hidden from the window on purpose; notes already written stay in the export and GET /calls/:id/enhanced |
 | Agent-written notes | none: CLI-28 designs it | `GET /calls/:id/enhance/context`, `PUT /calls/:id/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none: an agent writes them; the export carries them, the window does not show them |
-| Final pass | `finalize` | `POST /calls/:id/finalize` | none: missing: PG-M4 adds it | none: no run-again control yet (docs/ux/WINDOW.md) |
+| Final pass | `finalize` | `POST /calls/:id/finalize` | `akou_finalize` | none: no run-again control yet (docs/ux/WINDOW.md) |
 | Export | `export` | `POST /calls/:id/export` | `akou_export` | none: the hand-off runs by itself after every call; the window has no export control |
 | Run the hooks again | `hooks` | `POST /calls/:id/hooks` | none: no tool yet, and no design item names one | none: no control yet, and no design item names one |
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | `src/ui/app.ts` |
 | Rename a call | `calls` | `PATCH /calls/:id` | `akou_rename_call` | `src/ui/app.ts` |
-| List and add workspaces | `workspaces`, `workspace` | `GET /workspaces`, `POST /workspaces` | none: akou_start names the workspace and makes its folder; a list is PG-M4 | `src/ui/workspaces.ts` |
-| Share a live link | `share` | `GET /share`, `POST /share`, `DELETE /share` | none: missing: PG-M4 adds share on, off and status | `src/ui/app.ts` |
-| Templates | none: missing: PG-F3 | `GET /templates` | none: missing: PG-F3 | none: the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template |
-| Settings | `config` | `GET /config`, `PATCH /config` | none: writes stay off MCP on purpose, so an agent never switches the provider or the share bind; PG-M4 adds the read-only akou_config_get | `src/ui/settings-page.ts` |
+| List and add workspaces | `workspaces`, `workspace` | `GET /workspaces`, `POST /workspaces` | none: not one call's: akou_start names the workspace and makes its folder, and akou_list_calls shows each call's | `src/ui/workspaces.ts` |
+| Share a live link | `share` | `GET /share`, `POST /share`, `DELETE /share` | `akou_share_on`, `akou_share_off`, `akou_share_status` | `src/ui/app.ts` |
+| Templates | `templates` | `GET /templates`, `GET /templates/:name` | `akou_template_list`, `akou_template_get` | none: the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template |
+| Settings | `config` | `GET /config`, `PATCH /config` | `akou_config_get` | `src/ui/settings-page.ts` |
 | Speech models | `models` | `GET /models`, `POST /models/pull`, `POST /models/cancel`, `DELETE /models/:id`, `POST /models/import` | none: no tool: the Models page and `akou models` own downloads and deletes; akou_status reports the models in use | `src/ui/models-card.ts`, `src/ui/models-page.ts`, `src/ui/live-picker.ts` |
 | Choose the live transcript's model (asr.live) and its second pass (asr.review.*), and see what a call runs | `config`, `start`, `models`, `status` | `PATCH /config`, `POST /calls`, `GET /models`, `GET /status` | `akou_status` | `src/ui/models-page.ts`, `src/ui/live-picker.ts`, `src/ui/app.ts` |
-| Open the window | `open` | `POST /window` | none: missing: PG-M4 adds open window | none: it is the window |
+| Open the window | `open` | `POST /window` | `akou_open_window` | none: it is the window |
 | Play the audio | none: playback happens in the window | `GET /calls/:id/audio/:part` | none: playback happens in the window | `src/ui/window.ts` |
 | Quit | `quit` | `POST /quit` | none: left out on purpose (PG-M4 exclusions) | `src/main/window/shell.ts` |
 | Import from hark-viewer | `import` | `POST /import/hark-viewer` | none: left out on purpose (PG-M4 exclusions) | none: a one-time migration; the CLI is enough |
-| Devices and apps | `devices`, `apps` | none: missing: PG-A8 adds GET /devices and GET /apps; the commands exit 69 until then | none: missing: PG-A8 | none: the source picker (W3.3) waits on PG-A8 |
+| Devices and apps | `devices`, `apps` | `GET /devices`, `GET /apps` | `akou_devices` | `src/ui/dictation-mic.ts` |
 | Update the CLI | `self-update` | none: the CLI replaces its own binary; not built yet | none: touches only akou's own folders or the terminal (docs/ux/CLI.md section 14) | none: the app's update notice is DK-U1 |
 | What this akou is and can do | none: a program reads it before it offers presets; the CLI already knows its akou | `GET /server`, `GET /openapi.json` | none: the MCP server talks to the akou it was installed with | none: the window is the app itself |
-| Transcribe a file as a job (server mode) | `transcribe`, `jobs` | `POST /jobs`, `GET /jobs`, `GET /jobs/:id`, `GET /jobs/:id/result`, `DELETE /jobs/:id`, `GET /events`, `POST /audio/transcriptions` | none: jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md) | `src/ui/server-jobs.ts` |
-| Name or rename a job (server mode) | none: a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name | `PATCH /jobs/:id` | none: jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md) | none: the Jobs page shows each job's name and finds jobs by it; the program that submitted a job names it |
+| Transcribe a file as a job (server mode) | `transcribe`, `jobs` | `POST /jobs`, `GET /jobs`, `GET /jobs/:id`, `GET /jobs/:id/result`, `DELETE /jobs/:id`, `GET /events`, `POST /audio/transcriptions` | `akou_transcribe`, `akou_job_get`, `akou_jobs_list` | `src/ui/server-jobs.ts` |
+| Name or rename a job (server mode) | none: a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name | `PATCH /jobs/:id` | none: an agent reads its jobs by id; SI-7 names no rename tool, and a title is for the Jobs page | none: the Jobs page shows each job's name and finds jobs by it; the program that submitted a job names it |
 | Run the server in the foreground (server mode) | `serve` | none: it starts the API, so the API cannot start it | none: an agent does not start a server; the image or a service manager runs it | none: server mode has no window |
 | Which key is calling | none: the CLI on the box uses the app's own token, which is admin | `GET /keys/me` | none: the MCP server uses the app's own token, which is admin | none: the window is the user's own, in process |
 | API keys (server mode) | `keys` | `GET /keys`, `POST /keys`, `DELETE /keys/:id` | none: made by the operator, on the box or on the Keys page, not by an agent (SV-K2) | `src/ui/server-keys.ts` |
+| Change a key's callback hosts (server mode) | `keys` | `PATCH /keys/:id` | none: made by the operator, on the box, not by an agent (SV-K2) | none: the Keys page creates and revokes; changing hosts is the CLI's and the API's (SV-K7) |
 | Transcribe a clip through the dictation path | `dictate` | `POST /dictations` | none: MCP reads dictation history only; no tool feeds audio in (DICTATION.md DC-G5) | none: the window dictates with the key into the app under the cursor, not from a file |
 | Dictation history | `dictations` | `GET /dictations`, `GET /dictations/:id` | `akou_dictation_list`, `akou_dictation_get` | `src/ui/dictation-history.ts` |
 | Retry a dictation with another engine | `dictations` | `POST /dictations/:id/retry` | none: MCP reads dictation history only; a retry runs an engine on the user's audio (DICTATION.md DC-G5) | `src/ui/dictation-history.ts` |

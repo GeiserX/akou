@@ -40,6 +40,7 @@ const EXIT_LABELS: Record<keyof typeof EXIT, string> = {
   permission: "permission",
   config: "the settings refuse it",
   timeout: "timed out",
+  interrupted: "interrupted",
 };
 
 /** The page as the registry, the parity table and the exit codes generate it, byte for byte. */

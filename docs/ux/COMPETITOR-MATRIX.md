@@ -236,7 +236,7 @@ The CLI rows keep the ids [CLI.md](CLI.md) uses. CLI.md also owns CLI-16 onward,
 | CLI-04 | Human output by default, JSON with `--json` | Audit | CLI-04 |
 | CLI-05 | Help lists every flag; `help CMD` works; `-v` prints the version | Audit | CLI-05 |
 | CLI-06 | Secrets read from stdin, never argv | clig.dev | CLI-06, with PG-Z2 and DK-S5 |
-| CLI-07 | `akou devices` and `akou apps` built | Audit | CLI-07 |
+| CLI-07 | `akou devices` and `akou apps`, with the ids `--mic` and `--call app:` take | Audit | CLI-07 |
 | CLI-08 | Shell completions with call ids, workspaces, templates, speakers | gh, Superwhisper | CLI-08 |
 | CLI-09 | "Did you mean" on unknown commands, flags and settings | clig.dev | CLI-09 |
 | CLI-10 | `config get KEY` | Audit | CLI-10 |

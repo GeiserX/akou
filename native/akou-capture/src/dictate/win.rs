@@ -648,6 +648,7 @@ impl Targets for Screen {
         let field = self.focused().map_or("unknown", |el| kind_of(&el));
         Target {
             app: Process::open(pid).and_then(|p| p.exe()).unwrap_or_default(),
+            name: String::new(),
             pid: i64::from(pid),
             window: (hwnd.0 as usize).to_string(),
             field: field.into(),
