@@ -141,8 +141,9 @@ jobs:
           if [ -n "$ZONE" ]; then export TZ="$ZONE"; fi
           bun -e 'console.log(`the clock reads ${new Date().toString()}`)'
           bun test --reporter=junit --reporter-outfile=.junit-check.xml
-      # The same suite as check's Linux leg, so the same floor.
-      - run: bun scripts/ci/test-floor.ts check .junit-check.xml
+      # The same suite as check's Linux leg, so the same pass floor; six more may skip, the tests
+      # that compare a file's mtime with `Date.now()` a year ahead (CLOCK_SHIFTED).
+      - run: bun scripts/ci/test-floor.ts clock-shift .junit-check.xml
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).

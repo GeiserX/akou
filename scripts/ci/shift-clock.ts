@@ -17,6 +17,9 @@
 const days = Number(process.env.AKOU_CLOCK_SHIFT_DAYS ?? "365");
 if (!Number.isFinite(days)) throw new Error(`AKOU_CLOCK_SHIFT_DAYS is a number, not ${days}`);
 export const SHIFT_MS = days * 24 * 60 * 60 * 1000;
+// The kernel keeps real time, so a file's mtime does not move; the tests that compare one with
+// `Date.now()` read this and skip (`CLOCK_SHIFTED` in tests/helpers.ts). Children inherit it.
+process.env.AKOU_CLOCK_SHIFTED = String(days);
 
 const RealDate = Date;
 const shiftedNow = () => RealDate.now() + SHIFT_MS;
