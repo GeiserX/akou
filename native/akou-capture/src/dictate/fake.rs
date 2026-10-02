@@ -105,6 +105,7 @@ impl World {
 pub fn slack() -> Target {
     Target {
         app: "Slack".into(),
+        name: "Slack".into(),
         pid: 9,
         window: "w".into(),
         field: "editable".into(),

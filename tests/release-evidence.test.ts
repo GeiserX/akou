@@ -37,6 +37,13 @@ function repoCopy(): { dir: string; cleanup(): void } {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
   }
+  // `--check` also wants a changelog section for the version (CI-20); these tests set these ones.
+  const versions = [JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version];
+  versions.push("1.0.0-rc.1", "1.0.0", "1.2.0");
+  writeFileSync(
+    join(t.dir, "CHANGELOG.md"),
+    `# Changelog\n\n${versions.map((v) => `## ${v}\n\n- a change\n`).join("\n")}`,
+  );
   return t;
 }
 

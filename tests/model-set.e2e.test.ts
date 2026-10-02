@@ -153,7 +153,12 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     try {
       const m = (await rig.api("GET", "/models")).body as Body;
       expect(m.state).toBe("ready");
-      expect(m.final).toEqual({ setting: RECOGNIZER, named: RECOGNIZER, next: QWEN_ASR });
+      expect(m.final).toEqual({
+        setting: RECOGNIZER,
+        named: RECOGNIZER,
+        next: QWEN_ASR,
+        engines: [],
+      });
     } finally {
       await rig.api("PATCH", "/config", { "asr.final.model": "auto" });
     }

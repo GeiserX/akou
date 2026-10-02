@@ -175,13 +175,49 @@ pub struct Endpoint {
     pub default: bool,
 }
 
-/// Every input and output the OS reports. Listing opens no stream and asks for no permission.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// One app with audio, as `akou-capture devices` lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AudioApp {
+    /// What `--call app:<id>` takes: a macOS bundle id, a Windows executable name without `.exe`.
+    pub id: String,
+    /// What the OS calls it: the bundle id again on macOS, the executable file on Windows.
+    pub name: String,
+    pub pid: u32,
+}
+
+/// Every input and output the OS reports, and the apps with audio. Listing opens no stream and
+/// asks for no permission.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Endpoints {
     /// The audio system that answered (`coreaudio`, `wasapi`, `pulse`).
     pub backend: &'static str,
     pub inputs: Vec<Endpoint>,
     pub outputs: Vec<Endpoint>,
+    /// The apps `--call app:<id>` can capture, or why this system cannot capture one app.
+    pub apps: Result<Vec<AudioApp>, String>,
+}
+
+/// The apps to list from what the OS reports: one per id (case aside), sorted. With `dotted`
+/// (macOS, where `app:<id>` also takes `<id>.<anything>`), none whose id extends a listed one with
+/// a dot, since `app:<id>` takes those too (`us.zoom.xos` covers `us.zoom.xos.ZoomAudioHelper`).
+/// Windows matches the executable exactly, so there `foo.bar` stays listed beside `foo`. An empty
+/// id is no app.
+pub fn audio_apps(found: Vec<AudioApp>, dotted: bool) -> Vec<AudioApp> {
+    let mut apps: Vec<AudioApp> = vec![];
+    for a in found {
+        if a.id.is_empty() || apps.iter().any(|b| b.id.eq_ignore_ascii_case(&a.id)) {
+            continue;
+        }
+        apps.push(a);
+    }
+    let lower: Vec<String> = apps.iter().map(|a| a.id.to_ascii_lowercase()).collect();
+    let covered = |id: &str| {
+        let id = id.to_ascii_lowercase();
+        dotted && lower.iter().any(|o| id.starts_with(&format!("{o}.")))
+    };
+    let mut out: Vec<AudioApp> = apps.into_iter().filter(|a| !covered(&a.id)).collect();
+    out.sort_by_key(|a| a.id.to_ascii_lowercase());
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +280,53 @@ pub trait Frontend: Send {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app(id: &str, pid: u32) -> AudioApp {
+        AudioApp {
+            id: id.into(),
+            name: id.into(),
+            pid,
+        }
+    }
+
+    #[test]
+    fn audio_apps_lists_each_app_once_under_the_id_that_captures_it() {
+        let got = audio_apps(
+            vec![
+                app("us.zoom.xos.ZoomAudioHelper", 301),
+                app("us.zoom.xos", 300),
+                app("com.spotify.client", 400),
+                app("COM.SPOTIFY.CLIENT", 401),
+                app("", 500),
+                app("us.zoomer", 600),
+            ],
+            true,
+        );
+        let ids: Vec<&str> = got.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["com.spotify.client", "us.zoom.xos", "us.zoomer"]);
+        // Positive control: a helper alone is listed under its own id, which `app:` takes.
+        let alone = audio_apps(vec![app("com.google.Chrome.helper", 700)], true);
+        assert_eq!(alone[0].id, "com.google.Chrome.helper");
+    }
+
+    #[test]
+    fn audio_apps_keeps_dotted_executables_where_app_matches_exactly() {
+        // Windows: `app:foo` matches foo.exe only, so foo.bar.exe needs its own listed id.
+        let got = audio_apps(
+            vec![app("foo.bar", 801), app("foo", 800), app("FOO", 802)],
+            false,
+        );
+        let ids: Vec<&str> = got.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["foo", "foo.bar"]);
+        // The reason: the Windows rule takes foo.bar.exe under `foo.bar` and never under `foo`.
+        let dotted = crate::wasapi_rules::Proc {
+            pid: 801,
+            parent: 0,
+            exe: "foo.bar.exe".into(),
+        };
+        assert!(crate::wasapi_rules::matches(&dotted, "foo.bar"));
+        assert!(!crate::wasapi_rules::matches(&dotted, "foo"));
+    }
 
     #[test]
     fn call_modes() {

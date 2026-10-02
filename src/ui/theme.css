@@ -1189,7 +1189,7 @@ button.icon.on {
    --size, not the root font), so a larger transcript font never squeezes the transcript itself. */
 body.shell:not(.server) {
   display: grid;
-  grid-template-columns: 13.75rem minmax(0, 1fr) 24rem;
+  grid-template-columns: 13.75rem minmax(0, 1fr) 21.25rem;
   grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) auto;
 }
 body.shell:not(.server) > * {
@@ -1268,15 +1268,21 @@ body.shell:not(.server) > #pages {
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24rem;
+  grid-template-columns: minmax(0, 1fr) 21.25rem;
   min-height: 0;
 }
-/* Below 1248 px the full side columns would leave the transcript less than half the window. */
+/* Below 1248 px the full side columns would leave the transcript less than half the window. A
+   page has no side pane, so its sidebar keeps its full width down to 900 px; under that the page
+   itself needs the room. A page opened over the welcome is still a page. */
 @media (max-width: 1247px) {
   body.shell:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr) 18rem;
   }
-  body.shell.welcoming:not(.server),
+  body.shell.welcoming:not(.paged):not(.server) {
+    grid-template-columns: 10rem minmax(0, 1fr);
+  }
+}
+@media (max-width: 899px) {
   body.shell.paged:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
@@ -2147,8 +2153,13 @@ main {
 .a-card .lbl::before {
   content: "✦";
 }
+/* "asked by agent X · answered by Y" stays on one line, cut short with an ellipsis. */
 .a-card .ask-status {
   margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-weight: 400;
   color: var(--faint);
 }
@@ -2267,9 +2278,19 @@ button.cite:hover {
 .note:focus-within {
   background: var(--raised);
 }
-.note .note-text {
+.note .note-body {
   flex: 1;
   min-width: 0;
+}
+.note .note-text {
+  display: block;
+}
+/* "Action" or "Open question" under the note (b2). */
+.note .tag {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--faint);
 }
 .note .gutter {
   flex: none;
@@ -2445,9 +2466,35 @@ button.cite:hover {
   background: transparent;
   border-color: var(--line2);
 }
-#play {
-  border-radius: 14px;
+/* Play is a round icon (b2): a triangle, or two bars while playing. */
+#player-bar #play {
+  width: 28px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--fg);
+}
+#play::before {
+  content: "";
+  width: 9px;
+  height: 11px;
+  margin-left: 2px;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+#play.playing::before {
+  width: 3px;
+  height: 10px;
+  margin-left: 0;
+  clip-path: none;
+  box-shadow: 5px 0 0 currentColor;
+  transform: translateX(-2.5px);
+}
+/* One readout, "15:41:07 / 16:03:40": where the audio is and where the part ends. */
+#readout {
+  white-space: nowrap;
 }
 #player-bar time {
   font-variant-numeric: tabular-nums;
@@ -2456,15 +2503,48 @@ button.cite:hover {
 #pos {
   color: var(--fg);
 }
+/* The speed is a small pill (b2); it stays a picker, so its keys are unchanged. */
+#player-bar #speed {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  appearance: none;
+  color: var(--dim);
+  text-align: center;
+}
 /* The sliders match the buttons' 28 px, so one row fits the 48 px bar. */
 #player-bar input[type="range"] {
   height: 28px;
   margin: 0;
   padding-block: 0;
 }
-#scrub {
+#scrub-box {
+  position: relative;
   flex: 1 1 120px;
   min-width: 80px;
+  display: flex;
+  align-items: center;
+}
+#scrub {
+  flex: 1;
+  min-width: 0;
+}
+/* A note taken during the part: a short tick over the scrubber, under the pointer. */
+#marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#marks .mk {
+  position: absolute;
+  top: 50%;
+  width: 2px;
+  height: 12px;
+  margin: -6px 0 0 -1px;
+  border-radius: 1px;
+  background: var(--faint);
 }
 #balance {
   width: 72px;
@@ -2709,7 +2789,7 @@ dialog {
   font-size: 12px;
 }
 /* The Jobs page's search, drawn as the desktop sidebar's (WINDOW section 13), and the name cell:
-   the title first, the id dim beside it (SV-J10). */
+   the title first, cut short when long, and the id dim under it (SV-J10). */
 #page-jobs .search {
   display: flex;
   align-items: center;
@@ -2747,10 +2827,20 @@ dialog {
 #jobs-search::placeholder {
   color: var(--faint);
 }
+/* The sidebar's search draws no clear button; Escape empties it. */
+#jobs-search::-webkit-search-cancel-button {
+  display: none;
+}
 #jobs-table .job-title {
+  display: block;
+  max-width: 24em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--fg);
 }
 #jobs-table .job-id {
+  display: block;
   color: var(--dim);
   font-size: 11px;
 }

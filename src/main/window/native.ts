@@ -209,6 +209,7 @@ export function electrobunUi(): NativeUi {
         send: {
           open: (d) => defined.send.open(d),
           chip: (c) => defined.send.chip(c),
+          append: (text) => defined.send.append({ text }),
         },
       };
     },

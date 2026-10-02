@@ -61,6 +61,8 @@ export const APP_MODES = ["direct", "draft", "draft-send"] as const;
  */
 export interface AppRule {
   app: string;
+  /** The app's name as people know it (`Slack`), shown for the rule; never matched. */
+  name?: string;
   mode?: (typeof APP_MODES)[number];
   insert?: (typeof DICTATION_INSERTS)[number];
   sendKey?: string;
@@ -132,6 +134,11 @@ export type SettingValue =
   | readonly AppRule[];
 
 const home = homedir();
+
+/** `dictation.pill` by default: off on Linux, where a compositor may give the pill the keyboard. */
+export function pillDefault(platform: string): "off" | "top" {
+  return platform === "linux" ? "off" : "top";
+}
 
 /**
  * Defaults that depend on the machine are computed from the home folder; `resolveDefaults` redoes
@@ -264,6 +271,13 @@ export const SETTINGS = {
     default: 1,
     doc: "File jobs run at once. Each running job has its own Worker with its models loaded and `asr.threads` threads, so keep this times `asr.threads` under the cores, and the memory for that many copies of the model.",
   },
+  "server.model_idle_minutes": {
+    type: "integer",
+    min: 0,
+    max: 10080,
+    default: 60,
+    doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. 0: let go as soon as no queued job needs it.",
+  },
   "server.queue_max": {
     type: "integer",
     min: 0,
@@ -303,7 +317,7 @@ export const SETTINGS = {
       /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v as string)
         ? null
         : "is a preset name (auto, fast, ...) or an engine id from the model catalog",
-    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: the hardware's choice, `fast` today.",
+    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: `best` (Qwen3-ASR) wherever it is downloaded, else `fast` (Parakeet) when that is, else `best` on a GPU with 16 GB of memory and `fast` elsewhere; `GET /v1/server` `auto` says which and why.",
   },
   "server.auto_download": {
     type: "boolean",
@@ -451,7 +465,7 @@ export const SETTINGS = {
     type: "string[]",
     default: [],
     apiWritable: false,
-    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). With `asr.accelerator` set to `cpu`, akou adds `--device none`, so the build must accept `--device` (llama.cpp from late 2024 on). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
   },
   "asr.diarizeHelper": {
     type: "string[]",
@@ -476,6 +490,12 @@ export const SETTINGS = {
     values: FINAL_MODELS,
     default: "auto",
     doc: "The model that writes the final transcript after a call: `auto`, or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same). `qwen`: Qwen3-ASR on its llama-server, the most accurate; it gives no word times, so each line keeps the times of the stretch it was cut from. While the pass runs it holds about 3 GB of memory and the GPU when there is one. Without a GPU it decodes on the processor, much slower, and a pass gets half the call's length plus 300 s before it is stopped as stuck, so on such a machine a long call can fail: set `parakeet` there. One Qwen pass runs at a time; another waits for it. `parakeet`: Parakeet, on the processor. `auto` picks `qwen` whenever its model and its llama-server are downloaded, else `parakeet`. A model that is not downloaded never runs: the setting falls back to the other model and says why in the log, and with neither downloaded no pass runs. On Qwen the pass does not need Parakeet on disk. Speaker labels are the same with either. A Qwen that cannot start, or fails twice in a row, fails the pass, and `akou finalize --force` runs it again. `akou finalize --model` sets it for one run, and is refused when that model is not downloaded; a pass stopped by a quit runs again at the next start on this setting's model. A change applies from the next pass.",
+  },
+  "asr.final.engines": {
+    type: "string[]",
+    values: FINAL_MODELS.filter((m) => m !== "auto"),
+    default: [],
+    doc: "Several models for the final transcript, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): each one decodes every stretch of the call and their words are fused by confidence voting (ROVER), the first one breaking ties. Lines are named `rover-conf(<ids>)`. Empty, the default: one model, the one `asr.final.model` picks. A listed model that is not downloaded is left out, and so are models from the end of the list while together they need more than 60 % of this computer's memory; one that fails during the pass is dropped and the pass goes on with the rest. `final.done` names the models that ran and the ones left out, with why. `akou finalize --model` runs one model for one run whatever this says. A change applies from the next pass.",
   },
   "asr.review.everySeconds": {
     type: "integer",
@@ -869,12 +889,12 @@ export const SETTINGS = {
   "dictation.apps": {
     type: "apps",
     default: [],
-    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
+    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); `name`, optional, is the name of the app the rule is shown by (`Slack`) and is never matched; a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
   },
   "dictation.pill": {
     type: "string",
     values: ["top", "bottom", "left", "right", "off"],
-    default: process.platform === "linux" ? "off" : "top",
+    default: pillDefault(process.platform),
     doc: "Where the dictation pill shows `listening` and `transcribing`: `top` is the island at the top centre of the display. Off by default on Linux, where a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
   },
   "dictation.pillPreview": {
@@ -898,7 +918,7 @@ export const SETTINGS = {
   "dictation.keepAudio": {
     type: "boolean",
     default: true,
-    doc: "Keep each dictation's audio for Retry and for checking a learned word. Off: deleted once the offer to learn is closed.",
+    doc: "Keep each dictation's audio, as Opus at about 180 KB a minute, for Retry and for checking a learned word. Off: deleted once the offer to learn is closed.",
   },
   "server.dictation_slots": {
     type: "integer",
@@ -1022,9 +1042,10 @@ export function validateSetting(
   }
 }
 
-/** Each field of a per-app rule and the values it takes; `app` and `language` are checked apart. */
+/** Each field of a per-app rule and the values it takes; `app`, `name` and `language` are checked apart. */
 const APP_FIELDS: Readonly<Record<string, readonly string[] | null>> = {
   app: null,
+  name: null,
   mode: APP_MODES,
   insert: DICTATION_INSERTS,
   sendKey: DICTATION_SEND_KEYS,
@@ -1053,6 +1074,9 @@ export function validateApps(
         ok: false,
         error: `${at}: app must be a bundle id, executable name or window class`,
       };
+    }
+    if (o.name !== undefined && (typeof o.name !== "string" || o.name.length > 200)) {
+      return { ok: false, error: `${at}: name must be the app's name, up to 200 characters` };
     }
     if (seen.has(o.app)) return { ok: false, error: `${at}: ${o.app} already has a rule` };
     seen.add(o.app);
@@ -1207,12 +1231,21 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
  * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
  * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
  * `asr.review.model` `qwen` (unless it names its own). And short names read as the ids they name:
- * `asr.final.model` `qwen` and `parakeet`.
+ * `asr.final.model` `qwen` and `parakeet`, in it and in `asr.final.engines`.
  */
 export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
   const short = values["asr.final.model"];
   if (short === "qwen" || short === "parakeet") {
     values = { ...values, "asr.final.model": finalModelId(short) };
+  }
+  const list = values["asr.final.engines"];
+  if (Array.isArray(list) && list.some((v) => v === "qwen" || v === "parakeet")) {
+    values = {
+      ...values,
+      "asr.final.engines": list.map((v) =>
+        v === "qwen" || v === "parakeet" ? finalModelId(v) : v,
+      ),
+    };
   }
   if (values["asr.live"] !== "upgrade") return values;
   return {
