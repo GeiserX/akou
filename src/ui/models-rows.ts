@@ -93,6 +93,26 @@ export function modelName(r: Pick<ModelRow, "id" | "job"> & { name?: string | nu
   return r.id;
 }
 
+/** What `GET /server` lists that a job may name. */
+export interface JobModels {
+  presets?: readonly { name: string }[];
+  engines?: readonly { id: string }[];
+}
+
+/**
+ * The choices of a setting that names the model a job runs (`server.default_model`,
+ * `server.dictation_engine`, SV-S1): Automatic for `auto`, each preset by its name, each engine by
+ * its model's name, never a raw catalog id where the page has a name for it.
+ */
+export function jobModelChoices(s: JobModels): [value: string, label: string][] {
+  const out = new Map<string, string>([["auto", "Automatic"]]);
+  for (const p of s.presets ?? [])
+    if (!out.has(p.name)) out.set(p.name, p.name.charAt(0).toUpperCase() + p.name.slice(1));
+  for (const e of s.engines ?? [])
+    if (!out.has(e.id)) out.set(e.id, modelName({ id: e.id, job: "" }));
+  return [...out];
+}
+
 /** A live model's name on the page: Automatic, or the model's own name (`Nemotron 3.5`). */
 export function liveName(id: string, title = id): string {
   return id === "auto" ? "Automatic" : title;

@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
+import { RECOGNIZER } from "../../src/main/asr/models.ts";
 import { keychainStore } from "../../src/main/config/secrets.ts";
 import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import { MODELS_KEYS } from "../../src/ui/models-rows.ts";
@@ -327,6 +328,50 @@ describe("the Settings page", () => {
         expect(foot).not.toContain("akou models");
         await page.click("#settings-get-models");
         await page.waitForSelector("#page-models:not([hidden])");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Server mode's job defaults are selects in words: the model and the dictation engine by name, the language as Detect it or its name",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        const sent = patches(page);
+        await openSettings(page);
+        await page.click("#settings-go-server");
+        const model = "#page-settings select[data-key='server.default_model']";
+        const language = "#page-settings select[data-key='server.default_language']";
+        const engine = "#page-settings select[data-key='server.dictation_engine']";
+        await page.waitForSelector(model);
+        const picked = (sel: string) =>
+          page.$eval(sel, (s) => (s as HTMLSelectElement).selectedOptions[0]?.text);
+        const labels = (sel: string) =>
+          page.$$eval(`${sel} option`, (o) => o.map((x) => x.textContent ?? ""));
+        expect(await picked(model)).toBe("Automatic");
+        expect(await picked(engine)).toBe("Automatic");
+        expect(await picked(language)).toBe("Detect it");
+        for (const sel of [model, engine]) {
+          const words = await labels(sel);
+          expect(words).toContain("Fast");
+          expect(words).toContain("Parakeet v3");
+          expect(words).not.toContain(RECOGNIZER);
+        }
+        expect(await labels(language)).toContain("Spanish");
+        await page.selectOption(language, "es");
+        await until(() => sent.length === 1, 5000, "the language saved");
+        expect(sent[0]).toEqual({ "server.default_language": "es" });
+        await page.selectOption(model, "best");
+        await until(() => sent.length === 2, 5000, "the model saved");
+        expect(sent[1]).toEqual({ "server.default_model": "best" });
+        await page.selectOption(engine, RECOGNIZER);
+        await until(() => sent.length === 3, 5000, "the engine saved");
+        expect(sent[2]).toEqual({ "server.dictation_engine": RECOGNIZER });
+        const saved = (await rig.api("GET", "/config")).body.settings;
+        expect(saved["server.default_language"]).toBe("es");
+        expect(saved["server.default_model"]).toBe("best");
+        expect(saved["server.dictation_engine"]).toBe(RECOGNIZER);
       });
     },
     UI_TIMEOUT,
