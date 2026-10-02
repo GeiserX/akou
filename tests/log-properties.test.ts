@@ -158,16 +158,27 @@ describe("the log reader, on any truncation of a generated log (TS-22)", () => {
       const good = new TextEncoder().encode(jsonl(events));
       const r = rng(seed * 104729);
       for (let i = 0; i < 20; i++) {
-        const junk = Uint8Array.from({ length: 1 + Math.floor(r() * 300) }, () => {
+        // One tail in four did get its newline: a final line that is not JSON is still torn. It
+        // starts with a zero byte (a block of zeros after power loss), so it never parses as JSON.
+        const landed = i % 4 === 3;
+        const junk = Uint8Array.from({ length: (landed ? 2 : 1) + Math.floor(r() * 300) }, () => {
           const x = Math.floor(r() * 256);
           return x === 0x0a ? 0 : x;
         });
+        if (landed) {
+          junk[0] = 0;
+          junk[junk.length - 1] = 0x0a;
+        }
         const bytes = new Uint8Array(good.length + junk.length);
         bytes.set(good);
         bytes.set(junk, good.length);
         const got = parseLog(bytes);
         expect(got.events, `seed ${seed}, junk ${i}`).toEqual(events);
+        expect(got.invalid, `seed ${seed}, junk ${i}`).toEqual([]);
         expect(got.torn?.offset, `seed ${seed}, junk ${i}`).toBe(good.length);
+        expect(got.torn?.reason, `seed ${seed}, junk ${i}`).toBe(
+          landed ? "unparseable" : "no-newline",
+        );
       }
     }
   });
