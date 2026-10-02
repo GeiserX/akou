@@ -2865,7 +2865,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one. A word the file already holds gains the new heard forms and keeps the rest: who added it and when, its note, its scope.",
         "requestBody": {
           "required": true,
           "content": {

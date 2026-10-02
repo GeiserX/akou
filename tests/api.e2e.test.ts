@@ -556,6 +556,31 @@ describe("the vocabulary files", () => {
       workspace: "work",
     });
     expect(imp.body.imported).toBe(1);
+    // A word the file holds keeps its forms, note, origin and date; the import adds its new form.
+    await rig.api("POST", "/vocab", {
+      term: "Kubernetes",
+      heard: ["kubernetis"],
+      note: "the cluster",
+      workspace: "work",
+    });
+    const before = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Kubernetes",
+    );
+    await rig.api("POST", "/vocab/import", {
+      text: "Kubernetes <= cooper netties\n",
+      workspace: "work",
+    });
+    const after = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Kubernetes",
+    );
+    expect(after).toMatchObject({
+      heard: ["kubernetis", "cooper netties"],
+      note: "the cluster",
+      source: before.source,
+      added_at: before.added_at,
+    });
+    // The control: the import's own source is not the one kept.
+    expect(after.source).not.toBe("import:api");
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(404);
     const bad = await rig.api("POST", "/vocab", { term: "" });

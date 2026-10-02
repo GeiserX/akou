@@ -60,8 +60,8 @@ function notBuilt(what: string, when: string): never {
   throw new HttpError(501, "not_implemented", `${what} is not built yet (${when})`);
 }
 
-function checkTermOr400(term: unknown): string {
-  const bad = validateTerm(term);
+function checkTermOr400(term: unknown, scope?: string): string {
+  const bad = validateTerm(term, scope);
   if (bad) throw new HttpError(400, "bad_term", `${JSON.stringify(term)}: ${bad}`, { term });
   return term as string;
 }
@@ -507,9 +507,9 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         confirmed?: boolean;
         scope?: string;
       }>();
-      const term = checkTermOr400(b.term);
-      const workspace = checkWorkspace(b.workspace);
       const scope = checkScope(b.scope);
+      const term = checkTermOr400(b.term, scope);
+      const workspace = checkWorkspace(b.workspace);
       // A word the user stated goes in confirmed; an inferred one is sent with `confirmed: false`
       // (or as a call proposal) and does nothing until the user approves it.
       const confirmed = b.confirmed ?? true;
@@ -686,7 +686,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab/import",
     doc({
       id: "vocab.import",
-      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one. A word the file already holds gains the new heard forms and keeps the rest: who added it and when, its note, its scope.",
       body: { text: "string", "workspace?": "string", "scope?": "string" },
       ok: 200,
     }),
@@ -701,8 +701,19 @@ export function vocabRoutes(r: Router<ApiApp>): void {
           let next = file ?? emptyVocab();
           for (const e of res.entries) {
             const had = next.entries.find((x) => termKey(x.term) === termKey(e.term));
-            const dictation = scope && (!had || had.entryScope === "dictation");
-            next = upsertEntry(next, dictation ? { ...e, entryScope: scope } : e);
+            // A word the file holds keeps who added it, when, its forms, note, scope and decode
+            // flag: the import adds its new heard forms and confirms it, as `POST /vocab` keeps
+            // `source` and `added_at`. A caution line still turns decoding off.
+            const merged = had && {
+              ...had,
+              heard: [
+                ...had.heard,
+                ...e.heard.filter((h) => !had.heard.some((x) => termKey(x) === termKey(h))),
+              ],
+              confirmed: true,
+              ...(e.decode === false ? { decode: false } : {}),
+            };
+            next = upsertEntry(next, merged || (scope ? { ...e, entryScope: scope } : e));
           }
           return { file: next, result: null };
         });

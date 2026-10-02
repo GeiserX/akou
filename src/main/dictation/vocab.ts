@@ -24,8 +24,8 @@ export function dictationRules(entries: readonly MergedEntry[]): VocabRule[] {
 
 /**
  * A replacement that is written against the word before it (DC-U5): one that opens with a closing
- * mark (`,`, `;`, `)`), or with a dot not followed by a capital. So "example dot com" to `.com` is
- * `example.com`, while `.NET` stays a word of its own ("use .NET").
+ * mark (`, ; : ! ? % ) ] }`), or with a dot not followed by a capital. So "example dot com" to
+ * `.com` is `example.com`, while `.NET` stays a word of its own ("use .NET").
  */
 const GLUES_LEFT = /^(?:[,;:!?%)\]}]|\.(?!\p{Lu}))/u;
 
