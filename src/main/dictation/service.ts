@@ -192,6 +192,8 @@ export interface DictationServiceOptions extends TextRules {
   cue?(moment: CueMoment): void;
   /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
   mic?(): { device: string; preferBuiltIn: boolean };
+  /** `dictation.muteMedia`, for `pause_media` (DC-U8). */
+  pauseMedia?(): boolean;
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
   /** `dictation.keepAudio` as it is now; absent, the audio is kept. */
@@ -269,6 +271,8 @@ export interface DictationStatus {
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
   remote: DictationRemoteStatus | null;
+  /** The engines a retry can use now (`fast`, `best`, `live`, `remote`): those this machine runs. */
+  engines: string[];
 }
 
 /**
@@ -825,6 +829,7 @@ export class DictationService {
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
       remote: this.o.remote?.() ?? null,
+      engines: this.o.draft?.engines?.() ?? [],
     };
   }
 
@@ -889,6 +894,7 @@ export class DictationService {
       onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
+      ...(this.o.pauseMedia ? { pauseMedia: this.o.pauseMedia } : {}),
       metering: () => this.metering,
       send: (c) => {
         try {
@@ -971,6 +977,11 @@ export class DictationService {
   /** `dictation.mic` or `dictation.preferBuiltInOverBluetooth` changed: the helper opens it now. */
   rebuildMic(): void {
     this.helper?.session.rebuildMic();
+  }
+
+  /** Sends the running helper `dictation.muteMedia` as it is now (DC-U8). */
+  pauseMedia(): void {
+    this.helper?.session.pauseMedia();
   }
 
   /**

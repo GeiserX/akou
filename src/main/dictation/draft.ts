@@ -325,7 +325,10 @@ export class DraftBox {
                 ? { engine: it.engine, text: it.text, language: it.language }
                 : null,
           }
-        : {}),
+        : // The dictation's own text, tidied by AI: what the engine heard goes beside it (DC-U6).
+          it.formatted && it.raw && it.raw !== base && base === it.text
+          ? { heard: it.raw }
+          : {}),
       ...(o.rule ? { rule: o.rule } : {}),
     });
     return { ok: true };
@@ -349,6 +352,8 @@ export class DraftBox {
       forced?: boolean;
       rule?: DraftRule | null;
       other?: OtherReading | null;
+      /** What the engine heard before the AI tidy, shown beside the tidied text (DC-U6). */
+      heard?: string;
     },
   ): void {
     // Another dictation's draft left unanswered in the box: its learn window closes with it.
@@ -407,6 +412,7 @@ export class DraftBox {
       focus: o.focus,
       platform: this.o.platform,
       ...(o.rule?.enterSends ? { enterSends: true } : {}),
+      ...(o.heard ? { heard: o.heard } : {}),
     };
     this.up = true;
     w.open(d);

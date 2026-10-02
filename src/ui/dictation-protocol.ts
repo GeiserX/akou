@@ -50,6 +50,8 @@ export interface DraftOpen {
   platform: string;
   /** A per-app rule's `draft-send` (DC-U9): Enter inserts and presses the send key. */
   enterSends?: boolean;
+  /** What the engine heard, when the AI tidy (DC-U6) changed it into `text`: shown under the field. */
+  heard?: string;
 }
 
 export interface DraftRpc {

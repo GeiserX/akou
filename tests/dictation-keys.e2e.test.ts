@@ -151,6 +151,25 @@ describe("DC-A7: a changed dictation key applies at once from any door", () => {
   });
 });
 
+describe("DC-U8: pausing other media reaches the helper", () => {
+  test("the helper gets dictation.muteMedia after ready, and again when PATCH /config changes it", async () => {
+    const h = helper("RightShift");
+    const r = await rig({ helperArgs: h.args, settings: DICTATING });
+    await ready(r);
+    const media = () =>
+      lines(h.commands)
+        .filter((c) => c.type === "pause_media")
+        .map((c) => c.on);
+    await until(() => media().length === 1, 5000, "pause_media after ready");
+    expect((await r.api("PATCH", "/config", { "dictation.muteMedia": true })).status).toBe(200);
+    await until(() => media().length === 2, 5000, "pause_media on the change");
+    // Positive control: a change of another setting sends nothing more.
+    await r.api("PATCH", "/config", { "dictation.sendAlways": true });
+    await Bun.sleep(200);
+    expect(media()).toEqual([false, true]);
+  });
+});
+
 /** A remote akou on loopback that answers every dictation and records its bearer. */
 function remote(): { url: string; bearers: string[] } {
   const bearers: string[] = [];

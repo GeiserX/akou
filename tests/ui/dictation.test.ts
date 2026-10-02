@@ -1121,6 +1121,21 @@ describe("DC-S1: the draft box", () => {
   );
 
   test(
+    "DC-U6: text the AI tidied shows what was heard under the field; other text shows nothing there",
+    async () => {
+      const p = v.page;
+      await v.send("open", draft({ id: "d9", text: "Three apples.", heard: "um three apples" }));
+      expect(await value(p)).toBe("Three apples.");
+      expect(await visible(p, "#draft-heard")).toBe(true);
+      expect(await text(p, "#draft-heard")).toBe("As heard: um three apples");
+      // The control: the next draft, with nothing tidied, hides the line again.
+      await v.send("open", draft({ id: "d10" }));
+      expect(await visible(p, "#draft-heard")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "an automatic open leaves the keyboard where it was; a click moves it into the box",
     async () => {
       const p = v.page;
@@ -3007,13 +3022,18 @@ describe("DC-H1: the History page", () => {
     t?.cleanup();
   });
 
-  const openHistory = async (history: DictationRow[], settings: Record<string, unknown> = {}) => {
+  const openHistory = async (
+    history: DictationRow[],
+    settings: Record<string, unknown> = {},
+    engines?: string[],
+  ) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
         await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
         fx = await dictationFixture(p, { history });
         Object.assign(fx.settings, settings);
+        if (engines) fx.engines = engines;
       },
     });
     await page.click("#dictation-open");
@@ -3200,6 +3220,23 @@ describe("DC-H1: the History page", () => {
       expect(
         await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
       ).toEqual(["Retry with Best", "Retry with Live", "Delete"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the menu offers only the engines GET /dictation lists, so one whose model is gone is never offered",
+    async () => {
+      // A Mac with Parakeet deleted: no fast, and best heard this one.
+      const { page } = await openHistory(
+        [dictationRow(1, { engine: "best" })],
+        { "dictation.remote.url": "https://studio.example" },
+        ["best", "live", "remote"],
+      );
+      await page.click(`${row("d001")} .hist-more`);
+      expect(
+        await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
+      ).toEqual(["Retry with Live", "Retry on the other computer", "Delete"]);
     },
     UI_TIMEOUT,
   );
@@ -3828,6 +3865,58 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
       expect(await note.count()).toBe(0);
       await page.click(learn("ask"));
       expect(await note.count()).toBe(1);
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U8, DC-U6: the page says what a setting does on this machine", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-honest-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const openPage = async (platform: string) => {
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        await dictationFixture(p, { platform });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector("#page-dictation div.pg-row[data-key='dictation.muteMedia']");
+    return page;
+  };
+  const help = (key: string) =>
+    `#page-dictation div.pg-row[data-key='${key}'] .pg-lbl > div.pg-help`;
+  const media = "#page-dictation input[data-key='dictation.muteMedia']";
+
+  test(
+    "on macOS, pausing other media says it does nothing there and cannot be turned on; on Linux it can",
+    async () => {
+      const mac = await openPage("darwin");
+      expect(await mac.isDisabled(media)).toBe(true);
+      expect(await text(mac, help("dictation.muteMedia"))).toBe(
+        "macOS does not let akou see what is playing, so this does nothing on a Mac yet.",
+      );
+      // The control: Linux has a way to pause players, so the switch works and says so.
+      const linux = await openPage("linux");
+      expect(await linux.isDisabled(media)).toBe(false);
+      expect(await text(linux, help("dictation.muteMedia"))).toBe("It plays again when you stop.");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the AI tidy recommends a local model as the quickest",
+    async () => {
+      const page = await openPage("linux");
+      expect(await text(page, help("dictation.format"))).toContain("A local model is the quickest");
     },
     UI_TIMEOUT,
   );
