@@ -10,10 +10,11 @@
  * one assertion (the `assertions` attribute Bun writes per test case). It fails when no such test
  * ran, when every one was skipped, or when every one asserted nothing.
  *
- * With no such test, a trap is listed instead of failing when its test is a hardware, checklist or
- * nightly step (its own text says so), when it has no id a test can carry (`[spike]`,
- * `[decision]`), when its test lives outside the Bun suites (ELSEWHERE, with the reason), or when
- * its milestone is not reached.
+ * With no such test, a trap is listed instead of failing when TRAPS.md marks its test
+ * `Test (release checklist):`, `Test (on hardware):`, `Test (nightly):` or
+ * `Test (not written yet):`, when it has no id a test can carry (`[spike]`, `[decision]`), when
+ * its test lives outside the Bun suites (ELSEWHERE, with the reason), or when its milestone is not
+ * reached. Only test ids settle a trap: a test named `[spike] x` settles no `[spike]` trap.
  * This proves a test exists, runs and asserts something; review and positive controls prove it is
  * right.
  */
@@ -28,7 +29,12 @@ export const REACHED = new Set(["M0", "M1"]);
 export const ELSEWHERE: Record<string, string> = {
   "T0.27": "a grep test in the capture crate (cargo test, native/akou-capture/src/lib.rs)",
   "T0.28": "property tests in the capture crate (cargo test, native/akou-capture/src/convert.rs)",
+  "T4.21":
+    "resampler and aligner tests in the capture crate (cargo test, native/akou-capture/src/resample.rs and aligner.rs)",
 };
+
+/** How TRAPS.md says a trap's test is not a Bun test: `Test (nightly): ...`. */
+const MARKED = /\bTest \((release checklist|on hardware|nightly|not written yet)\):/;
 
 export interface Trap {
   title: string;
@@ -113,9 +119,8 @@ export function casesOf(xml: string): Case[] {
 export function listedWhy(t: Trap): string | null {
   if (t.milestone !== null && !REACHED.has(t.milestone))
     return `milestone ${t.milestone} is not reached yet`;
-  const test = /\bTests?\b[\s\S]*$/.exec(t.text)?.[0] ?? "";
-  if (/release checklist|on hardware|human listening|real devices|nightly/i.test(test))
-    return "its test is a hardware, checklist or nightly step";
+  const marked = MARKED.exec(t.text)?.[1];
+  if (marked) return `TRAPS.md marks its test "${marked}"`;
   const ids = t.ids.filter((id) => TEST_ID.test(id));
   if (ids.length === 0) return `no id a test can be named after (${t.ids.join(", ")})`;
   const away = ids.find((id) => ELSEWHERE[id]);
@@ -129,7 +134,8 @@ export function listedWhy(t: Trap): string | null {
  */
 export function judge(traps: Trap[], cases: Case[]): Verdict[] {
   return traps.map((trap): Verdict => {
-    const named = cases.filter((c) => trap.ids.some((id) => c.ids.has(id)));
+    const ids = trap.ids.filter((id) => TEST_ID.test(id));
+    const named = cases.filter((c) => ids.some((id) => c.ids.has(id)));
     const ran = named.filter((c) => !c.skipped && !c.failed);
     const asserted = ran.find((c) => c.assertions > 0);
     if (asserted) return { trap, status: "ok", by: asserted.name };
@@ -184,7 +190,7 @@ if (import.meta.main) {
   for (const l of lines) console.log(`trap-coverage: ${l}`);
   if (failed > 0) {
     console.error(
-      `trap-coverage: ${failed} reached trap${failed === 1 ? "" : "s"} without a test that ran and asserted. Name the test after the trap id, or, if its test is a hardware or checklist step, say so in TRAPS.md`,
+      `trap-coverage: ${failed} reached trap${failed === 1 ? "" : "s"} without a test that ran and asserted. Name the test after the trap id, or mark its test in TRAPS.md as \`Test (release checklist):\`, \`(on hardware)\`, \`(nightly)\` or \`(not written yet)\``,
     );
     process.exit(1);
   }

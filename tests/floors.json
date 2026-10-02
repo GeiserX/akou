@@ -1,7 +1,7 @@
 {
-  "check:darwin": { "minPass": 1978, "maxSkip": 26 },
-  "check:linux": { "minPass": 1978, "maxSkip": 28 },
-  "check:win32": { "minPass": 1958, "maxSkip": 62 },
+  "check:darwin": { "minPass": 1981, "maxSkip": 26 },
+  "check:linux": { "minPass": 1981, "maxSkip": 28 },
+  "check:win32": { "minPass": 1961, "maxSkip": 62 },
   "ui:linux": { "minPass": 136, "maxSkip": 0 },
   "ui-webkit:linux": { "minPass": 43, "maxSkip": 0 },
   "capture-traps:darwin": { "minPass": 22, "maxSkip": 0 },

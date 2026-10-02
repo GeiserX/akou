@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FLOORS, judge as judgeCoverage, parseLcov } from "../scripts/ci/coverage-floor.ts";
 import {
@@ -163,16 +163,55 @@ describe("[TS-6] every reached trap has a test that ran and asserted", () => {
     expect(only({})).toBe("ok");
   });
 
-  test("a hardware or checklist trap with no test is listed, not failed; a named test settles it", () => {
+  test("a trap TRAPS.md marks as a checklist step is listed, not failed; a named test settles it", () => {
     const grant = traps.find((t) => t.ids.includes("T0.18")) as Trap;
     expect(judge([grant], [])[0]).toMatchObject({
       status: "listed",
-      why: "its test is a hardware, checklist or nightly step",
+      why: 'TRAPS.md marks its test "release checklist"',
     });
     expect(judge([grant], casesOf(junit([{ name: "[T0.18] grant" }])))[0]?.status).toBe("ok");
     const later: Trap = { title: "x", ids: ["T9.9"], milestone: "M4", text: "Test: a unit test." };
     expect(judge([later], [])[0]).toMatchObject({ status: "listed" });
     expect(judge([{ ...later, milestone: "M1" }], [])[0]?.status).toBe("missing");
+  });
+
+  test("positive control: a test text that only mentions a checklist or the nightly job lists nothing", () => {
+    // [DK-T1]'s text ends with a release checklist step and [T4.20]'s names the nightly job, but
+    // both have Bun tests: with those gone, each fails.
+    for (const id of ["DK-T1", "T4.20"]) {
+      const t = traps.find((x) => x.ids.includes(id)) as Trap;
+      expect(listedWhy(t)).toBeNull();
+      expect(judge([t], [])[0]?.status).toBe("missing");
+    }
+    const marked = (text: string) =>
+      listedWhy({ title: "x", ids: ["T9.9"], milestone: null, text });
+    expect(marked("Test: a unit test; the release checklist records it.")).toBeNull();
+    expect(marked("Test (nightly): WER.")).toBe('TRAPS.md marks its test "nightly"');
+    expect(marked("Test (by the way): x.")).toBeNull();
+  });
+
+  test("only test ids settle a trap: a `[spike]` test settles no `[spike]` trap", () => {
+    const spike = traps.find((t) => t.ids.length === 1 && t.ids[0] === "spike") as Trap;
+    expect(
+      judge([spike], casesOf(junit([{ name: "[spike] a version pairing" }])))[0],
+    ).toMatchObject({ status: "listed" });
+  });
+
+  test("every trap the check holds to a test has a test in tests/ named after one of its ids", () => {
+    // The synthetic JUnit above has a case for every such trap, so it cannot see a trap whose
+    // test was never written; this reads the names the suites really give their tests.
+    const named = new Set<string>();
+    const dir = join(ROOT, "tests");
+    for (const f of readdirSync(dir, { recursive: true }) as string[]) {
+      if (!/\.tsx?$/.test(f)) continue;
+      const src = readFileSync(join(dir, f), "utf8");
+      for (const m of src.matchAll(/\b(?:test|describe|it)(?:\.\w+)*\(\s*(["'`])((?:(?!\1).)*)\1/g))
+        for (const id of idsIn(m[2] as string)) named.add(id);
+    }
+    const unnamed = traps
+      .filter((t) => listedWhy(t) === null && !t.ids.some((id) => named.has(id)))
+      .map((t) => t.ids.join(", "));
+    expect(unnamed).toEqual([]);
   });
 
   test("the script reads several JUnit files and exits 1 on a missing trap test", () => {
