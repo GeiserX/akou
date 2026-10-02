@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
 import { notWritableMessage } from "../src/main/server/writable.ts";
 import { until } from "./capture-helpers.ts";
@@ -152,6 +152,41 @@ describe("[SV-P8] akou serve", () => {
     expect(code).toBe(78);
     expect(runtime(h.configDir)).toBeNull();
   }, 30_000);
+
+  // SIGTERM is the clean stop the log is read after; Windows has none (see above).
+  test.skipIf(process.platform === "win32")(
+    "[SV-P7] on a box with no display, no sound server and no xdg-open, the log says nothing about any of them",
+    async () => {
+      const h = home();
+      // Only the directory Bun is in on PATH: no xdg-open, no pactl, no capture helper.
+      const env: Record<string, string> = { ...h.env, PATH: dirname(process.execPath) };
+      for (const k of [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "PULSE_SERVER",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+      ]) {
+        delete env[k];
+      }
+      const proc = serve(env);
+      await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+      const rt = runtime(h.configDir) as { port: number };
+      expect((await fetch(`http://127.0.0.1:${rt.port}/healthz`)).status).toBe(200);
+      proc.kill("SIGTERM");
+      expect(await proc.exited).toBe(0);
+      const err = await new Response(proc.stderr).text();
+      // The log is really read: the start line is in it.
+      expect(err).toContain("serving on");
+      const DESKTOP =
+        /display|pulse|pipewire|sound server|xdg-open|capture helper|akou-capture|tailnet|tailscale/i;
+      // Positive control: the pattern catches the lines it is there for.
+      expect(DESKTOP.test("akou warn: capture helper not found on PATH")).toBe(true);
+      expect(DESKTOP.test("akou warn: no tailnet: tailscale is not running")).toBe(true);
+      expect(err.split("\n").filter((l) => DESKTOP.test(l))).toEqual([]);
+    },
+    30_000,
+  );
 
   test("[SV-P11] AKOU_BEHIND_PROXY=true starts the default bind with no proxy setting in the file", async () => {
     const h = home();

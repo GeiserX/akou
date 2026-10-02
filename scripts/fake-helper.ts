@@ -68,6 +68,7 @@
  *                           the app and are never reported
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
  *   --target-app ID         the target app (default `com.example.editor`)
+ *   --target-name NAME      the target app's name as people know it (default none)
  *   --target-frame X,Y,W,H  the frame of the window with the keyboard, sent with `press` at each
  *                           key-down (DC-O1); without it `press` carries no frame, as on Linux
  *   --ax FILE               the scripted accessibility tree, the same lines as the real helper's
@@ -430,6 +431,7 @@ async function runDictate(): Promise<void> {
   const field = (opt("--field") ?? "editable") as FieldKind;
   const target: Target = {
     app: opt("--target-app") ?? "com.example.editor",
+    ...(opt("--target-name") ? { name: opt("--target-name") } : {}),
     pid: 4242,
     window: "w1",
     field,
@@ -510,7 +512,9 @@ async function runDictate(): Promise<void> {
         say({ type: "hotkey", name: o.name, target: targetAt(clock) });
       else if (o.type === "arm") say({ type: "press", on: true, ...(frame ? { frame } : {}) });
       else if (o.type === "disarm") say({ type: "press", on: false });
-      else if (o.type === "start") {
+      else if (o.type === "latched") {
+        if (open) say({ type: "latched", id: open.id });
+      } else if (o.type === "start") {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
         captured.set(open.id, targetAt(o.at));

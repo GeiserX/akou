@@ -193,6 +193,18 @@ impl Hotkey {
         matches!(self, Hotkey::Modifier(_))
     }
 
+    /// Whether `key` is one of the modifiers this chord holds: `LeftShift` is for
+    /// `Control+Shift+Space` and for `LeftShift+K`, not for `RightShift+K`.
+    pub fn holds(&self, key: &str) -> bool {
+        let Hotkey::Chord { mods, .. } = self else {
+            return false;
+        };
+        modifier(key).is_some_and(|(hm, hs)| {
+            mods.iter()
+                .any(|(m, side)| hm == *m && (*side == Side::Either || hs == *side))
+        })
+    }
+
     /// Whether `key` going down, with `held` already down, is this binding's press.
     pub fn pressed_by(&self, key: &str, held: &[String]) -> bool {
         match self {

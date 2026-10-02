@@ -70,6 +70,9 @@ pub enum Action {
     Start { t_ns: u64 },
     /// The session ends now. `cancel` drops it; any other reason runs the post-roll.
     End { reason: &'static str },
+    /// The session is latched now (tapped on, a chord released before `HOLD_MS`, or the app's
+    /// `session.start`), so the app may end it after silence (DC-A3). A held session never is.
+    Latched,
     /// Report `key {name}` to the app.
     Key(String),
     /// The session that starts next was pressed with the draft key (DC-S3).
@@ -290,11 +293,14 @@ impl Activation {
         }
     }
 
-    /// A Shift other than the hotkey itself (a `RightShift` hotkey held is not Shift+Enter).
+    /// A Shift other than the hotkey's own: a `RightShift` hotkey held, or the Shift of a chord
+    /// such as `Control+Shift+Space` while its press is still down, is not Shift+Enter (DC-A1).
     fn shift_held(&self) -> bool {
+        let chord_down = matches!(self.state, State::Listening { held: true, .. });
         self.held.iter().any(|k| {
             matches!(keys::modifier(k), Some((keys::Mod::Shift, _)))
                 && !keys::same(k, self.active.trigger())
+                && !(chord_down && self.active.holds(k))
         })
     }
 
@@ -434,8 +440,8 @@ impl Activation {
                 self.start_at(down_ns, out);
                 let tap = t_ns.saturating_sub(down_ns) < HOLD_MS * MS;
                 match self.mode {
-                    Mode::Toggle => self.latch(down_ns),
-                    Mode::HoldOrToggle if tap => self.latch(down_ns),
+                    Mode::Toggle => self.latch(down_ns, out),
+                    Mode::HoldOrToggle if tap => self.latch(down_ns, out),
                     _ => {
                         out.push(Action::End { reason: "release" });
                         self.state = self.awaiting(t_ns);
@@ -448,8 +454,8 @@ impl Activation {
             } => {
                 let tap = t_ns.saturating_sub(down_ns) < HOLD_MS * MS;
                 match self.mode {
-                    Mode::Toggle => self.latch(down_ns),
-                    Mode::HoldOrToggle if tap => self.latch(down_ns),
+                    Mode::Toggle => self.latch(down_ns, out),
+                    Mode::HoldOrToggle if tap => self.latch(down_ns, out),
                     _ => {
                         out.push(Action::End { reason: "release" });
                         self.state = self.awaiting(t_ns);
@@ -461,11 +467,12 @@ impl Activation {
         false
     }
 
-    fn latch(&mut self, down_ns: u64) {
+    fn latch(&mut self, down_ns: u64, out: &mut Vec<Action>) {
         self.state = State::Listening {
             down_ns,
             held: false,
         };
+        out.push(Action::Latched);
     }
 
     fn awaiting(&self, t_ns: u64) -> State {
@@ -511,7 +518,7 @@ impl Activation {
             self.drafting = false;
             out.push(Action::Arm { t_ns });
             out.push(Action::Start { t_ns });
-            self.latch(t_ns);
+            self.latch(t_ns, out);
         }
     }
 
@@ -744,6 +751,124 @@ mod tests {
         assert!(
             acts.contains(&(800, Action::Key("Enter".into()))),
             "{acts:?}"
+        );
+    }
+
+    /// DC-A1: Enter during a held `Control+Shift+Space` is Enter, since its Shift is the chord's,
+    /// so it ends the session and sends instead of opening the draft box; once the chord was
+    /// tapped and let go, a Shift pressed again with Enter is Shift+Enter (the positive control).
+    #[test]
+    fn dc_a1_the_shift_of_a_held_chord_does_not_make_enter_shift_enter() {
+        let (acts, _) = play(
+            "Control+Shift+Space",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftControl"),
+                (10, true, "LeftShift"),
+                (20, true, "Space"),
+                (800, true, "Enter"),
+            ],
+            900,
+        );
+        assert!(
+            acts.contains(&(800, Action::Key("Enter".into()))),
+            "{acts:?}"
+        );
+        assert!(acts.contains(&(800, Action::End { reason: "key" })));
+        let (acts, _) = play(
+            "Control+Shift+Space",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftControl"),
+                (10, true, "LeftShift"),
+                (20, true, "Space"),
+                (100, false, "Space"),
+                (110, false, "LeftShift"),
+                (120, false, "LeftControl"),
+                (500, true, "LeftShift"),
+                (520, true, "Enter"),
+            ],
+            600,
+        );
+        assert!(
+            acts.contains(&(520, Action::Key("Shift+Enter".into()))),
+            "{acts:?}"
+        );
+        // A chord whose Shift has a side leaves the other Shift a Shift.
+        let (acts, _) = play(
+            "Control+RightShift+Space",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftControl"),
+                (10, true, "RightShift"),
+                (20, true, "Space"),
+                (500, true, "LeftShift"),
+                (520, true, "Enter"),
+            ],
+            600,
+        );
+        assert!(
+            acts.contains(&(520, Action::Key("Shift+Enter".into()))),
+            "{acts:?}"
+        );
+    }
+
+    /// DC-A3: the helper says `Latched` when a session latches (a tap, toggle, a chord let go
+    /// before `HOLD_MS`, the app's start), right after its `Start`; a push-to-talk hold never.
+    #[test]
+    fn dc_a3_a_latched_session_says_so_and_a_hold_never_does() {
+        let latched = |acts: &[(u64, Action)]| {
+            only(acts, |a| {
+                matches!(a, Action::Start { .. } | Action::Latched)
+            })
+        };
+        let tap = [(0, true, "RightCommand"), (120, false, "RightCommand")];
+        let (acts, _) = play("RightCommand", Mode::HoldOrToggle, &tap, 500);
+        assert_eq!(
+            latched(&acts),
+            vec![(120, Action::Start { t_ns: 0 }), (120, Action::Latched)]
+        );
+        let (acts, _) = play(
+            "RightCommand",
+            Mode::HoldOrToggle,
+            &[(0, true, "RightCommand"), (800, false, "RightCommand")],
+            1000,
+        );
+        assert!(!acts.iter().any(|(_, a)| *a == Action::Latched), "{acts:?}");
+        let (acts, _) = play("RightCommand", Mode::Hold, &tap, 500);
+        assert!(!acts.iter().any(|(_, a)| *a == Action::Latched), "{acts:?}");
+        let (acts, _) = play(
+            "RightCommand",
+            Mode::Toggle,
+            &[(0, true, "RightCommand"), (900, false, "RightCommand")],
+            1000,
+        );
+        assert!(acts.contains(&(900, Action::Latched)), "{acts:?}");
+        let chord = |up: u64| {
+            play(
+                "Control+Space",
+                Mode::HoldOrToggle,
+                &[
+                    (0, true, "LeftControl"),
+                    (10, true, "Space"),
+                    (up, false, "Space"),
+                ],
+                1000,
+            )
+            .0
+        };
+        assert!(chord(100).contains(&(100, Action::Latched)));
+        assert!(!chord(900).iter().any(|(_, a)| *a == Action::Latched));
+        let mut a = Activation::new(Hotkey::parse("RightCommand").unwrap(), Mode::Hold);
+        let mut out = Vec::new();
+        a.start(0, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Action::Arm { t_ns: 0 },
+                Action::Start { t_ns: 0 },
+                Action::Latched
+            ]
         );
     }
 
