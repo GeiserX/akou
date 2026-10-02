@@ -268,4 +268,21 @@ describe("[DK-M8] the watchdog inside the app", () => {
     },
     LONG,
   );
+  test.skipIf(process.platform === "win32")(
+    "a process list that cannot be read ends nothing, so a helper in it is never left orphaned or killed",
+    async () => {
+      const r = await run(["--block", "30000", "--ps-fails"]);
+      try {
+        expect(await r.exitWithin(SILENCE + 4000)).toBeNull();
+        expect(processAlive(r.child)).toBe(true);
+        expect(r.log()).toMatch(
+          /error watchdog: could not list the processes below akou \(ps failed\), so nothing was ended/,
+        );
+        expect(r.log()).not.toContain("ending akou");
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
 });
