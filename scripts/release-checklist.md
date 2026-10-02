@@ -38,7 +38,8 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
 
 ## After the workflow
 
-1. The release page lists the DMG, the zip, four CLI archives and `SHA256SUMS`, and its notes start with the version's changelog section, then the unsigned first-open step. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
+1. The release page lists the DMG, the zip, four CLI archives, the update manifest and bundle (`stable-macos-arm64-*`) and `SHA256SUMS`, and its notes start with the version's changelog section, then the unsigned first-open step. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
+   The `update-feed` release holds the same manifest and bundle: the release job replaced them and fetched the manifest back as the app does (CI-23).
 2. On a test Mac (never the build machine), from the downloaded DMG:
    - `shasum -a 256 -c SHA256SUMS --ignore-missing` passes.
    - The first open needs the documented step (Control-click Open on macOS 14, Open Anyway on 15 and later) and nothing else; macOS never says the app is damaged.
