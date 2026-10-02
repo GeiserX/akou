@@ -128,6 +128,15 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
     ],
   },
+  "asr.final.engines": {
+    label: "Several models after the call",
+    help: "Each one hears the whole call and their words are combined. Slower; first one breaks ties.",
+    empty: "One model",
+    choices: [
+      ["qwen3-asr-1.7b", "Qwen3-ASR"],
+      ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
+    ],
+  },
   "asr.parakeet.decoding": {
     label: "Parakeet decoding",
     help: "Beam also leans toward your words, but can drop whole stretches.",
@@ -282,7 +291,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.default_language": {
     label: "Language when a job names none",
-    help: "A language tag such as es or en-US, or auto to detect it.",
+    help: "Detect it finds each job's language from its audio.",
   },
   "server.default_diarize": {
     label: "Label speakers when a job does not say",
@@ -306,6 +315,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Each loads its own copy of the model.",
     unit: "jobs",
   },
+  "server.model_idle_minutes": {
+    label: "Keep the model loaded between jobs for",
+    help: "0: let it go after each run of jobs.",
+    unit: "minutes",
+  },
   "server.queue_max": { label: "Jobs waiting, at most", help: "0: no limit.", unit: "jobs" },
   "server.queue_max_per_key": {
     label: "Jobs waiting per key, at most",
@@ -322,6 +336,12 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "server.dictation_engine": {
     label: "Engine for other computers' dictation",
+    help: "When their dictation names none. Automatic is the server's default.",
+    choices: [
+      ["auto", "Automatic"],
+      ["fast", "Fast"],
+      ["best", "Best"],
+    ],
   },
 
   // The Dictation page (docs/ux/design-explorations/sd-a-dictation.html).

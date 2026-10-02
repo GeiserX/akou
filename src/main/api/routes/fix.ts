@@ -54,9 +54,10 @@ import {
   validateTerm,
   validWorkspace,
 } from "../../vocab/files.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf, nextItemId } from "./common.ts";
+import { CALL_ID, callId, callOf, LIVE_REF_ERRORS, nextItemId, WRITE_ERRORS } from "./common.ts";
 import { editFile, targetPath } from "./vocab.ts";
 
 const MAX_LINE = 2000;
@@ -383,6 +384,11 @@ export function fixRoutes(r: Router<ApiApp>): void {
         "heard?": "string[]",
       },
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_field", "bad_term"],
+        404: ["not_found"],
+        409: ["line_changed", "term_exists", "vocab_file_invalid"],
+      }),
     }),
     async (c) => {
       const b = await c.body<{
@@ -728,6 +734,10 @@ export function fixRoutes(r: Router<ApiApp>): void {
         "renames?": "any",
       },
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, {
+        404: ["not_found"],
+        409: ["term_exists", "vocab_file_invalid"],
+      }),
     }),
     async (c) => {
       const b = await c.body<Partial<FixUndo>>();
@@ -871,6 +881,11 @@ export function fixRoutes(r: Router<ApiApp>): void {
       doc: "Forget a term a fix learned, at any time after the fix: `learned` is its `vocab.learned` id. The call's entries it came with are retracted, so its lines read as heard again, and it leaves the vocabulary file it was learned into (the whole entry when a fix wrote it, else only the heard forms the fix added). A `vocab.learned` revision with `term: null` tells the agents following the call.",
       body: { learned: "string" },
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_field"],
+        404: ["not_found"],
+        409: ["vocab_file_invalid"],
+      }),
     }),
     async (c) => {
       const b = await c.body<{ learned?: unknown }>();

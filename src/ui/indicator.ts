@@ -120,6 +120,7 @@ export function mountIndicator(
     closed: () => {
       if (followed && live?.call === followed) {
         const call = followed;
+        // clock: gives the call's end a moment to arrive before the indicator closes.
         setTimeout(() => {
           if (live?.call === call) start(call);
         }, 500);
@@ -176,6 +177,7 @@ export function mountIndicator(
   const sized = new ResizeObserver(fit);
   sized.observe(bar);
 
+  // clock: the indicator's elapsed time on screen.
   const timer = setInterval(() => {
     tick();
     fit();
