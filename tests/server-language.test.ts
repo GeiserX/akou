@@ -116,7 +116,7 @@ describe("[SV-J4] a job with no opinion names the language it heard", () => {
     "failing control: the same Spanish clip on fast carries no language, since Parakeet names none",
     async () => {
       const { res } = await result({ preset: "fast", language: "auto" }, clip("es"));
-      expect([res.engine.models[0], res.language]).not.toEqual([QWEN_ASR, "es"]);
+      expect(res.engine.models[0]).not.toBe(QWEN_ASR);
       expect(res.language).toBeNull();
     },
   );
