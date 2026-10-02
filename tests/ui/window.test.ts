@@ -2099,7 +2099,7 @@ describe("copy the transcript so far (W12.2)", () => {
 
 describe("the share viewer (DESIGN 8.3)", () => {
   test(
-    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to live, + and -, the offset tooltip",
+    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to the end, + and -, the offset tooltip",
     async () => {
       let id = "";
       await withRig(
@@ -2124,6 +2124,8 @@ describe("the share viewer (DESIGN 8.3)", () => {
             s.scrollTop = 0;
           });
           await viewer.waitForSelector("#jump", { state: "visible" });
+          // The shared call has ended: nothing is live, so the button does not say so.
+          expect(await viewer.textContent("#jump")).toBe("↓ Back to the end");
           const top = () =>
             viewer.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
           await rig.write(id, seg("l000061", "a brand new line", { w0: T0 + 61 * 4000 }));
@@ -2141,7 +2143,7 @@ describe("the share viewer (DESIGN 8.3)", () => {
           );
           await Bun.sleep(300);
           expect(await top()).toBeLessThan(10);
-          // Back to live, then pinned again.
+          // Back to the end, then pinned again.
           await viewer.click("#jump");
           await until(async () => (await gapOf(viewer)) < 2, 3000, "back at the bottom");
           await viewer.waitForSelector("#jump", { state: "hidden" });

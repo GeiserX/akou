@@ -576,7 +576,10 @@ describe("DC-L4: the chip asks once, from the draft box's page", () => {
       ).toEqual(["Kubernetes", "Grafana"]);
       await page.uncheck("#chip input[data-term='Grafana']");
       await page.click("#chip-learn");
-      await until(() => g.terms().includes("Kubernetes"), 5000, "the word learned");
+      // The learner saves the word before it writes `accepted` and `ignored`: wait for all four
+      // events, not only the word in the file.
+      await until(() => statuses(r.id).length === 4, 5000, "the answer written");
+      expect(g.terms()).toContain("Kubernetes");
       expect(g.terms()).not.toContain("Grafana");
       expect(statuses(r.id)).toEqual(["proposed", "proposed", "accepted", "ignored"]);
     },
