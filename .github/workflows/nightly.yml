@@ -117,7 +117,7 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - run: bun scripts/soak.ts --speed 10 --minutes 60 --out soak-results.json
+      - run: bun scripts/soak.ts --speed 10 --minutes 60
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).

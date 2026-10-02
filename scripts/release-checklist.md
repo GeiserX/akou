@@ -32,10 +32,10 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
    ```sh
    cargo build --release --manifest-path native/akou-capture/Cargo.toml
    bun scripts/soak.ts --speed 1 --minutes 480 --burner \
-     --helper native/akou-capture/target/release/akou-capture --out docs/gates/soak-0.1.0.json
+     --helper native/akou-capture/target/release/akou-capture --out "docs/gates/soak-$(bun -p "require('./package.json').version").json"
    ```
 
-   Every check prints `ok`. Commit the JSON with the release. A runner job cannot do this: its limit is 6 hours.
+   Every check prints `ok`. The JSON is named after the version step 3 stamped; commit it with the release. A runner job cannot do this: its limit is 6 hours.
 
 ## The tag
 

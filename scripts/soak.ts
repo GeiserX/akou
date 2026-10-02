@@ -146,6 +146,25 @@ export function judge(r: SoakResult): Verdict[] {
   return out;
 }
 
+/**
+ * Follows the packets of both channels: `holes` counts the ones that do not start where the last
+ * one of their channel ended, `audioSeconds` is the end of the last mic packet.
+ */
+export function continuity() {
+  const next = { mic: -1, call: -1 };
+  const c = {
+    holes: 0,
+    audioSeconds: 0,
+    add(p: Packet) {
+      const at = next[p.ch];
+      if (at >= 0 && Math.abs(p.fileSeconds - at) > 0.001) c.holes++;
+      next[p.ch] = p.fileSeconds + p.samples.length / CAPTURE_RATE;
+      if (p.ch === "mic") c.audioSeconds = next.mic;
+    },
+  };
+  return c;
+}
+
 const FAKE = join(import.meta.dir, "fake-helper.ts");
 
 export interface SoakOptions {
@@ -162,15 +181,7 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
   const root = mkdtempSync(join(tmpdir(), "akou-soak-"));
   const say = o.log ?? (() => {});
   const events: Record<string, number> = {};
-  const next = { mic: -1, call: -1 };
-  let holes = 0;
-  let audioSeconds = 0;
-  const onPacket = (p: Packet) => {
-    const at = next[p.ch];
-    if (at >= 0 && Math.abs(p.fileSeconds - at) > 0.001) holes++;
-    next[p.ch] = p.fileSeconds + p.samples.length / CAPTURE_RATE;
-    if (p.ch === "mic") audioSeconds = next.mic;
-  };
+  const audio = continuity();
   let engine: AkouCaptureEngine;
   if (o.helper) {
     const wav = join(root, "source.wav");
@@ -192,7 +203,7 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
     onEvent: (_, e: LogEvent) => {
       events[e.type] = (events[e.type] ?? 0) + 1;
     },
-    onPacket: (_, __, p) => onPacket(p),
+    onPacket: (_, __, p) => audio.add(p),
   });
   let maxLateMs = 0;
   let expected = performance.now() + 100;
@@ -213,7 +224,7 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
     };
     samples.push(s);
     say(
-      `${s.at.toFixed(0)} s: ${(audioSeconds / 3600).toFixed(2)} h of audio, heap ${s.heapMb.toFixed(1)} MB, rss ${s.rssMb.toFixed(1)} MB`,
+      `${s.at.toFixed(0)} s: ${(audio.audioSeconds / 3600).toFixed(2)} h of audio, heap ${s.heapMb.toFixed(1)} MB, rss ${s.rssMb.toFixed(1)} MB`,
     );
   };
   try {
@@ -244,8 +255,8 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
     return {
       speed: o.speed,
       wallSeconds,
-      audioSeconds,
-      holes,
+      audioSeconds: audio.audioSeconds,
+      holes: audio.holes,
       fileSeconds: ended.length > 0 ? ended.reduce((a, e) => a + e.fileSeconds, 0) : null,
       opusSeconds,
       samples,

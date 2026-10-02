@@ -4,7 +4,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { judge, SOAK_BOUNDS, type SoakResult, soak } from "../scripts/soak.ts";
+import { continuity, judge, SOAK_BOUNDS, type SoakResult, soak } from "../scripts/soak.ts";
+import { CAPTURE_RATE, type Packet } from "../src/main/capture/protocol.ts";
 
 function clean(): SoakResult {
   return {
@@ -67,9 +68,13 @@ describe("the soak's checks", () => {
   });
 
   test("growth is measured from the end of the warm-up, not from the first sample", () => {
-    // Loading at start-up is not a leak: 100 MB before a tenth of the run, flat after it.
+    // Loading at start-up is not a leak: 99 MB before a tenth of the run, flat after it. Measured
+    // from the first sample, the same run grows by more than the bound.
     const r = clean();
     (r.samples[0] as { heapMb: number }).heapMb = 1;
+    (r.samples[1] as { heapMb: number }).heapMb = 100;
+    (r.samples[2] as { heapMb: number }).heapMb = 101;
+    expect(100 - 1).toBeGreaterThan(SOAK_BOUNDS.heapGrowthMb);
     expect(failing(r)).toEqual([]);
   });
 
@@ -89,6 +94,30 @@ describe("the soak's checks", () => {
     };
     expect(failing(saw(0))).toEqual([]);
     expect(failing(saw(0.05))).toEqual(["memory.heap_growth_mb"]);
+  });
+});
+
+describe("the soak's hole counter", () => {
+  const packet = (ch: "mic" | "call", fileSeconds: number): Packet => ({
+    ch,
+    zeroFilled: false,
+    captureNs: 0n,
+    fileSeconds,
+    samples: new Float32Array(CAPTURE_RATE / 10),
+  });
+
+  test("packets that join pass, one that skips or overlaps is a hole, per channel", () => {
+    const c = continuity();
+    for (const at of [0, 0.1, 0.2]) {
+      c.add(packet("mic", at));
+      c.add(packet("call", at));
+    }
+    expect(c.holes).toBe(0);
+    expect(c.audioSeconds).toBeCloseTo(0.3, 6);
+    c.add(packet("mic", 0.4)); // 0.1 s of mic audio never arrived
+    expect(c.holes).toBe(1);
+    c.add(packet("call", 0.25)); // the call channel overlaps itself
+    expect(c.holes).toBe(2);
   });
 });
 
