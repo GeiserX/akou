@@ -1,9 +1,10 @@
 /**
  * `akou transcribe FILE` (docs/ux/SERVER.md SV-D1): a file job from the command line. It uploads
- * the file to `POST /v1/jobs` of the akou it talks to, waits for the job to end, and prints the
- * transcript, so transcribing a file is the same job whichever door asks for it. Keywords and
- * priority go as the form fields the route reads (`keywords[]`, `priority`), unchecked here: the
- * server's own refusal is printed, so its limits live in one place (docs/ux/CLI.md rule 1).
+ * the file to `POST /v1/jobs` of the akou it talks to (the desktop app, with its own token, or a
+ * server), waits for the job to end, and prints the transcript, so transcribing a file is the same
+ * job whichever door asks for it. Keywords and priority go as the form fields the route reads
+ * (`keywords[]`, `priority`), unchecked here: the server's own refusal is printed, so its limits
+ * live in one place (docs/ux/CLI.md rule 1).
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -17,7 +18,7 @@ const PRESETS = ["lite", "fast", "best", "fusion", "auto"];
 
 export const transcribeCommand: Command = {
   name: "transcribe",
-  summary: "Transcribe an audio file as a server job and print the transcript",
+  summary: "Transcribe an audio file as a job and print the transcript",
   usage: `akou transcribe FILE [--preset ${PRESETS.join("|")}] [--language L] [--diarize] [--keyword WORD…] [--keywords-file PATH] [--priority N] [--json]`,
   flags: {
     preset: { type: "string", value: "P", desc: `${PRESETS.join(", ")} (default auto)` },
@@ -74,11 +75,12 @@ export const transcribeCommand: Command = {
     for (const k of keywords) form.append("keywords[]", k);
     const priority = str(p, "priority");
     if (priority !== undefined) form.append("priority", priority);
-    // The desktop app has no job routes; `GET /v1/server` says so before any upload.
+    // An akou from before the desktop app took jobs has no job routes; `GET /v1/server` says so
+    // before any upload.
     const server = await api(ctx, "GET", "/server");
     if (server.body?.capabilities?.jobs !== true) {
       const message =
-        "file jobs need akou in server mode (the server.enabled setting); the akou this command reached has none";
+        "the akou this command reached takes no file jobs; update it, or set AKOU_URL to an akou that does";
       if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_server", message }));
       else ctx.io.err(`akou: ${message}`);
       return EXIT.unavailable;
@@ -115,7 +117,7 @@ export const transcribeCommand: Command = {
       return finish(ctx, result, (b: Body) => b.text as string);
     } catch (err) {
       // Ctrl-C: the job is cancelled below, and the exit is the shell's for SIGINT.
-      if (ctx.io.signal?.aborted) return 130;
+      if (ctx.io.signal?.aborted) return EXIT.interrupted;
       throw err;
     } finally {
       await api(ctx, "DELETE", `/jobs/${id}`, { launch: false }).catch(() => {});

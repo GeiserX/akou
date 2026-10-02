@@ -68,11 +68,17 @@ export interface DraftRpc {
        */
       language: { params: { id: string }; response: boolean };
       chip: { params: ChipAnswer; response: boolean };
+      /**
+       * The box's window took or lost the keyboard: while it has it, a dictation is appended to
+       * the field instead of inserted (DC-A4).
+       */
+      focused: { params: { on: boolean }; response: boolean };
     };
     messages: Record<string, never>;
   };
   webview: {
     requests: Record<string, never>;
-    messages: { open: DraftOpen; chip: Chip };
+    /** `append`: a dictation made while the box had the keyboard goes at the end of its field. */
+    messages: { open: DraftOpen; chip: Chip; append: { text: string } };
   };
 }

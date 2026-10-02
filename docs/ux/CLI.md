@@ -68,18 +68,18 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 
 | Group | Commands | Today |
 |---|---|---|
-| Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
+| Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--engines A,B] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
-| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
+| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `ask --preset NAME [--speaker NAME]` and `presets list` (PG-F2) · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `workspaces` · `workspace add NAME` · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
-| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|delete MODEL\|import\|select` (`pull` and `import` need no running app, SV-P3; `delete` asks the running akou, which refuses the default model and one in use) · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
+| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|delete MODEL\|import\|select` (`pull` and `import` need no running app, SV-P3; `delete` asks the running akou, which refuses the default model and one in use) · `devices` · `apps` · `templates list\|show` (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `demo`, `completion` |
 | Dictation | `dictate FILE [--engine E] [--language L]` **new** (DICTATION.md DC-G3: a clip through the dictation path) · `dictate start\|stop\|toggle\|cancel` · `dictations list\|show\|retry\|delete` **new** (DC-G3) | has every command in this row ([dictate.ts](../../src/main/cli/commands/dictate.ts)) |
 | Agents | `skill install\|uninstall [--harness claude\|codex] [--dir DIR]` · `mcp` · `webhook test` **new** (PG-W2) · `api METHOD PATH` **new** (CLI-11) | has, except `webhook test`, `api` |
-| Server | `serve` (SV-P8: the server in the foreground, exit 78 when the settings refuse its bind) · `jobs list [--status STATE]` (SV-J8) · `transcribe FILE [--preset P]` · `keys create\|list\|revoke` · `admin set-password` | has |
+| Server | `serve` (SV-P8: the server in the foreground, exit 78 when the settings refuse its bind) · `jobs list [--status STATE]` (SV-J8) · `transcribe FILE [--preset P]` (both against the desktop app too, with its token) · `keys create\|list\|update\|revoke` · `admin set-password` | has |
 | App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | has, except `self-update` |
 
 ### Naming a call
@@ -156,8 +156,8 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-16 | Exit 3 for "no call to act on" in every command | P0 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | bug |
-| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | partial: `tail -f` stops on the first Ctrl-C and exits 130 on the second |
+| CLI-16 | Exit 3 for "no call to act on" in every command | P1 | split from CLI-03; DESIGN 6.1 promises 3; the audit saw `enhance`, `show`, `finalize` and `export` exit 64 with no calls while `ask`, `tail`, `search` and `note` exit 3 | With a fresh `AKOU_HOME` and no calls, every call command in the registry exits 3; with one ended call and nothing live, every control exits 3. A table in the test lists the commands, and a new command missing from it fails the test | has: `tests/cli-exit-codes.e2e.test.ts` lists every command in the registry and runs each call command with no calls, with `-c` naming no call, and each command that defaults to `live` with nothing live; a missing call answers `not_found` with `call` in the body, so a missing key or model stays 64 |
+| CLI-21 | Ctrl-C ends the command, never the recording: follow commands exit 0, one-shot commands exit 130 and cancel their work | P1 | clig.dev; rule 5 | On a pty with a live fake call, Ctrl-C in `tail -f` exits 0 and `akou status --json` still shows the call recording. Ctrl-C during `ask` exits 130 and no provider process is left running | has: `tests/cli-terminal.e2e.test.ts` types Ctrl-C into `tail -f` and `ask` on a pty |
 
 ## 7. Errors that say what to do
 
@@ -293,7 +293,7 @@ The window's copy button already has a terminal form that needs nothing new: `ak
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-07 | `akou devices` and `akou apps`, over a devices and apps route on the API (owned by [PROGRAMMABILITY.md](PROGRAMMABILITY.md)), so the window and MCP read the same list | P1 | Audit; `--mic ID` and `--call app:ID` need a way to find the id | Both list the fake helper's devices and apps, one per line with the id first; `--json` gives the route's body; the ids they print are accepted by `akou start --mic` and `--call app:`. The CLI e2e run with the recordings root unreadable (rule 1) still passes | missing: exit 69 |
+| CLI-07 | `akou devices` and `akou apps`, over a devices and apps route on the API (owned by [PROGRAMMABILITY.md](PROGRAMMABILITY.md)), so the window and MCP read the same list | P1 | Audit; `--mic ID` and `--call app:ID` need a way to find the id | Both list the fake helper's devices and apps, one per line with the id first; `--json` gives the route's body; the ids they print are accepted by `akou start --mic` and `--call app:`. The CLI e2e run with the recordings root unreadable (rule 1) still passes | partial: both print the fake helper's list one per line with the id first (an app's name only where it is not its id, as on macOS), `--json` is the route's body, and the ids start a call (`tests/devices.e2e.test.ts`); the run with the recordings root unreadable is not tested yet |
 | CLI-26 | `akou calls rename CALL TITLE`, `calls move CALL -w WS`, `calls delete CALL`, `calls restore CALL` over PG-A4; `akou stop --discard` stops the live call and moves it to the trash before any hand-off runs (the CLI door of REC-05) | P1 | Granola trash, Minutes delete, Superwhisper discard; the way out of every state, including a recording started by mistake | `rename` changes the title in `akou calls` and the export file name; `delete` on a live call exits 75 with a `try: akou stop --discard` hint; `delete` then `restore` gives back an identical `akou show` output. `stop --discard` on a fake call leaves no export and runs no hook, and `calls restore` brings the call back. `delete` and `--discard` ask on a terminal and need `--yes` otherwise | partial: `calls rename` done (`calls rename last Weekly sync`); `move`, `delete`, `restore`, `stop --discard` and the export file name missing |
 | CLI-38 | `akou doctor --grant`: checks the microphone and system-audio grants and, on a terminal, asks the OS for each missing one or opens its settings pane; plain `doctor` reports the grants (and the Accessibility grant from DK-K1) without asking | P1 | REQUIREMENTS F0.26 promises it; today it exits 69 "not built" | With a fake grant checker reporting the microphone missing, `doctor --grant` requests it once (the fake records the request) and reports `mic: requested`; with both granted it requests nothing and exits 0; `--json` lists each grant and its state. On macOS, a hardware check with the grant removed is recorded | partial: built against a fake checker; on macOS the command line cannot read the app's grants, so they read `unknown` and `--grant` opens their panes, one per run because each pane replaces the one before, and `--grant NAME` (`mic`, `system-audio`, `accessibility`) reaches the later ones; the hardware check with a grant removed is not recorded yet |
 | CLI-27 | `akou show --from 14:30 --to 14:45 --speaker NAME` | P2 | the API already filters by time and speaker | On a fixture call, the output holds only lines inside the window and from that speaker; times are wall times in and out | missing |
@@ -302,7 +302,7 @@ The window's copy button already has a terminal form that needs nothing new: `ak
 | CLI-34 | `akou mark [LABEL]`: mark this moment in the notepad, with the wall time | P2 | Otter, tl;dv, Fathom; PRINCIPLES rule 11 | Writes the same mark event the window's mark key writes ([WINDOW.md](WINDOW.md)), at the current wall time, on the live call; with nothing live it exits 3 | missing |
 | CLI-11 | `akou api METHOD PATH [-f key=value] [--input FILE]`: any route with the token added and the proxy bypassed | P2 | `gh api` | `akou api GET /status` answers with `HTTP_PROXY` set to a dead address; `-f` fields become the JSON body on POST; the exit code follows the status as in section 6 | missing |
 | CLI-30 | `akou open [-w WS]`: with a headless app, opens the one-time address in the default browser; `-w` puts that workspace first in the call picker, as hark-viewer's `?workspace=` did. Needs `workspace` on `POST /window` | P2 | Audit; hark-viewer carry-over | With a fake `open`/`xdg-open`/`start` on `PATH`, the program receives the URL the API returned; `--print` prints it instead. `akou open -w work` sends `{"workspace": "work"}` to `POST /window` | partial: prints the URL only |
-| CLI-33 | `akou skill uninstall [--harness …]` removes everything `skill install` wrote, including any harness registration PG-M1 adds | P2 | the reverse of every state | After install then uninstall on a scratch home, the skills folders and the harness's MCP config are byte-identical to before | partial: `skill uninstall` removes the skills and the MCP entries (TS-25); the byte-identical check is not written |
+| CLI-33 | `akou skill uninstall [--harness …]` removes everything `skill install` wrote, including any harness registration PG-M1 adds | P2 | the reverse of every state | After install then uninstall on a scratch home, the skills folders and the harness's MCP config are byte-identical to before | has: `skill uninstall` removes the skills, the MCP entries (TS-25) and a harness's skills folder it leaves empty, while a `--dir` folder stays; `tests/skill.test.ts` compares a scratch home byte for byte before install and after uninstall, for a fresh harness and for one with another skill and another MCP server |
 
 Commands designed in a sibling, listed here so the tree is complete. Each has its bead there, not here:
 
@@ -391,28 +391,29 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Wait for a stage | `wait` | long poll on `…/events` | none, by design: an agent is told by the monitor | status | `wait` missing (PG-S5) |
 | Context pack | `context` | `POST …/context` | `akou_context` | "Copy context for my agent" | none |
 | Ask | `ask` | `POST …/ask` | `akou_ask` (hidden when the client is the provider) | Ask pane | none |
+| Ask presets | `presets list`, `ask --preset` | `GET /presets` | MCP prompts, one per preset file (PG-M7) | the ask box's menu | none |
 | Search one call | `search` | `GET …/search` | `akou_search` | none | window find is in [WINDOW.md](WINDOW.md) |
 | Speakers | `name` | `POST …/speakers…` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | speaker chip | none |
-| Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes` | notepad | MCP lacks edit and delete (PG-M4) |
+| Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes`, `akou_edit_note`, `akou_delete_note` | notepad | none |
 | Mark a moment | `mark` | notes route | `akou_add_note` | mark key | `mark` missing (CLI-34) |
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |
 | Memo | none | `GET/PUT …/memo` | `akou_memo_get`, `akou_memo_put` | memo pane | CLI-28 |
 | Vocabulary | `vocab …` | `/vocab…`, `…/vocab…`, `…/fix` | `akou_vocab_*` | Fix on a line, review pill | none |
 | Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | none: hidden on purpose | none |
 | Agent-written notes | none | `GET …/enhance/context`, `PUT …/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none | CLI-28 |
-| Final pass | `finalize` | `POST …/finalize` | none | Retry on a failed pass only | MCP lacks it (PG-M4); window has no run-again row yet in [WINDOW.md](WINDOW.md) |
+| Final pass | `finalize` | `POST …/finalize` | `akou_finalize` | Retry on a failed pass only | window has no run-again row yet in [WINDOW.md](WINDOW.md) |
 | Export, hooks | `export`, `hooks run` | `POST …/export`, `…/hooks` | `akou_export` | hand-off status | none for the CLI |
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | sidebar | none |
 | Rename a call | `calls rename` | `PATCH /calls/{id}` | `akou_rename_call` | the title in the call header | none |
 | List and add workspaces | `workspaces`, `workspace add` | `GET /workspaces`, `POST /workspaces` | none | the workspace menu in the Record row, New workspace in the sidebar | MCP: `akou_start` names the workspace and makes its folder |
 | Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | all missing (CLI-26) |
 | Edit a line | `edit` | PG-A5 | none yet | inline edit | all missing (CLI-29) |
-| Share | `share` | `/share` | none | share pill | MCP (PG-M4) |
-| Templates | `templates` | `GET /templates` | none | none: the window always uses the automatic choice | CLI and MCP (PG-F3); the window on purpose |
-| Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | MCP read (PG-M4) |
+| Share | `share` | `/share` | `akou_share_on`, `akou_share_off`, `akou_share_status`; no `bind`, a setting | share pill | none |
+| Templates | `templates list\|show` | `GET /templates`, `GET /templates/{name}` | `akou_template_list`, `akou_template_get` | none: the window always uses the automatic choice | the window on purpose |
+| Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | none |
 | Devices, apps | `devices`, `apps` | route to add (CLI-07) | none | device pickers | CLI and route missing (CLI-07) |
 | Import | `import hark-viewer` | `POST /import/hark-viewer` | none, by design | none | none |
-| Window | `open` | `POST /window` | none | n/a | PG-M4 adds open window |
+| Window | `open` | `POST /window` | `akou_open_window` | n/a | none |
 | Quit | `quit` | `POST /quit` | none, by design | tray Quit | none |
 | Transcribe a file as a job (server mode) | `transcribe`, `jobs list` | `POST /jobs`, `GET /jobs` … | none, by design | none | window: no jobs until SV-U4 |
 | Name or rename a job (server mode) | none: the program that submits a job names it; `jobs list` shows the name | `PATCH /jobs/{id}` | none, by design | the Jobs page shows and searches the name | none |
@@ -423,7 +424,7 @@ Names differ where a terminal verb is shorter (`name` against `akou_name_speaker
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-31 | The generated CLI reference (`docs/cli.md`: every command's help page, plus the parity table rendered from TS-13's table) with a drift check | P1 | Minutes "Generated file. Do not edit by hand"; TRAPS T1.39 | CI regenerates the file and fails on a diff. Positive control: adding a flag to a command without regenerating fails the job. Parity gaps are TS-13's test, not a second one here | missing: DESIGN 6.1 is hand-written and already differs from the registry |
+| CLI-31 | The generated CLI reference (`docs/cli.md`: every command's help page, plus the parity table rendered from TS-13's table) with a drift check | P1 | Minutes "Generated file. Do not edit by hand"; TRAPS T1.39 | CI regenerates the file and fails on a diff. Positive control: adding a flag to a command without regenerating fails the job. Parity gaps are TS-13's test, not a second one here | has: `scripts/cli-reference.ts` writes `docs/cli.md` from the command registry and the parity table; `tests/cli-reference.test.ts` fails when the committed page differs, with a flag added and a parity row changed as positive controls |
 
 ## 15. Testing
 
@@ -438,7 +439,6 @@ The jobs that run them and the minimum test counts are in [CI-CD.md](../CI-CD.md
 
 ## P0 list
 
-- **CLI-16** Exit 3 for "no call to act on" in every command; today four commands exit 64 for the same situation.
 - **CLI-17** Every command, flag or setting named in a message exists, and nothing tells the user to run `akou start` (which records) just to launch the app.
 
 Not a CLI P0, but the agent path depends on it: PG-M1 in [PROGRAMMABILITY.md](PROGRAMMABILITY.md). The skill tells the agent to use the MCP tools, and nothing registers them today.

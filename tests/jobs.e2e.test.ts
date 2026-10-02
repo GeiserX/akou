@@ -8,9 +8,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import { modelNameFor } from "../src/main/asr/live-worker.ts";
 import { MODELS } from "../src/main/asr/models.ts";
@@ -24,6 +23,7 @@ import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav, RATE, roomNoise } from "./fixtures/audio.ts";
 import { Webhook } from "./fixtures/standard-webhooks.ts";
 import { tempDir } from "./helpers.ts";
+import { RESULT } from "./server-helpers.ts";
 
 // Every case runs real jobs through a finalize Worker, several per case; a loaded CI box is slow.
 setDefaultTimeout(30_000);
@@ -154,8 +154,16 @@ let server: AppRig;
 let app: AppRig;
 let admin: Key;
 
+/** The fake recognizer as sherpa-onnx answers: words timed into the span, with confidences. */
+const WITH_WORDS: ModelSpec = {
+  kind: "module",
+  path: FAKE_MODELS,
+  model: "fake-parakeet",
+  options: { words: true },
+};
+
 beforeAll(async () => {
-  server = await appRig({ settings: SERVER });
+  server = await appRig({ settings: SERVER, models: WITH_WORDS });
   app = await appRig();
   admin = await newKey(server, "ops", [], "admin");
 });
@@ -223,13 +231,17 @@ describe("SV-J1: POST /v1/jobs, multipart", () => {
     await call(server, k.key, "GET", `/jobs/${ok.body.id}?wait=60`);
   });
 
-  test("the job routes exist in server mode only: the desktop app answers 404", async () => {
+  test("[akou-5an.119] the desktop app serves the job routes with its own token; keys and the OpenAI door stay server-only", async () => {
     const routes = (s: AppRig) =>
       (s.app.server?.routes() ?? []).map((r) => `${r.method} ${r.path}`);
-    expect(routes(app)).not.toContain("POST /v1/jobs");
-    expect((await call(app, app.token, "GET", "/jobs")).status).toBe(404);
-    // Positive control: the server has it.
-    expect(routes(server)).toContain("POST /v1/jobs");
+    expect(routes(app)).toContain("POST /v1/jobs");
+    expect((await call(app, app.token, "GET", "/jobs")).status).toBe(200);
+    // Nothing about keys changes: the desktop app still has none, and no OpenAI door.
+    expect(routes(app)).not.toContain("GET /v1/keys");
+    expect(routes(app)).not.toContain("POST /v1/audio/transcriptions");
+    expect(routes(server)).toContain("GET /v1/keys");
+    // A wrong token is still refused.
+    expect((await call(app, "0".repeat(64), "GET", "/jobs")).status).toBe(401);
   });
 });
 
@@ -603,35 +615,50 @@ describe("SV-J3: states and the long-poll", () => {
   });
 });
 
-/** The result of SV-J4, as a schema: no field missing, none extra. */
-const RESULT = z
-  .object({
-    job_id: z.string().startsWith("job_"),
-    status: z.literal("done"),
-    text: z.string(),
-    language: z.string().nullable(),
-    language_confidence: z.number().nullable(),
-    duration_s: z.number().nonnegative(),
-    words: z.array(
-      z.object({ w: z.string(), s: z.number(), e: z.number(), c: z.number() }).strict(),
-    ),
-    segments: z.array(
-      z
-        .object({ s: z.number(), e: z.number(), text: z.string(), speaker: z.string().nullable() })
-        .strict(),
-    ),
-    engine: z
-      .object({
-        name: z.literal("akou"),
-        version: z.string(),
-        preset: z.string(),
-        models: z.array(z.string()).min(1),
-      })
-      .strict(),
-    confidence: z.number().nullable(),
-    metadata: z.unknown(),
-  })
-  .strict();
+describe("SI-5: wait on POST /v1/jobs", () => {
+  /** A submit holding its answer `wait` seconds. */
+  async function submitWaiting(rig: AppRig, key: string, file: Uint8Array, wait: number) {
+    const form = new FormData();
+    form.append("file", new Blob([file], { type: "audio/wav" }), "note.wav");
+    const res = await fetch(`http://127.0.0.1:${rig.port}/v1/jobs?wait=${wait}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}` },
+      body: form,
+    });
+    return answer(res);
+  }
+
+  test("a 5 s clip with wait=55 answers 200, done, with its result in the one answer", async () => {
+    const k = await newKey(server, "si5-done");
+    const r = await submitWaiting(server, k.key, clip(["hello", "world"], 5), 55);
+    expect([r.status, r.body.status]).toEqual([200, "done"]);
+    expect(r.body.result.text).toBe("hello world");
+    expect(r.body.result.job_id).toBe(r.body.id);
+    expect(RESULT.safeParse(r.body.result).success).toBe(true);
+    // Positive control: with no wait the same submit is SV-J1's 202, queued, with no result.
+    const plain = await submit(server, k.key, clip(["hello", "world"], 5));
+    expect(plain.status).toBe(202);
+    expect(plain.body.result).toBeUndefined();
+  });
+
+  test("wait=1 on a busy queue answers 202 queued after one second; wait=61 is refused", async () => {
+    const g = gate();
+    const rig = await appRig({ settings: SERVER, jobs: { decode: g.decode } });
+    try {
+      const k = await newKey(rig, "si5-busy");
+      await submit(rig, k.key, NOTE);
+      const t0 = performance.now();
+      const r = await submitWaiting(rig, k.key, OTHER_NOTE, 1);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(1000);
+      expect([r.status, r.body.status]).toEqual([202, "queued"]);
+      expect(r.body.result).toBeUndefined();
+      expect((await submitWaiting(rig, k.key, OTHER_NOTE, 61)).status).toBe(400);
+    } finally {
+      g.open();
+      await rig.close();
+    }
+  });
+});
 
 describe("SV-J4: the result shape", () => {
   for (const preset of ["fast", "auto"]) {
@@ -647,6 +674,76 @@ describe("SV-J4: the result shape", () => {
       expect(RESULT.safeParse({ ...renamed, txt: text }).success).toBe(false);
     });
   }
+
+  test("[akou-5an.24.1] fast: every word is timed, in order, inside its file, with a confidence", async () => {
+    const k = await newKey(server, "j4-words");
+    const x = monoWav(
+      concat(silence(0.4), speak(["hello", "world"]), silence(1.5), speak(["ok", "great"])),
+    );
+    const { result } = await transcribe(server, k.key, x, { preset: "fast" });
+    expect(result.words.map((w: { w: string }) => w.w)).toEqual(["hello", "world", "ok", "great"]);
+    let last = 0;
+    for (const w of result.words) {
+      expect(w.s).toBeGreaterThanOrEqual(last);
+      expect(w.e).toBeGreaterThan(w.s);
+      last = w.e;
+    }
+    // Times are into the file, not into the piece: "ok" comes after the 1.5 s pause.
+    expect(result.words[2].s).toBeGreaterThan(1.9);
+    expect(last).toBeLessThanOrEqual(result.duration_s);
+    expect(result.confidence).toBe(0.9);
+    expect(result.speakers).toEqual({ asked: false, labelled: false, error: null });
+    expect(result.warnings).toEqual([]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  test("[akou-5an.24.1] a span the engine refuses is listed in skipped, with its reason", async () => {
+    const rig = await appRig({
+      settings: SERVER,
+      models: { ...WITH_WORDS, options: { words: true, refuseOver: 0.4 } },
+    });
+    try {
+      const k = await newKey(rig, "j4-skipped");
+      const { result } = await transcribe(rig, k.key, NOTE);
+      expect(RESULT.safeParse(result).error?.issues ?? []).toEqual([]);
+      expect(result.skipped.length).toBeGreaterThan(0);
+      for (const x of result.skipped) {
+        expect(x.reason).toBe("span too long for the fake engine");
+        expect(x.e).toBeGreaterThan(x.s);
+      }
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("[akou-5an.109] speaker labels that fail: speakers says so, a warning, no speaker model named", async () => {
+    const rig = await appRig({
+      settings: SERVER,
+      models: { ...WITH_WORDS, options: { diarizeFails: "no akou-diarize command" } },
+    });
+    try {
+      const k = await newKey(rig, "j4-lost-labels");
+      const { result } = await transcribe(rig, k.key, NOTE, { diarize: "true" });
+      expect(RESULT.safeParse(result).error?.issues ?? []).toEqual([]);
+      expect(result.text).toBe("hello world");
+      expect(result.speakers).toEqual({
+        asked: true,
+        labelled: false,
+        error: "no akou-diarize command",
+      });
+      expect(result.warnings).toEqual([expect.stringContaining("no akou-diarize command")]);
+      expect(result.engine.models).toEqual(["fake-parakeet", "silero-vad"]);
+      // Positive control: the same job on a working speaker model names it and warns of nothing.
+      const ok = await transcribe(server, (await newKey(server, "j4-labels")).key, NOTE, {
+        diarize: "true",
+      });
+      expect(ok.result.speakers).toEqual({ asked: true, labelled: true, error: null });
+      expect(ok.result.warnings).toEqual([]);
+      expect(ok.result.engine.models.length).toBeGreaterThan(2);
+    } finally {
+      await rig.close();
+    }
+  });
 
   for (const preset of ["lite", "fusion"]) {
     test(`the ${preset} preset is not built: 409 preset_unavailable, and nothing is queued`, async () => {
@@ -690,21 +787,109 @@ describe("SV-J4: the result shape", () => {
   });
 });
 
+describe("SV-J5: ?format on the result route", () => {
+  /** 30 s: one 47-character run of speech, then two short ones ten seconds apart. */
+  const LONG = monoWav(
+    concat(
+      silence(0.4),
+      speak(["hello", "world", "we", "should", "move", "the", "build", "to", "new", "box"], {
+        gapSeconds: 0.05,
+      }),
+      silence(10),
+      speak(["ok", "great"]),
+      silence(10),
+      speak(["yes"], { wordSeconds: 0.4 }),
+      silence(6),
+    ),
+  );
+
+  test("srt: cues of at most 42 characters from the words, which ffmpeg reads as subtitles", async () => {
+    const k = await newKey(server, "j5-srt");
+    const { id, result } = await transcribe(server, k.key, LONG);
+    expect(result.duration_s).toBeGreaterThanOrEqual(30);
+    expect(result.segments.length).toBe(3);
+    const r = await call(server, k.key, "GET", `/jobs/${id}/result?format=srt`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toStartWith("text/plain");
+    const cues = r.text.trim().split("\n\n");
+    // The 47-character run is two cues; the segments alone would make it one.
+    expect(cues.length).toBe(4);
+    for (const c of cues) {
+      const [n, times, ...lines] = c.split("\n");
+      expect(Number(n)).toBeGreaterThan(0);
+      expect(times).toMatch(/^\d\d:\d\d:\d\d,\d{3} --> \d\d:\d\d:\d\d,\d{3}$/);
+      expect(lines.join(" ").length).toBeLessThanOrEqual(42);
+    }
+    expect(cues.map((c) => c.split("\n").slice(2).join(" ")).join(" ")).toBe(result.text);
+  });
+
+  const ffmpeg = Bun.which("ffmpeg");
+  test.skipIf(!ffmpeg)(
+    "the srt of a 30 s clip opens in ffmpeg with the right count of cues (skipped when ffmpeg is not installed)",
+    async () => {
+      const k = await newKey(server, "j5-ffmpeg");
+      const { id } = await transcribe(server, k.key, LONG);
+      const r = await call(server, k.key, "GET", `/jobs/${id}/result?format=srt`);
+      const t = tempDir("akou-srt-");
+      try {
+        const path = join(t.dir, "cues.srt");
+        writeFileSync(path, r.text);
+        const out = Bun.spawnSync([
+          ffmpeg as string,
+          "-v",
+          "error",
+          "-i",
+          path,
+          "-f",
+          "webvtt",
+          "-",
+        ]);
+        expect(out.stderr.toString()).toBe("");
+        expect(out.exitCode).toBe(0);
+        expect(out.stdout.toString().match(/ --> /g)?.length).toBe(4);
+      } finally {
+        t.cleanup();
+      }
+    },
+  );
+
+  test("vtt starts with WEBVTT; text, verbose_json and json answer their shapes; another format is 400", async () => {
+    const k = await newKey(server, "j5-formats");
+    const { id, result } = await transcribe(server, k.key, NOTE);
+    const v = await call(server, k.key, "GET", `/jobs/${id}/result?format=vtt`);
+    expect(v.text.startsWith("WEBVTT\n")).toBe(true);
+    expect(v.text).toContain("hello world");
+    const t = await call(server, k.key, "GET", `/jobs/${id}/result?format=text`);
+    expect(t.text).toBe("hello world\n");
+    const vj = await call(server, k.key, "GET", `/jobs/${id}/result?format=verbose_json`);
+    expect(vj.body).toMatchObject({ text: "hello world", duration: result.duration_s });
+    expect(vj.body.segments[0]).toMatchObject({ id: 0, start: result.segments[0].s });
+    const j = await call(server, k.key, "GET", `/jobs/${id}/result?format=json`);
+    expect(j.body).toEqual(result);
+    const bad = await call(server, k.key, "GET", `/jobs/${id}/result?format=docx`);
+    expect(bad.status).toBe(400);
+    expect(bad.body).toMatchObject({ error: "bad_param", param: "format" });
+  });
+});
+
 describe("SV-J6: delete and retention", () => {
-  test("after delete the result route answers 404, the upload is gone and the feed keeps the id and final state", async () => {
+  test("after delete the job answers 410, the upload is gone and the feed keeps the id and final state", async () => {
     const k = await newKey(server, "j6");
     const { id } = await transcribe(server, k.key, NOTE, { metadata: '{"secret": "x"}' });
     const del = await call(server, k.key, "DELETE", `/jobs/${id}`);
     expect(del.status).toBe(200);
     expect(del.body).toMatchObject({ id, status: "done", deleted: true });
-    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
-    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(410);
+    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(410);
     expect(audioFiles(server).length).toBe(0);
     const feed = await call(server, k.key, "GET", "/events");
     expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
       { job_id: id, status: "done", deleted: true },
     ]);
-    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(410);
+    // Another key never had it: 404, as for an id that never was.
+    const other = await newKey(server, "j6-other");
+    expect((await call(server, other.key, "GET", `/jobs/${id}`)).status).toBe(404);
   });
 
   test("a queued job is dropped with its upload, and its feed says cancelled", async () => {
@@ -713,7 +898,7 @@ describe("SV-J6: delete and retention", () => {
     try {
       const k = await newKey(rig, "j6-queued");
       await submit(rig, k.key, NOTE);
-      const q = await submit(rig, k.key, OTHER_NOTE);
+      const q = await submit(rig, k.key, OTHER_NOTE, { metadata: '{"content_hash": "abc"}' });
       expect(audioFiles(rig).length).toBe(2);
       const del = await call(rig, k.key, "DELETE", `/jobs/${q.body.id}`);
       expect(del.body).toMatchObject({ id: q.body.id, status: "cancelled" });
@@ -722,6 +907,13 @@ describe("SV-J6: delete and retention", () => {
       expect(feed.body.events.map((e: { type: string }) => e.type)).toEqual([
         "transcription.cancelled",
       ]);
+      // SV-E3: it carries the job's metadata, as a failed event does, so the client can match it;
+      // it never carried a result, so it is not marked deleted.
+      expect(feed.body.events[0].data).toEqual({
+        job_id: q.body.id,
+        status: "cancelled",
+        metadata: { content_hash: "abc" },
+      });
     } finally {
       g.open();
       await rig.close();
@@ -783,11 +975,111 @@ describe("SV-J6: delete and retention", () => {
       expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(200);
       now += 86_400_000 + 1;
       expect(jobs.sweep()).toBe(1);
-      expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
+      // Expired: 410 with the window named, on the job and its result; a typo stays 404.
+      for (const path of [`/jobs/${id}`, `/jobs/${id}/result`]) {
+        const gone = await call(rig, k.key, "GET", path);
+        expect(gone.status).toBe(410);
+        expect(gone.body).toMatchObject({ error: "gone", id, retain_days: 7 });
+        expect(gone.body.message).toContain("7 days");
+      }
+      const typo = await call(rig, k.key, "GET", `/jobs/${id}x`);
+      expect(typo.status).toBe(404);
+      expect(typo.body.error).toBe("not_found");
       const feed = await call(rig, k.key, "GET", "/events");
       expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
         { job_id: id, status: "done", deleted: true },
       ]);
+    } finally {
+      await rig.close();
+    }
+  });
+  test("retention strips a cancelled event's metadata once the event is older than the timer", async () => {
+    let now = Date.now();
+    const g = gate();
+    const rig = await appRig({
+      settings: { ...SERVER, "server.retain_days": 7 },
+      jobs: { decode: g.decode, now: () => now },
+    });
+    try {
+      const k = await newKey(rig, "j6-scrub");
+      const first = await submit(rig, k.key, NOTE);
+      const q = await submit(rig, k.key, OTHER_NOTE, { metadata: '{"content_hash": "abc"}' });
+      await call(rig, k.key, "DELETE", `/jobs/${q.body.id}`);
+      g.open();
+      const done = await call(rig, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+      expect(done.body.status).toBe("done");
+      await call(rig, k.key, "DELETE", `/jobs/${first.body.id}`);
+      const jobs = rig.app.jobs();
+      if (!jobs) throw new Error("no job service");
+      const cancelled = async () =>
+        (await call(rig, k.key, "GET", "/events")).body.events.find(
+          (e: { type: string }) => e.type === "transcription.cancelled",
+        ).data;
+      now += 6 * 86_400_000;
+      expect(jobs.sweep()).toBe(0);
+      expect(await cancelled()).toEqual({
+        job_id: q.body.id,
+        status: "cancelled",
+        metadata: { content_hash: "abc" },
+      });
+      now += 86_400_000 + 1;
+      expect(jobs.sweep()).toBe(0);
+      expect(await cancelled()).toEqual({ job_id: q.body.id, status: "cancelled", deleted: true });
+    } finally {
+      g.open();
+      await rig.close();
+    }
+  });
+});
+
+describe("akou-5an.116 and .115: a running job says where it is, a done one how long each stage took", () => {
+  test("polling a diarized job shows the stage and the seconds done moving, then the stage times", async () => {
+    // Every decode busy-waits, so the transcribe stage lasts long enough to be seen moving.
+    const slow: ModelSpec = {
+      kind: "module",
+      path: FAKE_MODELS,
+      model: "fake-parakeet",
+      options: { slowMs: 400 },
+    };
+    const rig = await appRig({ settings: SERVER, models: slow });
+    try {
+      const k = await newKey(rig, "progress");
+      const clip = monoWav(
+        concat(
+          silence(0.3),
+          speak(["hello", "world"]),
+          silence(1.5),
+          speak(["ok", "great"]),
+          silence(1.5),
+          speak(["thanks"]),
+          silence(1.5),
+          speak(["deploy"]),
+          silence(0.3),
+        ),
+      );
+      const s = await submit(rig, k.key, clip, { diarize: "true" });
+      expect(s.status).toBe(202);
+      const seen: { stage: string; done_s: number; total_s: number | null }[] = [];
+      let job = s.body;
+      while (job.status === "queued" || job.status === "running") {
+        if (job.progress) seen.push(job.progress);
+        await Bun.sleep(25);
+        job = (await call(rig, k.key, "GET", `/jobs/${s.body.id}`)).body;
+      }
+      expect(`${job.status} ${job.error?.message ?? ""}`).toBe("done ");
+      const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+      expect(new Set(done).size).toBeGreaterThan(1);
+      expect(Math.max(...done)).toBeGreaterThan(Math.min(...done));
+      for (const p of seen) expect(["decode", "diarize", "transcribe"]).toContain(p.stage);
+      // Done: no progress any more, and the stage times on the job and in the result.
+      expect(job.progress).toBeUndefined();
+      expect(job.timings).toMatchObject({
+        decode_s: expect.any(Number),
+        diarize_s: expect.any(Number),
+      });
+      expect(job.timings.transcribe_s).toBeGreaterThan(1);
+      const r = await call(rig, k.key, "GET", `/jobs/${s.body.id}/result`);
+      expect(r.body.timings).toEqual(job.timings);
     } finally {
       await rig.close();
     }
@@ -865,7 +1157,40 @@ describe("SV-E1: the per-key event feed", () => {
     expect(later.body.cursor).toBe(all.body.cursor);
     // Nothing new: the same cursor comes back.
     const none = await call(server, k.key, "GET", `/events?after=${all.body.cursor}`);
-    expect(none.body).toEqual({ events: [], cursor: all.body.cursor, has_more: false });
+    expect(none.body).toEqual({
+      events: [],
+      cursor: all.body.cursor,
+      has_more: false,
+      feed_id: all.body.feed_id,
+    });
+  });
+
+  test("the page names its feed: the same across a restart, a new one once jobs.db is reset", async () => {
+    const home = tempDir("akou-feed-id-");
+    let rig: AppRig | null = await appRig({ settings: SERVER, home: home.dir });
+    try {
+      const k = await newKey(rig, "e1-feed-id");
+      await transcribe(rig, k.key, NOTE);
+      const first = (await call(rig, k.key, "GET", "/events")).body;
+      expect(first.feed_id).toMatch(/^feed_[0-9a-f]{8}$/);
+      expect(first.cursor).toBeGreaterThan(0);
+      const db = join(rig.app.configDir, "jobs", JOBS_DB);
+      await rig.app.quit();
+      rig = null;
+      rig = await appRig({ settings: SERVER, home: home.dir });
+      expect((await call(rig, k.key, "GET", "/events")).body.feed_id).toBe(first.feed_id);
+      await rig.app.quit();
+      rig = null;
+      for (const f of [db, `${db}-wal`, `${db}-shm`]) rmSync(f, { force: true });
+      rig = await appRig({ settings: SERVER, home: home.dir });
+      // The reset feed starts again at 0: a client holding the old cursor sees the id change.
+      const reset = (await call(rig, k.key, "GET", `/events?after=${first.cursor}`)).body;
+      expect(reset.feed_id).toMatch(/^feed_[0-9a-f]{8}$/);
+      expect(reset.feed_id).not.toBe(first.feed_id);
+    } finally {
+      await rig?.close();
+      home.cleanup();
+    }
   });
 
   test("wait holds the request until the key's next outcome", async () => {
@@ -1047,7 +1372,7 @@ describe("SV-D1: transcribing a file is a product feature", () => {
       expect(j.code).toBe(0);
       const id = (j.json as { job_id: string }).job_id;
       expect(id).toMatch(/^job_/);
-      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(404);
+      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(410);
     } finally {
       f.cleanup();
     }
@@ -1194,15 +1519,104 @@ describe("SV-D1: transcribing a file is a product feature", () => {
     }
   });
 
-  test("the desktop app has no file jobs: exit 69, naming the setting", async () => {
+  test("[akou-5an.119] on the desktop app, with server.enabled off, akou transcribe prints the transcript", async () => {
     const f = noteFile();
     try {
+      expect(app.app.mode()).toBe("app");
       const r = await cli({ ...process.env, ...app.env }, ["transcribe", f.path]);
-      expect(r.code).toBe(69);
-      expect(r.err).toContain("server.enabled");
+      expect(`${r.code} ${r.out}`).toBe("0 hello world");
     } finally {
       f.cleanup();
     }
+  });
+
+  test("[akou-5an.119] on the desktop app akou transcribe --preset best --diarize runs Qwen and labels the speakers", async () => {
+    const t = tempDir("akou-desk-best-");
+    const rig = await appRig({
+      settings: {
+        "asr.llamaServer": [
+          process.execPath,
+          join(import.meta.dir, "fixtures", "fake-llama-server.ts"),
+          "--fake-log",
+          join(t.dir, "llama.log"),
+        ],
+      },
+    });
+    try {
+      expect(rig.app.mode()).toBe("app");
+      const path = join(t.dir, "two.wav");
+      writeFileSync(
+        path,
+        monoWav(
+          concat(
+            silence(0.4),
+            speak(["hello", "world"], { voice: 1 }),
+            silence(1.2),
+            speak(["ok", "great"], { voice: 4 }),
+            silence(0.6),
+          ),
+        ),
+      );
+      const r = await cli({ ...process.env, ...rig.env }, [
+        "transcribe",
+        path,
+        "--preset",
+        "best",
+        "--language",
+        "en",
+        "--diarize",
+        "--json",
+      ]);
+      expect(r.code).toBe(0);
+      const out = r.json as {
+        text: string;
+        engine: { models: string[] };
+        segments: { speaker: string }[];
+      };
+      expect(out.text).toBe("hello world ok great");
+      expect(out.engine.models[0]).toBe("qwen3-asr-1.7b");
+      expect(out.segments.map((x) => x.speaker)).toEqual(["s0", "s1"]);
+    } finally {
+      await rig.close();
+      t.cleanup();
+    }
+  });
+
+  test("[akou-5an.119] on the desktop app a submitted job runs, and akou jobs list shows it done", async () => {
+    const s = await submit(app, app.token, NOTE, { title: "desk note" });
+    expect(s.status).toBe(202);
+    const done = await call(app, app.token, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    expect((await call(app, app.token, "GET", `/jobs/${s.body.id}/result`)).body.text).toBe(
+      "hello world",
+    );
+    const list = await cli({ ...process.env, ...app.env }, ["jobs", "list", "--status", "done"]);
+    expect(list.code).toBe(0);
+    expect(list.out).toContain(`${s.body.id}  done`);
+    expect(list.out).toContain("desk note");
+  });
+
+  test("[akou-5an.119] on the desktop app a 15-minute file is cut at its pauses and transcribed whole", async () => {
+    const minutes = 15;
+    const x = concat(
+      silence(1),
+      speak(["hello", "world"]),
+      silence(7 * 60),
+      speak(["ok", "great"]),
+      silence(7 * 60),
+      speak(["yes"], { wordSeconds: 0.4 }),
+    );
+    const file = monoWav(concat(x, silence(minutes * 60 - x.length / RATE)));
+    const s = await submit(app, app.token, file);
+    expect(s.status).toBe(202);
+    const done = await call(app, app.token, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    const r = (await call(app, app.token, "GET", `/jobs/${s.body.id}/result`)).body;
+    expect(r.duration_s).toBe(minutes * 60);
+    expect(r.text).toBe("hello world ok great yes");
+    // Three runs of speech, three pieces: no piece is the whole file.
+    expect(r.segments.length).toBe(3);
+    for (const seg of r.segments) expect(seg.e - seg.s).toBeLessThan(30);
   });
 
   test("with nothing running it exits 69, and a missing file is a usage error", async () => {
