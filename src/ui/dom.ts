@@ -109,6 +109,7 @@ export function toast(
     );
   }
   clearTimeout(toastTimer);
+  // clock: how long a toast stays on screen.
   toastTimer = setTimeout(hide, action ? 10_000 : 6000);
 }
 

@@ -33,6 +33,11 @@ export interface CallCreated extends Envelope {
   user: string;
   akou: string;
   template?: string;
+  /**
+   * The final pass's engines for this call (`akou start --engines`), in order, instead of
+   * `asr.final.engines`.
+   */
+  engines?: string[];
 }
 
 /**
@@ -357,8 +362,12 @@ export interface FinalDone extends Envelope {
   languages?: string[];
   skipped: unknown[];
   warning?: string;
-  /** The recognizer the pass decoded with. */
+  /** The recognizer the pass decoded with: `rover-conf(<ids>)` when several engines were fused. */
   model?: string;
+  /** A pass over several engines (`asr.final.engines`): the engines that decoded to its end. */
+  engines?: string[];
+  /** And the ones left out: not downloaded, over the memory budget, or failed during the pass. */
+  dropped?: { engine: string; reason: string }[];
 }
 
 export interface FinalFailed extends Envelope {
@@ -506,6 +515,7 @@ const SPECS: { [T in EventType]: Spec } = {
     user: req("string"),
     akou: req("string"),
     template: opt("string"),
+    engines: opt("string[]"),
   },
   "call.renamed": { rev: req("int"), title: req("string"), by: req("author") },
   "call.ended": { reason: req(["stop", "interrupted", "abandoned"]) },
@@ -649,6 +659,8 @@ const SPECS: { [T in EventType]: Spec } = {
     skipped: req("array"),
     warning: opt("string"),
     model: opt("string"),
+    engines: opt("string[]"),
+    dropped: opt("array"),
   },
   "final.failed": { step: req("string"), error: req("string") },
   "share.started": { bind: req("string"), expires: req("any"), include: req("object") },

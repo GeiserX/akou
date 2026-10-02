@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LlamaEngineSpec } from "../src/main/asr/engine.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "../src/main/asr/llama-catalog.ts";
@@ -21,7 +21,7 @@ import {
 import type { DictationEngine } from "../src/main/dictation/session.ts";
 import { ManualClock, until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { tempDir } from "./helpers.ts";
+import { jsonLines, tempDir } from "./helpers.ts";
 
 setDefaultTimeout(30_000);
 
@@ -32,6 +32,18 @@ afterEach(async () => {
 });
 
 const HELLO = concat(silence(0.3), speak(["hello"]), silence(0.3));
+
+/**
+ * The fake server's JSONL log, one object per complete line. The fake appends while the test
+ * polls, so a last line with no newline yet is still being written: it is left for the next read.
+ */
+function logLines(text: string): Record<string, unknown>[] {
+  return text
+    .split("\n")
+    .slice(0, -1)
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
 
 const FAST: DictationEngine = {
   name: "fast",
@@ -97,13 +109,7 @@ function rig(
     onLog: (level, msg) => logs.push(`${level} ${msg}`),
   });
   cleanups.push(() => best.stop());
-  const log = () =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((l) => JSON.parse(l) as Record<string, unknown>)
-      : [];
+  const log = () => jsonLines(logFile);
   return {
     best,
     clock,
@@ -116,6 +122,12 @@ function rig(
         .map((l) => l.body as { messages: { role: string; content: unknown }[] }),
   };
 }
+
+test("the fake log reader leaves a half-written last line for the next read", () => {
+  expect(logLines('{"argv":[]}\n{"body":{"mess')).toEqual([{ argv: [] }]);
+  expect(logLines('{"argv":[]}\n')).toEqual([{ argv: [] }]);
+  expect(logLines("")).toEqual([]);
+});
 
 describe("DC-E2: best is kept warm", () => {
   test("the first dictation after warm waits for health; the second starts nothing", async () => {
@@ -462,10 +474,7 @@ describe("DC-L3: the audio check on best", () => {
     };
     await expect(best.check(HELLO, ["Kubernetes"])).rejects.toThrow(/no warm Qwen/);
     await Bun.sleep(200);
-    const starts = readFileSync(logFile, "utf8")
-      .trim()
-      .split("\n")
-      .filter((l) => (JSON.parse(l) as { argv?: unknown }).argv).length;
+    const starts = jsonLines(logFile).filter((l) => l.argv).length;
     expect(starts).toBe(1);
     expect(best.pid()).toBe(first);
   });
@@ -616,5 +625,17 @@ describe("DC-E3: which engine a dictation runs", () => {
     ]);
     expect(dictationLanguages([], ["en"])).toEqual(["en"]);
     expect(dictationLanguages(["es"], ["en"])).toEqual(["es"]);
+  });
+});
+
+describe("reading the fake server's log", () => {
+  test("a line still being written is left for the next read, not parsed", () => {
+    const t = tempDir("akou-jsonl-");
+    cleanups.push(t.cleanup);
+    const file = join(t.dir, "fake.log");
+    writeFileSync(file, '{"argv":["a"]}\n{"body":{"messa');
+    expect(jsonLines(file)).toEqual([{ argv: ["a"] }]);
+    // Positive control: parsed, the torn line throws the error CI saw.
+    expect(() => JSON.parse('{"body":{"messa')).toThrow(/JSON Parse error/);
   });
 });

@@ -58,6 +58,8 @@ export interface DraftWindow {
   /** Shows the page on `d`: taking the keyboard with `d.focus`, else without. */
   open(d: DraftOpen): void;
   chip(c: Chip): void;
+  /** Adds a dictation's text at the end of the field (DC-A4). */
+  append(text: string): void;
   /** Shows the window again without the keyboard, for a chip after an insert. */
   showInactive(): void;
   hide(): void;
@@ -217,6 +219,11 @@ interface Open {
   rule: DraftRule | null;
   /** Another engine's reading of the dictation, whose words the ones shown are offered. */
   other: OtherReading | null;
+  /**
+   * The dictations appended to this draft while it had the keyboard (DC-A4), in order: their text
+   * follows `base` in the field, and each ends as the draft does (inserted or discarded).
+   */
+  added: { id: string; text: string }[];
 }
 
 export class DraftBox {
@@ -226,6 +233,8 @@ export class DraftBox {
   private readonly learner: Learner;
   /** Whether the window is up, so it is hidden once. */
   private up = false;
+  /** Whether the window has the keyboard, as its page says (DC-A4). */
+  private focus = false;
   readonly handlers: { [K in keyof Requests]: Handler<K> };
 
   constructor(private readonly o: DraftBoxOptions) {
@@ -252,13 +261,36 @@ export class DraftBox {
       retry: (p) => this.retry(p.id, p.engine),
       language: (p) => this.switchLanguage(p.id),
       chip: (a) => this.learner.answer(a),
+      focused: async (p) => {
+        this.focus = p.on;
+        return true;
+      },
     };
+  }
+
+  /**
+   * Whether a dictation made now goes into the box (DC-A4): it shows a draft not yet answered,
+   * not a fix, and has the keyboard.
+   */
+  takesDictation(): boolean {
+    const c = this.cur;
+    return this.up && this.focus && c !== null && !c.answered && !c.fix;
+  }
+
+  /** Appends dictation `id`'s `text` to the draft in the box; false when it takes none now. */
+  append(id: string, text: string): boolean {
+    const c = this.cur;
+    if (!this.takesDictation() || !this.win || !c) return false;
+    c.added.push({ id, text });
+    this.win.append(text);
+    return true;
   }
 
   /** The shell's window, or null when it closes. */
   attach(w: DraftWindow | null): void {
     this.win = w;
     this.up = false;
+    this.focus = false;
     if (!w) {
       this.cur = null;
       this.learner.clear();
@@ -349,12 +381,17 @@ export class DraftBox {
       forced?: boolean;
       rule?: DraftRule | null;
       other?: OtherReading | null;
+      added?: Open["added"];
     },
   ): void {
     // Another dictation's draft left unanswered in the box: its learn window closes with it.
     const prev = this.cur;
     if (prev && prev.id !== it.id && !prev.answered && !this.learner.has(prev.id))
       this.o.closeLearnWindow?.(prev.id);
+    // The same draft shown afresh (a retry's reading) replaces the field, appended text and all:
+    // those dictations are dropped (DC-A4). A refused insert's reopen keeps them.
+    if (prev && prev.id === it.id && o.added === undefined)
+      this.endAdded(prev, (x) => ({ type: "dictation.discarded", id: x }));
     const language = o.language !== undefined ? o.language : it.language;
     const forced = o.forced === true;
     const engineName = o.engineName ?? it.engine;
@@ -374,6 +411,7 @@ export class DraftBox {
       answered: false,
       rule: o.rule ?? null,
       other,
+      added: o.added ?? [],
     };
     // The user's own text has no engine words; a reading's words carry the other's where they differ.
     const alts =
@@ -415,6 +453,7 @@ export class DraftBox {
   private hide(): void {
     if (!this.up) return;
     this.up = false;
+    this.focus = false;
     this.win?.hide();
   }
 
@@ -446,6 +485,13 @@ export class DraftBox {
       if (chip) this.win?.chip(chip);
       return false;
     }
+    // The appended dictations went in with it.
+    this.endAdded(c, (id) => ({
+      type: "dictation.inserted",
+      id,
+      method: r.method,
+      receipt_ms: r.receipt_ms,
+    }));
     this.afterAnswer(c, chip);
     return true;
   }
@@ -467,6 +513,7 @@ export class DraftBox {
       forced: c.forced,
       rule: c.rule,
       other: c.other,
+      added: c.added,
     });
   }
 
@@ -476,6 +523,7 @@ export class DraftBox {
     c.answered = true;
     // Only a dictation that never reached the app is discarded; an inserted one stays inserted.
     if (this.o.log.item(id)?.state === "drafted") this.write({ type: "dictation.discarded", id });
+    this.endAdded(c, (x) => ({ type: "dictation.discarded", id: x }));
     this.afterAnswer(c, null);
     return true;
   }
@@ -550,11 +598,14 @@ export class DraftBox {
     return true;
   }
 
-  /** The offer to learn from the box's edit (DC-L1, DC-L3), beside the insert. */
+  /**
+   * The offer to learn from the box's edit (DC-L1, DC-L3), beside the insert. Appended text is
+   * part of what was heard, so only the user's own changes are compared.
+   */
   private learnFrom(c: Open, edited: string): Promise<Chip | null> {
     return this.learner.offer({
       id: c.id,
-      base: c.base,
+      base: [c.base, ...c.added.map((a) => a.text)].join(" "),
       edited,
       words: c.words,
       language: c.language,
@@ -583,6 +634,12 @@ export class DraftBox {
     if (this.learner.size > 0 || (this.cur !== null && !this.cur.answered)) return;
     this.cur = null;
     this.hide();
+  }
+
+  /** Ends each dictation appended to draft `c` that still waits in the box with `end`'s event. */
+  private endAdded(c: Open, end: (id: string) => Parameters<DictationLog["append"]>[0]): void {
+    for (const a of c.added.splice(0))
+      if (this.o.log.item(a.id)?.state === "drafted") this.write(end(a.id));
   }
 
   private write(d: Parameters<DictationLog["append"]>[0]): void {

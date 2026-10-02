@@ -93,12 +93,14 @@ function stamp(d) {
     pad(d.getMilliseconds(), 3) + " " + (off >= 0 ? "+" : "-") + pad(Math.floor(a / 60)) + ":" + pad(a % 60);
 }
 function line(level, msg) {
+  // clock: the watchdog stamps its log line with the time it writes it.
   try { appendFileSync(cfg.logFile, stamp(new Date()) + " " + level + " watchdog: " + msg + "\n", { mode: 0o600 }); } catch {}
 }
 function sample() {
   if (!cfg.sample || process.platform !== "darwin") return;
   try {
     mkdirSync(cfg.hangsDir, { recursive: true, mode: 0o700 });
+    // clock: a sample's file is named when it is taken.
     const file = join(cfg.hangsDir, "hang-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt");
     const r = spawnSync("/usr/bin/sample", [String(cfg.pid), String(cfg.sampleSeconds), "-file", file],
       { stdio: "ignore", timeout: (cfg.sampleSeconds + 2) * 1000 });
@@ -139,6 +141,7 @@ function reopen() {
   if (!cfg.relaunch || Atomics.load(beats, 2) !== 1) return;
   const stamp = join(cfg.hangsDir, "reopened");
   try {
+    // clock: a stamp file's real age.
     const ago = Date.now() - statSync(stamp).mtimeMs;
     if (ago < cfg.reopenMs) {
       line("warn", "not opening akou again: it was reopened " + Math.round(ago / 60000) + " min ago");
@@ -157,6 +160,7 @@ function reopen() {
 let last = Atomics.load(beats, 0);
 let still = 0;
 let fired = false;
+// clock: the watchdog thread checks the app's heartbeat in real time.
 setInterval(() => {
   const now = Atomics.load(beats, 0);
   if (now !== last) {
@@ -237,6 +241,7 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
   const worker = new Worker(url, { workerData: { beats, cfg } } as WorkerOptions);
   // Neither keeps a process alive that would otherwise exit (a test, a quit).
   (worker as { unref?: () => void }).unref?.();
+  // clock: the app's heartbeat to its watchdog, real time between threads.
   const timer = setInterval(beat, o.beatMs ?? BEAT_MS);
   (timer as { unref?: () => void }).unref?.();
   return {
