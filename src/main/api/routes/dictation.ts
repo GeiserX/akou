@@ -85,6 +85,13 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { multipart: { file: "file", "engine?": "string", "language?": "string" } },
       ok: 200,
+      errors: {
+        400: ["unknown_field"],
+        404: ["not_found"],
+        422: ["bad_field", "decode_failed", "missing_field", "too_long"],
+        500: ["transcription_failed"],
+        503: ["models_missing"],
+      },
     },
     async (c) => {
       const d = service(c);
@@ -160,6 +167,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         limit: { type: "integer", min: 1, max: 500, default: 100, doc: "Dictations per page." },
       },
       ok: 200,
+      errors: { 400: ["bad_param"], 404: ["not_found"] },
     },
     (c) => {
       const d = service(c);
@@ -193,6 +201,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const it = service(c).log.item(c.params.id as string);
@@ -210,6 +219,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,
+      errors: { 404: ["no_audio", "not_found"] },
       type: "wav",
     },
     (c) => {
@@ -239,6 +249,12 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       params: { id: "The dictation id, from dictations.list." },
       body: { engine: "string", "language?": "string" },
       ok: 200,
+      errors: {
+        404: ["no_audio", "not_found"],
+        422: ["bad_field"],
+        500: ["transcription_failed"],
+        503: ["models_missing"],
+      },
     },
     async (c) => {
       const id = c.params.id as string;
@@ -287,6 +303,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       params: { id: "The dictation id, from dictations.list." },
       body: { "text?": "string", "fix?": "boolean" },
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["no_draft_box", "no_target", "no_text"] },
     },
     async (c) => {
       const id = c.params.id as string;
@@ -311,6 +328,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const id = c.params.id as string;
@@ -329,6 +347,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       access: "admin",
       modes: ["app"],
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const d = service(c);
@@ -347,6 +366,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       access: "admin",
       modes: ["app"],
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     async (c) => {
       const svc = service(c);
@@ -399,6 +419,12 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         modes: ["app"],
         ...(action === "start" ? { body: { "language?": "string" } } : {}),
         ok: 200,
+        errors: {
+          404: ["not_found"],
+          409: ["dictation_busy", "dictation_off", "not_dictating"],
+          422: ["bad_field"],
+          503: ["dictation_starting"],
+        },
       },
       async (c) => {
         let language = "auto";
@@ -433,6 +459,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       access: "admin",
       modes: ["app"],
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["no_remote"] },
     },
     async (c) => {
       service(c);
@@ -474,6 +501,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
+      errors: { 404: ["not_found"] },
       type: "sse",
     },
     (c) => {

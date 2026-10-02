@@ -504,7 +504,9 @@ async function runDictate(): Promise<void> {
       if (o.type === "key") say({ type: "key", name: o.name });
       else if (o.type === "arm") say({ type: "press", on: true, ...(frame ? { frame } : {}) });
       else if (o.type === "disarm") say({ type: "press", on: false });
-      else if (o.type === "start") {
+      else if (o.type === "latched") {
+        if (open) say({ type: "latched", id: open.id });
+      } else if (o.type === "start") {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
         captured.set(open.id, targetAt(o.at));

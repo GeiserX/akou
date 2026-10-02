@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { BrowserContext, Page } from "playwright-core";
+import { RECOGNIZER } from "../../src/main/asr/models.ts";
 import { NO_MIC_NOTICE } from "../../src/ui/dictation-page.ts";
 import { type AppRig, appRig } from "../api-helpers.ts";
 import { clip, newKey, SERVER } from "../server-helpers.ts";
@@ -118,12 +119,11 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       // The engine is a choice in words, never the raw value in a text field, with a way to name
       // a model by its id, which the setting takes too.
       const engine = "#page-dictation select#set-server-dictation-engine";
-      expect(await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent))).toEqual([
-        "Automatic",
-        "Fast",
-        "Best",
-        "A model, by its id…",
-      ]);
+      const choices = await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent));
+      expect(choices[0]).toBe("Automatic");
+      expect(choices).toContain("Fast");
+      expect(choices).toContain("Best");
+      expect(choices.at(-1)).toBe("A model, by its id…");
       expect(await page.inputValue(engine)).toBe("auto");
       await page.selectOption(engine, "best");
       await until(() => fx.patches.length === 2, 5000, "the engine saved");
@@ -183,7 +183,15 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         5000,
         "the value saved",
       );
-      await page.selectOption("#page-dictation select#set-server-dictation-engine", "best");
+      // The engine is a select in words: Automatic, the presets, each model by its name.
+      const engine = "#page-dictation select#set-server-dictation-engine";
+      expect(
+        await page.$eval(engine, (x) => (x as HTMLSelectElement).selectedOptions[0]?.text),
+      ).toBe("Automatic");
+      const words = await page.$$eval(`${engine} option`, (o) => o.map((x) => x.textContent));
+      expect(words).toContain("Parakeet v3");
+      expect(words).not.toContain(RECOGNIZER);
+      await page.selectOption(engine, "best");
       await until(
         async () =>
           (await rig.api("GET", "/config")).body.settings["server.dictation_engine"] === "best",

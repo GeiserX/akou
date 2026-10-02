@@ -35,7 +35,7 @@ import { remoteParts } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
-import { modelName } from "./models-rows.ts";
+import { type JobModels, jobModelChoices, modelName } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
 import {
@@ -217,16 +217,21 @@ export const SERVER_GROUPS: readonly DictationGroup[] = [
 export const SERVER_ENGINE_KEY = "server.dictation_engine";
 
 /**
- * The engine for other computers' dictation: Automatic or a preset by name, or a model named by
- * its id, which the setting takes too. The Settings page draws it the same way.
+ * The engine for other computers' dictation: Automatic, a preset or a model by name (`choices`,
+ * the server's own list when it answered, else the presets in words), or a model named by its id,
+ * which the setting takes too. The Settings page draws it the same way.
  */
-export function serverEngineControl(id: string, value: string): HTMLElement {
+export function serverEngineControl(
+  id: string,
+  value: string,
+  choices?: readonly (readonly [value: string, label: string])[],
+): HTMLElement {
   const w = wordsFor(SERVER_ENGINE_KEY);
   return selectOrTyped({
     id,
     key: SERVER_ENGINE_KEY,
     label: w.label,
-    options: w.choices ?? [],
+    options: choices?.length ? choices : (w.choices ?? []),
     value,
     other: "A model, by its id…",
     placeholder: "Its id, such as qwen3-asr-1.7b",
@@ -344,6 +349,8 @@ export class DictationPage {
   private review: DictationReview | null = null;
   /** Dictations served in the last hour, in server mode. */
   private served: number | undefined;
+  /** Server mode: the presets and engines a dictation may run, as a select's choices. */
+  private engines: [value: string, label: string][] = [];
   /** The page under this one on screen instead of the page itself, if any. */
   private sub: Sub | null = null;
   /** "Use another computer" was turned on before an address was saved: the address turns it on. */
@@ -456,7 +463,12 @@ export class DictationPage {
     });
     const [cfg, server, status, dictation, mics, review] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config").catch(reach),
-      app ? null : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
+      app
+        ? null
+        : this.t.request<JobModels & { dictation?: { served_last_hour?: number } }>(
+            "GET",
+            "/server",
+          ),
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.readDictation() : null,
       app ? readMics(this.t) : null,
@@ -473,6 +485,7 @@ export class DictationPage {
     this.lost = lostOf(dictation);
     this.mics = mics;
     this.served = server?.body?.dictation?.served_last_hour;
+    this.engines = server && server.status < 400 ? jobModelChoices(server.body) : [];
     this.readError = null;
     if (cfg.status !== 200) {
       this.schema = {};
@@ -632,7 +645,7 @@ export class DictationPage {
     else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
     else if (key === FORMAT_WAIT_KEY) controls = [formatWait(id, w.label, spec, value)];
     else if (key === SERVER_ENGINE_KEY)
-      controls = [serverEngineControl(id, String(value ?? "auto"))];
+      controls = [serverEngineControl(id, String(value ?? "auto"), this.engines)];
     else if (key === "dictation.language")
       controls = [
         selectBox({
