@@ -799,6 +799,43 @@ describe("SV-J6: delete and retention", () => {
       await rig.close();
     }
   });
+  test("retention strips a cancelled event's metadata once the event is older than the timer", async () => {
+    let now = Date.now();
+    const g = gate();
+    const rig = await appRig({
+      settings: { ...SERVER, "server.retain_days": 7 },
+      jobs: { decode: g.decode, now: () => now },
+    });
+    try {
+      const k = await newKey(rig, "j6-scrub");
+      const first = await submit(rig, k.key, NOTE);
+      const q = await submit(rig, k.key, OTHER_NOTE, { metadata: '{"content_hash": "abc"}' });
+      await call(rig, k.key, "DELETE", `/jobs/${q.body.id}`);
+      g.open();
+      const done = await call(rig, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+      expect(done.body.status).toBe("done");
+      await call(rig, k.key, "DELETE", `/jobs/${first.body.id}`);
+      const jobs = rig.app.jobs();
+      if (!jobs) throw new Error("no job service");
+      const cancelled = async () =>
+        (await call(rig, k.key, "GET", "/events")).body.events.find(
+          (e: { type: string }) => e.type === "transcription.cancelled",
+        ).data;
+      now += 6 * 86_400_000;
+      expect(jobs.sweep()).toBe(0);
+      expect(await cancelled()).toEqual({
+        job_id: q.body.id,
+        status: "cancelled",
+        metadata: { content_hash: "abc" },
+      });
+      now += 86_400_000 + 1;
+      expect(jobs.sweep()).toBe(0);
+      expect(await cancelled()).toEqual({ job_id: q.body.id, status: "cancelled", deleted: true });
+    } finally {
+      g.open();
+      await rig.close();
+    }
+  });
 });
 
 describe("SV-J9: the job store", () => {

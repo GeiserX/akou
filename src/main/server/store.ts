@@ -5,7 +5,8 @@
  * - `jobs`: one row per job, from submit until the client deletes it or retention does. The
  *   uploaded audio is a file beside the database, named in the row, deleted when the job ends.
  * - `events`: the per-key feed (SV-E1), one row per outcome, in the order they happened. A deleted
- *   job keeps its events with the job id and the final state only.
+ *   job keeps its events with the job id and the final state only, except a cancelled event, which
+ *   keeps the job's metadata until retention removes it.
  * - `outbox`: one row per webhook delivery (SV-E5), written in the same transaction as its event,
  *   so the delivery and its attempt count are on disk before the first try.
  *
