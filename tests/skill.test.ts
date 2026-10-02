@@ -198,6 +198,22 @@ describe("akou skill install", () => {
     t.cleanup();
   });
 
+  test("[CLI-33] uninstall --dir keeps the folder the user named, even when it ends empty", async () => {
+    const t = tempDir();
+    try {
+      const dest = join(t.dir, "mine");
+      mkdirSync(dest);
+      expect((await cli({ HOME: t.dir }, ["skill", "install", "--dir", dest])).code).toBe(0);
+      // Positive control: install wrote into it, so uninstall has something to empty.
+      expect(readdirSync(dest).length).toBeGreaterThan(0);
+      expect((await cli({ HOME: t.dir }, ["skill", "uninstall", "--dir", dest])).code).toBe(0);
+      expect(existsSync(dest)).toBe(true);
+      expect(readdirSync(dest)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   test("goes to each harness's folder: CLAUDE_CONFIG_DIR, CODEX_HOME, or the ones that exist", async () => {
     const t = tempDir();
     const env = { HOME: t.dir };
