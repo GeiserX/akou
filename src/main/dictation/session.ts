@@ -267,8 +267,8 @@ export interface SessionOptions extends TextRules {
   onDraft?(id: string, reason: string, focus: boolean, rule?: DraftRule): boolean;
   /** Whether the draft box has the keyboard with a draft open in it (DC-A4). */
   draftFocused?(): boolean;
-  /** Appends a dictation's text to the draft box's field; false when the box cannot take it. */
-  onAppend?(text: string): boolean;
+  /** Appends dictation `id`'s text to the draft box's field; false when the box cannot take it. */
+  onAppend?(id: string, text: string): boolean;
   /** How the text goes in (DC-S2); `DEFAULT_INSERT` when absent. */
   insertPolicy?(): InsertPolicy;
   /** The per-app rule for `app` (DC-U9), from `dictation.apps`; none, the globals apply. */
@@ -439,7 +439,9 @@ export const DRAFT_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /** How an insert the app asked for outside a session ended (the draft box's, DC-S1). */
-export type InsertOutcome = { ok: true; method: string } | { ok: false; reason: string };
+export type InsertOutcome =
+  | { ok: true; method: string; receipt_ms: number }
+  | { ok: false; reason: string };
 
 /** An insert the app asked for outside a session: the dictation it logs to, if any. */
 interface Explicit {
@@ -838,7 +840,7 @@ export class DictationSession {
               method: m.method,
               receipt_ms: m.receipt_ms,
             });
-          x.resolve({ ok: true, method: m.method });
+          x.resolve({ ok: true, method: m.method, receipt_ms: m.receipt_ms });
           return;
         }
         const id = this.inserts.get(m.id);
@@ -1278,7 +1280,7 @@ export class DictationSession {
     const rule = c.rule;
     const sendKey = (rule?.sendKey as SendKey | undefined) ?? p.sendKey;
     // A press while the draft box had the keyboard adds to the draft there (DC-A4).
-    if (c.toDraft && c.asked === "insert" && !c.secure && this.o.onAppend?.(r.text)) {
+    if (c.toDraft && c.asked === "insert" && !c.secure && this.o.onAppend?.(id, r.text)) {
       this.notInserted(c, { type: "dictation.drafted", id, reason: "append" });
       return;
     }

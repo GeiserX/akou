@@ -296,6 +296,68 @@ describe("DC-H2: dictation.keepAudio off, a drafted dictation", () => {
   });
 });
 
+describe("DC-H2, DC-A4: dictation.keepAudio off, a dictation appended to the draft box", () => {
+  const TARGET = { app: "com.example.chat", pid: 7, window: "w7", field: "editable" } as const;
+
+  /** The hold's dictation, made while the box had the keyboard on another draft, once appended. */
+  const append = async (keep: boolean) => {
+    const r = rig(HOLD, { keepAudio: () => keep });
+    r.svc.draft.attach({
+      open: () => {},
+      chip: () => {},
+      append: () => {},
+      showInactive: () => {},
+      hide: () => {},
+    });
+    const log = r.svc.log;
+    const draft = "d-draft";
+    log.append({
+      type: "dictation.started",
+      id: draft,
+      target: TARGET,
+      engine: "fast",
+      by: "user",
+    });
+    log.append({ type: "dictation.ended", id: draft, reason: "release", seconds: 1 });
+    log.append({
+      type: "dictation.text",
+      id: draft,
+      raw: "see you",
+      text: "see you",
+      language: "en",
+      words: [],
+      engine: "fast",
+      model: "parakeet",
+      ms: 80,
+    });
+    log.append({ type: "dictation.drafted", id: draft, reason: "focus-changed" });
+    expect(r.svc.draft.open(draft, { focus: true })).toEqual({ ok: true });
+    await r.svc.draft.handlers.focused({ on: true });
+    await until(
+      () => log.items().some((it) => it.id !== draft && it.state === "drafted"),
+      10_000,
+      "the append",
+    );
+    const id = log.items().find((it) => it.id !== draft)?.id as string;
+    expect(log.events().find((e) => e.id === id && e.type === "dictation.drafted")).toMatchObject({
+      reason: "append",
+    });
+    return { r, draft, id };
+  };
+
+  test("its audio goes as it is appended, and it is discarded with the draft", async () => {
+    const { r, draft, id } = await append(false);
+    expect(r.audioFiles()).toEqual([]);
+    expect(await r.svc.draft.handlers.discard({ id: draft })).toBe(true);
+    expect(r.svc.log.item(id)?.state).toBe("discarded");
+  });
+
+  test("positive control: with keepAudio on, its audio stays", async () => {
+    const { r, id } = await append(true);
+    expect(r.audioFiles()).toEqual([`${id}.wav`]);
+  });
+});
+
 describe("DC-H2: the audio at the next start", () => {
   test("a file with no dictation goes; a finished dictation's goes only with keepAudio off", async () => {
     const r = rig(HOLD);

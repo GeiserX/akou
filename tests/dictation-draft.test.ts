@@ -70,13 +70,13 @@ function box(o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) {
   const session = {
     insertText: async (id: string, text: string, _t: unknown, sendKey: string) => {
       inserts.push({ id, text, sendKey });
-      const out = o.outcome ?? { ok: true, method: "paste" };
+      const out = o.outcome ?? { ok: true, method: "paste", receipt_ms: 5 };
       if (out.ok) log.append({ type: "dictation.inserted", id, method: "paste", receipt_ms: 5 });
       return out;
     },
     copyText: async (text: string) => {
       copies.push(text);
-      return { ok: true, method: "clipboard" } as InsertOutcome;
+      return { ok: true, method: "clipboard", receipt_ms: 0 } as InsertOutcome;
     },
   };
   const b = new DraftBox({
@@ -306,20 +306,74 @@ describe("DC-A4: a dictation made while the box has the keyboard", () => {
   test("goes into the open draft only while the page says the box has the keyboard", async () => {
     const f = box();
     const a = f.dictation();
+    const m = f.dictation("more");
     expect(f.b.takesDictation()).toBe(false);
     f.b.open(a, { focus: true });
-    expect(f.b.append("more")).toBe(false);
+    expect(f.b.append(m, "more")).toBe(false);
     expect(await f.b.handlers.focused({ on: true })).toBe(true);
     expect(f.b.takesDictation()).toBe(true);
-    expect(f.b.append("more")).toBe(true);
+    expect(f.b.append(m, "more")).toBe(true);
     expect(f.appended).toEqual(["more"]);
     await f.b.handlers.focused({ on: false });
-    expect(f.b.append("again")).toBe(false);
+    expect(f.b.append(m, "again")).toBe(false);
     // Answered (inserted), the box takes no more even with the keyboard.
     await f.b.handlers.focused({ on: true });
-    await f.b.handlers.insert({ id: a, text: HEARD, send: false });
-    expect(f.b.append("late")).toBe(false);
+    await f.b.handlers.insert({ id: a, text: `${HEARD} more`, send: false });
+    expect(f.b.append(m, "late")).toBe(false);
     expect(f.appended).toEqual(["more"]);
+  });
+
+  const MORE = "and then send the notes to the whole group";
+
+  /** A box on a draft with dictation `MORE` appended to it while it had the keyboard. */
+  const appended = async (o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) => {
+    const f = box(o);
+    const a = f.dictation();
+    const m = f.dictation(MORE);
+    f.b.open(a, { focus: true });
+    await f.b.handlers.focused({ on: true });
+    expect(f.b.append(m, MORE)).toBe(true);
+    const state = () => f.log.item(m)?.state;
+    return { f, a, m, state };
+  };
+
+  test("an appended dictation is inserted with the draft, and its words are no fix to learn", async () => {
+    const { f, a, state } = await appended();
+    expect(state()).toBe("drafted");
+    await f.b.handlers.insert({ id: a, text: `${HEARD} ${MORE}`, send: false });
+    expect(state()).toBe("inserted");
+    expect(f.learnEvents()).toEqual([]);
+    expect(f.chips).toEqual([]);
+  });
+
+  test("positive control: a fix in a draft with appended text is still proposed, and only it", async () => {
+    const { f, a } = await appended();
+    await f.b.handlers.insert({ id: a, text: `${FIXED} ${MORE}`, send: false });
+    expect(f.chips).toEqual([
+      { id: a, candidates: [{ term: "Kubernetes", heard: "cooper netties" }], mode: "ask" },
+    ]);
+  });
+
+  test("Escape discards the appended dictation with the draft", async () => {
+    const { f, a, state } = await appended();
+    expect(await f.b.handlers.discard({ id: a })).toBe(true);
+    expect(f.log.item(a)?.state).toBe("discarded");
+    expect(state()).toBe("discarded");
+  });
+
+  test("a Retry's reading replaces the field, so the appended dictation is discarded", async () => {
+    const { f, a, state } = await appended();
+    expect(await f.b.handlers.retry({ id: a, engine: "best" })).toBe(true);
+    expect(state()).toBe("discarded");
+    expect(f.log.item(a)?.state).toBe("drafted");
+  });
+
+  test("a refused insert reopens the draft with the appended dictation still in it", async () => {
+    const { f, a, state } = await appended({ outcome: { ok: false, reason: "focus-changed" } });
+    expect(await f.b.handlers.insert({ id: a, text: `${HEARD} ${MORE}`, send: false })).toBe(false);
+    expect(state()).toBe("drafted");
+    expect(await f.b.handlers.discard({ id: a })).toBe(true);
+    expect(state()).toBe("discarded");
   });
 });
 

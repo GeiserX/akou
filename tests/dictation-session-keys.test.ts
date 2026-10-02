@@ -495,7 +495,7 @@ describe("the session's own edges", () => {
       onLog: (_l, m) => logs.push(m),
       onDraft: () => true,
       draftFocused: () => o.draftFocused === true,
-      onAppend: (text) => {
+      onAppend: (_id, text) => {
         appended.push(text);
         return true;
       },

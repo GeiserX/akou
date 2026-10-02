@@ -362,17 +362,19 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       seed(g, "d-more", "see you at the standup");
       await openBox(g, "d-more");
       const box = dictation(g).draft;
-      // The page says its window has the keyboard, as its focus listener does.
-      expect(await box.handlers.focused({ on: true })).toBe(true);
-      expect(box.append("and bring the slides")).toBe(true);
+      // The window takes the keyboard: the page's own focus listener tells the main side.
+      await g.view.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await until(() => box.takesDictation(), 5000, "the page's focus report");
+      expect(box.append("d-more-2", "and bring the slides")).toBe(true);
       await g.view.page.waitForFunction(
         () =>
           (document.getElementById("draft-text") as HTMLTextAreaElement).value ===
           "see you at the standup and bring the slides",
       );
-      // Positive control: without the keyboard the box takes no dictation.
-      expect(await box.handlers.focused({ on: false })).toBe(true);
-      expect(box.append("never")).toBe(false);
+      // Positive control: the window loses the keyboard, and the box takes no dictation.
+      await g.view.page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      await until(() => !box.takesDictation(), 5000, "the page's blur report");
+      expect(box.append("d-more-3", "never")).toBe(false);
       await g.view.page.press("#draft-text", "Escape");
       await until(() => g.answered.at(-1) === "discard", 5000, "the discard");
     },

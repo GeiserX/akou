@@ -832,6 +832,47 @@ mod tests {
         );
     }
 
+    /// DC-A4's late Enter through the core: `send` for a paste still waiting for its receipt
+    /// presses the key after the read. The same paste with no `send` presses none (the control).
+    #[test]
+    fn dc_a4_a_send_after_the_insert_presses_the_key_after_the_read() {
+        for late in [true, false] {
+            let w = World::new();
+            let mut d = dictate(&w);
+            let mut out = Rec::default();
+            d.begin("simulate", true, ("granted", "granted"), &mut out);
+            run(&mut d, &mut out, 0, 1000);
+            d.key(true, "RightCommand", 1000 * MS, &mut out);
+            run(&mut d, &mut out, 1000, 2000);
+            d.key(false, "RightCommand", 2000 * MS, &mut out);
+            run(&mut d, &mut out, 2000, 2500);
+            let insert = Command::parse(
+                r#"{"type":"insert","id":"1","text":"hello","method":"paste","send_key":"none"}"#,
+            )
+            .unwrap();
+            assert!(d.command(insert, 2700 * MS, &mut out));
+            if late {
+                let send =
+                    Command::parse(r#"{"type":"send","id":"1","send_key":"Enter"}"#).unwrap();
+                d.command(send, 2800 * MS, &mut out);
+                assert_eq!(
+                    w.borrow().posted,
+                    ["Command+Code(9)"],
+                    "not before the read"
+                );
+            }
+            w.borrow_mut().pending_reads.push(3000 * MS);
+            run(&mut d, &mut out, 2800, 3300);
+            assert!(!d.busy());
+            let want: &[&str] = if late {
+                &["Command+Code(9)", "Named(\"Return\")"]
+            } else {
+                &["Command+Code(9)"]
+            };
+            assert_eq!(w.borrow().posted, want, "late send: {late}");
+        }
+    }
+
     /// DC-N9 through the core: the session captured Slack; the insert comes while Mail has the
     /// keyboard, so nothing is posted and the app hears why. DC-N8: a session that began under
     /// Secure Input goes to the clipboard.
