@@ -665,6 +665,8 @@ export class AkouApp implements ApiApp {
   private accel: AcceleratorState | null = null;
   /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
   private dictationSvc: DictationService | null = null;
+  /** The cue player dictation plays through; its files go when the app closes (DC-O3). */
+  private cuePlayer: SystemCuePlayer | null = null;
   /** Dictation's vocabulary (DC-L6), read on the first dictation after a change. */
   private dictationVocab: Promise<MergedEntry[]> | null = null;
   /** The `remote` dictation engine, made at the first remote dictation; it reads its settings live. */
@@ -2831,13 +2833,11 @@ export class AkouApp implements ApiApp {
    */
   private startDictation(): void {
     if (this.runMode !== "app") return;
-    const cues = new Cues(
-      new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) }),
-      () => ({
-        sounds: this.cfg.settings["dictation.sounds"],
-        pill: this.cfg.settings["dictation.pill"],
-      }),
-    );
+    this.cuePlayer ??= new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) });
+    const cues = new Cues(this.cuePlayer, () => ({
+      sounds: this.cfg.settings["dictation.sounds"],
+      pill: this.cfg.settings["dictation.pill"],
+    }));
     this.dictationSvc ??= new DictationService({
       configDir: this.configDir,
       now: () => this.clock.now(),
@@ -3685,6 +3685,7 @@ export class AkouApp implements ApiApp {
         }
       }
       await this.dictationSvc?.close();
+      this.cuePlayer?.close();
       this.remoteDictation?.close();
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();

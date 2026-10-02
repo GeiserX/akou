@@ -100,6 +100,7 @@ import type { Decoded } from "../asr/live-worker.ts";
 import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
 import type { AppRule } from "../config/schema.ts";
 import { forcesLanguage } from "./engines.ts";
+import { loggable } from "./format.ts";
 import type {
   AppToHelper,
   Bindings,
@@ -332,6 +333,12 @@ export interface SessionOptions extends TextRules {
    * helper started again while the page shows its meter keeps it moving.
    */
   metering?(): boolean;
+  /**
+   * Whether the Dictation page's key recorder is open (DC-U3): sent as `record_keys` after
+   * `ready`, so a helper started again while the recorder is open (a grant arriving) keeps
+   * reporting keys to it and starts no session.
+   */
+  recording?(): boolean;
 }
 
 /**
@@ -717,6 +724,7 @@ export class DictationSession {
         void this.rebind();
         this.rebuildMic();
         if (this.o.metering?.()) this.meter(true);
+        if (this.o.recording?.()) this.recordKeys(true);
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });
@@ -1372,7 +1380,8 @@ async function formatted(
   try {
     return await (mode ? o.format(text, mode) : o.format(text));
   } catch (err) {
-    o.onLog?.("warn", `format.skipped: ${(err as Error).message}`);
+    // The log gets the error's kind only: a provider's message can quote the dictated words.
+    o.onLog?.("warn", `format.skipped: ${loggable(err)}`);
     return { text, skipped: (err as Error).message };
   }
 }

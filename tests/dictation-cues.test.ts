@@ -6,13 +6,18 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KeyInput } from "../src/core/dictation/activation.ts";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
 import { cueCommand, cuesSilenced, SystemCuePlayer } from "../src/main/dictation/cues.ts";
 import { DictationService } from "../src/main/dictation/service.ts";
-import type { DictationEngine } from "../src/main/dictation/session.ts";
+import {
+  AUDIO_DRAIN_MS,
+  type DictationEngine,
+  DictationSession,
+} from "../src/main/dictation/session.ts";
+import { DictationLog } from "../src/main/dictation/store.ts";
 import { type CueMoment, Cues } from "../src/ui/dictation-cues.ts";
 import { FAKE_HELPER, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -127,6 +132,45 @@ describe("DC-O3: a dictation's cues", () => {
   });
 });
 
+describe("DC-O3: the end of a session the app stopped", () => {
+  /** A session on the helper's lines alone, ended with `reason`; the cues it asked for. */
+  async function ended(reason: "stop" | "cancel"): Promise<CueMoment[]> {
+    const t = tempDir("akou-dict-cue-stop-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const cues: CueMoment[] = [];
+    const s = new DictationSession({
+      log,
+      engine: () => null,
+      send: () => {},
+      bindings: () => ({
+        hotkey: RC,
+        draft: "",
+        fixLast: "",
+        pasteLast: "",
+        activation: "hold-or-toggle",
+      }),
+      now: () => Date.now(),
+      onCue: (m) => cues.push(m),
+    });
+    const target = { app: "a", pid: 1, window: "w", field: "editable" as const };
+    s.onMessage({ type: "session.started", id: "1", target, capture_ns: "0" });
+    s.onMessage({ type: "session.ended", id: "1", reason });
+    await Bun.sleep(AUDIO_DRAIN_MS + 100);
+    await s.settled();
+    return cues;
+  }
+
+  test("dictation turned off during a session (`stop`) is not the user's cancel: no cancel cue", async () => {
+    expect(await ended("stop")).toEqual(["start"]);
+  });
+
+  test("positive control: the user's cancel cues cancel", async () => {
+    expect(await ended("cancel")).toEqual(["start", "cancel"]);
+  });
+});
+
 describe("DC-O3: the system's player", () => {
   const WAV = new Uint8Array([82, 73, 70, 70, 1, 2, 3]);
 
@@ -140,7 +184,10 @@ describe("DC-O3: the system's player", () => {
         env,
         platform: "darwin",
         dir: () => t.dir,
-        spawn: (argv) => spawned.push(argv),
+        spawn: async (argv) => {
+          spawned.push(argv);
+          return 0;
+        },
       });
     player({ NODE_ENV: "test" }).play(WAV, "start");
     player({ CI: "true" }).play(WAV, "start");
@@ -154,6 +201,44 @@ describe("DC-O3: the system's player", () => {
     expect(spawned[0]?.[0]).toBe("/usr/bin/afplay");
     expect(spawned[1]).toEqual(spawned[0] as string[]);
     expect(new Uint8Array(readFileSync(spawned[0]?.[1] as string))).toEqual(WAV);
+  });
+
+  test("a player that exits with an error is said once and the next Linux player plays; close removes the files", async () => {
+    const t = tempDir("akou-cue-fallback-");
+    cleanups.push(t.cleanup);
+    const dir = join(t.dir, "cues");
+    const spawned: string[] = [];
+    const said: string[] = [];
+    const p = new SystemCuePlayer({
+      env: {},
+      platform: "linux",
+      which: (b) => (b === "pw-play" || b === "paplay" ? `/usr/bin/${b}` : null),
+      dir: () => {
+        mkdirSync(dir);
+        return dir;
+      },
+      // No PipeWire running: pw-play fails, paplay plays.
+      spawn: async (argv) => {
+        spawned.push(argv[0] as string);
+        return argv[0]?.endsWith("pw-play") ? 1 : 0;
+      },
+      onLog: (_level, msg) => said.push(msg),
+    });
+    p.play(WAV, "start");
+    await until(() => spawned.length === 2, 2000, "the fallback player");
+    p.play(WAV, "stop");
+    p.play(new Uint8Array([82, 73, 70, 70, 9]), "done");
+    await Bun.sleep(50);
+    expect(spawned).toEqual([
+      "/usr/bin/pw-play",
+      "/usr/bin/paplay",
+      "/usr/bin/paplay",
+      "/usr/bin/paplay",
+    ]);
+    expect(said).toEqual(["dictation cue not played: /usr/bin/pw-play exited with 1"]);
+    expect(readdirSync(dir).length).toBe(2);
+    p.close();
+    expect(existsSync(dir)).toBe(false);
   });
 
   test("the player per OS, and none found is said once", () => {

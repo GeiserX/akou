@@ -890,6 +890,7 @@ export class DictationService {
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
       metering: () => this.metering,
+      recording: () => this.recorder !== null,
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -952,6 +953,8 @@ export class DictationService {
    * included, while no session can start; null closes it. False with no helper ready.
    */
   recordKeys(fn: ((name: string) => void) | null): boolean {
+    // Closed always takes, so a helper started later never opens a recorder nobody shows.
+    if (fn === null) this.recorder = null;
     const s = this.helper?.session;
     if (!s?.ready) return false;
     this.recorder = fn;
@@ -1068,7 +1071,10 @@ export class DictationService {
     const mine = this.stops;
     void stop.then(() => {
       if (this.stops !== mine || this.helper) return;
+      // The page's recorder stays open across the restart, unless it closed meanwhile.
+      const recorder = this.recorder;
       this.start(argv, keys);
+      this.recorder = recorder;
       // `start` sets the helper; the check above narrowed it to null.
       const started = this.helper as Helper | null;
       if (started) started.regranted = true;
