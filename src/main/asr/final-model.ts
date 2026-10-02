@@ -41,6 +41,27 @@ export function finalModelName(id: string | undefined): string | undefined {
   return id ? shortModelName(id) : undefined;
 }
 
+/**
+ * Memory an engine of the final pass holds while it runs, MB, for the pass's budget
+ * (`FinalOptions.memoryBudgetMb`): Qwen about 3 GB (DESIGN 3.3), Parakeet with its model set about
+ * 2.7 GB (engine.ts, `ModelSet.release`).
+ */
+export const FINAL_ENGINE_MEMORY_MB: Readonly<Record<string, number>> = {
+  [QWEN_ASR]: 3000,
+  [RECOGNIZER]: 2700,
+};
+
+/** An engine's memory for the budget: its own figure, else the table's, else nothing. */
+export function finalEngineMemoryMb(e: { id: string; memoryMb?: number }): number {
+  return e.memoryMb ?? FINAL_ENGINE_MEMORY_MB[e.id] ?? 0;
+}
+
+/** An engine of `asr.final.engines` a pass left out, and why: `final.done`'s `dropped`. */
+export interface DroppedEngine {
+  engine: string;
+  reason: string;
+}
+
 export interface FinalChoice {
   /** The recognizer the pass runs, or null when neither is downloaded. */
   model: FinalModel | null;
@@ -75,4 +96,25 @@ export function chooseFinalModel(setting: string, c: LiveSetupContext): FinalCho
   const other: FinalModel = want === "qwen" ? "parakeet" : "qwen";
   if (why[other] === null) return { model: other, note: why[want] as string };
   return { model: null, note: `${why[want]}, and ${why[other]}` };
+}
+
+/**
+ * The engines a pass over `asr.final.engines` runs, in the list's order, each at most once, and
+ * the ones left out because they are not downloaded. Empty `models` when none is here.
+ */
+export function chooseFinalEngines(
+  list: readonly string[],
+  c: LiveSetupContext,
+): { models: FinalModel[]; dropped: DroppedEngine[] } {
+  const models: FinalModel[] = [];
+  const dropped: DroppedEngine[] = [];
+  for (const v of list) {
+    const m = finalModelOf(v);
+    if (!m || models.includes(m) || dropped.some((d) => d.engine === finalModelId(m))) continue;
+    const missing = m === "qwen" ? qwenMissing(c) : c.present(RECOGNIZER) ? [] : [RECOGNIZER];
+    if (missing.length === 0) models.push(m);
+    else
+      dropped.push({ engine: finalModelId(m), reason: `not downloaded (${missing.join(", ")})` });
+  }
+  return { models, dropped };
 }

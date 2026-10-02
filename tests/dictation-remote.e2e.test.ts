@@ -202,7 +202,7 @@ interface Fake {
 }
 
 function fakeRemote(
-  o: { delayMs?: number; status?: number; server?: unknown } = {},
+  o: { delayMs?: number; status?: number; server?: unknown; language?: string } = {},
 ): Promise<Fake> {
   const fields: Fake["fields"] = [];
   const auth: Fake["auth"] = [];
@@ -223,7 +223,12 @@ function fakeRemote(
       if (o.delayMs) await Bun.sleep(o.delayMs);
       if (o.status)
         return Response.json({ error: "queue_full", message: "full" }, { status: o.status });
-      return Response.json({ language: "en", duration: 2, text: "hello from the fake", words: [] });
+      return Response.json({
+        language: o.language ?? "en",
+        duration: 2,
+        text: "hello from the fake",
+        words: [],
+      });
     },
   });
   return Promise.resolve({
@@ -300,6 +305,22 @@ describe("DC-R1: the request", () => {
       expect(JSON.stringify({ ...e, message: e.message })).not.toContain("secret-key-2");
     } finally {
       full.stop();
+    }
+  });
+
+  test("a remote whose engine names no language (`und`, or `unknown` from an older server) gives no language", async () => {
+    for (const language of ["und", "unknown"]) {
+      const none = await fakeRemote({ language });
+      try {
+        const r = await transcribeRemote({
+          url: `http://127.0.0.1:${none.port}`,
+          key: "k",
+          samples: HELLO,
+        });
+        expect([language, r.language]).toEqual([language, null]);
+      } finally {
+        none.stop();
+      }
     }
   });
 

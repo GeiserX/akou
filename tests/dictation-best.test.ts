@@ -33,6 +33,18 @@ afterEach(async () => {
 
 const HELLO = concat(silence(0.3), speak(["hello"]), silence(0.3));
 
+/**
+ * The fake server's JSONL log, one object per complete line. The fake appends while the test
+ * polls, so a last line with no newline yet is still being written: it is left for the next read.
+ */
+function logLines(text: string): Record<string, unknown>[] {
+  return text
+    .split("\n")
+    .slice(0, -1)
+    .filter((l) => l !== "")
+    .map((l) => JSON.parse(l) as Record<string, unknown>);
+}
+
 const FAST: DictationEngine = {
   name: "fast",
   decode: async () => ({
@@ -110,6 +122,12 @@ function rig(
         .map((l) => l.body as { messages: { role: string; content: unknown }[] }),
   };
 }
+
+test("the fake log reader leaves a half-written last line for the next read", () => {
+  expect(logLines('{"argv":[]}\n{"body":{"mess')).toEqual([{ argv: [] }]);
+  expect(logLines('{"argv":[]}\n')).toEqual([{ argv: [] }]);
+  expect(logLines("")).toEqual([]);
+});
 
 describe("DC-E2: best is kept warm", () => {
   test("the first dictation after warm waits for health; the second starts nothing", async () => {

@@ -289,7 +289,7 @@ export const watch: Command = {
           // transcript that stopped moving.
           const body = (await res.json().catch(() => null)) as Body;
           above(`akou: ${describeError({ status: res.status, body, text: "", contentType: "" })}`);
-          stopAll(exitFor(res.status, body?.error));
+          stopAll(exitFor(res.status, body?.error, body));
           return;
         }
         for await (const ev of readSse(res.body)) {
