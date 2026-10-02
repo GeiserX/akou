@@ -290,6 +290,25 @@ describe("akou-5an.119: a best job in the desktop app takes its turn on the one 
     }
   });
 
+  test("a job cancelled while it waits keeps its place until the pass ahead ends", async () => {
+    const r = await appRig({ settings: { "asr.llamaServer": [process.execPath, FAKE_LLAMA] } });
+    try {
+      const pass = holdLine(r, "call-ahead");
+      const s = await submit(r, r.token, DIALOGUE, { preset: "best" });
+      expect(s.status).toBe(202);
+      await until(() => lineOwner(r) === s.body.id, 10_000, "the job joined the line");
+      const del = await asKey(r, r.token, "DELETE", `/jobs/${s.body.id}`);
+      expect(del.body.status).toBe("cancelled");
+      // The pass ahead still runs: the cancelled job's turn is not over, so nothing behind it starts.
+      await new Promise((res) => setTimeout(res, 500));
+      expect(lineOwner(r)).toBe(s.body.id);
+      pass.free();
+      await until(() => lineOwner(r) === null, 10_000, "the line freed once the pass ahead ended");
+    } finally {
+      await r.close();
+    }
+  });
+
   test("positive control: a server's best job does not wait on the line", async () => {
     const r = await appRig({
       settings: { ...SERVER, "asr.llamaServer": [process.execPath, FAKE_LLAMA] },

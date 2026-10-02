@@ -2606,9 +2606,15 @@ export class AkouApp implements ApiApp {
       ended = r;
     });
     this.qwenLine = { call: id, done };
+    // The job's place in the line ends only once the pass ahead has ended too: a job cancelled
+    // while it waits must not let the pass behind it start beside the one still running.
     const release = () => {
-      ended();
-      if (this.qwenLine?.done === done) this.qwenLine = null;
+      const finish = () => {
+        ended();
+        if (this.qwenLine?.done === done) this.qwenLine = null;
+      };
+      if (ahead) ahead.done.catch(() => {}).then(finish);
+      else finish();
     };
     // An aborted job never waits; a job that waited drops its listener, so a signal that is
     // never aborted does not keep one closure per job.
