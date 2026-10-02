@@ -67,6 +67,7 @@ import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { editFile, targetPath } from "./api/routes/vocab.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
+import { APP_LOG, AppLog, HANGS_DIR } from "./app-log.ts";
 import {
   type AcceleratorSetting,
   type AcceleratorState,
@@ -234,6 +235,7 @@ import {
   type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
+import { relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
@@ -241,6 +243,27 @@ import { MAC_PANES, PageServer, type SettingsPane } from "./window/page-server.t
 
 export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
+
+/** The events after which the watchdog reads the live state again at once (DK-M8). */
+const LIVE_CHANGES: ReadonlySet<string> = new Set([
+  "call.created",
+  "part.started",
+  "part.ended",
+  "call.ended",
+  "call.failed",
+]);
+
+/** The call events `app.log` names, by id only, with the words it uses (DK-M8). */
+const LOGGED_EVENTS: Partial<Record<LogEvent["type"], string>> = {
+  "call.created": "started",
+  "call.ended": "ended",
+  "call.failed": "failed",
+  "part.started": "a part started",
+  "part.ended": "a part ended",
+  "final.started": "final pass started",
+  "final.done": "final pass done",
+  "final.failed": "final pass failed",
+};
 /** A final pass still running at quit gets this long, then is left for the next start. */
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
@@ -290,6 +313,8 @@ export interface WindowShell {
   close(): Promise<void>;
   /** The global hotkey that starts and stops a call, or null when another app holds it. */
   registeredHotkey?(): string | null;
+  /** Is the main window open now? The watchdog opens the app again only if it was (DK-M8). */
+  isOpen?(): boolean;
 }
 
 export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
@@ -389,6 +414,11 @@ export interface AppOptions {
   liveReviewEveryMs?: number;
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
+  /**
+   * Write `app.log` in the config folder and run the watchdog (DK-M8). The two entry points set
+   * it; tests and `akou serve` do not.
+   */
+  supervise?: boolean;
 }
 
 export { NotWritable };
@@ -523,6 +553,11 @@ export class AkouApp implements ApiApp {
   readonly tokenPath: string;
   /** Resolves when the app has quit. */
   readonly closed: Promise<void>;
+  /** `app.log` (DK-M8), when the entry point asked for it. */
+  private readonly appLog: AppLog | null;
+  private watchdog: Watchdog | null = null;
+  /** Starts under way, which the watchdog counts as recording from before the helper spawns. */
+  private starting = 0;
   server: ApiServer | null = null;
   window: WindowShell | null = null;
   asr: LiveAsr | null = null;
@@ -667,6 +702,7 @@ export class AkouApp implements ApiApp {
       this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
+    this.appLog = o.supervise ? new AppLog(join(this.configDir, APP_LOG)) : null;
     this.tokenPath = token.path;
     this.tokens = new TokenSource(token.path, token.token);
     this.lockPath = lockPath;
@@ -1156,9 +1192,17 @@ export class AkouApp implements ApiApp {
     });
   }
 
+  /** A line from the desktop shell, into the same log as the app's own (DK-M8). */
+  logLine(level: "info" | "warn" | "error", msg: string): void {
+    this.log(level, msg);
+  }
+
   private log(level: "info" | "warn" | "error", msg: string): void {
+    this.appLog?.line(level, msg);
     if (this.o.onLog) this.o.onLog(level, msg);
-    else console.error(`akou ${level}: ${msg}`);
+    // With app.log on, a line goes to the terminal only when there is one: launched by the CLI,
+    // stderr is `launch.log`, which the CLI rotates only at a launch and must not grow for days.
+    else if (!this.appLog || process.stderr.isTTY) console.error(`akou ${level}: ${msg}`);
   }
 
   /**
@@ -1239,11 +1283,13 @@ export class AkouApp implements ApiApp {
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
+        this.appLog?.line("info", "asr: the live recognizer loaded its models");
         // The recognizer loaded its models: they count as used (SV-M4, in the app too).
         if (!this.givenRecognizer()) this.shelf?.touch(this.runningSet().map((m) => m.id));
       },
       (err: Error) => {
         this.asrState = { state: "unavailable", reason: err.message };
+        this.appLog?.line("warn", `asr: the live recognizer is unavailable: ${err.message}`);
       },
     );
   }
@@ -1253,6 +1299,11 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // The watchdog learns at once that a call went live or ended, not at the next beat (DK-M8).
+    if (LIVE_CHANGES.has(e.type)) this.watchdog?.touch();
+    // `app.log` (DK-M8): what happened to which call, by id only.
+    const happened = LOGGED_EVENTS[e.type];
+    if (happened && this.appLog) this.appLog.line("info", `call ${id}: ${happened}`);
     // A pass that has ended has no figure any more, before anyone reads the status for its end.
     if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
     // A language the recognizer just detected may bring its word list.
@@ -2165,7 +2216,15 @@ export class AkouApp implements ApiApp {
     await this.loadVocab(ws);
     // The call's own live setup rides on its controller (`liveAsked`), never a shared slot: a
     // concurrent start that is refused cannot touch the call that is starting.
-    return this.manager.start(req);
+    // The watchdog counts the start as a recording before the helper is spawned (DK-M8).
+    this.starting++;
+    this.watchdog?.touch();
+    try {
+      return await this.manager.start(req);
+    } finally {
+      this.starting--;
+      this.watchdog?.touch();
+    }
   }
 
   async call(id: string): Promise<CallController> {
@@ -3558,6 +3617,27 @@ export class AkouApp implements ApiApp {
     else if (!this.headless) this.log("info", "the window is not built yet; running headless");
   }
 
+  /**
+   * Once the API listens: the start line in `app.log` and the watchdog (DK-M8), when the entry
+   * point asked for them. The watchdog ends a stuck app only while no call records.
+   */
+  supervise(): void {
+    if (!this.appLog) return;
+    this.appLog.line(
+      "info",
+      `akou ${this.version} started (pid ${process.pid}, ${this.runMode}, ${this.headless ? "headless" : "with the window"}, API on port ${this.server?.port})`,
+    );
+    this.watchdog = startWatchdog({
+      logFile: this.appLog.file,
+      hangsDir: join(this.configDir, HANGS_DIR),
+      // A start counts from before its helper is spawned, so a stall in between never reads as
+      // "no call is recording" (`starting`); every live change is published at once (`touch`).
+      recording: () => this.starting > 0 || this.manager.live() !== null,
+      windowOpen: () => this.window?.isOpen?.() ?? false,
+      relaunch: relaunchCommand(),
+    });
+  }
+
   /** `runtime.json`: pid, port, version, and the harnesses found (DESIGN 5.3), mode 0600. */
   private writeRuntime(): void {
     if (!this.server || this.quitting) return;
@@ -3582,6 +3662,7 @@ export class AkouApp implements ApiApp {
   /** The one quit path. Safe to call twice; the second call waits for the first. */
   quit(): Promise<void> {
     this.quitting ??= (async () => {
+      this.appLog?.line("info", "quitting");
       // Let the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
       try {
@@ -3622,6 +3703,8 @@ export class AkouApp implements ApiApp {
         if (rt.pid === process.pid) unlinkSync(this.runtimeFile);
       } catch {}
       releaseLock(this.lockPath);
+      this.watchdog?.stop();
+      this.appLog?.line("info", `akou ${this.version} quit (pid ${process.pid})`);
       this.resolveClosed();
     })();
     return this.quitting;
@@ -3680,6 +3763,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
     app = new AkouApp(o, cfg, token, lockPath);
     await app.moveSecrets();
     await app.listen();
+    app.supervise();
     return app;
   } catch (err) {
     await app?.asr?.close();
@@ -3695,7 +3779,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
 if (import.meta.main) {
   let app: AkouApp;
   try {
-    app = await startApp({ secrets: systemSecrets() });
+    app = await startApp({ secrets: systemSecrets(), supervise: true });
   } catch (err) {
     if (err instanceof AlreadyRunningError) {
       console.error(err.message);

@@ -36,7 +36,7 @@ async function ensureShell(app: AkouApp): Promise<Shell> {
         home: homedir(),
         program: process.execPath,
       }),
-    onLog: (level, msg) => console.error(`akou ${level}: ${msg}`),
+    onLog: (level, msg) => app.logLine(level, `window: ${msg}`),
     state: fileState(loadConfig(process.env).paths.configDir),
     installCli: () => installCli(BUNDLED_CLI, nodeOps),
   });
@@ -49,6 +49,8 @@ try {
   const app = await startApp({
     // The API key lives in the Keychain on macOS, never in the config file.
     secrets: systemSecrets(),
+    // `app.log` and the watchdog (DK-M8): LaunchServices reads nothing this process prints.
+    supervise: true,
     excludeResponsible:
       process.platform === "darwin"
         ? BUNDLE_ID

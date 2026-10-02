@@ -18,12 +18,21 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
 import { RUNTIME_FILE } from "../app-info.ts";
+import { APP_LOG } from "../app-log.ts";
 import { resolvePaths } from "../config/schema.ts";
 import {
   ANSWER_MS,
@@ -103,6 +112,24 @@ export class Hung extends Unreachable {
 /** A hung app was stopped for a request that never launches one (`akou quit`, DK-M8). */
 export class StoppedHung extends Hung {
   override name = "StoppedHung";
+}
+
+/** What a program the CLI launches prints, in the config folder. */
+export const LAUNCH_LOG = "launch.log";
+/**
+ * At this size `launch.log` becomes `launch.log.1`, replacing the older one, checked at each
+ * launch only: once the CLI exits, nothing of akou's stands between the launched program and the
+ * file. It stays small because the app logs to `app.log` and echoes nothing to a stderr that is
+ * not a terminal, so `launch.log` holds only what is printed before the app can log (a start that
+ * fails) or instead of it (a crash).
+ */
+export const LAUNCH_LOG_MAX_BYTES = 1024 * 1024;
+
+/** Moves `file` to `file.1` once it reaches `max` bytes. Never throws. */
+export function rotate(file: string, max: number): void {
+  try {
+    if (statSync(file).size >= max) renameSync(file, `${file}.1`);
+  } catch {}
 }
 
 /** A probe answered this recently: the next request goes straight out. */
@@ -436,7 +463,7 @@ export class ApiClient {
   }
 
   /**
-   * Starts the app headless, detached, with its output in `app.log`, and waits for its API. Two
+   * Starts the app headless, detached, with its output in `launch.log`, and waits for its API. Two
    * clients launching at once are fine: the second app finds the first one's lock and exits.
    */
   launch(waitMs: number = this.budget): Promise<Runtime> {
@@ -450,7 +477,11 @@ export class ApiClient {
     const cmd = this.launchCmd;
     if (!cmd || cmd.length === 0) throw new Unreachable("akou is not running");
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
-    const log = openSync(join(this.configDir, "app.log"), "a", 0o600);
+    // What the launched program prints. The app writes its own `app.log` (DK-M8); this file holds
+    // what it printed before it could, such as a start that failed.
+    const file = join(this.configDir, LAUNCH_LOG);
+    rotate(file, LAUNCH_LOG_MAX_BYTES);
+    const log = openSync(file, "a", 0o600);
     try {
       const child = spawn(cmd[0] as string, cmd.slice(1), {
         detached: true,
@@ -470,7 +501,7 @@ export class ApiClient {
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(
-      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, "app.log")}`,
+      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, LAUNCH_LOG)} and ${join(this.configDir, APP_LOG)}`,
     );
   }
 

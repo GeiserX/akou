@@ -795,6 +795,11 @@ export class Shell implements WindowShell {
     return this.hotkey;
   }
 
+  /** Is the main window open? Read by the watchdog, which reopens the app only if it was. */
+  isOpen(): boolean {
+    return this.window !== null;
+  }
+
   /** The tray, the hotkey, the login item and the quit path. The window opens on `show`. */
   async start(): Promise<void> {
     const s = this.app.config().settings;
