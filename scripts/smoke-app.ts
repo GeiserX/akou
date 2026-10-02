@@ -44,7 +44,14 @@ import { join } from "node:path";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { parseStderrLine } from "../src/main/capture/protocol.ts";
 import { DICTIONARY_LANGUAGES } from "../src/main/vocab/dictionary.ts";
-import { MIN_MACOS, PINS, RELEASE_DIR, releaseName, WRAPPER_APP } from "./build-app.ts";
+import {
+  diarizeArchive,
+  MIN_MACOS,
+  PINS,
+  RELEASE_DIR,
+  releaseName,
+  WRAPPER_APP,
+} from "./build-app.ts";
 import { sourceVersion } from "./stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -332,6 +339,13 @@ async function main(argv: string[]): Promise<void> {
       existsSync(join(RELEASE_DIR, `${releaseName(version)}.${ext}`)),
       `${releaseName(version)}.${ext} exists`,
     );
+  }
+
+  // The diarization helper alone: one file, the binary, at the archive's top.
+  const tgz = join(RELEASE_DIR, diarizeArchive(version));
+  if (check(existsSync(tgz), `${diarizeArchive(version)} exists`)) {
+    const listed = spawnSync("tar", ["-tzf", tgz]).stdout.toString().trim();
+    check(listed === "akou-diarize", `${diarizeArchive(version)} holds akou-diarize alone`, listed);
   }
 
   // The wrapper.

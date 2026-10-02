@@ -708,6 +708,31 @@ export async function downloadFile(
   renameSync(part, path);
 }
 
+/**
+ * The download working on each model file in this process. The download card's pull and the
+ * Models page's (or a job's) can ask for the same file at once; the second waits for the first, so
+ * one writer appends to each `.part` file and the second finds the file verified (SV-M6).
+ */
+const fetching = new Map<string, Promise<unknown>>();
+
+/** Resolves when `p` settles, either way; rejects at once when `signal` aborts first. */
+function settled(p: Promise<unknown>, signal?: AbortSignal): Promise<void> {
+  const done = p.then(
+    () => {},
+    () => {},
+  );
+  if (!signal) return done;
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener("abort", stop, { once: true });
+    void done.then(() => {
+      signal.removeEventListener("abort", stop);
+      resolve();
+    });
+  });
+}
+
 /** Downloads every missing or bad file of the given models. Files already verified are skipped. */
 export async function downloadModels(
   dir: string,
@@ -721,20 +746,34 @@ export async function downloadModels(
     if (!m) throw new Error(`unknown model ${id}`);
     for (const f of m.files) {
       const path = modelFile(dir, id, f.name);
-      if (
-        existsSync(path) &&
-        statSync(path).size === f.size &&
-        (await sha256File(path)) === f.sha256
-      ) {
-        out.push({ model: id, name: f.name, path, state: "ok" });
-        continue;
+      for (let other = fetching.get(path); other; other = fetching.get(path)) {
+        await settled(other, o.signal);
       }
-      if (existsSync(path)) rmSync(path);
-      await downloadFile(id, f, path, o);
+      const one = fetchOne(id, f, path, o);
+      fetching.set(path, one);
+      try {
+        await one;
+      } finally {
+        if (fetching.get(path) === one) fetching.delete(path);
+      }
       out.push({ model: id, name: f.name, path, state: "ok" });
     }
   }
   return out;
+}
+
+/** One file of `downloadModels`: kept when it is there and verified, else downloaded. */
+async function fetchOne(
+  model: string,
+  f: ModelFileSpec,
+  path: string,
+  o: DownloadOptions,
+): Promise<void> {
+  if (existsSync(path) && statSync(path).size === f.size && (await sha256File(path)) === f.sha256) {
+    return;
+  }
+  if (existsSync(path)) rmSync(path);
+  await downloadFile(model, f, path, o);
 }
 
 /** What `importModels` reports and stops on, as a download does. */

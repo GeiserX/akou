@@ -182,7 +182,12 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
     // A start answers 201; an attach to the call already recording answers 200 with the same body
     // type, so a client generated from the file does not read it as the error.
     const responses = doc.paths["/v1/calls"]?.post?.responses as Record<string, unknown>;
-    expect(Object.keys(responses).sort()).toEqual(["200", "201", "default"]);
+    // Its refusals (4xx, 5xx) are listed too, by status (PG-A7).
+    expect(
+      Object.keys(responses)
+        .filter((s) => !/^[45]/.test(s))
+        .sort(),
+    ).toEqual(["200", "201", "default"]);
     expect(responses["200"]).toMatchObject({ content: { "application/json": {} } });
   });
 });
@@ -439,7 +444,10 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
     try {
       const doc = (await app.get("/openapi.json")).body;
       expect(doc.paths["/v1/calls"]).toBeDefined();
-      expect(doc.paths["/v1/events"]).toBeUndefined();
+      // The desktop app takes file jobs (akou-5an.119); keys and the OpenAI door are server mode's.
+      expect(doc.paths["/v1/jobs"]?.post?.operationId).toBe("jobs.create");
+      expect(doc.paths["/v1/keys"]).toBeUndefined();
+      expect(doc.paths["/v1/audio/transcriptions"]).toBeUndefined();
     } finally {
       await app.server.stop();
     }

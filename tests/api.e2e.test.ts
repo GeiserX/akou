@@ -508,6 +508,9 @@ describe("after the call", () => {
         headers: { authorization: `Bearer ${rig.token}`, range: "bytes=500-" },
       });
       expect(bad.status).toBe(416);
+      // PG-A7: the one error shape, even for a range refusal.
+      expect(bad.headers.get("content-range")).toBe("bytes */100");
+      expect(((await bad.json()) as { error: string }).error).toBe("bad_range");
       expect((await rig.api("GET", `/calls/${id}/audio/9`)).status).toBe(404);
     },
     LONG,
@@ -556,6 +559,23 @@ describe("the vocabulary files", () => {
       workspace: "work",
     });
     expect(imp.body.imported).toBe(1);
+    // A term over the file's limits (60 heard forms, one of 101 characters, a note of 1001) is
+    // imported within them, with a `skipped` line for each; the import is never refused whole.
+    const forms = Array.from({ length: 60 }, (_, n) => `form${n}`).join(" | ");
+    const long = await rig.api("POST", "/vocab/import", {
+      text: `Hetzner <= ${"x".repeat(101)} | ${forms}  # ${"n".repeat(1001)}`,
+      workspace: "work",
+    });
+    expect([long.status, long.body.imported, long.body.skipped.length]).toEqual([200, 1, 3]);
+    const hetzner = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Hetzner",
+    );
+    expect([hetzner.heard.length, hetzner.heard[0], hetzner.note.length]).toEqual([
+      50,
+      "form0",
+      1000,
+    ]);
+    expect((await rig.api("DELETE", "/vocab/Hetzner?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(200);
     expect((await rig.api("DELETE", "/vocab/Vercel?workspace=work")).status).toBe(404);
     const bad = await rig.api("POST", "/vocab", { term: "" });
