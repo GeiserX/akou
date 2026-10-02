@@ -295,7 +295,7 @@ export class CallManager {
       return last ? { ok: true, id: last.id } : fail(404, "no_calls", "there are no calls yet");
     }
     if (this.index.has(ref) || this.controllers.has(ref)) return { ok: true, id: ref };
-    return fail(404, "not_found", `no call ${ref}`);
+    return fail(404, "not_found", `no call ${ref}`, { call: ref });
   }
 
   view(ref: CallRef): CallView | null {
@@ -504,7 +504,7 @@ export class CallManager {
       // Two restarts at once (the window and an agent) share one load and one controller; the
       // second then finds the call starting and is refused, never a second helper.
       const loaded = await this.open(r.id);
-      if (!loaded) return fail(404, "not_found", `no call ${r.id}`);
+      if (!loaded) return fail(404, "not_found", `no call ${r.id}`, { call: r.id });
       c = loaded;
       const other = this.live();
       if (other && other !== c) {

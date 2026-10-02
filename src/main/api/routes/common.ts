@@ -6,6 +6,7 @@
  */
 
 import type { CallController } from "../../call/call.ts";
+import type { RouteErrors } from "../errors.ts";
 import { HttpError, type RouteContext, throwOutcome } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 
@@ -50,3 +51,15 @@ export function nextItemId(prefix: string, lastSeq: number): string {
 /** The `{id}` of a call route, as the OpenAPI file describes it. */
 export const CALL_ID =
   "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.";
+
+/** What resolving `{id}` refuses where `last` is accepted (`resolveRef`, `app.call`). */
+export const CALL_REF_ERRORS: RouteErrors = { 404: ["no_calls", "no_live_call", "not_found"] };
+
+/** What resolving `{id}` refuses where `last` is not accepted. */
+export const LIVE_REF_ERRORS: RouteErrors = {
+  400: ["last_refused"],
+  404: ["no_live_call", "not_found"],
+};
+
+/** What writing an event to a call's log refuses (`app.write`), beyond finding the call. */
+export const WRITE_ERRORS: RouteErrors = { 400: ["refused"], 409: ["locked", "log_closed"] };

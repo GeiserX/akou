@@ -579,6 +579,23 @@ export function positionText(v: CallView, part: number, a: number): string {
   return formatWall(p.clock.wallFromAudio(a), v.call?.tz ?? "UTC");
 }
 
+/**
+ * Where the call's notes fall on the scrubber of the part being played, as fractions of its length
+ * (0 to 1): a note taken at wall time `w` marks the instant of the part that was recorded then.
+ * Notes taken outside the part, or in a pause inside it, draw no mark.
+ */
+export function noteMarks(v: CallView, part: number, duration: number): number[] {
+  const p = v.part(part);
+  if (!p || !(duration > 0)) return [];
+  const out: number[] = [];
+  for (const n of v.notes()) {
+    const a = p.clock.audioFromWall(n.w);
+    if (a > duration || Math.abs(p.clock.wallFromAudio(a) - n.w) > 1000) continue;
+    out.push(a / duration);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // The calls list (WINDOW section 13)
 

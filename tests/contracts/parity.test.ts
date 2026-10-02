@@ -71,6 +71,20 @@ describe("[TS-13] door parity", () => {
     ]);
   });
 
+  test("positive control: a job route with no tool and no written exclusion fails (SI-7)", () => {
+    const job = "Transcribe a file as a job (server mode)";
+    expect(parityProblems(PARITY, doors({ dropTool: ["akou_transcribe"] }))).toEqual([
+      `${job}: the mcp door has no akou_transcribe`,
+    ]);
+    const silent = PARITY.map((r) => (r.action === job ? { ...r, mcp: { none: "" } } : r));
+    expect(parityProblems(silent, doors())).toEqual([
+      `${job}: the mcp door lacks it and gives no reason`,
+      "the mcp door has akou_transcribe, which no row maps",
+      "the mcp door has akou_job_get, which no row maps",
+      "the mcp door has akou_jobs_list, which no row maps",
+    ]);
+  });
+
   test("positive controls: an unmapped route, a gap with no reason and a window action that went away each fail", () => {
     const d = doors();
     const api = new Set([...d.api, "POST /calls/:id/rename"]);

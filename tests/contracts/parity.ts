@@ -454,9 +454,8 @@ export const PARITY: readonly Row[] = [
       "GET /events",
       "POST /audio/transcriptions",
     ],
-    mcp: {
-      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
-    },
+    // SI-7: an agent with a shell uploads a file on its machine; Executor uses the OpenAPI file.
+    mcp: ["akou_transcribe", "akou_job_get", "akou_jobs_list"],
     // The Jobs page of server mode's web UI (SERVER.md SV-U4).
     window: [
       ui("server-jobs.ts", '"GET", `/jobs?#{q}`'),
@@ -470,7 +469,7 @@ export const PARITY: readonly Row[] = [
     },
     api: ["PATCH /jobs/:id"],
     mcp: {
-      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
+      none: "an agent reads its jobs by id; SI-7 names no rename tool, and a title is for the Jobs page",
     },
     // SERVER.md SV-J10: the Jobs page shows the name and searches it; the program names the job.
     window: {
@@ -501,6 +500,15 @@ export const PARITY: readonly Row[] = [
       ui("server-keys.ts", '"POST", "/keys"'),
       ui("server-keys.ts", '"DELETE", `/keys/#{encodeURIComponent(id)}`'),
     ],
+  },
+  {
+    action: "Change a key's callback hosts (server mode)",
+    cli: ["keys"],
+    api: ["PATCH /keys/:id"],
+    mcp: { none: "made by the operator, on the box, not by an agent (SV-K2)" },
+    window: {
+      none: "the Keys page creates and revokes; changing hosts is the CLI's and the API's (SV-K7)",
+    },
   },
   {
     action: "Transcribe a clip through the dictation path",
