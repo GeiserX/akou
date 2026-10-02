@@ -105,7 +105,7 @@ function deliveredJob(s: JobStore, url: string, key = "key_a"): FeedEvent {
     job.id,
     { status: "done", result },
     { type: "transcription.completed", data: result, deliverTo: url },
-  );
+  )?.event;
   if (!e) throw new Error("finish wrote nothing");
   return e;
 }

@@ -303,7 +303,7 @@ export const SETTINGS = {
       /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v as string)
         ? null
         : "is a preset name (auto, fast, ...) or an engine id from the model catalog",
-    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: the hardware's choice, `fast` today.",
+    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: `best` (Qwen3-ASR) wherever it is downloaded, else `fast` (Parakeet) when that is, else `best` on a GPU with 16 GB of memory and `fast` elsewhere; `GET /v1/server` `auto` says which and why.",
   },
   "server.auto_download": {
     type: "boolean",
