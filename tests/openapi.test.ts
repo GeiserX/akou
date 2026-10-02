@@ -182,7 +182,12 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
     // A start answers 201; an attach to the call already recording answers 200 with the same body
     // type, so a client generated from the file does not read it as the error.
     const responses = doc.paths["/v1/calls"]?.post?.responses as Record<string, unknown>;
-    expect(Object.keys(responses).sort()).toEqual(["200", "201", "default"]);
+    // Its refusals (4xx, 5xx) are listed too, by status (PG-A7).
+    expect(
+      Object.keys(responses)
+        .filter((s) => !/^[45]/.test(s))
+        .sort(),
+    ).toEqual(["200", "201", "default"]);
     expect(responses["200"]).toMatchObject({ content: { "application/json": {} } });
   });
 });

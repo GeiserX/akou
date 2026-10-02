@@ -280,7 +280,8 @@ export class QwenEngine implements FinalEngine {
     // when the model chose that language, and a None answer must never be forced into words.
     let a = await this.ask(unit);
     if (forced && a.lang !== "None" && a.lang !== forced) a = await this.ask(unit, forced);
-    const allowed = (this.o.allowed ?? []).filter((c) => qwenLanguage(c));
+    const listed = unit.allowed?.length ? unit.allowed : (this.o.allowed ?? []);
+    const allowed = listed.filter((c) => qwenLanguage(c));
     if (!forced && a.lang && a.lang !== "None" && allowed.length > 0) {
       const names = allowed.map((c) => qwenLanguage(c) as string);
       if (!names.includes(a.lang)) {
