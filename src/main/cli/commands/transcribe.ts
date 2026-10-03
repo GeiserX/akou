@@ -1,7 +1,12 @@
 /**
  * `akou transcribe FILE` (docs/ux/SERVER.md SV-D1): a file job from the command line. It uploads
  * the file to `POST /v1/jobs` of the akou it talks to, waits for the job to end, and prints the
- * transcript, so transcribing a file is the same job whichever door asks for it.
+ * transcript, so transcribing a file is the same job whichever door asks for it. That akou is the
+ * desktop app on this machine, with its one token, or a server named by `AKOU_URL` with a key.
+ *
+ * On a server the job is deleted once its transcript is printed: the server keeps no copy. The
+ * desktop app keeps it, so `akou jobs list` shows it, until `server.retain_days` deletes it. A
+ * job cut short (Ctrl-C) is cancelled and deleted on both.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -15,14 +20,27 @@ const PRESETS = ["lite", "fast", "best", "fusion", "auto"];
 
 export const transcribeCommand: Command = {
   name: "transcribe",
-  summary: "Transcribe an audio file as a server job and print the transcript",
+  summary: "Transcribe an audio file on this akou, or on a server (AKOU_URL), and print the text",
   usage: `akou transcribe FILE [--preset ${PRESETS.join("|")}] [--language L] [--diarize]   [--json]`,
   flags: {
     preset: { type: "string", value: "P", desc: `${PRESETS.join(", ")} (default auto)` },
     language: { type: "string", value: "L", desc: "a BCP-47 tag such as en or es-ES, or auto" },
     diarize: { type: "boolean", desc: "label the speakers" },
   },
-  examples: ["akou transcribe voice-note.ogg", "akou transcribe call.m4a --language es --diarize"],
+  notes: [
+    "The desktop app on this machine transcribes the file itself, with no setting to turn on.",
+    "Long audio is cut at its pauses, so a long recording works, up to server.max_audio_minutes",
+    "(240). The command waits until the job ends; Ctrl-C cancels it.",
+    "The job then stays in `akou jobs list` for server.retain_days.",
+    "AKOU_URL sends the file to an akou server instead, with the key in AKOU_API_KEY or in the",
+    "file AKOU_API_KEY_FILE names; the server deletes the job once the text is printed.",
+    "Exit codes: 0 done (no speech prints nothing), 64 usage, 69 no akou to reach, 70 the job failed.",
+  ],
+  examples: [
+    "akou transcribe voice-note.ogg",
+    "akou transcribe call.m4a --preset best --language es --diarize",
+    "AKOU_URL=https://akou.example AKOU_API_KEY_FILE=~/.config/akou-key akou transcribe note.ogg",
+  ],
   run: async (ctx, p) => {
     const [file, ...rest] = p.positional;
     if (!file || rest.length > 0) return usage(ctx, "transcribe needs one FILE");
@@ -43,20 +61,26 @@ export const transcribeCommand: Command = {
     const language = str(p, "language");
     if (language) form.append("language", language);
     if (bool(p, "diarize")) form.append("diarize", "true");
-    // The desktop app has no job routes; `GET /v1/server` says so before any upload.
+    // An akou with no job routes (one older than file jobs in the desktop app, or one whose job
+    // queue did not start) says so on `GET /v1/server`, before any upload.
     const server = await api(ctx, "GET", "/server");
     if (server.body?.capabilities?.jobs !== true) {
-      const message =
-        "file jobs need akou in server mode (the server.enabled setting); the akou this command reached has none";
-      if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_server", message }));
+      const message = ctx.io.env.AKOU_URL?.trim()
+        ? "the akou at AKOU_URL takes no file jobs"
+        : "the akou on this machine takes no file jobs: update it, or set AKOU_URL to an akou server (`akou help transcribe`)";
+      if (ctx.json) ctx.io.out(JSON.stringify({ error: "no_jobs", message }));
       else ctx.io.err(`akou: ${message}`);
       return EXIT.unavailable;
     }
+    // The desktop app keeps the job for `akou jobs list`; a server keeps no copy once it is out.
+    const keep = server.body?.mode === "app";
     const sent = await api(ctx, "POST", "/jobs", { form, timeoutMs: 600_000 });
     if (sent.status !== 202 && sent.status !== 200) return finish(ctx, sent, () => "");
     const id = sent.body.id as string;
-    // The transcript printed is the only copy the caller asked for: the job is deleted once it is
-    // out, and on Ctrl-C, which also cancels a job still queued or running (SV-J6).
+    // Whether the job reached its end here: one cut short (Ctrl-C, a lost connection) is cancelled.
+    let ended = false;
+    // On a server the transcript printed is the only copy the caller asked for: the job is deleted
+    // once it is out. Ctrl-C cancels a job still queued or running, in both modes (SV-J6).
     try {
       let job = { ...sent, status: 200 };
       while (job.status === 200 && ["queued", "running"].includes(job.body?.status)) {
@@ -67,6 +91,7 @@ export const transcribeCommand: Command = {
         });
       }
       if (job.status !== 200) return finish(ctx, job, () => "");
+      ended = true;
       if (job.body.status !== "done") {
         const e = job.body.error as { code?: string; message?: string } | undefined;
         const message = `the job ${job.body.status}${e?.message ? `: ${e.message}` : ""}`;
@@ -87,7 +112,9 @@ export const transcribeCommand: Command = {
       if (ctx.io.signal?.aborted) return EXIT.interrupted;
       throw err;
     } finally {
-      await api(ctx, "DELETE", `/jobs/${id}`, { launch: false }).catch(() => {});
+      if (!keep || !ended) {
+        await api(ctx, "DELETE", `/jobs/${id}`, { launch: false }).catch(() => {});
+      }
     }
   },
 };
