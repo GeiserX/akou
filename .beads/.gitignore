@@ -80,6 +80,7 @@ bd.db
 # tracker (private remote), never in this public repo.
 issues.jsonl
 interactions.jsonl
+events.jsonl
 
 # Remote-visibility cache written by the bd wrapper (per machine)
 .remote-visibility
