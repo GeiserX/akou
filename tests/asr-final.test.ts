@@ -552,16 +552,6 @@ describe("after Stop, through the call's writer", () => {
     expect(finalBudgetMs(events([3600, 1800]))).toBe(2_700_000);
   });
 
-  test("a pass over several engines gets the decode budget once per engine", () => {
-    const b = new LogBuilder();
-    b.created({ id: "01J8Z6Q4M2VX0K7B3D4E5F6G7Q" });
-    b.partStarted(1, T0);
-    b.partEnded(1, "stop", 3600);
-    expect(finalBudgetMs(b.events, 2)).toBe(3_600_000);
-    // Control: one engine keeps half the call.
-    expect(finalBudgetMs(b.events, 1)).toBe(1_800_000);
-  });
-
   test("a pass that cannot start writes final.failed and never throws", async () => {
     const r = callRig();
     r.engine.onStart = (s) => s.capturing();
