@@ -436,6 +436,83 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 </details>
 
+## akou_job_get
+
+**Read a transcription job**
+
+One transcription job by id, waiting up to `wait` seconds for it to end; a done job comes with its transcript in `result`. Read-only.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `wait` | `integer` | no | Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "wait": {
+      "default": 50,
+      "description": "Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_jobs_list
+
+**List transcription jobs**
+
+The 20 newest transcription jobs this key submitted, newest first: id, title, state, preset, model and times, no transcript. `status` keeps one state. Read-only.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `status` | `"queued" or "running" or "done" or "failed" or "cancelled"` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "done",
+        "failed",
+        "cancelled"
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_list_calls
 
 **List past calls**
@@ -962,6 +1039,70 @@ Parameters: none.
 {
   "type": "object",
   "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_transcribe
+
+**Transcribe a file on a server**
+
+Transcribe an audio or video file on this machine as a job on the akou server (`AKOU_URL`, server mode): uploads the file once and waits up to `wait` seconds. A job that ends in time comes back done with its transcript in `result`; one still queued or running comes back with its `id` for akou_job_get. A path that is missing or not an audio or video file is refused and nothing is sent.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `path` | `string` | yes | The file's path on this machine. |
+| `preset` | `"lite" or "fast" or "best" or "fusion" or "auto"` | no | How much accuracy matters; auto lets the server choose. |
+| `language` | `string` | no | A BCP-47 tag such as en or es, or auto. |
+| `diarize` | `boolean` | no | Label the speakers. |
+| `wait` | `integer` | no | Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The file's path on this machine."
+    },
+    "preset": {
+      "description": "How much accuracy matters; auto lets the server choose.",
+      "type": "string",
+      "enum": [
+        "lite",
+        "fast",
+        "best",
+        "fusion",
+        "auto"
+      ]
+    },
+    "language": {
+      "description": "A BCP-47 tag such as en or es, or auto.",
+      "type": "string"
+    },
+    "diarize": {
+      "description": "Label the speakers.",
+      "type": "boolean"
+    },
+    "wait": {
+      "default": 50,
+      "description": "Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50
+    }
+  },
+  "required": [
+    "path"
+  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
 ```
