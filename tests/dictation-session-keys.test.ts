@@ -15,7 +15,7 @@ import type { DictationItem } from "../src/core/dictation/events.ts";
 import { SPOKEN_PUNCTUATION } from "../src/core/dictation/punctuation.ts";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
-import type { AppToHelper } from "../src/main/dictation/protocol.ts";
+import type { AppToHelper, Bindings } from "../src/main/dictation/protocol.ts";
 import {
   type DictationFollow,
   DictationService,
@@ -28,6 +28,7 @@ import {
   type InsertPolicy,
 } from "../src/main/dictation/session.ts";
 import { DictationLog } from "../src/main/dictation/store.ts";
+import { fixLastDefault } from "../src/main/window/hotkey.ts";
 import type { DraftOpen } from "../src/ui/dictation-protocol.ts";
 import { FAKE_HELPER, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -73,7 +74,15 @@ type Key = [number, string, boolean];
 
 function rig(
   keys: Key[],
-  o: { insert?: InsertPolicy; switches?: string[]; extra?: Partial<DictationServiceOptions> } = {},
+  o: {
+    insert?: InsertPolicy;
+    switches?: string[];
+    extra?: Partial<DictationServiceOptions>;
+    /** The draft key, fix last and paste last (DC-S3, DC-A5); unbound by default. */
+    bindings?: Partial<Bindings>;
+    /** Dictations already in the log before the helper starts. */
+    seed?: (log: DictationLog) => void;
+  } = {},
 ): Rig {
   const t = tempDir("akou-dict-keys-");
   cleanups.push(t.cleanup);
@@ -115,12 +124,14 @@ function rig(
     ...o.extra,
   });
   cleanups.push(() => svc.close());
+  o.seed?.(svc.log);
   svc.follow((m) => {
     if (m.kind !== "level") follow.push(m);
   });
   svc.draft.attach({
     open: (d) => opened.push(d),
     chip: () => {},
+    append: () => {},
     showInactive: () => {},
     hide: () => {},
   });
@@ -141,7 +152,14 @@ function rig(
       commands,
       ...(o.switches ?? []),
     ],
-    () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
+    () => ({
+      hotkey: RC,
+      draft: "",
+      fixLast: "",
+      pasteLast: "",
+      activation: "hold-or-toggle",
+      ...o.bindings,
+    }),
   );
   return {
     svc,
@@ -255,6 +273,48 @@ describe("DC-S3: the key you press picks the mode, one row per key path", () => 
   for (const [name, keys, mode] of rows) {
     test(name, async () => {
       const r = rig(keys);
+      await r.settled();
+      expect(modeOf(r)).toBe(mode);
+    });
+  }
+
+  // The draft key bound: it opens the box, Enter during it flips this press, and the dictation
+  // key beside it still inserts directly (the positive control).
+  const RO = "RightOption";
+  const draftRows: [string, Key[], Mode][] = [
+    [
+      "a push-to-talk hold of the draft key opens the draft box",
+      [
+        [800, RO, true],
+        [1700, RO, false],
+      ],
+      "draft",
+    ],
+    [
+      "a tap of the draft key latches, and a second tap opens the draft box",
+      [
+        [800, RO, true],
+        [900, RO, false],
+        [2500, RO, true],
+        [2600, RO, false],
+      ],
+      "draft",
+    ],
+    [
+      "Enter during a draft key hold flips this press: inserts, then sends",
+      [[800, RO, true], ...press(1600, "Enter"), [1700, RO, false]],
+      "send",
+    ],
+    [
+      "Escape during a latched draft key session cancels",
+      [[800, RO, true], [900, RO, false], ...press(2500, "Escape")],
+      "cancelled",
+    ],
+    ["with the draft key bound, a hold of the dictation key still inserts", HOLD, "insert"],
+  ];
+  for (const [name, keys, mode] of draftRows) {
+    test(name, async () => {
+      const r = rig(keys, { bindings: { draft: RO } });
       await r.settled();
       expect(modeOf(r)).toBe(mode);
     });
@@ -376,6 +436,37 @@ describe("DC-S2: the send key after the paste receipt", () => {
     expect(r.follow.some((m) => m.kind === "event" && m.e.type === "dictation.failed")).toBe(true);
   });
 
+  test("Enter after the insert went out, before its receipt, sends after the receipt (DC-A4)", async () => {
+    // An engine that does not wait for the keys, so the insert goes out before the Enter at 3 s,
+    // and a target that reads 2.5 s after the paste, so the Enter comes before the receipt.
+    const quick = (): DictationEngine => {
+      const asr = new LiveAsr(
+        {
+          models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+          inThread: true,
+        },
+        () => undefined,
+      );
+      cleanups.push(() => asr.close());
+      return { name: "fast", decode: (x, d) => asr.decode(x, d) };
+    };
+    const slow = { switches: ["--speed", "1", "--receipt-ms", "2500"], extra: { engine: quick } };
+    const r = rig([...HOLD, ...press(3000, "Enter")], slow);
+    await r.settled();
+    expect(r.inserts().map((l) => [l.type, l.send_key ?? l.key])).toEqual([
+      ["insert", "none"],
+      ["send", "Enter"],
+    ]);
+    expect(lines(r.commands).filter((c) => c.type === "send")).toEqual([
+      { type: "send", id: "1", send_key: "Enter" },
+    ]);
+    expect(r.item()).toMatchObject({ state: "inserted", text: "hello" });
+    // Positive control: the same hold with no Enter presses no send key.
+    const quiet = rig(HOLD, slow);
+    await quiet.settled();
+    expect(quiet.inserts().map((l) => l.type)).toEqual(["insert"]);
+  });
+
   test("sendKey: none presses nothing even on Enter", async () => {
     const r = rig(enterDuringHold, { insert: { ...DEFAULT_INSERT, sendKey: "none" } });
     await r.settled();
@@ -435,13 +526,14 @@ describe("the session's own edges", () => {
     samples: new Float32Array(320),
   });
 
-  function session(o: { secure?: boolean } = {}) {
+  function session(o: { secure?: boolean; draftFocused?: boolean } = {}) {
     const t = tempDir("akou-dict-keys-unit-");
     cleanups.push(t.cleanup);
     const log = new DictationLog(t.dir);
     cleanups.push(() => log.close());
     const sent: AppToHelper[] = [];
     const logs: string[] = [];
+    const appended: string[] = [];
     const s = new DictationSession({
       log,
       engine: () => ({
@@ -461,12 +553,17 @@ describe("the session's own edges", () => {
       insertPolicy: () => SEND_ENTER,
       onLog: (_l, m) => logs.push(m),
       onDraft: () => true,
+      draftFocused: () => o.draftFocused === true,
+      onAppend: (_id, text) => {
+        appended.push(text);
+        return true;
+      },
     });
     if (o.secure) s.onMessage({ type: "secure_input", on: true });
-    return { s, sent, log, logs };
+    return { s, sent, log, logs, appended };
   }
 
-  test("Enter after the text went to the helper does nothing, and says so", async () => {
+  test("Enter after the text went to the helper, before its receipt, still sends (DC-A4)", async () => {
     const { s, sent, logs } = session();
     s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
     s.onPacket(packet());
@@ -474,7 +571,42 @@ describe("the session's own edges", () => {
     await until(() => sent.some((c) => c.type === "insert"), 2000, "the insert");
     s.onMessage({ type: "key", name: "Enter" });
     expect(sent.filter((c) => c.type === "insert")).toMatchObject([{ send_key: "none" }]);
+    expect(sent.filter((c) => c.type === "send")).toEqual([
+      { type: "send", id: "1", send_key: "Enter" },
+    ]);
+    expect(logs).toEqual([]);
+    // Once the receipt came the text is in: a later Enter does nothing, and says so.
+    s.onMessage({ type: "inserted", id: "1", method: "paste", receipt_ms: 5 });
+    s.onMessage({ type: "key", name: "Enter" });
+    expect(sent.filter((c) => c.type === "send")).toHaveLength(1);
     expect(logs).toEqual(["dictation: Enter came after the insert began, so it did nothing"]);
+  });
+
+  test("a press while the draft box has the keyboard appends to it, and nothing goes to the app (DC-A4)", async () => {
+    const dictate = async (draftFocused: boolean) => {
+      const r = session({ draftFocused });
+      r.s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+      r.s.onPacket(packet());
+      r.s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+      await until(
+        () => r.appended.length > 0 || r.sent.some((c) => c.type === "insert"),
+        2000,
+        "the outcome",
+      );
+      await r.s.settled();
+      return r;
+    };
+    const into = await dictate(true);
+    expect(into.appended).toEqual(["hello"]);
+    expect(into.sent.filter((c) => c.type === "insert")).toEqual([]);
+    expect(into.log.items()[0]).toMatchObject({ state: "drafted", text: "hello" });
+    expect(into.log.events().find((e) => e.type === "dictation.drafted")).toMatchObject({
+      reason: "append",
+    });
+    // Positive control: with the box not focused the same session is inserted.
+    const out = await dictate(false);
+    expect(out.appended).toEqual([]);
+    expect(out.sent.filter((c) => c.type === "insert")).toHaveLength(1);
   });
 
   test("a password field: Shift+Enter never shows its text, and Enter sends nothing", async () => {
@@ -518,5 +650,102 @@ describe("DC-S6 on a spoken dictation", () => {
     await r.settled();
     expect(r.item()).toMatchObject({ raw: "hello comma world", text: "hello, world" });
     expect(r.inserts()[0]?.text).toBe("hello, world");
+  });
+});
+
+describe("DC-A5: fix last and paste last", () => {
+  const LAST = "d-last";
+  /** One dictation already inserted, the newest: what fix last and paste last act on. */
+  const seed = (log: DictationLog) => {
+    const target = { app: "Notes", pid: 9, window: "w", field: "editable" as const };
+    log.append({ type: "dictation.started", id: LAST, target, engine: "fast", by: "user" });
+    log.append({ type: "dictation.ended", id: LAST, reason: "release", seconds: 1 });
+    log.append({
+      type: "dictation.text",
+      id: LAST,
+      raw: "cooper netties",
+      text: "cooper netties",
+      language: "en",
+      words: [],
+      engine: "fast",
+      model: "fake-parakeet",
+      ms: 5,
+    });
+    log.append({ type: "dictation.inserted", id: LAST, method: "paste", receipt_ms: 3 });
+  };
+  /** Shift held, then the dictation key down and up: fix last's default press. */
+  const shiftThenRc: Key[] = [
+    [800, "LeftShift", true],
+    [850, RC, true],
+    [950, RC, false],
+    [1000, "LeftShift", false],
+  ];
+  const tapLog = (r: Rig) => lines(r.tap);
+
+  test("with the defaults, Shift then Right Command opens the last dictation for fixing and starts no session", async () => {
+    const r = rig(shiftThenRc, { seed, bindings: { fixLast: fixLastDefault(RC) } });
+    await until(() => tapLog(r).length >= shiftThenRc.length, 10_000, "the keys");
+    await until(() => r.opened.length > 0, 10_000, "the draft box");
+    expect(r.opened).toHaveLength(1);
+    expect(r.opened[0]).toMatchObject({ id: LAST, text: "cooper netties", focus: true });
+    expect(r.svc.log.items().map((i) => i.id)).toEqual([LAST]);
+    expect(r.follow.some((m) => m.kind === "press")).toBe(false);
+    // Opened for teaching: Enter offers to learn and inserts nothing into the app.
+    expect(
+      await r.svc.draft.handlers.insert({ id: LAST, text: "cooper netties", send: false }),
+    ).toBe(true);
+    expect(r.inserts()).toEqual([]);
+  });
+
+  test("positive control: Right Command then Shift is the interrupt, no fix and no session", async () => {
+    const keys: Key[] = [
+      [800, RC, true],
+      [850, "LeftShift", true],
+      [950, RC, false],
+      [1000, "LeftShift", false],
+    ];
+    const r = rig(keys, { seed, bindings: { fixLast: fixLastDefault(RC) } });
+    await until(() => tapLog(r).length >= keys.length, 10_000, "the keys");
+    await Bun.sleep(200);
+    expect(r.opened).toEqual([]);
+    expect(r.svc.log.items().map((i) => i.id)).toEqual([LAST]);
+    expect(r.follow.flatMap((m) => (m.kind === "press" ? [m.on] : []))).toEqual([true, false]);
+  });
+
+  const pasteKeys: Key[] = [
+    [800, "LeftControl", true],
+    [810, "LeftShift", true],
+    [820, "V", true],
+    [860, "V", false],
+    [870, "LeftShift", false],
+    [880, "LeftControl", false],
+  ];
+
+  test("with paste last set, its press inserts the last text where the keyboard is", async () => {
+    const r = rig(pasteKeys, { seed, bindings: { pasteLast: "Control+Shift+V" } });
+    await until(() => r.inserts().length > 0, 10_000, "the insert");
+    await until(() => tapLog(r).length >= pasteKeys.length, 10_000, "the keys");
+    expect(r.inserts()).toMatchObject([
+      {
+        type: "insert",
+        text: "cooper netties",
+        send_key: "none",
+        target: { app: "com.example.editor" },
+      },
+    ]);
+    expect(
+      tapLog(r)
+        .filter((k) => k.key === "V")
+        .map((k) => k.swallowed),
+    ).toEqual([true, true]);
+    expect(r.svc.log.items().map((i) => i.id)).toEqual([LAST]);
+  });
+
+  test("with paste last empty, no binding exists: the keys pass and nothing is inserted", async () => {
+    const r = rig(pasteKeys, { seed });
+    await until(() => tapLog(r).length >= pasteKeys.length, 10_000, "the keys");
+    await Bun.sleep(200);
+    expect(r.inserts()).toEqual([]);
+    expect(tapLog(r).some((k) => k.swallowed === true)).toBe(false);
   });
 });

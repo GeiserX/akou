@@ -52,8 +52,8 @@ use crate::health::dead_call::PROBE_S;
 use crate::health::device_watch::{DeviceId, MicTarget, mic_target};
 use crate::protocol::{CallInfo, Ch, MicInfo};
 use crate::source::{
-    CallMode, Chunk, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError,
-    Opened, Status,
+    AudioApp, CallMode, Chunk, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend,
+    OpenError, Opened, Status, audio_apps,
 };
 use crate::wasapi_rules::{CallSource, Proc, endpoint_plan, output_heard, plan, render_watch};
 
@@ -833,6 +833,66 @@ impl Frontend for WindowsFrontend {
 
 /// Every active capture and render endpoint, with the defaults (communications for the mic,
 /// console for the output). Reads properties only.
+/// The apps with an audio session on an output, by executable name, which `--call app:<id>`
+/// matches (`wasapi_rules::matches`); never akou's own. Process loopback, which captures one app,
+/// needs build `PROCESS_LOOPBACK_BUILD`.
+fn session_apps(en: &DeviceEnumerator) -> Result<Vec<AudioApp>, String> {
+    let b = build();
+    if b < crate::wasapi_rules::PROCESS_LOOPBACK_BUILD {
+        return Err(format!(
+            "capturing one app needs Windows build {} or newer; this is build {b}",
+            crate::wasapi_rules::PROCESS_LOOPBACK_BUILD
+        ));
+    }
+    let own = std::process::id();
+    let mut pids: Vec<u32> = vec![];
+    for d in active(en, Direction::Render) {
+        let Ok(list) = d
+            .get_iaudiosessionmanager()
+            .and_then(|m| m.get_audiosessionenumerator())
+        else {
+            continue;
+        };
+        for i in 0..list.get_count().unwrap_or(0) {
+            let Ok(s) = list.get_session(i) else {
+                continue;
+            };
+            if matches!(s.get_state(), Ok(wasapi::SessionState::Expired)) {
+                continue;
+            }
+            // Process 0 is the system sounds session, no app.
+            if let Ok(pid) = s.get_process_id()
+                && pid != 0
+                && pid != own
+                && !pids.contains(&pid)
+            {
+                pids.push(pid);
+            }
+        }
+    }
+    let procs = processes();
+    Ok(audio_apps(
+        pids.iter()
+            .filter_map(|pid| procs.iter().find(|p| p.pid == *pid))
+            .map(|p| AudioApp {
+                id: exe_stem(&p.exe).to_string(),
+                name: p.exe.clone(),
+                pid: p.pid,
+            })
+            .collect(),
+        false,
+    ))
+}
+
+/// `Teams.exe` as `--call app:` takes it: the name without `.exe`, in any case.
+fn exe_stem(exe: &str) -> &str {
+    if exe.len() > 4 && exe[exe.len() - 4..].eq_ignore_ascii_case(".exe") {
+        &exe[..exe.len() - 4]
+    } else {
+        exe
+    }
+}
+
 pub fn list_devices() -> Result<Endpoints, OpenError> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -858,6 +918,7 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
                 backend: "wasapi",
                 inputs: side(Direction::Capture, Role::Communications),
                 outputs: side(Direction::Render, Role::Console),
+                apps: session_apps(&en),
             })
         })();
         let _ = tx.send(r);

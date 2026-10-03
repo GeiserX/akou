@@ -572,7 +572,7 @@ export class DictationDictionary {
     const n = r.body.imported ?? 0;
     const skipped = r.body.skipped?.length ?? 0;
     toast(
-      `Imported ${n} ${n === 1 ? "word" : "words"}${skipped > 0 ? `; ${skipped} ${skipped === 1 ? "line was" : "lines were"} not a word` : ""}.`,
+      `Imported ${n} ${n === 1 ? "word" : "words"}${skipped > 0 ? `; ${skipped} ${skipped === 1 ? "line needs" : "lines need"} a look` : ""}.`,
       "info",
     );
     await this.load();

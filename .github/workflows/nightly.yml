@@ -10,10 +10,19 @@ name: nightly
 #   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts). Today it scores the
 #   default recognizer, and Qwen3-ASR through llama-server on macOS and Linux (ASR-5: WER, silent
 #   clips, and memory flat over 150 requests with the default prompt cache as the failing control).
-# - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
-#   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
-#   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
-#   and then ci.yml's `ui` leg under ci-ok, once it passes.
+#   Dictation's release-to-text time per engine (the streaming model, Qwen, a loopback akou serve)
+#   for 3, 10 and 30 s of speech (docs/ux/DICTATION.md DC-T3), recorded and uploaded as this OS's
+#   entry of docs/gates/dictation-latency.json. That committed table comes from a real machine,
+#   since these runners have no GPU worth the name; the night's numbers sit beside it.
+# - soak: one call through the app's call manager and the fake helper at 10x speed for one runner
+#   hour, so ten hours of audio, checked for holes in the audio, memory growth, a held event loop
+#   and an unreadable or swelling log (docs/TESTING.md TS-24, scripts/soak.ts).
+# - clock-shift: the unit and e2e suites (`bun test`) once a year ahead and once each in two
+#   unusual time zones (TS-5), so a fixture pinned to the calendar, or code that assumes the zone,
+#   is red here before it turns a pull request red on its own a day later.
+# - dictation-timing: DC-R6's wall-clock bound, a 20 s hold's release-to-text within 200 ms of a
+#   3 s hold's over a slow link (`AKOU_TIMING=1`). The PR check counts the bytes sent after release
+#   instead, since a shared runner's stall moved the wall clock by up to 1.8 s.
 
 on:
   schedule:
@@ -21,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Stages to run, comma separated (fleurs, ami, replay, qwen); empty runs them all"
+        description: "Stages to run, comma separated (fleurs, ami, replay, qwen, dictation); empty runs them all"
         required: false
         default: ""
 
@@ -92,24 +101,43 @@ jobs:
         with:
           path: eval-data
           key: eval-data-${{ runner.os }}-${{ hashFiles('scripts/eval/nightly.ts', 'docs/research/asr-benchmark.json') }}
-      # Qwen and its llama-server build (about 2.5 GB) are fetched each night, outside the cached
-      # folders, so the recognizer's cache stays small enough for the repository's cache quota.
+      # Qwen and its llama-server build (about 2.5 GB), and dictation's streaming model, are fetched
+      # each night, outside the cached folders, so the recognizer's cache stays small enough for the
+      # repository's cache quota.
       - name: evaluate against the committed baselines
         env:
           ONLY: ${{ inputs.only }}
+          MACHINE: GitHub's ${{ matrix.os }} runner
         run: |
           bun scripts/eval/nightly.ts --models eval-models --data eval-data \
             --qwen-models "$RUNNER_TEMP/qwen-models" \
             --diarize "native/akou-diarize/target/release/akou-diarize$EXE" \
-            --nemotron models/nemotron3_diar_v3.onnx ${ONLY:+--only "$ONLY"} --out nightly-results.json
+            --nemotron models/nemotron3_diar_v3.onnx ${ONLY:+--only "$ONLY"} --out nightly-results.json \
+            --latency-table dictation-latency.json --machine "$MACHINE"
+      - name: dictation's release-to-text table for this OS
+        if: always() && hashFiles('dictation-latency.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dictation-latency-${{ matrix.os }}
+          path: dictation-latency.json
 
-  ui-webkit:
-    # By hand only until the suite passes on WebKit (see the header).
-    if: github.event_name == 'workflow_dispatch'
+  clock-shift:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Every `bun` the run starts preloads the shift through BUN_OPTIONS, the app processes
+          # the e2e tests spawn included; the clock keeps ticking from a year ahead.
+          - run: a year ahead
+            shift: true
+          # UTC+14, the first to reach a new day, and UTC-2:30, a half-hour offset with DST.
+          - run: Pacific/Kiritimati
+            zone: Pacific/Kiritimati
+          - run: America/St_Johns
+            zone: America/St_Johns
+    name: clock-shift (${{ matrix.run }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      AKOU_UI_BROWSER: webkit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -118,7 +146,44 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The WebKit build pinned by playwright-core, with its system libraries.
-      - run: bunx playwright-core install --with-deps webkit
-      - run: bun run test:ui --reporter=junit --reporter-outfile=.junit-ui.xml
-      - run: bun scripts/ci/test-floor.ts ui-webkit .junit-ui.xml
+      - name: bun test, ${{ matrix.run }}
+        shell: bash
+        env:
+          SHIFT: ${{ matrix.shift && 'yes' || '' }}
+          ZONE: ${{ matrix.zone }}
+        run: |
+          if [ -n "$SHIFT" ]; then export BUN_OPTIONS="--preload=$PWD/scripts/ci/shift-clock.ts"; fi
+          if [ -n "$ZONE" ]; then export TZ="$ZONE"; fi
+          bun -e 'console.log(`the clock reads ${new Date().toString()}`)'
+          bun test --reporter=junit --reporter-outfile=.junit-check.xml
+      # The same suite as check's Linux leg, so the same pass floor; six more may skip, the tests
+      # that compare a file's mtime with `Date.now()` a year ahead (CLOCK_SHIFTED).
+      - run: bun scripts/ci/test-floor.ts clock-shift .junit-check.xml
+
+  dictation-timing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AKOU_TIMING: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/dictation-remote.e2e.test.ts -t "after release"
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/soak.ts --speed 10 --minutes 60

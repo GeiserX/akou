@@ -21,7 +21,7 @@ bun run check
 `bun run check` runs, in order, the Bun version check, Biome, `tsc` for the app and for the window, then `bun test` and its floor. CI runs exactly this on macOS, Windows and Linux. It refuses any Bun but the pinned one; to run it without installing that Bun, use `bunx bun@$(cat .bun-version) run check`.
 
 - `bun run format` applies Biome's fixes.
-- `bun run test:ui` drives the window in a headless browser. Install the browser once with `bunx playwright-core install --only-shell chromium`.
+- `bun run test:ui` drives the window in a headless browser. Install the browser once with `bunx playwright-core install --only-shell chromium`. CI also runs it in WebKit: `bunx playwright-core install webkit`, then `AKOU_UI_BROWSER=webkit bun run test:ui`.
 - `bun run build:ui` builds the window's static bundle into `dist/ui`.
 
 Every CI test job has a floor in `tests/floors.json`: fewer passing tests or more skips fail the job. A skip is only allowed for a missing model, device or operating system, with the reason in the test's name.

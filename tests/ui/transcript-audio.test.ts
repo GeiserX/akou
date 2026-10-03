@@ -13,6 +13,7 @@ import { stereoWav } from "../fixtures/audio.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   seedCall,
   silentWav,
   standardCall,
@@ -312,7 +313,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         async (rig) => {
           await audio(rig, id, 12);
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const row = '#lines .row[data-id="l000003"] .text';
           const pick = async (label: string) => {
@@ -377,7 +378,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const back = () =>
             page.evaluate(() => {
@@ -583,7 +584,9 @@ describe("the player bar (W5.3 to W5.6)", () => {
           await page.evaluate(() => {
             (document.getElementById("follow") as HTMLElement).hidden = false;
           });
-          for (const width of [1440, 900, 800]) {
+          // Back to wide from 1248, where the wide layout's column wraps the bar: WebKit kept the
+          // wrapped height there until the shell's last row was min-content (TS-14).
+          for (const width of [1440, 900, 800, 1248, 1440]) {
             await page.setViewportSize({ width, height: 800 });
             const m = await page.evaluate(() => {
               const bar = document.getElementById("player-bar") as HTMLElement;
@@ -644,6 +647,89 @@ describe("the player bar (W5.3 to W5.6)", () => {
           await page.keyboard.press("End");
           await until(async () => (await player(page)).at === 12, 5000, "the end");
           expect(await text(page, "#pos")).toBe(formatWall(T0 + 12_000, TZ));
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[akou-dzm.10] the bar as b2 draws it: a round icon Play, one 'pos / end' readout in wall time, a speed pill, and a mark on the scrubber for each note taken in the part",
+    async () => {
+      let id = "";
+      const note = (n: string, w: number) =>
+        ({ type: "note", id: n, rev: 1, text: `note ${n}`, w, afterSeq: 1, by: "user" }) as const;
+      await withRig(
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b);
+              // Two notes inside the 12 s part, one after it ended: only the two are marked.
+              for (const [n, w] of [
+                ["n0001", T0 + 3000],
+                ["n0002", T0 + 9000],
+                ["n0003", T0 + 60_000],
+              ] as const)
+                b.add(note(n, w));
+            }).id),
+        },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          // Before anything plays: no readout and no marks.
+          expect(await text(page, "#readout")).toBe("");
+          expect(await page.locator("#marks .mk").count()).toBe(0);
+          await playRow(page, "l000003");
+          // WebKit starts the audio a moment after the line's metadata: pause it once it plays.
+          await until(
+            async () =>
+              !(await page.evaluate(
+                () => (document.getElementById("player") as HTMLAudioElement).paused,
+              )),
+            5000,
+            "the line playing",
+          );
+          await pauseNow(page);
+          await until(
+            async () => (await page.locator("#marks .mk").count()) === 2,
+            5000,
+            "the note marks",
+          );
+          // Play is an icon in a circle; its name says what it does.
+          expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
+          expect((await text(page, "#play"))?.trim()).toBe("");
+          const play = await page.locator("#play").boundingBox();
+          expect(play?.width).toBe(play?.height);
+          // One readout: the position, then the part's end, both wall times (principle 9).
+          const at = await text(page, "#pos");
+          expect(await text(page, "#readout")).toBe(`${at} / ${formatWall(T0 + 12_000, TZ)}`);
+          // The speed is a pill, still a picker.
+          expect(
+            await page.$eval("#speed", (el) => {
+              const c = getComputedStyle(el);
+              return `${el.tagName} ${c.borderRadius} ${c.height} ${c.appearance}`;
+            }),
+          ).toBe("SELECT 6px 24px none");
+          expect(await text(page, "#speed option:checked")).toBe("1.0x");
+          // A note at time t draws a mark at t on the scrubber.
+          const placed = await page.evaluate(() => {
+            const box = (
+              document.getElementById("scrub-box") as HTMLElement
+            ).getBoundingClientRect();
+            return [...document.querySelectorAll<HTMLElement>("#marks .mk")].map((m) => {
+              const r = m.getBoundingClientRect();
+              return (r.left + r.width / 2 - box.left) / box.width;
+            });
+          });
+          expect(placed.map((f) => Math.round(f * 100))).toEqual([25, 75]);
+          // A note added while the part is open is marked at once.
+          await rig.write(id, note("n0004", T0 + 6000));
+          await until(
+            async () => (await page.locator("#marks .mk").count()) === 3,
+            5000,
+            "the new mark",
+          );
         },
       );
     },

@@ -544,21 +544,33 @@ describe("SV-K1: GET /v1/server", () => {
       expect(b).toMatchObject({ name: "akou", version: rig.app.version, mode, gpu: null });
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
       // `fast` (Parakeet) and `best` (Qwen on llama-server) are built; each is available once the
-      // default models are there, and best fetches Qwen on demand.
+      // default models are there, and best fetches Qwen on demand. `auto` runs fast here, so it is
+      // available too, and says so.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best", "auto"]);
+      expect(b.presets.at(-1)).toMatchObject({ name: "auto", resolves_to: "fast" });
       expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
         "parakeet-tdt-0.6b-v3-fp32",
         "qwen3-asr-1.7b",
       ]);
       expect(Object.keys(b.capabilities).sort()).toEqual(
-        ["bazarr", "events", "interactive", "jobs", "openai", "webhooks", "wyoming"].sort(),
+        [
+          "bazarr",
+          "events",
+          "interactive",
+          "jobs",
+          "languages_bound",
+          "openai",
+          "webhooks",
+          "wyoming",
+        ].sort(),
       );
-      // server.dictation_slots reserves one Worker by default (DC-R2); the app runs no jobs.
+      // server.dictation_slots reserves one Worker by default (DC-R2); the app has no lane.
       expect(b.capabilities.interactive).toBe(mode === "server");
-      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
-      for (const c of ["jobs", "events", "webhooks"])
-        expect(b.capabilities[c]).toBe(mode === "server");
+      // Jobs, their feed and a job's `languages[]` bound exist in both modes (akou-5an.119); signed
+      // deliveries need keys.
+      for (const c of ["jobs", "events", "languages_bound"]) expect(b.capabilities[c]).toBe(true);
+      expect(b.capabilities.webhooks).toBe(mode === "server");
     }
   });
 
@@ -651,8 +663,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
-        // The job queue's numbers (SV-Q4): the app has no queue.
-        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
+        // The job queue's numbers (SV-Q4), in both modes: the app runs file jobs too.
+        queue: expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });
@@ -836,6 +848,17 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     expect(empty.status).toBe(422);
     expect(empty.body).toMatchObject({ error: "bad_field", field: "title" });
     expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    // [akou-dzm.12] A control character (ESC, NUL) is refused too: the CLI prints titles raw on a
+    // terminal, where `a\x1b[2Jb` would clear the screen. A tab is only whitespace and folds.
+    for (const bad of ["a\x1b[2Jb", "a\u0000b"]) {
+      const r = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: bad });
+      expect(r.status).toBe(422);
+      expect(r.body).toMatchObject({ error: "bad_field", field: "title" });
+    }
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    const tab = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro\tTwo" });
+    expect(tab.body.title).toBe("Retro Two");
+    await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro" });
 
     // Another key cannot see the job, so it cannot name it; an unknown id is 404 too.
     const other = await writeKey(named, "other");
@@ -874,6 +897,27 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     open();
     expect((await answer).status).toBe(200);
   }, 30_000);
+
+  test("[akou-dzm.12] the OpenAI door refuses a bad metadata.title as the metadata field, which that request has", async () => {
+    const k = await writeKey(named, "openai-long");
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([new Uint8Array(clip(["hello"], 2))], { type: "audio/wav" }),
+      "note.wav",
+    );
+    form.append("metadata", JSON.stringify({ title: "x".repeat(201) }));
+    const r = await fetch(`http://127.0.0.1:${named.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(r.status).toBe(422);
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(JSON.stringify(body)).toContain("metadata.title");
+    expect(JSON.stringify(body)).toContain('"metadata"');
+    expect(JSON.stringify(body)).not.toContain('"title"');
+  });
 });
 
 describe("SV-J10: the jobs store's search", () => {

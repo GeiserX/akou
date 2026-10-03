@@ -426,13 +426,18 @@ export interface ExportResult {
   draft: EventDraft | null;
 }
 
-/** The Markdown file this call exports to, and whether it is beside an edited one. */
+/**
+ * The Markdown file this call exports to, and whether it is beside an edited one. An unedited
+ * file still under the name akou gave it (`recorded`), for a title the call no longer has, moves
+ * to the new title's name (`from`, PROGRAMMABILITY PG-A4); a file the user renamed keeps its name.
+ */
 function pickTarget(
   folder: string,
   base: string,
   id: string,
   ours: ReadonlySet<string>,
-): { path: string; update: boolean } {
+  recorded: ReadonlySet<string>,
+): { path: string; update: boolean; from?: string } {
   const found: string[] = [];
   const main = join(folder, `${base}.md`);
   if (existsSync(folder)) {
@@ -447,8 +452,19 @@ function pickTarget(
     return t !== null && ours.has(sha256(t));
   };
   const unedited = found.filter(isOurs);
+  const free = () => {
+    for (let n = 1; n < 100; n++) {
+      const p = n === 1 ? main : join(folder, `${base} (${n}).md`);
+      if (!existsSync(p)) return p;
+    }
+    throw new Error(`no free name for ${base}.md in ${folder}`);
+  };
   if (unedited.length > 0) {
     const plain = unedited.find((p) => !/ \(akou update(?: \d+)?\)\.md$/.test(p));
+    const stem = plain ? basename(plain, ".md").replace(/ \(\d+\)$/, "") : base;
+    if (plain && stem !== base && recorded.has(plain)) {
+      return { path: free(), update: false, from: plain };
+    }
     return { path: plain ?? (unedited[0] as string), update: plain === undefined };
   }
   if (found.length > 0) {
@@ -461,11 +477,7 @@ function pickTarget(
     throw new Error(`too many "(akou update)" files beside ${first}`);
   }
   // A file of the same name that is not this call's is never touched.
-  for (let n = 1; n < 100; n++) {
-    const p = n === 1 ? main : join(folder, `${base} (${n}).md`);
-    if (!existsSync(p)) return { path: p, update: false };
-  }
-  throw new Error(`no free name for ${base}.md in ${folder}`);
+  return { path: free(), update: false };
 }
 
 function exists(path: string): boolean {
@@ -501,7 +513,10 @@ export function exportCall(o: ExportOptions): ExportResult {
   const folder = join(o.root, c.workspace);
   const known = view.handoff().exports;
   const ours = new Set(known.map((e) => e.sha256));
-  const target = pickTarget(folder, exportBaseName(view), c.id, ours);
+  const recorded = new Set(known.map((e) => e.path));
+  const target = pickTarget(folder, exportBaseName(view), c.id, ours, recorded);
+  // Renamed with the call: the file moves before it is written, so it is never there twice.
+  if (target.from) renameSync(target.from, target.path);
   const base = attachmentsName(view, folder);
   const attachments = join(folder, "attachments", base);
 

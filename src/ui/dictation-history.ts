@@ -35,6 +35,8 @@ export interface DictationRow {
   state: string;
   /** The app it went to; null for a clip sent to the API. */
   app: string | null;
+  /** That app's name as people know it (`Slack`), where the OS gives one. */
+  app_name?: string | null;
   text: string | null;
   /** The language the engine heard or was told (`es`); null when it named none. */
   language?: string | null;
@@ -50,7 +52,10 @@ interface Page {
   next_cursor: string | null;
 }
 
-/** The engines a retry can ask for; the route refuses one this machine cannot run, and says why. */
+/**
+ * The engines a retry can ask for where the app does not list its own (an older app); the route
+ * refuses one this machine cannot run, and says why.
+ */
 export const RETRY_ENGINES = ["fast", "best", "live", "remote"] as const;
 
 /** An engine as a person reads it. */
@@ -118,9 +123,17 @@ export class DictationHistory {
    */
   remote: () => boolean = () => true;
 
+  /**
+   * The engines this machine can retry on (`GET /dictation`'s `engines`), so an engine whose model
+   * is not downloaded is never offered; null where the app does not say. The Dictation page, which
+   * reads it, sets it.
+   */
+  engines: () => readonly string[] | null = () => null;
+
   constructor(private readonly t: Transport) {
     this.search.addEventListener("input", () => {
       clearTimeout(this.timer);
+      // clock: debounces the search box while the user types.
       this.timer = setTimeout(() => void this.load(), SEARCH_MS);
     });
     this.more.addEventListener("click", () => void this.load(true));
@@ -181,6 +194,7 @@ export class DictationHistory {
       return;
     }
     const days = new Map<string, HTMLElement[]>();
+    // clock: the history groups by day against the page's own clock.
     const now = Date.now();
     // The same days and times as the calls in the sidebar.
     const tz = localZone();
@@ -276,14 +290,14 @@ export class DictationHistory {
   }
 
   /**
-   * The row's menu as it opens: Retry with every engine but the one that heard it, since that one
-   * would most likely hear the same, and the other computer only when one is set up; then Delete,
-   * which asks once more.
+   * The row's menu as it opens: Retry with every engine this machine runs but the one that heard
+   * it, since that one would most likely hear the same, and the other computer only when one is
+   * set up; then Delete, which asks once more.
    */
   private fillMenu(menu: HTMLElement, d: DictationRow, results: HTMLElement): void {
-    const engines = RETRY_ENGINES.filter(
-      (x) => x !== d.engine && (x !== "remote" || this.remote()),
-    );
+    // The other computer follows the settings as they are on the page, saved a moment ago or not.
+    const here = (this.engines() ?? RETRY_ENGINES).filter((x) => x !== "remote");
+    const engines = [...here, ...(this.remote() ? ["remote"] : [])].filter((x) => x !== d.engine);
     const del = twoStep(
       {
         class: "delete",
@@ -328,7 +342,7 @@ export class DictationHistory {
         { attrs: { datetime: new Date(d.at).toISOString() } },
         hourMinute(d.at, localZone()),
       ),
-      ` · ${d.app ?? "No app"}`,
+      ` · ${d.app_name || d.app || "No app"}`,
     ];
     // The engine asked for could not run: the one that heard it instead, as a retry says.
     if (d.fallback_from)

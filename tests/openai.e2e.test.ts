@@ -9,7 +9,14 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { promptTerms, RESPONSE_FORMATS, srt, vtt } from "../src/main/api/routes/openai.ts";
+import {
+  CUE_CHARS,
+  promptTerms,
+  RESPONSE_FORMATS,
+  srt,
+  vtt,
+  wordCues,
+} from "../src/main/api/routes/openai.ts";
 import { MODELS, RECOGNIZER } from "../src/main/asr/models.ts";
 import { resolveModel } from "../src/main/server/model-store.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -200,6 +207,23 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
     expect(check(OK["application/json"].schema, { ...b, segments: [seg] })).not.toEqual([]);
   });
 
+  test("[SV-C1] verbose_json with no language anywhere says und, never unknown; words stay empty", async () => {
+    // The fake engine, as Parakeet, names no language: only the request's hint could.
+    const r = await post([
+      ["response_format", "verbose_json"],
+      ["timestamp_granularities[]", "word"],
+    ]);
+    const b = JSON.parse(r.text);
+    expect([b.language, b.words]).toEqual(["und", []]);
+    expect(check(OK["application/json"].schema, b)).toEqual([]);
+    // Positive control: a hint is the language when the engine names none.
+    const es = await post([
+      ["language", "es"],
+      ["response_format", "verbose_json"],
+    ]);
+    expect(JSON.parse(es.text).language).toBe("es");
+  });
+
   test("text, srt and vtt answer plain text", async () => {
     const text = await post([["response_format", "text"]]);
     expect(text.type).toContain("text/plain");
@@ -307,6 +331,33 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     expect(((await jobs.json()) as { jobs: unknown[] }).jobs).toEqual([]);
   });
 
+  test("[SV-E1] a synchronous call adds nothing to the key's job feed", async () => {
+    const auth = { authorization: `Bearer ${key}` };
+    const feed = async () =>
+      (await (await fetch(`http://127.0.0.1:${rig.port}/v1/events`, { headers: auth })).json()) as {
+        events: { job_id: string }[];
+      };
+    const before = (await feed()).events.length;
+    expect((await post([["response_format", "json"]])).status).toBe(200);
+    expect((await feed()).events.length).toBe(before);
+    // Positive control: a job of the same key through POST /v1/jobs does reach the feed.
+    const form = new FormData();
+    form.append("file", new Blob([NOTE], { type: "audio/wav" }), "note.wav");
+    const job = (await (
+      await fetch(`http://127.0.0.1:${rig.port}/v1/jobs`, {
+        method: "POST",
+        headers: auth,
+        body: form,
+      })
+    ).json()) as { id: string };
+    await fetch(`http://127.0.0.1:${rig.port}/v1/jobs/${job.id}?wait=60`, { headers: auth });
+    expect((await feed()).events.map((e) => e.job_id)).toContain(job.id);
+    await fetch(`http://127.0.0.1:${rig.port}/v1/jobs/${job.id}`, {
+      method: "DELETE",
+      headers: { ...auth, "content-type": "application/json" },
+    });
+  });
+
   test("[SV-D3] a refused request leaves no upload on disk, and neither does an answered one", async () => {
     const dir = join(rig.app.configDir, "jobs", "audio");
     const uploads = () => readdirSync(dir).filter((f) => f.endsWith(".upload"));
@@ -329,6 +380,26 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const r = await post([["model", "whisper-1"]], monoWav(silence(61)));
     expect(r.status).toBe(422);
     expect(JSON.parse(r.text)).toMatchObject({ error: "too_long" });
+  });
+
+  test("[SV-J5] cues from timed words: at most 42 characters, never across a segment", () => {
+    const segs = [
+      { s: 0, e: 4, text: "x", speaker: "s0" },
+      { s: 5, e: 6, text: "y", speaker: "s1" },
+    ];
+    const long = "abcdefghij";
+    const words = [0, 1, 2, 3].map((i) => ({ w: long, s: i, e: i + 0.5, c: 1 }));
+    const cues = wordCues([...words, { w: "ok", s: 5, e: 5.5, c: null }], segs);
+    // 10 + 1 + 10 + 1 + 10 + 1 + 10 is 43: the fourth word starts a cue of its own.
+    expect(cues).toEqual([
+      { s: 0, e: 2.5, text: `${long} ${long} ${long}`, speaker: "s0" },
+      { s: 3, e: 3.5, text: long, speaker: "s0" },
+      { s: 5, e: 5.5, text: "ok", speaker: "s1" },
+    ]);
+    expect(cues?.every((c) => c.text.length <= CUE_CHARS)).toBe(true);
+    // A word with no time (Qwen) leaves the cues to the segments.
+    expect(wordCues([{ w: "a", s: null, e: null, c: 0.9 }], segs)).toBeNull();
+    expect(wordCues([], segs)).toBeNull();
   });
 
   test("srt and vtt cues from segments", () => {

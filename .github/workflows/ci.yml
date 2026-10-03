@@ -92,8 +92,28 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The pinned Bun, Biome, tsc twice, bun test, then the job's floor.
-      - run: bun run check
+      # ffmpeg on the Linux check, so the tests that read audio and subtitles through the real
+      # ffmpeg (SV-P6, SV-J5) run in CI instead of skipping; the floor's maxSkip counts on it.
+      - if: runner.os == 'Linux'
+        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
+      # The pinned Bun, Biome, tsc twice, bun test, then the job's floor. On Linux the same run
+      # measures coverage and holds it to its floor (scripts/ci/coverage-floor.ts, TS-8, TS-8b).
+      - if: runner.os != 'Linux'
+        run: bun run check
+      - if: runner.os == 'Linux'
+        run: bun run check:coverage
+      # The JUnit file for the trap check (the `traps` job) and, from Linux, the lcov file.
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-check-${{ runner.os }}
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
+          path: |
+            .junit-check.xml
+            coverage/lcov.info
+          if-no-files-found: ignore
+          retention-days: 14
       # A dispatch with `repeat` proves the flake fixes that live in the check: the capture traps
       # against the fake helper (the helper crash and [T0.9], docs/TESTING.md TS-1), that many times.
       # bash on every OS: Windows' default shell, pwsh, reads "$TEST_REPEAT" as an unset
@@ -108,13 +128,27 @@ jobs:
 
   # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake
-  # provider. Only Chromium's headless shell is installed; nothing plays audio or opens a window.
+  # provider, once in Chromium's headless shell and once in Playwright's WebKit, the closest
+  # stand-in for the WKWebView and WebKitGTK the app ships (docs/TESTING.md TS-14), each engine
+  # with its own floor. Nothing plays audio or opens a window.
   ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            install: --only-shell chromium
+            floor: ui
+          - browser: webkit
+            install: webkit
+            floor: ui-webkit
+    name: ui (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
     env:
+      AKOU_UI_BROWSER: ${{ matrix.browser }}
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,10 +156,42 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The browser build pinned by playwright-core, headless shell only, with its system libraries.
-      - run: bunx playwright-core install --with-deps --only-shell chromium
+      # The browser build pinned by playwright-core, with its system libraries.
+      - run: bunx playwright-core install --with-deps ${{ matrix.install }}
+      # Every parity screen in both themes, for review (TS-15c), from the Chromium leg: saved, never
+      # compared. A repeat dispatch saves none.
       - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
-      - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+        env:
+          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && matrix.browser == 'chromium' && 'ui-shots' || '' }}
+      - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-ui-${{ matrix.browser }}
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
+          path: .junit-ui.xml
+          if-no-files-found: ignore
+          retention-days: 14
+      - id: shots
+        if: always() && hashFiles('ui-shots/*.png') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-screenshots
+          path: ui-shots/*.png
+          retention-days: 14
+      - if: always() && steps.shots.outputs.artifact-url != ''
+        shell: bash
+        env:
+          URL: ${{ steps.shots.outputs.artifact-url }}
+        run: |
+          {
+            echo "### Screenshots for review"
+            echo
+            echo "Every parity screen, dark and light: $URL"
+            echo
+            ls ui-shots | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
   # release builds, then the app's capture trap scenarios against the real binary in file mode.
@@ -363,7 +429,10 @@ jobs:
           answer p1
           echo "{\"type\":\"insert\",\"id\":\"t1\",\"text\":\"typed é 😀\",\"method\":\"type\",\"send_key\":\"none\",\"target\":$target}" >&4
           answer t1
-          sleep 0.5
+          # The target writes its field to field.txt every 0.1 s, and the typed events land after
+          # the answer: wait for the text, with a deadline, rather than a fixed 0.5 s.
+          want=$(printf 'pasted by akou\ntyped é 😀')
+          for _ in $(seq 1 100); do [ "$(cat field.txt)" = "$want" ] && break; sleep 0.1; done
           echo '{"type":"stop"}' >&4
           exec 4>&-
           wait "$helper"
@@ -374,7 +443,7 @@ jobs:
           echo "clipboard: $(pbpaste)"
           grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
           grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
-          [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
+          [ "$field" = "$want" ] || { echo "the field holds the wrong text"; exit 1; }
           [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
       # DC-N2 on a real Mac: bound to Fn, the shipping helper sets the Globe key's action to Do
       # Nothing and gives the runner's value back on stop; killed while it owns the key, the next
@@ -751,8 +820,11 @@ jobs:
       - run: bun install --frozen-lockfile
       # cargo test writes no JUnit on stable Rust, so its own result lines become one: each
       # `test <name> ... ok|FAILED|ignored` line of both builds is a test case, and the `helper`
-      # floor counts them (DC-T2), so a Rust test that stops running fails the job.
+      # floor counts them (DC-T2), so a Rust test that stops running fails the job. cargo test runs
+      # once even in a `repeat` dispatch, so its floor is not scaled by the job's TEST_REPEAT.
       - name: cargo test floor
+        env:
+          TEST_REPEAT: 1
         run: |
           awk '
             function esc(v) { gsub(/&/, "\\&amp;", v); gsub(/</, "\\&lt;", v); gsub(/>/, "\\&gt;", v); gsub(/"/, "\\&quot;", v); return v }
@@ -772,9 +844,18 @@ jobs:
         env:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
           AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
-        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts tests/asr-opus-final.e2e.test.ts
+        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts tests/asr-opus-final.e2e.test.ts tests/dictation-audio-opus.e2e.test.ts
       # With both binaries set every test runs: the floor allows no skip.
       - run: bun scripts/ci/test-floor.ts capture-e2e .junit-capture-e2e.xml
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-capture-e2e-${{ runner.os }}
+          # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
+          include-hidden-files: true
+          path: .junit-capture-e2e.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   # ROADMAP M4: the real helper on Linux against virtual devices, through both sound servers it
   # talks to. The PipeWire rig links one stereo stimulus into the mic (left) and the call output
@@ -1670,11 +1751,29 @@ jobs:
         run: npm ci --no-audit --no-fund --prefix scripts/ci/executor
       - run: bun scripts/ci/executor-roundtrip.ts --executor scripts/ci/executor/node_modules/.bin/executor
 
+  # Every reached trap in docs/TRAPS.md has a test that ran and asserted (TS-6): the JUnit files of
+  # check on every OS, the window and the capture e2e, read together by scripts/trap-coverage.ts.
+  traps:
+    needs: [changes, check, ui, helper]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: junit-*
+          path: junit
+      - run: bun scripts/trap-coverage.ts $(find junit -name '.junit-*.xml' | sort)
+
   # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, server-macos, diarize, gpu-image, executor]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, server-macos, diarize, gpu-image, executor, traps]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

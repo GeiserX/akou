@@ -3,7 +3,11 @@ name: release
 # The release (docs/DESIGN.md section 9, scripts/release-checklist.md). On a `v*` tag it checks that
 # every version string equals the tag, builds the capture helper, the macOS app (unsigned: ad-hoc
 # signed, not notarized) and the CLI binaries, checks each built artifact without opening anything,
-# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS.
+# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS, a build
+# attestation for every asset, and notes that start with the version's CHANGELOG.md section.
+# It then replaces the update feed the app's updater reads (docs/CI-CD.md CI-23).
+#
+# A tag runs no tests: it releases only a commit whose ci-ok is green (docs/CI-CD.md CI-19).
 #
 # Run it by hand (workflow_dispatch) for a dry run: the same builds and checks, the artifacts
 # uploaded to the run, and no release. `allow_missing_helper` lets a dry run build the app before
@@ -30,6 +34,7 @@ on:
       - scripts/build-app.ts
       - scripts/build-cli.ts
       - scripts/smoke-app.ts
+      - scripts/check-feed.ts
       - scripts/locate-helper-probe.ts
       - scripts/smoke-cli.ts
       - scripts/stamp-version.ts
@@ -61,7 +66,11 @@ env:
 jobs:
   version:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The tested-commit step may wait for CI on the tagged commit to finish.
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +93,28 @@ jobs:
           fi
       - name: the bundled word lists are what the build script makes from its pinned source
         run: bun scripts/build-dictionaries.ts --check
-      - run: bun run check
+      # The release notes start with this version's CHANGELOG.md section (docs/CI-CD.md CI-20);
+      # `--check` above already failed if it is missing.
+      - name: the version's changelog section, for the release notes
+        run: |
+          mkdir -p notes
+          bun scripts/stamp-version.ts --notes > notes/changelog.md
+          cat notes/changelog.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notes
+          path: notes/changelog.md
+          if-no-files-found: error
+          retention-days: 14
+      # A tag releases only a commit CI already passed (docs/CI-CD.md CI-19), so the tests are not
+      # run again here: the newest ci.yml run of the tagged commit must end with ci-ok green. A pull
+      # request or a dry run has its own ci.yml run.
+      - name: the tagged commit passed ci-ok
+        if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: bun scripts/ci/tested-commit.ts "$SHA" --wait-minutes 90
 
   app:
     needs: version
@@ -151,6 +181,8 @@ jobs:
         run: bun scripts/build-app.ts ${HELPER_FLAG:+"$HELPER_FLAG"}
       - name: check the built app without opening it
         run: bun scripts/smoke-app.ts ${HELPER_FLAG:+"$HELPER_FLAG"}
+      - name: the update feed is for this app and this version (docs/CI-CD.md CI-23)
+        run: bun scripts/check-feed.ts --dir dist/release
       - name: build the CLI (bun build --compile, ad-hoc codesign, --verify --strict)
         run: bun scripts/build-cli.ts
       - name: check the CLI binary headless
@@ -302,24 +334,50 @@ jobs:
           done
 
   # The image of the tag is part of the release: no GitHub release goes out while it failed.
+  # Every asset gets a build provenance attestation, the one signature (docs/CI-CD.md CI-21):
+  # keyless, so there is no key to guard. `gh attestation verify <file> -R GeiserX/akou` checks one.
   release:
     needs: [app, cli, image-manifest]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The app bundle goes up twice: to the versioned release and to the update feed.
+    timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      # For the feed check after publishing; first, since checkout empties the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notes
+          path: notes
       - name: SHA256SUMS
         working-directory: dist
         run: |
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
+      - name: attest every file SHA256SUMS lists
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: every asset verifies against its attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: dist
+        run: |
+          for f in akou-* stable-*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done
       - name: publish the release (a prerelease while 0.x; never a draft)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -329,7 +387,8 @@ jobs:
           version="${TAG#v}"
           prerelease=""
           case "$version" in 0.*|*-*) prerelease="--prerelease" ;; esac
-          cat > notes.md <<'EOF'
+          { cat ../notes/changelog.md; echo; } > notes.md
+          cat >> notes.md <<'EOF'
           **This build is not signed by Apple.** The first time you open akou, macOS refuses it. On macOS 14, Control-click akou in Applications, choose Open, then Open again. On macOS 15 and later, open akou once, then go to System Settings, Privacy & Security, and click Open Anyway. After an update macOS may ask for the microphone and system audio again. The speech models are downloaded on first run. See [docs/getting-started.md](https://github.com/GeiserX/akou/blob/main/docs/getting-started.md).
           EOF
           gh release create "$TAG" \
@@ -339,4 +398,51 @@ jobs:
             --notes-file notes.md \
             --generate-notes \
             ${prerelease:+"$prerelease"} \
-            -- akou-* SHA256SUMS
+            -- akou-* stable-* SHA256SUMS
+      # The update feed (docs/CI-CD.md CI-23): the app's updater reads release.baseUrl, the assets of
+      # the fixed `update-feed` release, which every tag replaces: the bundle first, then the
+      # manifest that names it. The release is created the first time. Its assets are replaced in
+      # place, so the repository must keep immutable releases off.
+      - name: publish the update feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: dist
+        run: |
+          if ! gh release view update-feed --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create update-feed \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "akou update feed" \
+              --notes "The files the app's updater reads. Every release replaces them. To install akou, download it from the newest versioned release." \
+              --prerelease \
+              --latest=false
+          fi
+          gh release upload update-feed --repo "$GITHUB_REPOSITORY" --clobber -- stable-*.tar.zst
+          gh release upload update-feed --repo "$GITHUB_REPOSITORY" --clobber -- stable-*-update.json
+      - name: the published feed offers this version, as the app fetches it
+        run: bun scripts/check-feed.ts --url
+
+  # The Homebrew cask (docs/CI-CD.md CI-25): the tap is another repository, which this workflow's
+  # token cannot push to, so the bump pushes with TAP_PUSH_TOKEN, a token limited to the tap, and
+  # stops with an error naming the secret when it is missing. It runs once the release is out, so
+  # the cask never points at a DMG that is not published.
+  cask:
+    needs: release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: push the cask bump to the tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          TAP_PUSH_TOKEN: ${{ github.event_name == 'push' && secrets.TAP_PUSH_TOKEN || '' }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          bun scripts/bump-cask.ts --sums SHA256SUMS

@@ -21,9 +21,13 @@
  *   bun scripts/stamp-version.ts --check           exit 1 if any place differs from package.json
  *   bun scripts/stamp-version.ts --check --tag v0.1.0   and exit 1 unless package.json is 0.1.0
  *   bun scripts/stamp-version.ts --plist PATH...   exit 1 unless each Info.plist's CFBundleVersion matches
+ *   bun scripts/stamp-version.ts --notes           print the version's CHANGELOG.md section for the release notes
  *
  * The release workflow runs `--check --tag "$GITHUB_REF_NAME"` first and `--plist` on the built
  * bundle; `tests/release.test.ts` fails when any place drifts.
+ *
+ * `--check` also fails when `CHANGELOG.md` has no `## <version>` section (docs/CI-CD.md CI-20): the
+ * version-bump PR writes it, and the release notes start with it (`--notes`).
  *
  * A stable version (1.0.0 or later, no prerelease part) also needs its evidence on record
  * (docs/CI-CD.md CI-28), and `--check` fails without it: the newest row of the terms table in
@@ -282,6 +286,34 @@ export function previousStable(
   return best && { tag: best.tag, date: best.date };
 }
 
+/** The `## <version>` section of a changelog, its heading through the line before the next `## `. */
+export function changelogSection(md: string, version: string): string | null {
+  const lines = md.split("\n");
+  const head = `## ${version}`;
+  // The heading, then a space or nothing: 0.1 is not 0.1.0.
+  const at = lines.findIndex((l) => l.startsWith(head) && /^(\s|$)/.test(l.slice(head.length)));
+  if (at === -1) return null;
+  const end = lines.findIndex((l, i) => i > at && l.startsWith("## "));
+  return lines
+    .slice(at, end === -1 ? undefined : end)
+    .join("\n")
+    .trim();
+}
+
+/**
+ * The first part of the release notes: the version's changelog section, with every relative link
+ * pointed at the file in the tagged tree, since a release page resolves none of them.
+ */
+export function releaseNotes(md: string, version: string, repo: string): string | null {
+  const section = changelogSection(md, version);
+  return (
+    section?.replace(
+      /\]\((?!https?:|#|mailto:)([^)\s]+)\)/g,
+      (_all, path: string) => `](https://github.com/${repo}/blob/v${version}/${path})`,
+    ) ?? null
+  );
+}
+
 /** What a stable `version` still lacks before it may be released (CI-28); empty for a prerelease. */
 export function evidenceProblems(root: string, version: string): string[] {
   if (!isStable(version)) return [];
@@ -312,6 +344,21 @@ export function main(argv: string[]): number {
     stamp(root, set);
   }
   const version = sourceVersion(root);
+  const changelog = join(root, "CHANGELOG.md");
+  const changelogMd = existsSync(changelog) ? readFileSync(changelog, "utf8") : "";
+  if (argv.includes("--notes")) {
+    const notes = releaseNotes(
+      changelogMd,
+      version,
+      process.env.GITHUB_REPOSITORY ?? "GeiserX/akou",
+    );
+    if (notes === null) {
+      console.error(`stamp-version: CHANGELOG.md has no section for ${version}`);
+      return 1;
+    }
+    console.log(notes);
+    return 0;
+  }
   if (argv.includes("--plist")) {
     const plists = argv.slice(argv.indexOf("--plist") + 1).filter((a) => !a.startsWith("--"));
     let bad = 0;
@@ -342,6 +389,12 @@ export function main(argv: string[]): number {
     for (const d of drift(root, version)) {
       console.error(
         `stamp-version: ${d.file} says ${d.version ?? "(none)"}, package.json ${version}`,
+      );
+      bad++;
+    }
+    if (changelogSection(changelogMd, version) === null) {
+      console.error(
+        `stamp-version: CHANGELOG.md has no "## ${version}" section; write it in the version-bump PR`,
       );
       bad++;
     }

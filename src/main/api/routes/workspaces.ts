@@ -31,6 +31,7 @@ export function workspaceRoutes(r: Router<ApiApp>): void {
       modes: ["app"],
       body: { name: "string" },
       ok: 200,
+      errors: { 400: ["bad_workspace"], 409: ["workspace_not_folder"] },
     },
     async (c) => {
       const b = await c.body<{ name: string }>();

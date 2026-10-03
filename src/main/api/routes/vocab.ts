@@ -52,9 +52,19 @@ import {
 } from "../../vocab/files.ts";
 import { type KnownTerm, type PassInput, runPass } from "../../vocab/pass.ts";
 import { suggestTerms } from "../../vocab/suggest.ts";
+import { errorsOf } from "../errors.ts";
 import { HttpError, json, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { CALL_ID, callId, callOf, nextItemId, resolveRef } from "./common.ts";
+import {
+  CALL_ID,
+  CALL_REF_ERRORS,
+  callId,
+  callOf,
+  LIVE_REF_ERRORS,
+  nextItemId,
+  resolveRef,
+  WRITE_ERRORS,
+} from "./common.ts";
 
 function notBuilt(what: string, when: string): never {
   throw new HttpError(501, "not_implemented", `${what} is not built yet (${when})`);
@@ -273,6 +283,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       doc: "The vocabulary in force for a call: its own words, the files it used, the pass's proposals, and the words waiting for the user's review.",
       params: { id: CALL_ID },
       ok: 200,
+      errors: CALL_REF_ERRORS,
     }),
     async (c) => {
       const call = await callOf(c);
@@ -306,6 +317,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: { term: "string", "heard?": "string[]", "segs?": "string[]", "decode?": "boolean" },
       ok: 201,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, { 400: ["bad_term"] }),
     }),
     async (c) => {
       const b = await c.body<{
@@ -341,6 +353,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID, vid: "The entry id (`v0012`)." },
       body: {},
       ok: 200,
+      errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, { 404: ["not_found"] }),
     }),
     async (c) => {
       await c.body();
@@ -363,6 +376,11 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       params: { id: CALL_ID },
       body: {},
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, {
+        409: ["not_ended", "pass_running"],
+        499: ["cancelled"],
+        503: ["provider_unavailable"],
+      }),
     }),
     async (c) => {
       await c.body();
@@ -462,6 +480,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
+      errors: { 400: ["bad_workspace"] },
     }),
     async (c) => {
       const workspace = checkWorkspace(c.query.raw("workspace"));
@@ -496,6 +515,10 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         "scope?": "string",
       },
       ok: 201,
+      errors: {
+        400: ["bad_entry", "bad_field", "bad_term", "bad_workspace"],
+        409: ["vocab_file_invalid"],
+      },
     }),
     async (c) => {
       const b = await c.body<{
@@ -553,6 +576,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       query: { workspace: WORKSPACE },
       body: {},
       ok: 200,
+      errors: { 400: ["bad_workspace"], 404: ["not_found"], 409: ["vocab_file_invalid"] },
     }),
     async (c) => {
       await c.body();
@@ -586,6 +610,11 @@ export function vocabRoutes(r: Router<ApiApp>): void {
           "dictation?": "boolean",
         },
         ok: 200,
+        errors: errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, {
+          400: ["bad_field", "bad_workspace"],
+          404: ["not_found"],
+          409: ["call_word", "vocab_file_invalid"],
+        }),
       }),
       async (c) => {
         const b = await c.body<{
@@ -686,9 +715,10 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab/import",
     doc({
       id: "vocab.import",
-      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one. A word the file already holds gains the new heard forms and keeps the rest: who added it and when, its note, its scope.",
+      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word over the file's limits (50 heard forms, each at most 100 characters; a note of 1000) is imported within them and listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one. A word the file already holds gains the new heard forms and keeps the rest: who added it and when, its note, its scope.",
       body: { text: "string", "workspace?": "string", "scope?": "string" },
       ok: 200,
+      errors: { 400: ["bad_field", "bad_workspace"], 409: ["vocab_file_invalid"] },
     }),
     async (c) => {
       const b = await c.body<{ text: string; workspace?: string; scope?: string }>();
@@ -737,6 +767,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       doc: "Ranked candidate words from a call or from a text, leaving out words already known or rejected. Suggests only; nothing is written.",
       body: { "text?": "string", "call?": "string", "k?": "integer" },
       ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 400: ["bad_field"] }),
     }),
     async (c) => {
       const b = await c.body<{ text?: string; call?: string; k?: number }>();
@@ -779,6 +810,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       doc: "How the recognizer's tokenizer splits a word. Not built yet: answers 501.",
       body: { term: "string" },
       ok: 200,
+      errors: { 501: ["not_implemented"] },
     }),
     async (c) => {
       await c.body();

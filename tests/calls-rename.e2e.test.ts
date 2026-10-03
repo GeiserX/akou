@@ -119,9 +119,9 @@ describe("renaming over every door", () => {
     expect(
       (await rig.api("PATCH", "/calls/01J8Z6Q4M2VX0K7B3D4E5NOPE0", { title: "" })).status,
     ).toBe(404);
-    // A rename names the call; moving it to another workspace is not this route.
-    const move = await rig.api("PATCH", `/calls/${SAVED}`, { title: "Q4", workspace: "home" });
-    expect([move.status, move.body.error]).toEqual([400, "unknown_field"]);
+    // A field the route does not take is refused (moving takes `workspace`, PG-A4).
+    const other = await rig.api("PATCH", `/calls/${SAVED}`, { title: "Q4", folder: "home" });
+    expect([other.status, other.body.error]).toEqual([400, "unknown_field"]);
   });
 
   test(

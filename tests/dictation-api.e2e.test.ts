@@ -146,6 +146,37 @@ describe("DC-A1: dictation.enabled is the master switch", () => {
   });
 });
 
+describe("DC-U4: PATCH dictation.mic reaches the running helper", () => {
+  test("a new microphone is a second rebuild_mic with it; another setting sends none", async () => {
+    const commands = join(scratch(), "commands.jsonl");
+    const r = await rig({
+      helperArgs: ["--commands-log", commands],
+      settings: { "dictation.enabled": true },
+    });
+    const rebuilds = () =>
+      existsSync(commands)
+        ? readFileSync(commands, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((l) => JSON.parse(l))
+            .filter((c) => c.type === "rebuild_mic")
+        : [];
+    await until(() => rebuilds().length === 1, 10_000, "rebuild_mic after ready");
+    expect(rebuilds()[0]).toMatchObject({ device: "default" });
+    // Positive control: a setting that is not the microphone sends no rebuild_mic.
+    expect((await r.api("PATCH", "/config", { "dictation.retainDays": 7 })).status).toBe(200);
+    await Bun.sleep(300);
+    expect(rebuilds()).toHaveLength(1);
+    expect((await r.api("PATCH", "/config", { "dictation.mic": "usb-mic-1" })).status).toBe(200);
+    await until(() => rebuilds().length === 2, 5000, "rebuild_mic on the change");
+    expect(rebuilds()[1]).toEqual({
+      type: "rebuild_mic",
+      device: "usb-mic-1",
+      prefer_built_in: true,
+    });
+  });
+});
+
 describe("DC-L6: a dictation goes through its vocabulary", () => {
   test("a `scope: dictation` entry fixes the next dictation, the raw text stays, and removing it undoes that", async () => {
     const r = await rig();
