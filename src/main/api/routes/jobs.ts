@@ -1,7 +1,7 @@
 /**
- * The job routes (docs/ux/SERVER.md sections 5 and 6), in both modes: the desktop app takes a file
- * job with its own token, as server mode does with a key. Any key reaches them and sees its own
- * jobs and events only; an admin, or the app's token, sees every key's.
+ * The job routes (docs/ux/SERVER.md sections 5 and 6), in both modes. In server mode any key
+ * reaches them and sees its own jobs and events only; an admin sees every key's. In the desktop
+ * app the one local token reaches them, and owns every job as the key id `app`.
  *
  * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `title`, `preset`, `model`, `language`,
  *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
@@ -79,10 +79,10 @@ export function requireQueueRoom(jobs: JobService, key: string, idem: string | n
   if (full) throw queueFullError(full);
 }
 
-/** The job service, or 404 where none runs. */
+/** The job service, or 404 where there is none. */
 export function jobsOf(c: RouteContext<ApiApp>): JobService {
   const j = c.app.jobs?.();
-  if (!j) throw new HttpError(404, "not_found", "this akou runs no job queue");
+  if (!j) throw new HttpError(404, "not_found", "this akou has no job queue");
   return j;
 }
 
@@ -458,7 +458,7 @@ function waitParam(c: RoutedContext<ApiApp>): number {
   return wait;
 }
 
-/** Every job route: any key, in both modes (the desktop app takes them with its own token). */
+/** Every job route: any key in server mode, the one token in the desktop app. */
 const JOB_ROUTE = { access: "jobs", modes: ["app", "server"] } as const satisfies Partial<RouteDoc>;
 
 export function jobRoutes(r: Router<ApiApp>): void {
@@ -607,7 +607,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/result",
     {
       id: "jobs.result",
-      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
+      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       query: {

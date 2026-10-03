@@ -260,3 +260,10 @@ double-metaphone 2.0.1 (MIT), https://github.com/words/double-metaphone
   The English sound-alike key that scores a dictation fix as a learning candidate
   (src/core/dictation/learn.ts). Bundled into the app's main process from npm; its MIT notice is
   in the package.
+
+transcribe-cpp 0.2.4 (MIT), https://github.com/handy-computer/transcribe.cpp
+  Copyright (c) 2026 The transcribe.cpp authors.
+  Runs Whisper large-v3 and Canary-1b-v2 in the final pass (src/main/asr/transcribe-cpp.ts). The
+  npm package and its per-platform native package (@transcribe-cpp/<platform>) ship
+  transcribe.cpp's library with ggml (MIT) and miniz (MIT); their licence texts are in the
+  package's licenses folder. It loads them through koffi 3.3.2 (MIT), https://github.com/Koromix/koffi.

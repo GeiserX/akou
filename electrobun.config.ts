@@ -15,6 +15,7 @@
  *   - sherpa-onnx-node and its platform package under `bun/node_modules`, where the app's
  *     `createRequire` finds them; the `.node` file links its two libraries through `@rpath` with an
  *     `@loader_path` rpath, so they sit beside it in the platform package;
+ *   - transcribe-cpp, koffi and their two platform packages beside them, the same way;
  *   - the two recognition Workers, the browser pages and the `akou` command line (a
  *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
  *     first;
@@ -122,6 +123,32 @@ export function sherpaCopies(platform: string, arch: string): Record<string, str
   return out;
 }
 
+/** transcribe-cpp's native package per platform (its loader's `<platform>-<arch>` tuple). */
+export const TRANSCRIBE_CPP_PACKAGES: Readonly<Record<string, string>> = {
+  "darwin-arm64": "darwin-arm64-metal",
+};
+
+/**
+ * transcribe-cpp (Whisper and Canary, src/main/asr/transcribe-cpp.ts) and what it loads at run
+ * time, whole, under `bun/node_modules`: the binding, koffi and koffi's platform package (the
+ * `.node` file), and the platform package whose library and ggml backends sit side by side, where
+ * the binding's `artifactDir()` finds them.
+ */
+export function transcribeCppCopies(platform: string, arch: string): Record<string, string> {
+  const pkg = TRANSCRIBE_CPP_PACKAGES[`${platform}-${arch}`];
+  if (!pkg) return {};
+  const out: Record<string, string> = {};
+  for (const dir of [
+    "transcribe-cpp",
+    "koffi",
+    `@koromix/koffi-${platform}-${arch}`,
+    `@transcribe-cpp/${pkg}`,
+  ]) {
+    out[`node_modules/${dir}`] = `${MAIN_OUT}/node_modules/${dir}`;
+  }
+  return out;
+}
+
 /**
  * Signing needs an identity (`-` is ad-hoc); notarization needs a real Developer ID and Apple
  * credentials.
@@ -173,6 +200,7 @@ export default {
       NOTICE: `${MAIN_OUT}/NOTICE`,
       LICENSE: `${MAIN_OUT}/LICENSE`,
       ...sherpaCopies(process.platform, process.arch),
+      ...transcribeCppCopies(process.platform, process.arch),
       ...builtCopies(),
       ...helperCopies(),
     },
