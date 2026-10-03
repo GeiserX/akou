@@ -234,6 +234,8 @@ describe("akou jobs list against a server", () => {
           jobs: [
             { id: "job_1", status: "done", created_at: created },
             { id: "job_2", status: "queued" },
+            { id: "job_3", status: "running", title: "Weekly sync" },
+            { id: "job_4", status: "queued", title: null },
           ],
         }),
     });
@@ -243,12 +245,15 @@ describe("akou jobs list against a server", () => {
         "list",
       ]);
       expect(r.code).toBe(EXIT.ok);
-      const [first, second] = r.out.split("\n");
+      const [first, second, third, fourth] = r.out.split("\n");
       const ms = Date.parse(created);
       expect(first).toBe(`job_1  done  ${new Date(ms).toLocaleDateString("en-CA")} ${wall(ms)}`);
       expect(r.out).not.toContain(created);
       // A job with no time is listed without one, not with "?" or "Invalid Date".
       expect(second).toBe("job_2  queued");
+      // [akou-dzm.12] A job's title follows its state; a job with none is listed without one.
+      expect(third).toBe("job_3  running  Weekly sync");
+      expect(fourth).toBe("job_4  queued");
       // Positive control: --json keeps the server's value as it came.
       const j = await cli(env({ AKOU_URL: `http://127.0.0.1:${srv.port}`, AKOU_API_KEY: "k" }), [
         "jobs",
