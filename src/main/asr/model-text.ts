@@ -80,6 +80,9 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
     short: "Qwen",
     lines: { review: "Hears the last minutes again and rewrites the lines. 30 languages." },
   },
+  // Engines of the final pass only (transcribe-cpp): no live or review slot, so no line.
+  "whisper-large-v3": { name: "Whisper large-v3", short: "Whisper", lines: {} },
+  "canary-1b-v2": { name: "Canary 1B v2", short: "Canary", lines: {} },
 };
 
 /** Settings values by their model's name. */
@@ -96,14 +99,8 @@ export function liveModelName(id: string): string {
   return MODEL_TEXT[id]?.name ?? VALUE_NAMES[id] ?? id;
 }
 
-/**
- * The short name, for the Record row's button: `Qwen` for Qwen3-ASR, `Qwen + Parakeet` for a final
- * pass that fused them.
- */
+/** The short name, for the Record row's button: `Qwen` for Qwen3-ASR. */
 export function shortModelName(id: string): string {
-  // Several engines fused by the final pass: `Qwen + Parakeet`.
-  const fused = /^rover-[a-z]+\((.*)\)$/.exec(id)?.[1];
-  if (fused) return fused.split(",").map(shortModelName).join(" + ");
   return MODEL_TEXT[id]?.short ?? liveModelName(id);
 }
 
