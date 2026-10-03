@@ -294,6 +294,13 @@ const OUT = {
     callText: CALL_TEXT,
   }),
   dictation: z.object({ id: z.string(), state: z.string(), callText: CALL_TEXT }),
+  devices: z.looseObject({
+    inputs: z.array(z.looseObject({ id: z.string(), name: z.string() })),
+    apps: z
+      .array(z.looseObject({ id: z.string(), name: z.string() }))
+      .nullable()
+      .describe("Null where one app cannot be captured; `appsUnavailable` says why."),
+  }),
   getCall: z.object({
     call: z.string(),
     state: PACK_STATE,
@@ -397,6 +404,7 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_transcribe: { title: "Transcribe a file on a server", hints: WRITE },
   akou_job_get: { title: "Read a transcription job", hints: READ },
   akou_jobs_list: { title: "List transcription jobs", hints: READ },
+  akou_devices: { title: "List microphones and apps", hints: READ },
 };
 
 /** The tools of a server's file jobs (SI-7); every other tool works on calls in the app. */
@@ -542,7 +550,7 @@ export function createMcpServer(o: McpOptions): McpServer {
           .string()
           .optional()
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
-        mic: z.string().optional().describe('The microphone: a device id or "none"'),
+        mic: z.string().optional().describe("The microphone: an input id from akou_devices"),
         vocab: z.array(z.string()).optional(),
         withoutModels: z
           .boolean()
@@ -1555,6 +1563,26 @@ export function createMcpServer(o: McpOptions): McpServer {
           words: undefined,
         }),
       );
+    },
+  );
+
+  tool(
+    "akou_devices",
+    {
+      description:
+        "The microphones, outputs and apps with audio akou can record: an input's `id` is what akou_start takes as `mic`, an app's `id` what it takes as `call: \"app:ID\"`. Read-only; opens no device.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.devices,
+    },
+    async () => {
+      const r = await req("GET", "/devices");
+      if (r.status !== 200) return asResult(r, compact);
+      // The apps are a second read; where one app cannot be captured the answer says why.
+      const a = await req("GET", "/apps");
+      const apps = a.status === 200 ? a.body.apps : null;
+      const why =
+        a.status === 200 ? undefined : `${a.body?.error ?? a.status}: ${describeError(a)}`;
+      return result(compact({ ...r.body, apps, ...(why ? { appsUnavailable: why } : {}) }));
     },
   );
 

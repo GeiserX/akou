@@ -423,13 +423,10 @@ export const PARITY: readonly Row[] = [
   {
     action: "Devices and apps",
     cli: ["devices", "apps"],
-    api: {
-      none: "missing: PG-A8 adds GET /devices and GET /apps; the commands exit 69 until then",
-    },
-    mcp: {
-      none: "missing: PG-A8 adds the device list; akou_start's `mic` takes a device id meanwhile",
-    },
-    window: { none: "the source picker (W3.3) waits on PG-A8" },
+    api: ["GET /devices", "GET /apps"],
+    mcp: ["akou_devices"],
+    // The Dictation page's microphone picker; the call source picker is W3.3.
+    window: [ui("dictation-mic.ts", '"GET", "/devices"')],
   },
   {
     action: "Update the CLI",

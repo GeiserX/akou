@@ -74,6 +74,7 @@ const DESIGN_TOOLS = [
   "akou_transcribe",
   "akou_job_get",
   "akou_jobs_list",
+  "akou_devices",
 ];
 
 let rig: AppRig;

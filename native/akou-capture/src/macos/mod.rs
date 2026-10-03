@@ -43,8 +43,8 @@ use crate::health::dead_call::PROBE_S;
 use crate::health::device_watch::DeviceId;
 use crate::protocol::{CallInfo, Ch};
 use crate::source::{
-    CallMode, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError, Opened,
-    Status,
+    AudioApp, CallMode, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError,
+    Opened, Status, audio_apps,
 };
 
 const OPEN_BUDGET: Duration = Duration::from_secs(15);
@@ -300,10 +300,25 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
         host.output_devices().ok().map(|d| d.collect()),
         host.default_output_device().map(|d| mic::device_id(&d)),
     );
+    // Every process with audio, by bundle id, which `--call app:<id>` matches; never akou's own.
+    let own = std::process::id() as i32;
+    let apps = audio_apps(
+        audio_processes()
+            .into_iter()
+            .filter(|p| p.pid != own && p.responsible != own)
+            .map(|p| AudioApp {
+                name: p.bundle.clone(),
+                id: p.bundle,
+                pid: p.pid.max(0) as u32,
+            })
+            .collect(),
+        true,
+    );
     Ok(Endpoints {
         backend: "coreaudio",
         inputs,
         outputs,
+        apps: Ok(apps),
     })
 }
 

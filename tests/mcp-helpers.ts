@@ -108,6 +108,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_transcribe: { path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 },
   akou_job_get: { id: "job_1", wait: 0 },
   akou_jobs_list: {},
+  akou_devices: {},
 };
 
 /**
@@ -293,6 +294,19 @@ export function sampleApi(n = 3): ApiClient {
       model: "fake",
       ms: 12,
     });
+    // A machine has a handful of devices, however long its calls are.
+    if (path === "/devices") {
+      return {
+        backend: "fake",
+        inputs: [
+          { id: "mic-1", name: "Built-in Microphone", default: true },
+          { id: "mic-2", name: "Desk Mic", default: false },
+        ],
+        outputs: [{ id: "out-1", name: "Speakers", default: true }],
+      };
+    }
+    if (path === "/apps")
+      return { backend: "fake", apps: [{ id: "us.zoom.xos", name: "zoom", pid: 3 }] };
     if (path === "/dictations") {
       return { items: Array.from({ length: n }, (_, i) => dictation(i)), next_cursor: null };
     }

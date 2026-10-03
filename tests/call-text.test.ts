@@ -300,6 +300,7 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_open_window: "whether the window showed, or its address",
   akou_config_get: "settings, secrets redacted",
   akou_jobs_list: "ids, titles, states and times, no transcript",
+  akou_devices: "device and app names the OS reports",
 };
 
 describe("[PG-Z1] every MCP answer that carries call text quotes it", () => {

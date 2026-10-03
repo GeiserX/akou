@@ -89,6 +89,7 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_transcribe: WRITE,
   akou_job_get: READ,
   akou_jobs_list: READ,
+  akou_devices: READ,
 };
 
 /** What is wrong with a tool list against the table: one line per problem, empty when none. */

@@ -145,6 +145,7 @@ import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
+import { type CaptureDevices, queryDevices } from "./capture/devices.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
 import {
@@ -1996,6 +1997,11 @@ export class AkouApp implements ApiApp {
       ran?.review?.model === "qwen" ||
       (beam && (ran?.setup === "parakeet" || ran?.review?.model === "parakeet"))
     );
+  }
+
+  /** `GET /devices`, `GET /apps`: the device query of the helper `capture.helper` names (PG-A8). */
+  devices(): Promise<CaptureDevices> {
+    return queryDevices(locateHelper(this.cfg.settings["capture.helper"]).command);
   }
 
   /** What the API key is saved in: the Keychain, or null for the config file. */

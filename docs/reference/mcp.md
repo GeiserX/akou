@@ -189,6 +189,29 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
 
 </details>
 
+## akou_devices
+
+**List microphones and apps**
+
+The microphones, outputs and apps with audio akou can record: an input's `id` is what akou_start takes as `mic`, an app's `id` what it takes as `call: "app:ID"`. Read-only; opens no device.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+Parameters: none.
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_dictation_get
 
 **Read a dictation**
@@ -1235,7 +1258,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `title` | `string` | no |  |
 | `template` | `string` | no |  |
 | `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
-| `mic` | `string` | no | The microphone: a device id or "none" |
+| `mic` | `string` | no | The microphone: an input id from akou_devices |
 | `vocab` | `string[]` | no |  |
 | `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
@@ -1260,7 +1283,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "type": "string"
     },
     "mic": {
-      "description": "The microphone: a device id or \"none\"",
+      "description": "The microphone: an input id from akou_devices",
       "type": "string"
     },
     "vocab": {
