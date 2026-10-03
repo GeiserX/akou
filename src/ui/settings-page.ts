@@ -421,7 +421,7 @@ export class SettingsPage {
     // What the last visit drew goes until the read lands: typing into it would be lost when the
     // read draws over it.
     replace(this.col, h("p", { class: "pg-reading" }, "Reading the settings…"));
-    await this.load();
+    await this.load(true);
     if (shown !== this.shows) return;
     this.sub = key ? this.pageOf(key) : null;
     this.draw();
@@ -444,21 +444,25 @@ export class SettingsPage {
     await Promise.all(rows.map((r) => this.save(r)));
   }
 
-  private async load(): Promise<void> {
+  /**
+   * Reads the settings, the status and the models. `mics` reads the microphones too, which runs the
+   * capture helper's device query: a show does, a save keeps the list the show read.
+   */
+  private async load(mics = false): Promise<void> {
     const read = ++this.reads;
     const app = !this.hooks.server;
-    const [cfg, st, models, mics, server] = await Promise.all([
+    const [cfg, st, models, inputs, server] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.t.request<LiveReply>("GET", "/models") : null,
-      app ? readMics(this.t) : null,
+      app && mics ? readMics(this.t) : null,
       // Both modes: the desktop's Server mode page sets the same job defaults.
       this.t.request<JobModels>("GET", "/server").catch(() => null),
     ]);
     if (read !== this.reads) return;
     this.status = st && st.status < 400 ? (st.body ?? {}) : {};
     this.live = models && models.status < 400 ? (models.body?.live ?? null) : null;
-    this.mics = mics && "inputs" in mics ? mics.inputs : null;
+    if (mics) this.mics = inputs && "inputs" in inputs ? inputs.inputs : null;
     // A job's model is a preset or an engine: offer both.
     this.models = server && server.status < 400 ? jobModelChoices(server.body) : [];
     if (cfg.status >= 400) {
