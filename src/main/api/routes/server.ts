@@ -5,7 +5,7 @@
  * - `GET /healthz`, no key: `{ok, version, models_ready, queue_depth, queue}`, 200 when the API
  *   answers, 503 while the models load: while the files download, and while the recognizer loads
  *   them. `models_ready` is true only once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
- *   `queue` is the job queue's settings, depth, throughput and ETA (SV-Q4), null in the app.
+ *   `queue` is the job queue's settings, depth, throughput and ETA (SV-Q4), in both modes.
  * - `GET /v1/server`, no key: what this akou is and can do, and a link to the OpenAPI file (SV-C4),
  *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
  *   offering them. A capability is true only once its route exists, so the flags follow the code;
@@ -22,6 +22,7 @@
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
 
+import { fusionChoice } from "../../asr/fusion.ts";
 import { RECOGNIZER } from "../../asr/models.ts";
 import type { QueueStats } from "../../server/jobs.ts";
 import { PRESETS } from "../../server/presets.ts";
@@ -30,7 +31,7 @@ import { json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { BOUND_LANGUAGES } from "./jobs.ts";
 
-/** The job queue's numbers (SV-Q4), or null where there is no queue (the desktop app). */
+/** The job queue's numbers (SV-Q4), or null where there is no queue. */
 function queueOf(app: ApiApp): QueueStats | null {
   return app.jobs?.()?.queueStats() ?? null;
 }
@@ -51,7 +52,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load. `queue` is the job queue's settings, depth, throughput and ETA, null in the desktop app.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -75,7 +76,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -90,21 +91,29 @@ export function serverRoutes(r: Router<ApiApp>): void {
       // Section 14: a preset a remote offers is available here too, since a job for it runs there.
       const jobs = c.app.jobs?.();
       const remotes = jobs?.remotes;
-      const dictation = jobs?.dictationStats() ?? null;
+      // The desktop app dictates through its own engine, not a lane of the job queue.
+      const dictation = c.app.mode?.() === "server" ? (jobs?.dictationStats() ?? null) : null;
       return json(200, {
         name: "akou",
         version: c.app.version,
         mode: c.app.mode?.() ?? "app",
-        presets: PRESETS.map((p) => ({
-          name: p.name,
-          available:
-            (p.built && (c.app.presetAvailable?.(p.name) ?? ready)) ||
-            (remotes?.offered([p.name]) ?? false),
-          engines: p.engines,
-          hardware: p.hardware,
-          speed: p.speed,
-        })),
-        // SV-R2: what a job with no opinion runs here now, and why; null in the desktop app.
+        // SV-R1: each preset's engines, speaker model and how it joins its engines; `fusion`'s as
+        // the settings make it (`asr.final.engines`, `asr.fusion`).
+        presets: PRESETS.map((p) => {
+          const fused = p.name === "fusion" ? fusionChoice(c.app.config().settings) : null;
+          return {
+            name: p.name,
+            available:
+              (p.built && (c.app.presetAvailable?.(p.name) ?? ready)) ||
+              (remotes?.offered([p.name]) ?? false),
+            engines: fused ? fused.engines : p.engines,
+            diarizer: p.diarizer,
+            fusion: fused ? fused.fuser : p.fusion,
+            hardware: p.hardware,
+            speed: p.speed,
+          };
+        }),
+        // SV-R2: what a job with no opinion runs here now, and why; null where file jobs are off.
         auto: jobs ? (c.app.autoChoice?.() ?? null) : null,
         // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
         // Qwen (`metal`, `vulkan`, `cuda`, `sycl`, `rocm`), or `custom` for an own llama-server
@@ -127,14 +136,16 @@ export function serverRoutes(r: Router<ApiApp>): void {
         remotes: remotes?.view() ?? [],
         // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.
         retain_days: c.app.config().settings["server.retain_days"],
-        // SV-Q4: the queue's settings, depth, throughput and ETA; null in the desktop app.
+        // SV-Q4: the queue's settings, depth, throughput and ETA, in both modes.
         queue: queueOf(c.app),
         // DC-R2: the lane dictations run in; null in the desktop app.
         dictation,
         capabilities: {
+          // In both modes: the desktop app takes file jobs with its one token (SV-J1).
           jobs: has("POST", "/jobs"),
-          // Signed deliveries per key (SV-E2) come with the job route's `callback_url`.
-          webhooks: has("POST", "/jobs"),
+          // Signed deliveries per key (SV-E2) come with the job route's `callback_url`, and only a
+          // key has a secret to sign with: none in the desktop app, which has no key routes.
+          webhooks: has("POST", "/jobs") && has("POST", "/keys"),
           events: has("GET", "/events"),
           openai: has("POST", "/audio/transcriptions"),
           // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.

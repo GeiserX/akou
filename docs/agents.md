@@ -56,9 +56,13 @@ Every command takes `--json` and then prints one JSON answer, errors included. `
 | `akou calls` | List calls by date, title and length; `akou calls rename` renames one |
 | `akou show CALL --format md` | One call's transcript |
 | `akou export` | Hand a finished call to the export folder |
+| `akou transcribe FILE` | Transcribe an audio file on this machine and print the text; `--preset best`, `--language es`, `--diarize` |
+| `akou jobs list` | The file jobs `akou transcribe` ran, with their state |
 | `akou config show`, `akou config set KEY VALUE` | Read and change settings |
 | `akou models list`, `akou models pull` | The speech models on this machine, and the download |
 | `akou doctor` | Check the models, the helper, the token, the API and the permissions |
+
+`akou transcribe` needs no setting: the desktop app takes the file with its own token, cuts long audio at its pauses, and the command waits until the job ends and prints the transcript. Server mode (`server.enabled`) is only for other programs reaching akou over the network; never turn it on to transcribe a file here. For a short clip you want typed as text, `akou dictate FILE` is the other path; it sends the whole clip as one piece, with no cut at pauses, no speaker labels and no job, so a long recording can be refused. Use `akou transcribe` for a recording.
 
 A command that needs the app opens it in the background when it is not running. The exit codes are fixed: 0 ok, 3 no call to act on (nothing live, no calls yet, or no such call), 64 usage, 69 unavailable, 70 software, 75 already recording, 77 permission, 124 timed out, 130 interrupted by Ctrl-C.
 
@@ -72,4 +76,4 @@ The app serves a local API on `http://127.0.0.1:8476/v1`, on this machine's loop
 
 `akou mcp` serves MCP on standard input and output, as a thin client of the local API; `akou skill install` and the plugin register it for you. The tools include `akou_start`, `akou_stop`, `akou_pause`, `akou_resume`, `akou_mute`, `akou_unmute`, `akou_status`, `akou_context`, `akou_read`, `akou_search`, `akou_ask`, `akou_add_note`, `akou_get_notes`, `akou_name_speaker`, `akou_merge_speakers`, `akou_vocab_add`, `akou_vocab_propose`, `akou_remember`, `akou_list_calls`, `akou_get_call`, `akou_rename_call` and `akou_export`.
 
-The same commands drive a server when `AKOU_URL` is set: see [The command line against a server](server.md#the-command-line-against-a-server).
+The same commands drive a server when `AKOU_URL` is set, `akou transcribe` included: see [The command line against a server](server.md#the-command-line-against-a-server).
