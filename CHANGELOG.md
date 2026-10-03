@@ -2,6 +2,64 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.5 — a stuck akou recovers on its own, a double-click fixes a word, and server jobs run Qwen
+
+On 0.5.4 akou could stop answering while its port still took connections. Every command then waited out its 60 s timeout, a plain kill did nothing, and one recording started 21 minutes late. In 0.5.5 the app ends itself when its main thread is stuck and no call records, and the command line restarts an app that stopped answering, never while a call records. Fixing a misheard word takes a double-click, and the agent following the call is told what the fix taught. On a server, a job that names no model now runs Qwen wherever it is downloaded, and its result says when each word was said. From this release on, a version without a prerelease part is published as a full release, not a prerelease.
+
+### When akou stops answering
+- **The command line restarts an app that stopped answering.** A command that changes something, `akou start` among them, stops the stuck app, saves a sample of it in the hangs folder, opens it again and runs, all within about 15 s, and says so. A command that only reads stops nothing and points at `--restart`. While a call records, it stops nothing. It says the audio is still being written and how to restart akou by hand (#226).
+- **The app ends itself when its main thread is stuck.** A watchdog watches a heartbeat from that thread. With no call recording, after 10 s without one it logs a line, saves a sample, ends the app and every process under it, and opens akou again if its window was open. While a call records it only logs. A Mac waking from sleep does not trip it. The app now writes app.log itself, rotated at 4 MB and readable only by you (#227).
+- **`akou quit` says "akou has quit" only once every akou process is gone**, the app, the launcher above it and the helpers below it. On 0.5.4 it could answer while the launcher was still running (#228).
+- **A model import no longer freezes the app.** Importing from a folder copied files of up to 2.5 GB on the thread that answers the API, so akou went silent for the whole copy, 22 s for one model from another disk. The copy now runs in steps, checks SHA-256 as before, shows progress like a download, can be cancelled, and leaves no temporary file behind (#225).
+- **A Mac with no display no longer crashes when a call starts.** The app died about 18 s in, when the menu bar item switched to the recording mark. With no display it now leaves the item as it is (#244).
+- **The Dictation page says why when akou is out of reach**, for example while it restarts, instead of hanging on "Reading the dictation settings…". A failed save marks its row and names the setting (#229).
+
+### Fixing a word
+- **Double-click a word to fix it.** The fix opens on the line, above it when it does not fit below. A fix that taught akou a word shows as learned on the line, and from there you can rename the word or forget it. Forget removes only what this fix taught (#224).
+- **An agent following the call learns what a fix taught.** The fix writes a `vocab.learned` event, and the agent's next read carries a learned list, once: the term taught, taken back or renamed, what it was heard as, and how many lines the fix changed. `akou_read` and `akou tail` print one plain line per item, and `akou_context` lists the five newest (#223). The [fix-a-word design](docs/ux/design-explorations/fix-a-word-on-the-line.md) now says a fix learns the word at once (#213).
+- **A word no longer corrects its own inflections.** With "sandbox" in the vocabulary, "sandboxing" and "sandboxed" read as themselves again (#248).
+- **A call archive's glossary imports whole.** akou cuts an entry over the vocabulary file's limits to fit and lists it with the reason, instead of failing the whole import. Variants marked `(ctx)` or `(refused)` and the call banners are left out (#248).
+
+### The window
+- **The live transcript stays at the bottom**, newest line last, with any empty space above it. Before, 40 percent of the window's height sat empty under the newest line, and the view could stop following on long lines. A reader who scrolled up stays where they are (#222).
+- **A saved call says Back to the end**, not Back to live, when you scroll up. The share viewer does the same on an ended share (#235).
+- **The player bar has a round play button, one time readout and a speed pill**, and a mark on the scrubber for each note taken in the part being played (#282).
+- **Pressing two Download buttons for one model downloads it once.** Before, both downloads wrote the same file, it failed its SHA-256 check and was fetched again (#234).
+- **Settings picks a job's model, language and dictation engine by name**, in both the desktop and server mode, instead of free-text fields holding `auto` (#246).
+
+### Dictation
+- **The draft key, fix last and paste last keys work.** The app sent them to the helper, but the helper only listened for the dictation key. Fix last opens the newest dictation in the draft box, and paste last types its text again (#277).
+- **A tapped key session stops after silence**, Enter during a chord that holds Shift ends and sends again, and Mouse3 to Mouse5 can be the dictation key (#252).
+- **The Dictation page names engines and apps in words.** A per-app rule shows the app's name on macOS, not its bundle id (#258).
+- **A long dictation on Best no longer loses words.** Qwen's answer stopped where its context filled, so a five-minute dictation kept 100 of 679 words. Anything longer than 180 s now goes to Qwen in pieces cut at a quiet moment. The second pass and server jobs use the same path (#278).
+
+### Server and jobs
+- **A job that names no model runs Qwen wherever Qwen is downloaded**, as the app's final pass does. Otherwise it runs Parakeet when Parakeet is downloaded. With neither, it fetches Qwen on a GPU with 16 GB of memory and Parakeet elsewhere. `GET /v1/server` says what `auto` picks and why, and the Models page shows that sentence (#243).
+- **A job's result says when each word was said and how sure the engine was**, lists the spans it could not decode, and says when speaker labels were asked for and lost. Qwen gives confidences but no word times. The result comes as JSON, the OpenAI shape, text, SRT or VTT (#238).
+- **Each job can bound its auto language** with `languages[]`, so one server can serve clients that speak different languages (#247).
+- **An agent can transcribe a file on its own machine in one tool call.** `akou mcp` adds `akou_transcribe`, `akou_job_get` and `akou_jobs_list`, and `POST /v1/jobs` takes `wait` to hold the answer until the job ends. A file that is not audio or video never leaves the machine (#251).
+- **A client can trust the job feed.** A synchronous OpenAI transcription leaves no event behind, a cancelled event carries the job's metadata, and every page carries a `feed_id` that changes when the jobs database is replaced (#242).
+- **A job that asks for speaker labels with no speaker helper fails** with `diarize_unavailable` and says how to fix it, instead of finishing without speakers. The release now publishes the macOS helper on its own as `akou-diarize-0.5.5-darwin-arm64.tar.gz` (#245).
+- **The OpenAPI file lists every error code each route can answer** (#250). The [server page](docs/server.md) covers a reverse proxy in front of akou and the limits to raise for long recordings on a Mac (#271).
+
+### Command line
+- **`akou` exits 3 whenever there is no call to act on**, so a script can tell "no call yet" from a typo, and exits 130 on Ctrl-C without printing an error (#239).
+- Dictation ids stay unique within one millisecond, a late cancel of a second-pass review no longer leaks, and a write to a helper that just exited no longer fails the run (#236, #240).
+
+### Releases and docs
+- **A release without a prerelease part, 0.5.5 included, is published as a full release** and shows as Latest on GitHub. Only a version such as `0.6.0-rc.1` is a prerelease.
+- Every diagram on the [docs site](https://geiserx.github.io/akou/) reads in the dark theme (#230). The roadmap, design and requirements say what ships today, including Nemotron live, Qwen final and Parakeet as the fallback (#288, #289, #290). The settings reference fails the check when it drifts from the code (#259).
+- The [compose example](examples/compose/telegram-archive/.env.example) pins the published 0.5.4 images (#221).
+
+The HTTP API adds fields, routes and query parameters, and changes two answers. A synchronous OpenAI transcription writes no event to the job feed, and a bad audio range answers `bad_range` in the usual error shape instead of an empty 416.
+
+### Known limitations
+- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility, as [docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing) shows.
+- **The hang itself is not fixed, only recovered from.** A window call waits on the app's main thread with no time limit. While a call records, akou never ends a stuck app, so you restart it by hand.
+- **The fix for a Mac with no display has not run on one.** The crash did not reproduce on the machines at hand, so the evidence is a shell test and the recorded crash.
+- **A model import on the same disk is now a real copy**, about 2.4 times slower than the old instant clone.
+- Every item under 0.5.4's Known limitations still applies.
+
 ## 0.5.4 — Qwen writes the final transcript, and a Mac on Nemotron and Qwen needs no Parakeet
 
 On 0.5.3 the final transcript always came from Parakeet, whatever was downloaded, and every Mac needed Parakeet before it could record. A long final pass showed no progress until it ended. In 0.5.4 Qwen writes the final transcript whenever it is downloaded, and a Mac that runs Nemotron for the live lines and Qwen after the call keeps no Parakeet at all. The final pass says how far it is, in the window and in `akou status`, and the Models page lists the whole catalog.

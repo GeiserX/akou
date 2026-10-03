@@ -253,7 +253,7 @@ This is the one first-run flow; [WINDOW.md](WINDOW.md) section 10 draws it. One 
 
 ## 12. Updates
 
-Builds are unsigned for now, and every 0.x release is a prerelease. The ElectroBun updater exists but akou does not wire it. On an ad-hoc signed Mac an in-place update may cost the permission grants, which makes silent auto-apply a bad default today.
+Builds are unsigned for now. A release is a prerelease only when its version has a prerelease part, such as `0.6.0-rc.1`. The ElectroBun updater exists but akou does not wire it. On an ad-hoc signed Mac an in-place update may cost the permission grants, which makes silent auto-apply a bad default today.
 
 The design has two steps and one mechanism, ElectroBun's `Updater`, fed by the release feed [CI-CD.md](../CI-CD.md) CI-23 publishes. First a notice. With `app.updateCheck` on, akou calls `Updater.checkForUpdate()` once a day and says that a newer version exists, in the tray (a badge and a menu item), in Settings, and in `akou status`. Clicking opens the release page. "Check for updates…" in the tray and the menu runs the same call whenever someone clicks it, because a click is the user asking. Second, once it is proven on hardware, apply in place through the same `Updater`. Never while a call records or a final pass runs. It applies on "Restart to update" or at the next quit, and DK-O4's post-update check follows.
 
