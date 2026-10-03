@@ -20,8 +20,7 @@
  *   one. `auto` and `nemotron` are the downloaded Nemotron that hears the call's languages; with
  *   none, Parakeet when Parakeet is here or already chosen for the final pass, which then writes
  *   the live lines too; else the Nemotron the languages pick (`engineForLanguages`).
- * - **Second pass** (`asr.review.model`), the final pass's **listed engines** (`asr.final.engines`)
- *   and **dictation** (while it is on: `fast` is Parakeet,
+ * - **Second pass** (`asr.review.model`) and **dictation** (while it is on: `fast` is Parakeet,
  *   `best` is Qwen, `auto` follows `dictation.final`, whose `live` adds none) are kept while chosen
  *   (`keptModels`) but never waited for: a call runs without them, as it did before.
  *
@@ -32,7 +31,7 @@
 import { existsSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "./accelerator.ts";
-import { finalModelId, finalModelOf } from "./final-model.ts";
+import { finalModelOf } from "./final-model.ts";
 import { chooseLiveEngine, engineForLanguages, isLiveEngine } from "./live-engines.ts";
 import { type LiveSetupContext, qwenRoom, reviewerId, reviewerOf } from "./live-setups.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
@@ -46,8 +45,6 @@ export interface ModelSetSettings {
   readonly "asr.languages": readonly string[];
   readonly "asr.review.model": string;
   readonly "asr.final.model": string;
-  /** Absent: none listed. */
-  readonly "asr.final.engines"?: readonly string[];
   readonly "dictation.enabled": boolean;
   readonly "dictation.engine": string;
   readonly "dictation.final": string;
@@ -137,10 +134,6 @@ export function keptModels(c: ModelSetContext): string[] {
   const out = chosenModels(c);
   const review = reviewerOf(s["asr.review.model"]);
   if (review) out.push(...withRuntime(c, reviewerId(review)));
-  for (const v of s["asr.final.engines"] ?? []) {
-    const m = finalModelOf(v);
-    if (m) out.push(...withRuntime(c, finalModelId(m)));
-  }
   if (s["dictation.enabled"]) {
     const engine = s["dictation.engine"];
     const by =
