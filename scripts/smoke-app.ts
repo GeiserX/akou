@@ -40,6 +40,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -354,7 +355,10 @@ console.log(JSON.stringify({ bun: Bun.version, open }));
     load.status === 0 ? `Bun ${loaded.bun}` : load.stderr.toString().slice(-400),
   );
   const inBundle = join(main, "node_modules", SHERPA_PLATFORM);
-  for (const lib of [...SHERPA_LIBS, "sherpa-onnx.node"]) {
+  // ONNX Runtime loads its shared provider library only for a provider other than the CPU, so it is
+  // in the bundle (above) but not open here.
+  const loadedNow = SHERPA_LIBS.filter((l) => l !== "onnxruntime_providers_shared.dll");
+  for (const lib of [...loadedNow, "sherpa-onnx.node"]) {
     const path =
       loaded.open.find((p) => basename(p).toLowerCase() === lib.toLowerCase()) ?? "(not open)";
     check(samePath(path, join(inBundle, lib)), `${lib} is loaded from the bundle`, path);
@@ -457,22 +461,44 @@ async function main(argv: string[]): Promise<void> {
     if (
       check(setup.length === 1, `one ${releaseName(version)}-setup installer`, setup.join(", "))
     ) {
-      // What the installer holds: the packed app, once, and a program to run.
-      const listed = spawnSync(TAR, ["-t", "-f", join(RELEASE_DIR, setup[0] as string)]);
-      const entries = listed.stdout
-        .toString()
+      // What the installer holds. Windows: `akou-Setup.exe` and the packed app beside it under
+      // `.installer/`. Linux: one `installer` program that carries the packed app inside itself,
+      // so it must be larger than the packed app.
+      const file = join(RELEASE_DIR, setup[0] as string);
+      const entries = spawnSync(TAR, ["-t", "-f", file])
+        .stdout.toString()
         .split(/\r?\n/)
         .filter((l) => l !== "");
-      check(
-        entries.filter((e) => e.endsWith(".tar.zst")).length === 1,
-        "the installer holds one packed app",
-        entries.join(", "),
-      );
-      check(
-        entries.some((e) => /(^|\/)(launcher|[^/]*Setup)(\.exe)?$/.test(e)),
-        "the installer holds a program to run",
-        entries.join(", "),
-      );
+      if (process.platform === "win32") {
+        check(
+          entries.includes("akou-Setup.exe"),
+          "the installer holds akou-Setup.exe",
+          entries.join(", "),
+        );
+        check(
+          entries.filter((e) => /^\.installer\/[^/]+\.tar\.zst$/.test(e)).length === 1,
+          "the installer holds one packed app",
+          entries.join(", "),
+        );
+      } else {
+        const out = mkdtempSync(join(tmpdir(), "akou-setup-"));
+        try {
+          spawnSync(TAR, ["-x", "-f", file, "-C", out]);
+          const program = join(out, "installer");
+          const packed = readdirSync(join(APP_DIR, "Resources")).find((f) =>
+            f.endsWith(".tar.zst"),
+          );
+          const size = existsSync(program) ? statSync(program).size : 0;
+          const app = packed ? statSync(join(APP_DIR, "Resources", packed)).size : 0;
+          check(
+            app > 0 && size > app,
+            "the installer program carries the packed app",
+            `${entries.join(", ")}; installer ${size} bytes, packed app ${app}`,
+          );
+        } finally {
+          rmSync(out, { recursive: true, force: true });
+        }
+      }
     }
     const launcher = join(APP_DIR, "bin", `launcher${EXE}`);
     check(existsSync(launcher), "the app has its launcher", launcher);
