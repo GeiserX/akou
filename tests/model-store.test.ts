@@ -141,14 +141,11 @@ describe("[SV-S1] which model a job runs: request, then server default, then har
       "unknown_model",
       "model",
     ]);
-    const unbuilt = refusal(() => resolveModel({ model: "fusion" }, o("auto")));
+    const unbuilt = refusal(() => resolveModel({ model: "lite" }, o("auto")));
     expect([unbuilt.status, unbuilt.code]).toEqual([409, "preset_unavailable"]);
+    // An engine this catalog does not have is unknown, whichever preset lists it elsewhere.
     const engine = refusal(() => resolveModel({ model: "canary-1b-v2" }, o("auto")));
-    expect([engine.status, engine.code, engine.details.preset]).toEqual([
-      409,
-      "preset_unavailable",
-      "fusion",
-    ]);
+    expect([engine.status, engine.code]).toEqual([422, "unknown_model"]);
     // best is built (akou-5an.93): it names Qwen, whatever the catalog holds.
     expect(resolveModel({ model: "best" }, o("auto"))).toEqual({
       model: "qwen3-asr-1.7b",
@@ -189,7 +186,7 @@ describe("[SV-S1] which model a job runs: request, then server default, then har
 describe("[SV-R1] the preset table names engines the catalog has", () => {
   test("every engine of a built preset is a catalog model, and the first is a recognizer", () => {
     const built = PRESETS.filter((p) => p.built);
-    expect(built.map((p) => p.name)).toEqual(["fast", "best"]);
+    expect(built.map((p) => p.name)).toEqual(["fast", "best", "fusion"]);
     for (const p of built) {
       expect(p.engines.length).toBeGreaterThan(0);
       for (const id of p.engines)

@@ -379,7 +379,7 @@ describe("All models: the whole catalog by what each model does, the ones on dis
       "nemotron-3.5-320",
     ]);
     // Parakeet streams too, but it writes the transcript after the call: it is a final model.
-    expect(of("final")).toEqual([RECOGNIZER, QWEN_ID]);
+    expect(of("final")).toEqual([RECOGNIZER, QWEN_ID, "whisper-large-v3", "canary-1b-v2"]);
     expect(of("speakers")).toEqual([NEMOTRON, "titanet-small", "pyannote-segmentation-3.0"]);
     expect(of("helpers")[0]).toBe("silero-vad");
     expect(roleOf({ kind: "speech", after_call: false })).toBe("live");
