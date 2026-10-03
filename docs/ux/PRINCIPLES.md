@@ -49,7 +49,7 @@ Each principle has a check. If we cannot write the check, the principle is too v
 ### Recording and capture
 
 - Record from an agent (skill, CLI, MCP) and from the window, tray or hotkey, with the same result.
-- Record the whole computer by default, so a call never drops because akou lost track of an app. Per-app capture is an option.
+- Record the whole computer by default, so a call never drops because akou lost track of an app. Per-app capture is an option, and when per-app capture loses its app, the call falls back to the whole computer rather than dropping.
 - Keep the mic and the call on separate channels end to end.
 - Survive route and device changes (headphones, Bluetooth, docks) without stopping.
 - Keep one call in one folder across restarts.

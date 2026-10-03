@@ -15,12 +15,14 @@ import {
   callMeta,
   dayLabel,
   defaultWorkspace,
+  FELL_BACK_FOR_MS,
   finalNote,
   formatDuration,
   groupCalls,
   HUES,
   HueBook,
   hasRecording,
+  healthDot,
   languages,
   noteMarks,
   playingLine,
@@ -372,6 +374,89 @@ describe("the banner: red proven, amber guess or lag, grey quiet, green recovere
         callHeardAt: okAt + 59_000,
       }),
     ).toBeNull();
+  });
+
+  /** Part 1 records one app, every app it tapped exits, part 2 records the whole computer. */
+  const fellBackCall = (o: { exited?: boolean; firstMode?: string } = {}) => {
+    const b = new LogBuilder();
+    b.created();
+    b.add({
+      type: "part.started",
+      part: 1,
+      file: "audio/part-001.opus",
+      wallStart: T0,
+      monoStart: 1_000_000,
+      mic: "Built-in Microphone",
+      call: { mode: o.firstMode ?? "app:com.example.call" },
+      capture: "akou-capture 0.1.0",
+    });
+    if (o.exited ?? true) b.add(health("tapped-apps-exited", { silentFor: 0, rebuilds: 0 }));
+    b.add({
+      type: "part.started",
+      part: 2,
+      file: "audio/part-002.opus",
+      wallStart: FELL_AT,
+      monoStart: 1_060_000,
+      mic: "Built-in Microphone",
+      call: { mode: "system" },
+      capture: "akou-capture 0.1.0",
+    });
+    b.partEnded(1, "restart");
+    return b;
+  };
+  const FELL_AT = T0 + 60_000;
+  const after = { ...input, now: FELL_AT + 10_000, lastLineAt: FELL_AT + 9_000 };
+
+  test("a per-app call that fell back to the whole computer names the app and the time, amber", () => {
+    const v = fold(fellBackCall().events);
+    expect(banner({ ...after, view: v })).toEqual({
+      kind: "guess",
+      text: `com.example.call quit, so akou records the whole computer since ${formatWall(FELL_AT, TZ, { seconds: false })}. Stop if the meeting is over.`,
+    });
+    // Two apps asked for are both named.
+    const two = fold(fellBackCall({ firstMode: "app:com.example.call,org.example.chat" }).events);
+    expect(banner({ ...after, view: two })?.text).toStartWith(
+      "com.example.call, org.example.chat quit,",
+    );
+  });
+
+  test("the fallback banner sits after the red rows and before the guesses, and goes after five minutes", () => {
+    const b = fellBackCall();
+    // A 90 s gap with no lines would be the quiet guess; the fallback says more and wins.
+    const quiet = { ...after, view: fold(b.events), now: FELL_AT + QUIET_AFTER_MS + 5_000 };
+    expect(banner({ ...quiet, lastLineAt: FELL_AT })?.text).toContain("records the whole computer");
+    // A dead whole-computer part is still the red row.
+    b.add(health("dead", { part: 2 }));
+    expect(banner({ ...after, view: fold(b.events) })?.kind).toBe("dead");
+    // Bounded: once FELL_BACK_FOR_MS has passed, the banner chain carries on as before.
+    const late = FELL_AT + FELL_BACK_FOR_MS + 1;
+    const v = fold(fellBackCall().events);
+    expect(
+      banner({ ...after, view: v, now: late, lastLineAt: late - 1000, callHeardAt: late - 1000 }),
+    ).toBeNull();
+  });
+
+  test("positive control: no fallback banner without the exit, or when part 1 was not per-app", () => {
+    expect(banner({ ...after, view: fold(fellBackCall({ exited: false }).events) })).toBeNull();
+    expect(banner({ ...after, view: fold(fellBackCall({ firstMode: "none" }).events) })).toBeNull();
+  });
+
+  test("the health dot ignores a state from an older part's helper", () => {
+    const b = fellBackCall();
+    expect(fold(b.events).channelHealth("call")?.state).toBe("tapped-apps-exited");
+    expect(healthDot(fold(b.events), "call", true)).toBe("ok");
+    expect(healthDot(fold(b.events), "call", false)).toBe("none");
+    // The newest part's own state still shows.
+    b.add(health("dead", { part: 2 }));
+    expect(healthDot(fold(b.events), "call", true)).toBe("dead");
+    expect(
+      healthDot(
+        live((x) => x.add(health("stalled"))),
+        "call",
+        true,
+      ),
+    ).toBe("stalled");
+    expect(healthDot(null, "mic", false)).toBe("none");
   });
 });
 

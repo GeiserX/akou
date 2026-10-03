@@ -20,8 +20,12 @@ import {
   TRANSITIONS,
   TransitionError,
 } from "../src/main/call/state.ts";
+import { EXIT } from "../src/main/capture/protocol.ts";
 import { flush, logOf, ManualClock, ofType, ScriptedEngine, types } from "./capture-helpers.ts";
 import { jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
+
+/** A per-app scope, as `--call` and `POST /calls {call}` take it. */
+const APP = "app:com.example.call";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -541,6 +545,63 @@ describe("restart", () => {
     expect(c?.status).toBe("interrupted");
     expect(s.engine.sessions.length).toBe(6);
     expect(ofType(s.events, "call.ended")).toMatchObject([{ reason: "interrupted" }]);
+  });
+
+  test("[F0.11] a per-app call whose tapped apps all exit keeps recording as the whole computer, never stops", async () => {
+    const s = setup();
+    s.engine.onStart = (x) => x.capturing();
+    const a = await s.mgr.start({ workspace: "work", title: "Sync", call: APP });
+    if (!a.ok) throw new Error(a.error);
+    s.engine.onStart = null;
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(0.5);
+    s.engine.last.health("call", "tapped-apps-exited");
+    await flush();
+    // Make before break: the per-app helper keeps the mic until the whole-computer one captures.
+    expect(s.engine.sessions.map((x) => x.opts.call)).toEqual([APP, "system"]);
+    expect(s.engine.sessions[1]?.opts.mic).toBe(s.engine.sessions[0]?.opts.mic as string);
+    expect(s.engine.sessions[0]?.sent).not.toContain("stop");
+    s.engine.last.capturing();
+    await c?.idle();
+    expect(c?.status).toBe("recording");
+    expect(c?.current?.part).toBe(2);
+    expect(ofType(s.events, "health")).toMatchObject([
+      { part: 1, ch: "call", state: "tapped-apps-exited" },
+    ]);
+    expect(ofType(s.events, "part.started").map((e) => [e.part, e.call.mode])).toEqual([
+      [1, APP],
+      [2, "system"],
+    ]);
+    expect(ofType(s.events, "part.ended")).toMatchObject([{ part: 1, reason: "restart" }]);
+    expect(ofType(s.events, "call.ended")).toEqual([]);
+    expect(s.mgr.live()?.id).toBe(a.call);
+  });
+
+  test("tapped apps exiting while a restart is still opening still end on a whole-computer part", async () => {
+    const s = setup();
+    s.engine.onStart = (x) => x.capturing();
+    const a = await s.mgr.start({ workspace: "work", title: "Sync", call: APP });
+    if (!a.ok) throw new Error(a.error);
+    s.engine.onStart = null;
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(0.5);
+    const p = s.mgr.restart("live");
+    await flush();
+    expect(s.engine.sessions.length).toBe(2);
+    // The apps exit while the user's restart opens a second per-app helper, which then finds no
+    // app and exits before capturing.
+    s.engine.sessions[0]?.health("call", "tapped-apps-exited");
+    s.engine.onStart = (x) => x.capturing();
+    s.engine.sessions[1]?.exit(EXIT.noDevice);
+    expect(await p).toMatchObject({ ok: false, status: 503 });
+    await c?.idle();
+    expect(s.engine.sessions.map((x) => x.opts.call)).toEqual([APP, APP, "system"]);
+    expect(c?.status).toBe("recording");
+    expect(ofType(s.events, "part.started").map((e) => [e.part, e.call.mode])).toEqual([
+      [1, APP],
+      [3, "system"],
+    ]);
+    expect(ofType(s.events, "call.ended")).toEqual([]);
   });
 
   test("two concurrent restarts of an ended call in a fresh app run: one helper, one live call", async () => {

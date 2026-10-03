@@ -180,6 +180,7 @@ Native notifications carry information only. Any action goes through the tray, t
 |---|---|---|---|
 | A call started, not from the focused window | Recording started | "Started by an agent" / "from the command line" / "from the hotkey", from the call's `by` | Always, even with notifications at `errors` |
 | Capture dead or permission-suspect | Call side silent / Microphone silent | What akou is doing about it ("rebuilding", "check the permission") | Window not focused |
+| Per-app capture lost every app it tapped | Recording the whole computer now | The app quit or restarted, akou records the whole computer, stop if the meeting is over; never the app's name | Window not focused |
 | A start refused (hotkey, tray, agent) | Could not start recording | The reason, naming a window card or a setting that exists | Always |
 | Recording stopping or stopped by a rule (low disk, maximum length) | Recording stopping / Recording stopped | The rule, in words | Always |
 | Recovered after a crash | akou recovered a call | "The recording up to the crash is saved" | At the next launch |

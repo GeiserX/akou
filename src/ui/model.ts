@@ -241,6 +241,44 @@ export interface BannerInput {
 export const QUIET_AFTER_MS = 90_000;
 export const LAG_AMBER_S = 10;
 export const RECOVERED_FOR_MS = 30_000;
+/** How long the banner says that a per-app call now records the whole computer. */
+export const FELL_BACK_FOR_MS = 5 * 60_000;
+
+/**
+ * The newest part records the whole computer because every app the part before it tapped exited
+ * (DESIGN 2.5, "Tapped apps exited"): the app ids that part asked for, and when the whole-computer
+ * part began. Read from `part.started` and `health` events alone, so a reopened window says it too.
+ */
+export function fellBack(v: CallView): { apps: string; since: number } | null {
+  const parts = v.parts();
+  const now = parts.at(-1);
+  const before = parts.at(-2);
+  if (!now || !before || now.call.mode !== "system" || !before.call.mode.startsWith("app:"))
+    return null;
+  const exited = v
+    .healthHistory()
+    .some((h) => h.part === before.part && h.ch === "call" && h.state === "tapped-apps-exited");
+  if (!exited) return null;
+  const apps = before.call.mode
+    .slice("app:".length)
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .join(", ");
+  return { apps, since: now.wallStart };
+}
+
+/**
+ * What a channel's health dot shows: the newest part's own health state. A state from an older
+ * part is that part's helper, which is gone (a fallback part has no health event of its own until
+ * something changes), so the dot then reads the level like a part with no events yet.
+ */
+export function healthDot(v: CallView | null, ch: "mic" | "call", hasLevel: boolean): string {
+  const h = v?.channelHealth(ch);
+  const newest = v?.parts().at(-1)?.part;
+  if (h && (newest === undefined || h.part >= newest)) return h.state;
+  return hasLevel ? "ok" : "none";
+}
 
 export function banner(i: BannerInput): Banner | null {
   const v = i.view;
@@ -285,6 +323,13 @@ export function banner(i: BannerInput): Banner | null {
     };
   }
   if (v.state === "paused") return null;
+  const fb = fellBack(v);
+  if (fb && i.now - fb.since < FELL_BACK_FOR_MS) {
+    return {
+      kind: "guess",
+      text: `${fb.apps} quit, so akou records the whole computer since ${formatWall(fb.since, v.call.tz, { seconds: false })}. Stop if the meeting is over.`,
+    };
+  }
   const lag = v.asrLag?.seconds ?? 0;
   if (lag > LAG_AMBER_S) {
     return {
