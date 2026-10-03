@@ -876,6 +876,8 @@ export interface EnginesOptions {
   /** An engine whose `memoryMb` is over this is dropped before it loads. 0 or absent: none. */
   memoryBudgetMb?: number;
   log?(level: "info" | "warn" | "error", msg: string): void;
+  /** Unit `u` was decoded by the engine whose turn it is, whole or in part (a job's progress). */
+  onUnit?(u: number): void;
 }
 
 export interface EnginesResult {
@@ -1018,6 +1020,7 @@ export async function runEngines(
           break;
         }
         run.decode_s += (performance.now() - t) / 1000;
+        o.onUnit?.(u);
         // Fusion aligns words; a single engine's result keeps exactly what the engine gave.
         if (n > 1) h = withWords(h);
         const said = heard[u];
@@ -1383,6 +1386,24 @@ export interface JobPassInput {
   /** The languages an `auto` decode may choose among (the job's `languages[]`), over the engine's. */
   languages?: readonly string[];
   options?: Partial<FinalOptions>;
+  /** Told as the pass moves: its stage, and the seconds of audio it has transcribed of the total. */
+  progress?: (p: JobProgress) => void;
+}
+
+/** Where a running job is (akou-5an.116): reading its file, labelling speakers, transcribing. */
+export interface JobProgress {
+  stage: "decode" | "diarize" | "transcribe";
+  /** Seconds of the file transcribed so far; 0 before the transcribing starts. */
+  done_s: number;
+  /** The file's length in seconds; null while the file is still being read. */
+  total_s: number | null;
+}
+
+/** Wall seconds per stage of a job (akou-5an.115); `diarize_s` is null when no labels were asked. */
+export interface JobTimings {
+  decode_s: number;
+  diarize_s: number | null;
+  transcribe_s: number;
 }
 
 export interface JobSegment {
@@ -1440,6 +1461,8 @@ export interface JobPassResult {
    * With several engines, the VAD and every engine's decode time, summed.
    */
   decode_s?: number;
+  /** Wall seconds of the pass's two stages, model loads and an engine's start included. */
+  stages?: { diarize_s: number | null; transcribe_s: number };
   /**
    * The N-engine pass (ASR-6), for a job that ran one: the fuser, each engine that loaded with the
    * units it decoded whole and its decode seconds, and each engine the pass went on without, why,
@@ -1476,6 +1499,10 @@ export async function runJobPass(
   const one = engine && !("engines" in engine) ? engine : undefined;
   const x = input.samples;
   const duration_s = round3(x.length / ASR_RATE);
+  const tell = (stage: JobProgress["stage"], done: number) =>
+    input.progress?.({ stage, done_s: round3(done), total_s: duration_s });
+  const passFrom = performance.now();
+  let diarize_s: number | null = null;
   const empty: JobPassResult = {
     text: "",
     segments: [],
@@ -1519,6 +1546,8 @@ export async function runJobPass(
   let spans: DiarizedSpan[] = [];
   let diarizeError: string | null = null;
   if (input.diarize) {
+    tell("diarize", 0);
+    const diarizeFrom = performance.now();
     // A diarizer that fails costs the labels, not the job, as on a call.
     try {
       spans = await models.diarizer().process(samples);
@@ -1526,7 +1555,9 @@ export async function runJobPass(
       diarizeError = (err as Error).message;
       log("error", `speaker labels failed, the job goes on without them: ${diarizeError}`);
     }
+    diarize_s = round3((performance.now() - diarizeFrom) / 1000);
   }
+  tell("transcribe", from / ASR_RATE);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
   const words: JobWord[] = [];
@@ -1545,6 +1576,7 @@ export async function runJobPass(
   const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) =>
     heardSpeech.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true),
   );
+  let shown = from / ASR_RATE;
   const pass = await runEngines(
     engines,
     pieces.map((p) => ({ samples, from: p.from, to: p.to })),
@@ -1556,6 +1588,14 @@ export async function runJobPass(
       minSplitSeconds: o.minSplitSeconds,
       memoryBudgetMb: fusion?.memoryBudgetMb,
       log,
+      // The transcribe stage's progress, piece by piece; with several engines it only grows, so
+      // the first engine to reach a piece is what it shows.
+      onUnit: (u) => {
+        const end = (from + (pieces[u] as { to: number }).to) / ASR_RATE;
+        if (end <= shown) return;
+        shown = end;
+        tell("transcribe", end);
+      },
     },
   );
   if (engines.length > 1) modelId = pass.model;
@@ -1599,6 +1639,10 @@ export async function runJobPass(
     speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
     diarized: input.diarize && diarizeError === null,
     decode_s,
+    stages: {
+      diarize_s,
+      transcribe_s: round3((performance.now() - passFrom) / 1000 - (diarize_s ?? 0)),
+    },
     ...(fusion
       ? { fusion: { fuser: fusion.fuser, engines: pass.ran, dropped: pass.dropped } }
       : {}),
@@ -1645,6 +1689,7 @@ type ToJob = {
 
 type FromJob =
   | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
   | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
@@ -1771,6 +1816,8 @@ async function fusionEngines(
 }
 
 async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
+  let lastSent = Number.NEGATIVE_INFINITY;
+  let lastStage: JobProgress["stage"] | null = null;
   const { final: _, fusion, ...setSpec } = m.models;
   const key = JSON.stringify(setSpec);
   if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(setSpec as ModelSpec) };
@@ -1797,6 +1844,20 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         glossary: m.glossary,
         languages: m.languages,
         options: m.options,
+        progress: (p) => {
+          // A new stage always goes; within one, at most once a second, and the last figure.
+          const now = performance.now();
+          if (
+            p.stage === lastStage &&
+            now - lastSent < PROGRESS_EVERY_MS &&
+            p.done_s < (p.total_s ?? 0)
+          ) {
+            return;
+          }
+          lastSent = now;
+          lastStage = p.stage;
+          reply({ type: "progress", ...p });
+        },
       },
       models,
       (level, msg) => reply({ type: "log", level, msg }),
@@ -1836,6 +1897,7 @@ export class JobWorker {
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
+    const onProgress = input.progress;
     if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
     this.w ??= new Worker(siblingModule(import.meta.url, "finalize-worker"), {
       workerData: FINALIZE_WORKER_NAME,
@@ -1856,6 +1918,10 @@ export class JobWorker {
       w.onmessage = (e: MessageEvent<FromJob>) => {
         const r = e.data;
         if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        if (r.type === "progress") {
+          const { type: _t, ...p } = r;
+          return onProgress?.(p);
+        }
         if (r.type === "child") {
           if (r.alive) this.kids.add(r.pid);
           else this.kids.delete(r.pid);

@@ -49,6 +49,7 @@ export const ERROR_CODES = {
   final_running: "The final pass of this call is running.",
   final_unavailable: "The final pass cannot run on this machine.",
   forbidden: "The key's scope does not reach this route.",
+  gone: "The job was deleted, or passed the `retain_days` akou keeps one from its creation.",
   idempotency_conflict: "The Idempotency-Key was used with another file or other options.",
   internal: "An unexpected failure inside akou.",
   interrupted: "The job was running when the server stopped.",
