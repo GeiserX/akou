@@ -18,6 +18,7 @@ import {
   type ModelSpecEntry,
   NEMOTRON,
   RECOGNIZER,
+  WHISPER_LARGE_V3,
 } from "../src/main/asr/models.ts";
 import { PRESET_NAMES, presetModels } from "../src/main/asr/presets.ts";
 import { EXIT } from "../src/main/cli/client.ts";
@@ -32,6 +33,7 @@ const bodies: Record<string, Uint8Array> = {
   "nemotron3_diar_v3.onnx": new TextEncoder().encode("a stand-in diarizer\n"),
   "qwen.gguf": new TextEncoder().encode("a stand-in Qwen\n"),
   "llama.tar.gz": new TextEncoder().encode("a stand-in llama-server build\n"),
+  "whisper.gguf": new TextEncoder().encode("a stand-in Whisper\n"),
 };
 const hits = new Map<string, number>();
 let server: ReturnType<typeof Bun.serve>;
@@ -197,6 +199,55 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
     v.t.cleanup();
   });
 
+  test("[akou-5an.41] fusion pulls its three engines, the llama-server build and the helpers", async () => {
+    const build = llamaRuntime(
+      { "asr.accelerator": "auto", "asr.llamaServer": [] },
+      hostPlatform(),
+      MODELS,
+      { detected: detectAccelerator("auto", hostProbe()) },
+    ) as string;
+    const withAll = [
+      ...registry,
+      entry(QWEN_ASR, ["qwen.gguf"]),
+      entry(build, ["llama.tar.gz"]),
+      entry(WHISPER_LARGE_V3, ["whisper.gguf"]),
+    ];
+    const v = volume();
+    const r = await cli(v.env, ["models", "pull", "fusion", "--json"], { models: withAll });
+    expect(r.code).toBe(0);
+    expect(r.json.models).toEqual([
+      QWEN_ASR,
+      WHISPER_LARGE_V3,
+      RECOGNIZER,
+      build,
+      "silero-vad",
+      NEMOTRON,
+    ]);
+    for (const [id, f] of [
+      [QWEN_ASR, "qwen.gguf"],
+      [WHISPER_LARGE_V3, "whisper.gguf"],
+      [build, "llama.tar.gz"],
+    ]) {
+      expect(existsSync(join(v.models, id as string, f as string))).toBe(true);
+    }
+    // asr.final.engines overrides the list: Canary added, no Qwen, so no llama-server build.
+    expect(
+      presetModels("fusion", [RECOGNIZER, "silero-vad"], build, [
+        WHISPER_LARGE_V3,
+        RECOGNIZER,
+        "canary-1b-v2",
+      ]),
+    ).toEqual({
+      preset: "fusion",
+      models: [WHISPER_LARGE_V3, RECOGNIZER, "canary-1b-v2", "silero-vad"],
+    });
+    // Positive control: without Parakeet in the list, the machine's Parakeet is not pulled.
+    expect(
+      presetModels("fusion", [RECOGNIZER, "silero-vad"], null, [QWEN_ASR, WHISPER_LARGE_V3]),
+    ).toEqual({ preset: "fusion", models: [QWEN_ASR, WHISPER_LARGE_V3, "silero-vad"] });
+    v.t.cleanup();
+  });
+
   test("[SV-R2] auto with Qwen and its build on disk pulls best's models, as a job would run it", async () => {
     const build = llamaRuntime(
       { "asr.accelerator": "auto", "asr.llamaServer": [] },
@@ -221,7 +272,7 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
   });
 
   test("a preset with no engine yet exits 69, says so, and downloads nothing", async () => {
-    for (const p of ["lite", "fusion"]) {
+    for (const p of ["lite"]) {
       const v = volume();
       const before = count();
       const r = await cli(v.env, ["models", "pull", p], { models: registry });
