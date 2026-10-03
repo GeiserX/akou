@@ -128,15 +128,6 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
     ],
   },
-  "asr.final.engines": {
-    label: "Several models after the call",
-    help: "Each one hears the whole call and their words are combined. Slower; first one breaks ties.",
-    empty: "One model",
-    choices: [
-      ["qwen3-asr-1.7b", "Qwen3-ASR"],
-      ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
-    ],
-  },
   "asr.parakeet.decoding": {
     label: "Parakeet decoding",
     help: "Beam also leans toward your words, but can drop whole stretches.",
@@ -153,6 +144,23 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "asr.segmentWindow": { label: "Longest live line", unit: "seconds" },
   "asr.modelsDir": { label: "Models folder" },
+  "asr.final.engines": {
+    label: "Fusion engines",
+    help: "The fusion preset's engines, in the order ties are broken. Empty: the preset's own three.",
+  },
+  "asr.fusion": {
+    label: "How fusion picks each word",
+    choices: [
+      ["rover-conf", "Confidence vote"],
+      ["rover-freq", "Majority vote"],
+      ["first", "First engine, gaps filled from the others"],
+    ],
+  },
+  "asr.memoryBudgetMb": {
+    label: "Memory an engine may need",
+    unit: "MB",
+    help: "0: 60% of this machine's memory. An engine over it is left out of the fusion pass.",
+  },
   "asr.diarizer": {
     label: "Who spoke",
     help: "Takes effect at the next start.",

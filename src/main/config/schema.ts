@@ -27,6 +27,7 @@ import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { FINAL_MODELS, finalModelId } from "../asr/final-model.ts";
+import { enginesRefusal, FUSION_DEFAULT, FUSION_ENGINES, fuserRefusal } from "../asr/fusion.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
@@ -276,7 +277,7 @@ export const SETTINGS = {
     min: 0,
     max: 10080,
     default: 60,
-    doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. 0: let go as soon as no queued job needs it.",
+    doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. The desktop app keeps none: it lets a model go as soon as no queued job needs it. 0: let go as soon as no queued job needs it.",
   },
   "server.queue_max": {
     type: "integer",
@@ -493,9 +494,24 @@ export const SETTINGS = {
   },
   "asr.final.engines": {
     type: "string[]",
-    values: FINAL_MODELS.filter((m) => m !== "auto"),
     default: [],
-    doc: "Several models for the final transcript, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): each one decodes every stretch of the call and their words are fused by confidence voting (ROVER), the first one breaking ties. Lines are named `rover-conf(<ids>)`. Empty, the default: one model, the one `asr.final.model` picks. A listed model that is not downloaded is left out, and so are models from the end of the list while together they need more than 60 % of this computer's memory; one that fails during the pass is dropped and the pass goes on with the rest. `final.done` names the models that ran and the ones left out, with why. `akou finalize --model` runs one model for one run whatever this says. A change applies from the next pass.",
+    check: (v) => enginesRefusal(v as readonly string[]),
+    doc: `The engines of the \`fusion\` preset's pass, in priority order: the order the fuser breaks ties in. Every engine decodes every piece of the file, one engine after another so one GPU model is loaded at a time, and the fuser (\`asr.fusion\`) joins their words. Ids: ${FUSION_ENGINES.map((id) => `\`${id}\``).join(", ")}. Empty: the preset's own, ${FUSION_DEFAULT.map((id) => `\`${id}\``).join(", ")}, the three the benchmark measured best together; add \`canary-1b-v2\` for a fourth. With no job language, the first engine that identifies languages decodes first and the others are given the language it heard. An engine that cannot load, or fails, is left out and the job goes on with the rest; the result's \`engine.fusion\` says which ran and which were left out, and why. Applies to the next job.`,
+  },
+  "asr.fusion": {
+    type: "string",
+    min: 1,
+    max: 20,
+    default: "rover-conf",
+    check: (v) => fuserRefusal(v as string),
+    doc: "How the `fusion` preset joins its engines' words: `rover-conf` (the default) aligns them and keeps, word by word, the one most engines wrote, weighted by each engine's confidence in it; `rover-freq` counts engines only, and loses words past three engines; `first` keeps the first engine's text and uses the others only where it failed. Needs no provider. The fusers that ask a language model (`llm-pick`, `llm-free`) are not built.",
+  },
+  "asr.memoryBudgetMb": {
+    type: "integer",
+    min: 0,
+    max: 1_048_576,
+    default: 0,
+    doc: "Memory, MB, an engine of the `fusion` preset may need: an engine whose estimate (its model files and a fifth more) is over it is left out of the pass and the result says so. The engines load one at a time, so each is held against the budget alone. 0: 60 % of this machine's memory.",
   },
   "asr.review.everySeconds": {
     type: "integer",
@@ -1231,21 +1247,12 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
  * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
  * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
  * `asr.review.model` `qwen` (unless it names its own). And short names read as the ids they name:
- * `asr.final.model` `qwen` and `parakeet`, in it and in `asr.final.engines`.
+ * `asr.final.model` `qwen` and `parakeet`.
  */
 export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
   const short = values["asr.final.model"];
   if (short === "qwen" || short === "parakeet") {
     values = { ...values, "asr.final.model": finalModelId(short) };
-  }
-  const list = values["asr.final.engines"];
-  if (Array.isArray(list) && list.some((v) => v === "qwen" || v === "parakeet")) {
-    values = {
-      ...values,
-      "asr.final.engines": list.map((v) =>
-        v === "qwen" || v === "parakeet" ? finalModelId(v) : v,
-      ),
-    };
   }
   if (values["asr.live"] !== "upgrade") return values;
   return {
