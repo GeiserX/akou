@@ -708,7 +708,7 @@
         "tags": [
           "models"
         ],
-        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`), `next` (the id the next pass runs, never one that is not downloaded; null when neither is; `rover-conf(<ids>)` when it fuses several) and `engines` (`asr.final.engines` as ids, empty for one model).",
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`) and `next` (the id the next pass runs, never one that is not downloaded; null when neither is).",
         "responses": {
           "200": {
             "description": "OK",
@@ -1026,7 +1026,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. `engines` lists the models of this call's final pass, in order (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`, or `qwen` and `parakeet`), instead of `asr.final.engines`; it is kept in the call's log, so a pass after a restart runs them too. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1066,12 +1066,6 @@
                   },
                   "reviewEvery": {
                     "type": "number"
-                  },
-                  "engines": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
                   },
                   "attach": {
                     "type": "boolean"
@@ -6322,7 +6316,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
@@ -6855,7 +6849,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done; 410 `gone` once the job was deleted or passed `server.retain_days`.",
+        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done; 410 `gone` once the job was deleted or passed `server.retain_days`.",
         "parameters": [
           {
             "name": "id",
@@ -7397,7 +7391,7 @@
             "$ref": "#/components/responses/499.cancelled"
           },
           "500": {
-            "$ref": "#/components/responses/500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+            "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -9466,7 +9460,7 @@
           }
         }
       },
-      "500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
+      "500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
         "description": "Internal error",
         "content": {
           "application/json": {
@@ -9480,6 +9474,7 @@
                     "error": {
                       "enum": [
                         "diarize_unavailable",
+                        "engine_unavailable",
                         "internal",
                         "interrupted",
                         "model_download_failed",
@@ -9948,6 +9943,10 @@
           {
             "const": "dictation_starting",
             "description": "The dictation helper is still starting."
+          },
+          {
+            "const": "engine_unavailable",
+            "description": "A speech engine of the job's preset is down or could not load, so the job failed rather than come back with its text missing."
           },
           {
             "const": "enhance_running",
