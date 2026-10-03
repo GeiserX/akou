@@ -2,7 +2,9 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
-## Unreleased
+## 0.6.0 — a file transcribes on the desktop app, and the fusion preset joins three engines
+
+Up to 0.5.5 a recording on your own Mac had to be copied to a server before `akou transcribe` would take it, and on a server one engine decided every word. In 0.6.0 the desktop app runs file jobs itself, with its own token and the same queue and presets as a server. A server gains the `fusion` preset: Qwen3-ASR, Whisper large-v3 and Parakeet decode the same pieces and the result keeps, per word, the one the confidence vote prefers. On the benchmark the trio scores 7.97 pooled WER against 8.63 for Qwen alone.
 
 ### Files
 - **`akou transcribe FILE` works on the desktop app.** Up to 0.5.5 it exited 69 with `not_server` unless akou ran in server mode, so a recording on your own Mac had to be copied to a server first. The desktop app now takes file jobs with its own token, on the same queue, presets and models as a server: long audio is cut at its pauses, `--diarize` labels the speakers, and the command prints the transcript and exits 0. The app keeps the job, so `akou jobs list` shows it until `server.retain_days` deletes it; a server still deletes it once the text is printed. Server mode keeps its one meaning: keyed access for other programs over the network. The app binds loopback as before, reads no keys, signs no callbacks, sends no job to `server.remotes`, and still answers 404 on `/v1/keys` and the OpenAI-compatible route.
