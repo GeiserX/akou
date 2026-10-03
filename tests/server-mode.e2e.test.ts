@@ -543,11 +543,11 @@ describe("SV-K1: GET /v1/server", () => {
       const b = JSON.parse(r.body);
       expect(b).toMatchObject({ name: "akou", version: rig.app.version, mode, gpu: null });
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
-      // `fast` (Parakeet) and `best` (Qwen on llama-server) are built; each is available once the
-      // default models are there, and best fetches Qwen on demand. `auto` runs fast here, so it is
-      // available too, and says so.
+      // `fast` (Parakeet), `best` (Qwen on llama-server) and `fusion` (both and Whisper) are built;
+      // each is available once the default models are there; best and fusion fetch theirs on demand.
+      // `auto` runs fast here, so it is available too, and says so.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best", "auto"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best", "fusion", "auto"]);
       expect(b.presets.at(-1)).toMatchObject({ name: "auto", resolves_to: "fast" });
       expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
         "parakeet-tdt-0.6b-v3-fp32",
@@ -565,10 +565,13 @@ describe("SV-K1: GET /v1/server", () => {
           "wyoming",
         ].sort(),
       );
-      // server.dictation_slots reserves one Worker by default (DC-R2); the app has no lane.
+      // server.dictation_slots reserves one Worker by default (DC-R2); the app dictates through
+      // its own engine, with no lane in its job queue.
       expect(b.capabilities.interactive).toBe(mode === "server");
-      // Jobs, their feed and a job's `languages[]` bound exist in both modes (akou-5an.119); signed
-      // deliveries need keys.
+      expect(b.dictation === null).toBe(mode === "app");
+      // Jobs, their feed and a job's languages[] exist in both modes (SV-J1, SV-E1, SV-J11): the
+      // app takes file jobs with its one token. Signed deliveries need a key's secret, so server
+      // mode only (SV-E2).
       for (const c of ["jobs", "events", "languages_bound"]) expect(b.capabilities[c]).toBe(true);
       expect(b.capabilities.webhooks).toBe(mode === "server");
     }
@@ -634,20 +637,27 @@ describe("SV-K1: GET /v1/server", () => {
     expect(doc).not.toContain("finished job");
   });
 
-  test("capabilities.jobs turns true with the route itself", async () => {
-    const s = startApiServer({
-      app: fakeApp(),
-      port: 0,
-      token: () => "t".repeat(64),
-      router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, () => json(202, {})),
-    });
-    try {
-      const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);
-      const b = (await r.json()) as { capabilities: { jobs: boolean } };
-      expect(b.capabilities.jobs).toBe(true);
-    } finally {
-      await s.stop();
-    }
+  test("capabilities.jobs follows the route itself: false without it, true with it", async () => {
+    const jobsFlag = async (router: Router<ApiApp>) => {
+      const s = startApiServer({ app: fakeApp(), port: 0, token: () => "t".repeat(64), router });
+      try {
+        const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);
+        return ((await r.json()) as { capabilities: { jobs: boolean } }).capabilities.jobs;
+      } finally {
+        await s.stop();
+      }
+    };
+    const bare = () => {
+      const r = new Router<ApiApp>();
+      serverRoutes(r);
+      return r;
+    };
+    expect(await jobsFlag(bare())).toBe(false);
+    expect(await jobsFlag(bare().add("POST", "/jobs", JOBS_CREATE, () => json(202, {})))).toBe(
+      true,
+    );
+    // The desktop app's own table has it (SV-J1 in app mode).
+    expect(await jobsFlag(buildRouter("app"))).toBe(true);
   });
 });
 
@@ -663,7 +673,7 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
-        // The job queue's numbers (SV-Q4), in both modes: the app runs file jobs too.
+        // The job queue's numbers (SV-Q4), in both modes: the app has a queue for its file jobs.
         queue: expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }

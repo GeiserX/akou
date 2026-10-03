@@ -173,23 +173,20 @@ const JOBS_CREATE = (
 ).doc;
 
 function uploadServer(maxUploadBytes?: number): ApiServer {
+  // The call routes for the JSON cap, and a stand-in for the real job route, which needs a queue.
+  const router = new Router<ApiApp>();
+  callRoutes(router);
   return startApiServer({
     app: { version: "0.0.0-test" } as unknown as ApiApp,
     port: 0,
     token: () => TOKEN,
     maxUploadBytes,
-    // The job route's shape (SV-J1): an upload, for any key. It counts what arrives. The call
-    // routes beside it are the JSON routes the cap still holds; the real job route is not here,
-    // since both modes serve it and this one stands in for it.
-    router: (() => {
-      const r = new Router<ApiApp>().add("POST", "/jobs", JOBS_CREATE, async (c) => {
-        let bytes = 0;
-        for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
-        return json(202, { bytes });
-      });
-      callRoutes(r);
-      return r;
-    })(),
+    // The job route's shape (SV-J1): an upload, for any key. It counts what arrives.
+    router: router.add("POST", "/jobs", JOBS_CREATE, async (c) => {
+      let bytes = 0;
+      for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
+      return json(202, { bytes });
+    }),
   });
 }
 
