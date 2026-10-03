@@ -14,6 +14,9 @@ name: nightly
 #   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
 #   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
 #   and then ci.yml's `ui` leg under ci-ok, once it passes.
+# - dictation-timing: DC-R6's wall-clock bound, a 20 s hold's release-to-text within 200 ms of a
+#   3 s hold's over a slow link (`AKOU_TIMING=1`). The PR check counts the bytes sent after release
+#   instead, since a shared runner's stall moved the wall clock by up to 1.8 s.
 
 on:
   schedule:
@@ -102,6 +105,21 @@ jobs:
             --qwen-models "$RUNNER_TEMP/qwen-models" \
             --diarize "native/akou-diarize/target/release/akou-diarize$EXE" \
             --nemotron models/nemotron3_diar_v3.onnx ${ONLY:+--only "$ONLY"} --out nightly-results.json
+
+  dictation-timing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AKOU_TIMING: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun test tests/dictation-remote.e2e.test.ts -t "after release"
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).
