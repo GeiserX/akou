@@ -9,14 +9,16 @@ The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many
 | GPU | Image | Add to `docker run` |
 |---|---|---|
 | None | `drumsergio/akou:0.5.5` | Nothing |
-| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.5.5-vulkan` | `--device /dev/dri --group-add $(stat -c %g /dev/dri/renderD128)` |
+| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.5.5-vulkan` | `--device /dev/dri/renderD128 --group-add $(stat -c %g /dev/dri/renderD128)`, with the GPU's own render node |
 | NVIDIA | `drumsergio/akou:0.5.5-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
 | Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself ([A Mac as the server](server.md#a-mac-as-the-server)); it uses Metal |
+
+Pass one render node, the GPU's own, not the whole `/dev/dri`. llama-server picks among the render nodes it can open by its own device order, not by path. An iGPU with SR-IOV virtual functions shows several nodes (`ls /dev/dri`): on an Intel UHD 770 with two virtual functions, llama-server opened a virtual function instead of the GPU akou had detected, and the GPU hung. Mesa could pin llama-server to the detected GPU by its PCI bus address, which a virtual function does not share, but akou does not do that yet: it needs a run on a box with virtual functions. When akou can open more than one node, `accelerator.reason` lists them and names the one to pass.
 
 `--group-add` gives the container's user the group that owns the render node on the host (`render` on most distributions). Without it the GPU is there but akou cannot open it, and it says so. In compose, the Vulkan image takes:
 
 ```yaml
-    devices: ["/dev/dri:/dev/dri"]
+    devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
     group_add: ["993"] # the number `stat -c %g /dev/dri/renderD128` prints on the host
 ```
 
@@ -56,6 +58,7 @@ Where it runs is `asr.accelerator`:
 |---|---|---|
 | A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
 | The Docker image, any Linux box | `auto` | The GPU the image can open, else the CPU: the `-vulkan` image on an Intel or AMD GPU, the `-cuda` image on NVIDIA ([A GPU](#a-gpu)). The plain image runs the CPU, several times slower |
+| The `-vulkan` image on an Intel UHD 770 iGPU | `auto` | The iGPU, but slower than the CPU beside it: on Spanish voice notes of 23 s and 101 s it decoded in 33 s and 118 s once the model had loaded, about 1.2 times slower than real time, while the plain image on the same box took 17 s and 66 s, about 1.5 times faster than real time. The UHD 770 has less compute than the box's own cores and shares their memory bandwidth, so on it run the plain image, or send `best` to a Mac ([Sending jobs to another akou](server.md#sending-jobs-to-another-akou)). The first load after a pull compiles shaders and can pass the 5-minute load limit once |
 | Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build and NVIDIA's CUDA runtime, both downloaded with Qwen, so the host needs only the driver |
 | Linux or Windows, akou run natively, with an Intel or AMD GPU | `auto` or `vulkan` | llama.cpp's Vulkan build, through the GPU's Vulkan driver (Mesa on Linux) |
 | Linux or Windows x64, akou run natively, with Intel's oneAPI or AMD's ROCm installed | `sycl` or `rocm` | llama.cpp's SYCL or ROCm build, downloaded with Qwen. `auto` never picks these |
