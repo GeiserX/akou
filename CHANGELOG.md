@@ -4,7 +4,7 @@ All notable changes to akou. Versions follow [semantic versioning](https://semve
 
 ## 0.5.5 — a stuck akou recovers on its own, a double-click fixes a word, and server jobs run Qwen
 
-On 0.5.4 akou could stop answering while its port still took connections. Every command then waited out its 60 s timeout, a plain kill did nothing, and one recording started 21 minutes late. In 0.5.5 the app ends itself when its main thread is stuck and no call records, and the command line restarts an app that stopped answering, never while a call records. Fixing a misheard word takes a double-click, and the agent following the call is told what the fix taught. On a server, a job that names no model now runs Qwen wherever it is downloaded, and its result says when each word was said. From this release on, a version without a prerelease part is published as a full release, not a prerelease.
+On 0.5.4 akou could stop answering while its port still took connections. Every command then waited out its 60 s timeout, a plain kill did nothing, and one recording started 21 minutes late. In 0.5.5 the app ends itself when its main thread is stuck and no call records, and the command line restarts an app that stopped answering, never while a call records. Fixing a misheard word takes a double-click, and the agent following the call is told what the fix taught. On a server, a job that names no model now runs Qwen wherever it is downloaded, and its result says when each word was said.
 
 ### When akou stops answering
 - **The command line restarts an app that stopped answering.** A command that changes something, `akou start` among them, stops the stuck app, saves a sample of it in the hangs folder, opens it again and runs, all within about 15 s, and says so. A command that only reads stops nothing and points at `--restart`. While a call records, it stops nothing. It says the audio is still being written and how to restart akou by hand (#226).
@@ -46,8 +46,7 @@ On 0.5.4 akou could stop answering while its port still took connections. Every 
 - **`akou` exits 3 whenever there is no call to act on**, so a script can tell "no call yet" from a typo, and exits 130 on Ctrl-C without printing an error (#239).
 - Dictation ids stay unique within one millisecond, a late cancel of a second-pass review no longer leaks, and a write to a helper that just exited no longer fails the run (#236, #240).
 
-### Releases and docs
-- **A release without a prerelease part, 0.5.5 included, is published as a full release** and shows as Latest on GitHub. Only a version such as `0.6.0-rc.1` is a prerelease.
+### Docs
 - Every diagram on the [docs site](https://geiserx.github.io/akou/) reads in the dark theme (#230). The roadmap, design and requirements say what ships today, including Nemotron live, Qwen final and Parakeet as the fallback (#288, #289, #290). The settings reference fails the check when it drifts from the code (#259).
 - The [compose example](examples/compose/telegram-archive/.env.example) pins the published 0.5.4 images (#221).
 

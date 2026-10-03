@@ -9,7 +9,7 @@ Items use the same fields as TESTING.md: an id, a priority (P0 now, P1 this segm
 - The repository is public, so every job runs on GitHub-hosted runners, which are free for public repositories. No self-hosted runner ever runs pull-request code.
 - One required check, `ci-ok`, guards `main`. It passes only when every job it depends on passed or was skipped on purpose.
 - Pull requests get the fast, deterministic lanes on all three OSes. Real models, time-zone shifts, the accelerated soak and the macOS floor run nightly. Hardware steps run by hand before a release.
-- A tag `v*` builds, checks and publishes a release with checksums and build attestations. Only a version with a prerelease part, such as `0.6.0-rc.1`, is published as a prerelease. Any other version, 0.x included, becomes the latest release. It is never a draft. A stable release, 1.0.0 or later, also needs its evidence on record: the terms check and every M0 gate.
+- A tag `v*` builds, checks and publishes a release with checksums and build attestations. While the version is 0.x it is a prerelease. It is never a draft. A stable release also needs its evidence on record: the terms check and every M0 gate.
 - Every gate has been seen to fail once (a positive control) before we trust it green.
 
 ## 1. Today

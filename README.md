@@ -41,7 +41,7 @@ The first window asks what you will use akou for and downloads the speech models
 
 ## Status
 
-akou 0.x runs on macOS on Apple silicon only. It is unsigned, and an update may ask for the microphone and system audio grants again. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
+The 0.x releases are prereleases: macOS on Apple silicon only, unsigned, and an update may ask for the microphone and system audio grants again. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
 
 ## Documentation
 
