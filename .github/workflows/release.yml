@@ -33,6 +33,7 @@ on:
       - scripts/smoke-app.ts
       - scripts/gates/g2-worker.ts
       - scripts/gates/g2-probe.ts
+      - scripts/clip.ts
       - scripts/locate-helper-probe.ts
       - scripts/smoke-cli.ts
       - scripts/stamp-version.ts
@@ -165,8 +166,11 @@ jobs:
           path: eval-models
           key: recognizer-${{ runner.os }}-${{ hashFiles('src/main/asr/models.ts') }}
       # Prereleases never wait on a gate (ROADMAP M0), so here the result is recorded, not enforced.
+      # continue-on-error absorbs a failure but not a stall: a slow model download must not push
+      # this release job into its own limit.
       - name: G2, recognition in a Worker of the packaged app (ROADMAP; recorded, not enforced)
         continue-on-error: true
+        timeout-minutes: 15
         run: bun scripts/gates/g2-worker.ts --models eval-models --out gate-g2-macOS.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
