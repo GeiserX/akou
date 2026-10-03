@@ -175,7 +175,7 @@ async function main(argv: string[]): Promise<void> {
       target: "bun",
       format: "esm",
       // Loaded at run time from the bundle's own node_modules, beside the Workers.
-      external: ["sherpa-onnx-node"],
+      external: ["sherpa-onnx-node", "transcribe-cpp"],
     });
     if (!r.success || !r.outputs[0]) fail(`the ${name} bundle failed: ${r.logs.join("; ")}`);
     await Bun.write(join(ROOT, out), r.outputs[0]);
