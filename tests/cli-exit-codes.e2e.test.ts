@@ -41,6 +41,7 @@ const TABLE: Readonly<Record<string, ((call?: string) => string[]) | string>> = 
   templates: "lists and prints the note templates",
   quit: "quits the app",
   tail: (x) => ["tail", ...c(x)],
+  events: (x) => ["events", ...c(x)],
   context: (x) => ["context", "what was decided?", ...c(x)],
   ask: (x) => ["ask", "what was decided?", ...c(x)],
   presets: "lists the ask presets",
