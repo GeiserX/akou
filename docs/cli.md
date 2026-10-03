@@ -303,6 +303,25 @@ usage: akou tail [-c CALL] [-f] [--since SEQ] [--last 5m] [--format txt|md|json]
 example: akou tail -f --last 2m
 ```
 
+## events
+
+```text
+akou events: The call's log events as JSON lines, one object per line; -f follows until it ends
+
+usage: akou events [-c CALL] [-f] [--type T,…] [--since SEQ]
+
+  -c, --call CALL  live, last or a call id (default: live)
+  -f, --follow     keep printing until the call ends
+      --type T,…   only these event types: health,seg,answer
+      --since SEQ  events after this cursor (default: all)
+      --json       accepted; the output is always JSON lines
+  -h, --help       show this help
+      --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
+
+example: akou events -f --type health,answer
+example: akou events -c last --since 120
+```
+
 ## context
 
 ```text
@@ -862,6 +881,7 @@ example: akou serve
 | Restart | `restart` | `POST /calls/:id/restart` | `akou_restart` | `src/ui/app.ts` |
 | Status | `status` | `GET /status` | `akou_status` | `src/ui/window.ts` |
 | Read and follow the transcript | `tail`, `show`, `watch` | `GET /calls/:id/transcript`, `GET /calls/:id/events`, `GET /calls/:id/stream` | `akou_read`, `akou_get_call` | `src/ui/window.ts`, `src/ui/app.ts` |
+| Follow the event log as JSON lines | `events` | `GET /calls/:id/events`, `GET /calls/:id/stream` | none: an agent is pushed the events by the plugin monitor (PG-K3), which runs it | none: the raw log is for programs; the window shows the call it describes |
 | Wait for a stage after the call | `wait` | `GET /calls/:id/events` | none: an agent follows GET /calls/{id}/events or akou_read; there is no akou_wait (PG-S5) | none: the window shows each stage as it happens and never blocks on one |
 | One call's record | none: `show` prints the transcript; no command prints the record itself | `GET /calls/:id` | none: the tools read it internally (akou_vocab_propose, akou_enhanced_put); none returns it | none: the window builds its view from the call list and the followed log |
 | Context pack | `context` | `POST /calls/:id/context` | `akou_context` | `src/ui/ask.ts` |

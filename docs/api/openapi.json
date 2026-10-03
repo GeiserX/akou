@@ -2056,7 +2056,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll.",
+        "description": "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll. With `types`, only those events, and the wait lasts until one of them arrives; `cursor` still moves past the others.",
         "parameters": [
           {
             "name": "id",
@@ -2089,6 +2089,15 @@
               "minimum": 0,
               "maximum": 30,
               "default": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Only these log event types, comma-separated (`health,seg,answer,share.started`). The cursor still moves past the others, so a reconnect does not replay them. Default: every type.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -2137,7 +2146,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it.",
+        "description": "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it. `types` keeps only those events: one left out comes as its `id` alone, which moves `Last-Event-ID` and delivers nothing. `ephemeral=none` drops the spoken line, the levels and `read`.",
         "parameters": [
           {
             "name": "id",
@@ -2158,6 +2167,29 @@
               "minimum": 0,
               "maximum": 9007199254740991,
               "default": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Only these log event types, comma-separated (`health,seg,answer,share.started`). The cursor still moves past the others, so a reconnect does not replay them. Default: every type.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ephemeral",
+            "in": "query",
+            "required": false,
+            "description": "`none`: no `partial`, `level` or `read` messages, the log events alone.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "none"
+              ],
+              "default": "all"
             }
           }
         ],

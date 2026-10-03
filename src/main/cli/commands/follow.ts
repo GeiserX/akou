@@ -31,11 +31,17 @@ function learnedText(b: Body, format: Format): string[] {
 }
 
 /** Waits for the next events after `cursor` (the API long-polls up to 25 s). */
-async function nextEvents(ctx: Ctx, call: string, cursor: number): Promise<Body> {
+async function nextEvents(
+  ctx: Ctx,
+  call: string,
+  cursor: number,
+  o: { types?: string; launch?: boolean; wait?: number } = {},
+): Promise<Body> {
   const r = await api(ctx, "GET", `/calls/${call}/events`, {
-    query: { after: cursor, wait: 25 },
+    query: { after: cursor, wait: o.wait ?? 25, types: o.types },
     timeoutMs: 40_000,
     signal: ctx.io.signal,
+    ...(o.launch === false ? { launch: false } : {}),
   });
   if (r.status !== 200) throw Object.assign(new Error("events"), { response: r });
   return r.body;
@@ -116,6 +122,68 @@ const tail: Command = {
       }
     }
     return EXIT.ok;
+  },
+};
+
+/** The events that end a call: `events -f` stops after them. */
+const ENDS = ["call.ended", "call.failed"];
+
+const events: Command = {
+  name: "events",
+  summary: "The call's log events as JSON lines, one object per line; -f follows until it ends",
+  usage: "akou events [-c CALL] [-f] [--type T,…] [--since SEQ]",
+  flags: {
+    call: callFlag("live"),
+    follow: { type: "boolean", short: "f", desc: "keep printing until the call ends" },
+    type: { type: "string", value: "T,…", desc: "only these event types: health,seg,answer" },
+    since: { type: "string", value: "SEQ", desc: "events after this cursor (default: all)" },
+    json: { type: "boolean", desc: "accepted; the output is always JSON lines" },
+  },
+  examples: ["akou events -f --type health,answer", "akou events -c last --since 120"],
+  run: async (ctx, p) => {
+    if (p.positional.length > 0) return usage(ctx, "events takes no words; name the call with -c");
+    const want = str(p, "type")
+      ?.split(",")
+      .map((t) => t.trim())
+      .filter((t) => t !== "");
+    const kept = want && want.length > 0 ? new Set(want) : null;
+    // A follower asks for the ends too, to know when to stop; it prints only what was asked for.
+    const follow = bool(p, "follow");
+    const types = kept ? [...new Set([...kept, ...(follow ? ENDS : [])])].join(",") : undefined;
+    // Never launches the app: a stream of a call that is not running has nothing to say (PG-S3).
+    let r: Body;
+    try {
+      // A one-off read answers at once; a follower may wait for the first event.
+      r = await nextEvents(ctx, ref(p), int(p, "since", 0, Number.MAX_SAFE_INTEGER) ?? 0, {
+        types,
+        launch: false,
+        wait: follow ? 25 : 0,
+      });
+    } catch (err) {
+      const res = (err as { response?: Body }).response;
+      if (res) return finish(ctx, res, () => "");
+      throw err;
+    }
+    // Follow by id, so `live` cannot move to another call under us.
+    const id = r.call as string;
+    let cursor = r.cursor as number;
+    for (;;) {
+      let ended = false;
+      for (const e of r.events as Body[]) {
+        if (!kept || kept.has(e.type)) ctx.io.out(JSON.stringify(e));
+        if (ENDS.includes(e.type)) ended = true;
+      }
+      if (!follow || ended || ctx.io.signal?.aborted) return EXIT.ok;
+      try {
+        r = await nextEvents(ctx, id, cursor, { types, launch: false });
+      } catch (err) {
+        const res = (err as { response?: Body }).response;
+        if (res) return finish(ctx, res, () => "");
+        if (ctx.io.signal?.aborted) return EXIT.ok;
+        throw err;
+      }
+      cursor = r.cursor as number;
+    }
   },
 };
 
@@ -315,4 +383,4 @@ const search: Command = {
   },
 };
 
-export const followCommands: Command[] = [tail, context, ask, presets, search];
+export const followCommands: Command[] = [tail, events, context, ask, presets, search];
