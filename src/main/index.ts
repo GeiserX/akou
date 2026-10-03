@@ -3666,7 +3666,8 @@ export class AkouApp implements ApiApp {
       this.jobService = make();
       this.jobService.start();
     } catch (err) {
-      this.jobService?.close();
+      // The model store is shared with the Models page: keep it open for pulls.
+      this.jobService?.close({ keepShelf: true });
       this.jobService = null;
       this.log(
         "error",

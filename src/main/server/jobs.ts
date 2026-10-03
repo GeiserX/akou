@@ -1070,8 +1070,9 @@ export class JobService {
       // A model that takes no hotwords gets none (the engine would refuse them).
       // Read before the run: the samples' buffer is handed to the Worker, which empties it here.
       const audioS = samples.length / ASR_RATE;
-      // A llama-server engine waits for the owner's GPU line (the desktop app's final passes).
-      if (spec.final && this.o.gpuTurn) {
+      // A llama-server engine waits for the owner's GPU line (the desktop app's final passes),
+      // whether it is the job's one final engine or one engine of a fused pass.
+      if (takesGpuTurn(spec) && this.o.gpuTurn) {
         release = await this.o.gpuTurn(job.id, abort.signal);
         if (abort.signal.aborted) return;
       }
@@ -1309,7 +1310,11 @@ export class JobService {
     }
   }
 
-  close(): void {
+  /**
+   * Stops the queue. `keepShelf` leaves the model store open: the desktop app shares it with the
+   * Models page, so a queue that failed to start must not take the store down with it.
+   */
+  close(o: { keepShelf?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
     this.remotes.close();
@@ -1321,9 +1326,19 @@ export class JobService {
       s.worker?.close();
       s.worker = null;
     }
-    this.o.shelf.close();
+    if (!o.keepShelf) this.o.shelf.close();
     this.store.close();
   }
+}
+
+/**
+ * Whether a job on this spec decodes on llama-server (Qwen) and so waits its turn on the owner's
+ * GPU line: as the spec's final engine, or as one engine of its fused pass.
+ */
+export function takesGpuTurn(spec: ModelSpec): boolean {
+  return (
+    Boolean(spec.final) || (spec.fusion?.engines.some((e) => e.kind === "llama-server") ?? false)
+  );
 }
 
 const REQUEST_FIELDS = [
