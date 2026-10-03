@@ -42,6 +42,8 @@ export interface DraftTransport {
 export interface DraftSink {
   open(d: DraftOpen): void;
   chip(c: Chip): void;
+  /** A dictation made while the box had the keyboard: at the end of the field, a space between. */
+  append(text: string): void;
 }
 
 /** An underlined span of the field: where it is now, and what the other engine heard. */
@@ -311,5 +313,13 @@ export function mountDraft(t: DraftTransport): DraftSink {
       }
     },
     chip: (c) => chip.show(c),
+    append: (more) => {
+      if (!d || done || more.trim() === "") return;
+      const glue = field.value === "" || /\s$/.test(field.value) ? "" : " ";
+      field.value = `${field.value}${glue}${more.trim()}`;
+      field.dispatchEvent(new Event("input"));
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    },
   };
 }

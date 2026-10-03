@@ -410,7 +410,8 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
-      if (SETTLED.has(e.type)) this.settledAudio(e.id, e.type);
+      if (SETTLED.has(e.type))
+        this.settledAudio(e.id, e.type, e.type === "dictation.drafted" && e.reason === "append");
       this.tell({ kind: "event", e });
     };
     this.sweep();
@@ -463,14 +464,17 @@ export class DictationService {
     }
   }
 
-  /** A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed. */
-  private settledAudio(id: string, type: string): void {
+  /**
+   * A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed.
+   * `appended`: its text went into another dictation's draft (DC-A4), which never decodes it again.
+   */
+  private settledAudio(id: string, type: string, appended: boolean): void {
     if ((this.o.keepAudio?.() ?? true) || !this.audio.has(id)) return;
     clearTimeout(this.windows.get(id));
     this.windows.delete(id);
     // A draft waits in the box for as long as the user takes, and the box's Retry decodes this
     // audio again: its window has no timer, and the box closes it when the draft is answered.
-    if (type === "dictation.drafted") {
+    if (type === "dictation.drafted" && !appended) {
       this.windows.set(id, undefined);
       return;
     }
@@ -883,6 +887,8 @@ export class DictationService {
       saveAudio: (id, samples) => this.audio.write(id, samples),
       onDraft: (id, _reason, focus, rule) =>
         this.draft.open(id, { focus, ...(rule ? { rule } : {}) }).ok,
+      draftFocused: () => this.draft.takesDictation(),
+      onAppend: (id, text) => this.draft.append(id, text),
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
       appRule: (app) => this.o.apps?.().find((r) => r.app === app),
       onBusy: () => this.tell({ kind: "busy" }),

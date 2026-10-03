@@ -68,6 +68,7 @@ test("every command the app writes is the fixture's line, which the Rust helper 
       read_field: true,
     },
     { type: "settled", id: "1" },
+    { type: "send", id: "1", send_key: "Enter" },
     { type: "focus", target: { ...target, field: "secure" } },
     { type: "session.start" },
     { type: "session.stop" },

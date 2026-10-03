@@ -272,6 +272,10 @@ export interface SessionOptions extends TextRules {
    * (DC-A4). False: the dictation fails.
    */
   onDraft?(id: string, reason: string, focus: boolean, rule?: DraftRule): boolean;
+  /** Whether the draft box has the keyboard with a draft open in it (DC-A4). */
+  draftFocused?(): boolean;
+  /** Appends dictation `id`'s text to the draft box's field; false when the box cannot take it. */
+  onAppend?(id: string, text: string): boolean;
   /** How the text goes in (DC-S2); `DEFAULT_INSERT` when absent. */
   insertPolicy?(): InsertPolicy;
   /** The per-app rule for `app` (DC-U9), from `dictation.apps`; none, the globals apply. */
@@ -453,7 +457,9 @@ export const DRAFT_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 /** How an insert the app asked for outside a session ended (the draft box's, DC-S1). */
-export type InsertOutcome = { ok: true; method: string } | { ok: false; reason: string };
+export type InsertOutcome =
+  | { ok: true; method: string; receipt_ms: number }
+  | { ok: false; reason: string };
 
 /** An insert the app asked for outside a session: the dictation it logs to, if any. */
 interface Explicit {
@@ -465,6 +471,8 @@ interface Explicit {
 interface Listening {
   helperId: string;
   target: Target;
+  /** The draft box had the keyboard at the press: the text goes into it, not to the app (DC-A4). */
+  toDraft: boolean;
   chunks: Float32Array[];
   samples: number;
   /** Secure Input was on at the start, or the field is a password field (DC-N8). */
@@ -547,6 +555,11 @@ export class DictationSession {
   private readonly insertRules = new Map<string, DraftRule>();
   /** The draft box's inserts and copies waiting for the helper's answer, by the id sent. */
   private readonly explicit = new Map<string, Explicit>();
+  /**
+   * Inserts gone to the helper with no send key, by helper id, and the key Enter would press for
+   * them: an Enter that comes before the receipt still sends (DC-A4).
+   */
+  private readonly lateSends = new Map<string, Exclude<SendKey, "none">>();
   private explicitSeq = 0;
   /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
   private decoding = 0;
@@ -819,6 +832,7 @@ export class DictationSession {
         const c: Listening = {
           helperId: m.id,
           target: m.target,
+          toDraft: this.o.draftFocused?.() ?? false,
           chunks: [],
           samples: 0,
           secure: this.secureInput || m.target.field === "secure",
@@ -874,12 +888,13 @@ export class DictationSession {
               method: m.method,
               receipt_ms: m.receipt_ms,
             });
-          x.resolve({ ok: true, method: m.method });
+          x.resolve({ ok: true, method: m.method, receipt_ms: m.receipt_ms });
           return;
         }
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
+        this.lateSends.delete(m.id);
         this.insertRules.delete(m.id);
         // Nothing was pasted after a clipboard-only insert, so nothing is read back.
         if (m.method === "clipboard") this.reads.delete(m.id);
@@ -920,6 +935,7 @@ export class DictationSession {
         if (!id) return;
         const rule = this.insertRules.get(m.id);
         this.inserts.delete(m.id);
+        this.lateSends.delete(m.id);
         this.reads.delete(m.id);
         this.insertRules.delete(m.id);
         // The keyboard moved or the field cannot take it: the text waits in the draft box, whose
@@ -952,7 +968,14 @@ export class DictationSession {
     }
     const c = this.cur ?? this.latest;
     if (!c) {
-      // The text is on its way into the app already: too late to send it or hold it back.
+      // The text is on its way into the app already: too late to hold it back, but an Enter still
+      // sends once the target has read it (DC-A4).
+      const late = asked === "send" ? [...this.lateSends].at(-1) : undefined;
+      if (late) {
+        this.lateSends.delete(late[0]);
+        this.o.send({ type: "send", id: late[0], send_key: late[1] });
+        return;
+      }
       this.o.onLog?.("info", `dictation: ${name} came after the insert began, so it did nothing`);
       return;
     }
@@ -1125,6 +1148,7 @@ export class DictationSession {
       this.write({ type: "dictation.failed", id, error: "the dictation helper stopped" });
     }
     this.inserts.clear();
+    this.lateSends.clear();
     this.reads.clear();
     this.insertRules.clear();
     for (const x of this.explicit.values())
@@ -1303,6 +1327,11 @@ export class DictationSession {
     const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
     const rule = c.rule;
     const sendKey = (rule?.sendKey as SendKey | undefined) ?? p.sendKey;
+    // A press while the draft box had the keyboard adds to the draft there (DC-A4).
+    if (c.toDraft && c.asked === "insert" && !c.secure && this.o.onAppend?.(id, r.text)) {
+      this.notInserted(c, { type: "dictation.drafted", id, reason: "append" });
+      return;
+    }
     // A per-app rule's draft box (DC-U9), taking the keyboard as Shift+Enter's does. A key the
     // user pressed during the session (Enter, Escape) still wins over the rule.
     if (
@@ -1332,6 +1361,8 @@ export class DictationSession {
     this.decoding--;
     if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
+    if (!send && method !== "clipboard" && sendKey !== "none")
+      this.lateSends.set(c.helperId, sendKey);
     if (read) this.reads.set(c.helperId, id);
     const kept = draftRule(rule, false);
     if (kept) this.insertRules.set(c.helperId, kept);

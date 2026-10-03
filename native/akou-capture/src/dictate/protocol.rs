@@ -308,6 +308,12 @@ pub enum Command {
     Settled {
         id: String,
     },
+    /// Enter came after insert `id` went out with no send key (DC-A4): press `send_key` after its
+    /// receipt as if it had been asked for. Nothing for an insert no longer waiting.
+    Send {
+        id: String,
+        send_key: String,
+    },
     Focus {
         target: Target,
     },
@@ -400,6 +406,16 @@ impl Command {
                 }
             }
             "settled" => Command::Settled { id: need("id")? },
+            "send" => {
+                let send_key = need("send_key")?;
+                if send_key == "none" || !SEND_KEYS.contains(&send_key.as_str()) {
+                    return Err(format!("send needs a send_key of {SEND_KEYS:?} but none"));
+                }
+                Command::Send {
+                    id: need("id")?,
+                    send_key,
+                }
+            }
             "focus" => Command::Focus {
                 target: Target::from_value(v.get("target").ok_or("focus needs target")?)?,
             },
@@ -999,6 +1015,10 @@ mod tests {
                     trailing_space: false,
                 },
                 Command::Settled { id: "1".into() },
+                Command::Send {
+                    id: "1".into(),
+                    send_key: "Enter".into(),
+                },
                 Command::Focus { target: secure },
                 Command::SessionStart,
                 Command::SessionStop,
