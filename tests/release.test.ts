@@ -385,3 +385,41 @@ describe("the unsigned first open", () => {
     }
   });
 });
+
+describe("the release workflow's version job", () => {
+  test("the version job gives the whole check suite as long as ci.yml's check job does", () => {
+    const release = Bun.YAML.parse(
+      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+    ) as { jobs: { version: { "timeout-minutes"?: number; steps: { run?: string }[] } } };
+    const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    // ci.yml's check job: `timeout-minutes: ${{ inputs.repeat > 1 && 180 || 30 }}`, 30 on one run.
+    const checkJob = ci.slice(ci.indexOf("\n  check:"));
+    const ciMinutes = Number(/timeout-minutes: \$\{\{[^}]*\|\| (\d+) \}\}/.exec(checkJob)?.[1]);
+    expect(ciMinutes).toBeGreaterThan(0);
+    expect(release.jobs.version.steps.some((s) => s.run?.trim() === "bun run check")).toBe(true);
+    expect(release.jobs.version["timeout-minutes"] ?? 0).toBeGreaterThanOrEqual(ciMinutes);
+  });
+
+  test("the version job installs ffmpeg as ci.yml's Linux check does, since the skip floor counts on it", () => {
+    type Steps = { steps: { run?: string }[] };
+    const release = Bun.YAML.parse(
+      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+    ) as { jobs: { version: Steps } };
+    const ci = Bun.YAML.parse(
+      readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8"),
+    ) as {
+      jobs: { check: Steps };
+    };
+    const install = (job: Steps) =>
+      job.steps.findIndex((s) => /apt-get install[^\n]*\bffmpeg\b/.test(s.run ?? ""));
+    const runs = (job: Steps) => job.steps.findIndex((s) => s.run?.trim() === "bun run check");
+    const ciStep = ci.jobs.check.steps[install(ci.jobs.check)];
+    // Positive control: ci.yml's check installs it before the suite, so the pattern finds a real step.
+    expect(install(ci.jobs.check)).toBeGreaterThanOrEqual(0);
+    expect(install(ci.jobs.check)).toBeLessThan(runs(ci.jobs.check));
+    const v = release.jobs.version;
+    expect(install(v)).toBeGreaterThanOrEqual(0);
+    expect(install(v)).toBeLessThan(runs(v));
+    expect(v.steps[install(v)]?.run?.trim()).toBe(ciStep?.run?.trim());
+  });
+});
