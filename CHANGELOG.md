@@ -2,6 +2,24 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## Unreleased
+
+### Files
+- **`akou transcribe FILE` works on the desktop app.** Up to 0.5.5 it exited 69 with `not_server` unless akou ran in server mode, so a recording on your own Mac had to be copied to a server first. The desktop app now takes file jobs with its own token, on the same queue, presets and models as a server: long audio is cut at its pauses, `--diarize` labels the speakers, and the command prints the transcript and exits 0. The app keeps the job, so `akou jobs list` shows it until `server.retain_days` deletes it; a server still deletes it once the text is printed. Server mode keeps its one meaning: keyed access for other programs over the network. The app binds loopback as before, reads no keys, signs no callbacks, sends no job to `server.remotes`, and still answers 404 on `/v1/keys` and the OpenAI-compatible route.
+- **A `best` file job waits its turn behind a call's final pass on Qwen**, and a final pass that starts meanwhile waits for the job: only one llama-server fits on Metal, and starting a second stops the first. A server's jobs do not wait.
+- **The app closes a job's Worker once the queue is empty**, so a file transcribed once does not keep its model in memory. A server keeps its default model loaded, as before.
+- **The app finds Homebrew's ffmpeg.** A Mac app opened from the Finder runs with a short PATH, so M4A, MP3 and Ogg files failed with "ffmpeg is not installed" although `brew install ffmpeg` had put one in `/opt/homebrew/bin`. akou now looks there and in `/usr/local/bin` when PATH has none.
+- **No message sends anyone to server mode for a local file.** `akou help transcribe` says the desktop app runs the job, names `AKOU_URL`, `AKOU_API_KEY` and `AKOU_API_KEY_FILE` for a server, and lists the exit codes. An akou with no job routes now answers `no_jobs` (it was `not_server`), and `akou jobs list` no longer suggests `akou serve`. [docs/agents.md](docs/agents.md), [docs/usage.md](docs/usage.md#transcribing-a-file), [docs/server.md](docs/server.md) and the [akou skill](skills/akou/SKILL.md) say the same.
+
+The HTTP API: the job routes and `GET /v1/events` answer in the desktop app too, and `GET /v1/server` there has `capabilities.jobs` and `events` true and a `queue` object; `webhooks`, `openai` and `interactive` stay false, and `dictation` stays null.
+
+### Server jobs
+- **The `fusion` preset is built.** A job with `preset: fusion` runs Qwen3-ASR, Whisper large-v3 and Parakeet over the same pieces of the file, one engine loaded at a time, and joins their words by confidence ROVER. On the benchmark this trio scored 7.97 pooled WER, against 8.63 for Qwen alone. The job's model reads `rover-conf(qwen3-asr-1.7b,whisper-large-v3,parakeet-tdt-0.6b-v3-fp32)`. A client can name such a list itself in `model`, and `server.default_model` can be `fusion`. `akou models pull fusion` fetches the three engines, the llama-server build and the speaker models.
+- **An engine that fails is left out, and the job goes on.** An engine that will not load, crashes or refuses a piece is dropped, for the whole job or for that piece. The job fails only when no engine is left. The result's `engine.fusion` lists the engines that ran, with their decode seconds, and the dropped ones with the reason.
+- **New settings:** `asr.final.engines` sets the preset's engines and their order (add `canary-1b-v2` for a fourth). `asr.fusion` is `rover-conf`, `rover-freq` or `first`. `asr.memoryBudgetMb` leaves out an engine whose estimated memory is over the budget. The fusers that ask a language model are not built yet.
+- `GET /v1/server` gives each preset's speaker model (`diarizer`) and how it joins its engines (`fusion`).
+- A recorded call's final pass still runs one engine, Parakeet or Qwen.
+
 ## 0.5.5 — a stuck akou recovers on its own, a double-click fixes a word, and server jobs run Qwen
 
 On 0.5.4 akou could stop answering while its port still took connections. Every command then waited out its 60 s timeout, a plain kill did nothing, and one recording started 21 minutes late. In 0.5.5 the app ends itself when its main thread is stuck and no call records, and the command line restarts an app that stopped answering, never while a call records. Fixing a misheard word takes a double-click, and the agent following the call is told what the fix taught. On a server, a job that names no model now runs Qwen wherever it is downloaded, and its result says when each word was said.

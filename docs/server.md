@@ -2,6 +2,8 @@
 
 akou also runs as a self-hosted transcription server: one Docker image on linux/amd64 and linux/arm64, running the same core as the desktop app. A program uploads an audio file, gets a job id back at once, and reads one result with text, language, words, segments and the engine that made it, by long-poll, by an event feed, or by a signed webhook. The server also speaks the OpenAI transcription endpoint, the Wyoming protocol and Bazarr's `/asr`, so Nextcloud, Home Assistant and Bazarr work with no code on their side. There is no akou cloud and no relay: the server is your own box, reached by your own programs.
 
+You do not need server mode to transcribe a file on your own Mac: the desktop app takes `akou transcribe FILE` with its own token ([Usage](usage.md#transcribing-a-file)). Server mode is for other programs and other machines, with keys.
+
 The steps below cover the image, the models, the first start and the keys. [GPUs and presets](server-hardware.md) covers the GPU images, the `best` preset and a large backlog.
 
 ## Running the image
@@ -178,7 +180,10 @@ The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key com
 ```sh
 export AKOU_URL=https://akou.example
 export AKOU_API_KEY_FILE=~/.config/akou/remote.key
+akou transcribe note.ogg --preset best
 akou jobs list
 ```
+
+`akou transcribe` uploads the file, waits for the job and prints the transcript; on a server the job is deleted once the text is printed, so it does not stay in `akou jobs list` there. Without `AKOU_URL` the same commands go to the desktop app on this machine, which runs the job itself.
 
 With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that refuses the connection, or answers nothing within the request's time, exits 69 and names `AKOU_URL`; a wrong key exits 77. `akou quit` refuses to run, since it stops only the app on this machine, and `akou doctor` reports the server it reaches. `AKOU_API_KEY_FILE` may start with `~/`, as `docker -e` and a systemd unit pass it unexpanded.
