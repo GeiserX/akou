@@ -184,7 +184,7 @@ The controls were also seen to fail. A copy of the script with the drift left ou
 
 - A two-clock run on a Mac with a real input device (a USB mic or audio interface) and a session holding both the Microphone and the system-audio grant: `drift-signal` with the mic train into that device's loopback or played acoustically into the mic, `akou start`, 62 minutes, `drift-test.ts`, then `g4-controls.ts`.
 - A real tap death under the new rule: the next one that happens on a real device should show `dead` with `silent_for` near 1 s and a gap near 1 s.
-- The macOS 14.2 or 14.3 run.
+- The macOS 14.2 or 14.3 run, in a tart VM on an Apple silicon Mac: [`scripts/gates/g4-macos14-vm.sh`](../../scripts/gates/g4-macos14-vm.sh) clones the clean `macos-sonoma-vanilla:14.3` image (about 25 GB to pull, 50 GB on disk), records 12 s through the helper with a tone playing and 12 s with nothing playing, and passes when the call channel reads above -60 dBFS with the tone and under -90 dBFS without it. The VM has no microphone, so it answers only whether the tap works on 14.3, which is what decides the 14.4 floor. A system-audio prompt in the VM needs one click over VNC (`VNC=1`).
 
 ## G5: containment
 
