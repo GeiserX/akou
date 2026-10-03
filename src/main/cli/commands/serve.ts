@@ -29,6 +29,16 @@ export function compiledServeWarning(compiled: boolean): string | null {
     : null;
 }
 
+/**
+ * The API's address as bound (SV-P5), for the startup line: `0.0.0.0` or `::` when it listens on
+ * every address, where `url` names the loopback a client on this machine uses.
+ */
+export function boundUrl(hostname: string, url: string): string {
+  const u = new URL(url);
+  u.hostname = hostname.includes(":") ? `[${hostname}]` : hostname;
+  return u.href;
+}
+
 export const serveCommand: Command = {
   name: "serve",
   summary: "Run the akou server in the foreground (server mode, no window) until Ctrl-C",
@@ -71,7 +81,10 @@ export const serveCommand: Command = {
       return EXIT.software;
     }
     for (const i of app.config().issues) ctx.io.err(`akou: setting refused: ${i.message}`);
-    ctx.io.err(`akou ${app.version}: serving on ${app.server?.url} (pid ${process.pid})`);
+    const where = app.server?.hostname
+      ? boundUrl(app.server.hostname, app.server.url)
+      : app.server?.url;
+    ctx.io.err(`akou ${app.version}: serving on ${where} (pid ${process.pid})`);
     const warning = compiledServeWarning(isCompiled());
     if (warning) ctx.io.err(warning);
     const quit = () => void app.quit();
