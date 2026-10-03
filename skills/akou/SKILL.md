@@ -2,7 +2,7 @@
 name: akou
 description: Record a call or meeting on this computer with akou and answer questions about it while it runs, or transcribe an audio file. Use when the user says record this call or meeting, starts a call, names a speaker, spells a word, asks what was said, decided or is being discussed, or hands over a recording or voice note to transcribe.
 metadata:
-  version: "0.5.5"
+  version: "0.6.0"
 ---
 
 # akou
