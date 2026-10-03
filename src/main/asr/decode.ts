@@ -2,13 +2,15 @@
  * Any audio container to the recognizer's input (docs/ux/SERVER.md SV-P6): ffmpeg decodes the
  * first audio stream of a file (Opus in Ogg or WebM, AAC in M4A, MP3, WAV, the audio of a video)
  * and resamples it to 16 kHz mono float, which is what a job hands the final pass. The image
- * installs ffmpeg with one apt line; the desktop app does not use this (SV-P10).
+ * installs ffmpeg with one apt line. The desktop app's file jobs use it too (`akou transcribe`),
+ * but never for its own recordings (SV-P10).
  *
  * A file ffmpeg cannot read, a file with no audio stream and a machine with no ffmpeg are each a
  * `DecodeError` with the reason, never an empty transcript.
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import { ASR_RATE } from "./engine.ts";
 
@@ -24,7 +26,7 @@ export class DecodeError extends Error {
 }
 
 export interface DecodeOptions {
-  /** The ffmpeg program and any leading arguments. Default: `ffmpeg` on PATH. */
+  /** The ffmpeg program and any leading arguments. Default: `ffmpegCommand()`. */
   ffmpeg?: readonly string[];
   /** Stops the decode (a cancelled job): ffmpeg is killed and the promise rejects. */
   signal?: AbortSignal;
@@ -77,9 +79,28 @@ export function decodeArgs(path: string): string[] {
   ];
 }
 
+/**
+ * Where Homebrew puts ffmpeg (Apple silicon, then Intel). A Mac app opened from the Finder or the
+ * Dock runs with a PATH of `/usr/bin:/bin:/usr/sbin:/sbin`, so `ffmpeg` on PATH misses an ffmpeg
+ * the user's own shell finds.
+ */
+export const FFMPEG_ELSEWHERE = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"] as const;
+
+/**
+ * The ffmpeg to run: `ffmpeg` when PATH has one, else the first of `FFMPEG_ELSEWHERE` on disk,
+ * else `ffmpeg`, whose absence the decode then reports.
+ */
+export function ffmpegCommand(
+  onPath: (name: string) => string | null = (name) => Bun.which(name),
+  exists: (path: string) => boolean = existsSync,
+): string {
+  if (onPath("ffmpeg")) return "ffmpeg";
+  return FFMPEG_ELSEWHERE.find((p) => exists(p)) ?? "ffmpeg";
+}
+
 /** Decodes `path` to 16 kHz mono samples in [-1, 1]. */
 export function decodeAudio(path: string, o: DecodeOptions = {}): Promise<Float32Array> {
-  const [program, ...lead] = o.ffmpeg ?? ["ffmpeg"];
+  const [program, ...lead] = o.ffmpeg ?? [ffmpegCommand()];
   return new Promise((resolve, reject) => {
     const child = spawn(program as string, [...lead, ...decodeArgs(path)], {
       stdio: ["ignore", "pipe", "pipe"],

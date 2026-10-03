@@ -131,6 +131,8 @@ interface Answer {
   words: WordHyp[];
   /** Mean log-probability of the text's tokens (0 for no text). */
   meanLp: number;
+  /** exp of `meanLp`, or undefined when the answer carried no log-probabilities. */
+  conf?: number;
 }
 
 /**
@@ -301,6 +303,7 @@ export class QwenEngine implements FinalEngine {
     };
     const code = a.lang ? CODE_OF[a.lang] : undefined;
     if (code) h.lang = code;
+    if (h.text !== "" && a.conf !== undefined) h.conf = a.conf;
     return h;
   }
 
@@ -379,11 +382,13 @@ export class QwenEngine implements FinalEngine {
       if (k >= 0) tokens = tokens.slice(k + 1);
     }
     const lps = tokens.map((x) => x.logprob);
+    const meanLp = lps.length ? lps.reduce((a, b) => a + b, 0) / lps.length : 0;
     return {
       lang: parsed.lang,
       text: parsed.text,
       words: wordsOf(parsed.text, tokens),
-      meanLp: lps.length ? lps.reduce((a, b) => a + b, 0) / lps.length : 0,
+      meanLp,
+      ...(lps.length ? { conf: Math.min(1, Math.exp(meanLp)) } : {}),
     };
   }
 }

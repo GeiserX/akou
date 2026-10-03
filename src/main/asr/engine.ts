@@ -11,7 +11,8 @@
  * docs/research/asr-architecture.md section 2.1: any number of engines decode the same units into
  * `Hypothesis` values that carry per-word confidences and times, and a fuser combines them.
  * Parakeet on sherpa-onnx is the first `FinalEngine` (`RecognizerEngine` over the model set's
- * recognizer); the pipelines still call `Recognizer.decode` until the N-engine final pass (ASR-6).
+ * recognizer). Both final passes decode a span through `decodeUnit` (finalize-worker.ts), and a file
+ * job's N-engine pass (ASR-6, `runEngines`) runs a list of engines over the same units and fuses.
  */
 
 import type { Provider } from "../llm/provider.ts";
@@ -37,6 +38,11 @@ export interface Hypothesis {
   text: string;
   words: WordHyp[];
   lang?: string;
+  /**
+   * 0 to 1: the engine's confidence in the whole unit, when it reports one (Qwen: exp of the mean
+   * log-probability of the text's tokens). Kept for a unit whose words carry no confidence.
+   */
+  conf?: number;
   /** Decode time, milliseconds. */
   ms: number;
 }
@@ -64,8 +70,8 @@ export interface FinalEngine {
     languageId: boolean;
   };
   /**
-   * Memory it holds while loaded, MB, for the final pass's budget; absent for the measured
-   * figure by its id (final-model.ts).
+   * About how much memory the engine holds while loaded, MB, when known: the N-engine pass drops an
+   * engine over its memory budget (`asr.memoryBudgetMb`) instead of loading it.
    */
   readonly memoryMb?: number;
   load(): Promise<void>;
@@ -278,7 +284,9 @@ export interface LlamaEngineSpec {
  * How a Worker gets its models: sherpa-onnx with files from the models folder, or a module that
  * exports `createModels(options)` (the test fakes, which CI uses). `final`, when set, is the engine
  * that decodes a file job's units in place of the model set's recognizer, which then never loads;
- * the model set still gives the VAD and the speaker labels.
+ * the model set still gives the VAD and the speaker labels. `fusion`, when set, is the N-engine pass
+ * (ASR-6): every engine of its list decodes every unit, one engine at a time, and the fuser joins
+ * their words; it takes the place of `final`.
  */
 export type ModelSpec = (
   | {
@@ -294,14 +302,36 @@ export type ModelSpec = (
       diarizeHelper?: readonly string[];
     }
   | { kind: "module"; path: string; model: string; options?: unknown }
-) & {
-  final?: LlamaEngineSpec;
-  /**
-   * A final pass over several engines (`asr.final.engines`): their ids in order, each either
-   * `final`'s engine or the model set's recognizer. Absent: `final` alone, else the recognizer.
-   */
-  finals?: readonly string[];
-};
+) & { final?: LlamaEngineSpec; fusion?: FusionSpec };
+
+/**
+ * One engine of the N-engine pass, as the Worker builds it: the model set's recognizer (Parakeet),
+ * Qwen on llama-server, Whisper or Canary on transcribe-cpp, or a module's `createEngine(options,
+ * engine)` (the test fakes). `memoryMb` is the engine's estimate for the memory budget.
+ */
+export type FusionEngineSpec = (
+  | { kind: "recognizer"; engine: string }
+  | LlamaEngineSpec
+  | {
+      kind: "transcribe-cpp";
+      engine: string;
+      /** The models folder: the GGUF is `<modelsDir>/<engine>/<file>`. */
+      modelsDir: string;
+      /** The user's languages (`asr.languages`), forced in this order when a unit has none. */
+      languages?: readonly string[];
+    }
+  | { kind: "module"; path: string; engine: string; options?: unknown }
+) & { memoryMb?: number };
+
+/** The N-engine pass of a file job (ASR-6). */
+export interface FusionSpec {
+  /** `asr.fusion`. */
+  fuser: "first" | "rover-freq" | "rover-conf";
+  /** In priority order: the order the fuser breaks ties in. */
+  engines: readonly FusionEngineSpec[];
+  /** The memory budget, MB; an engine whose estimate is over it is dropped. 0 or absent: none. */
+  memoryBudgetMb?: number;
+}
 
 export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
   if (spec.kind === "module") {
@@ -317,36 +347,31 @@ export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
 /**
  * A model set's recognizer as a `FinalEngine`: Parakeet on sherpa-onnx in the app, the fake
  * recognizer in CI. It decodes through `prepare`, so the recognizer still loads once per app run
- * whichever path asks for it. It takes no glossary: it decodes with the call's decode list as its
- * hotwords where the decoding takes them (beam, as the single-Parakeet pass does), and with none
- * under greedy, the default.
+ * whichever path asks for it. It takes no glossary: Parakeet decodes greedy, which takes no
+ * hotwords, and the vocabulary applies when reading and after the call.
  */
 export class RecognizerEngine implements FinalEngine {
   readonly id: string;
   readonly features = { confidence: true, timestamps: true, glossary: false, languageId: false };
-  private hw: PreparedHotwords | null = null;
+  private rec: Recognizer | null = null;
 
-  constructor(
-    private readonly models: Pick<ModelSet, "recognizerModel" | "prepare">,
-    private readonly list: DecodeList | null = null,
-  ) {
+  constructor(private readonly models: Pick<ModelSet, "recognizerModel" | "prepare">) {
     this.id = models.recognizerModel;
   }
 
   async load(): Promise<void> {
-    this.hw ??= this.models.prepare(this.list);
+    this.rec ??= this.models.prepare(null).recognizer;
   }
 
   async unload(): Promise<void> {
-    this.hw = null;
+    this.rec = null;
   }
 
   async decode(unit: FinalUnit): Promise<Hypothesis> {
     await this.load();
-    const { recognizer: rec, arg } = this.hw as PreparedHotwords;
+    const rec = this.rec as Recognizer;
     const t = performance.now();
-    // Hotwords only reach a transducer (live-worker.ts `streamHotwords`).
-    const r = rec.decode(unit.samples, rec.kind === "transducer" && arg ? arg : undefined);
+    const r = rec.decode(unit.samples);
     const ms = performance.now() - t;
     const h: Hypothesis = { engine: this.id, text: r.text, words: r.words ?? [], ms };
     if (r.lang) h.lang = r.lang;
