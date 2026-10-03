@@ -30,6 +30,9 @@
       "name": "templates"
     },
     {
+      "name": "presets"
+    },
+    {
       "name": "share"
     },
     {
@@ -245,6 +248,66 @@
           "templates"
         ],
         "description": "The note templates the enhanced notes can use: the shipped ones and the user's own, with the sections of each.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/presets": {
+      "get": {
+        "operationId": "presets.list",
+        "tags": [
+          "presets"
+        ],
+        "description": "The ask presets: the shipped ones and the user's own files, in menu order, read from the folder on every request. Without `call`, each `question` is the file's body with `{speaker}`, `{user}` and `{title}` unfilled, and `usesSpeaker` says which ask about one speaker. With `call`, they are filled in for that call: `{user}` from `user.name`, `{title}` from its title, and a preset that names `{speaker}` once per named speaker, or for `speaker` alone. A preset is a question for one call: ask it with `POST /calls/{id}/ask`.",
+        "parameters": [
+          {
+            "name": "call",
+            "in": "query",
+            "required": false,
+            "description": "Fill the presets in for this call: `live`, `last` or an id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "speaker",
+            "in": "query",
+            "required": false,
+            "description": "With `call`: fill `{speaker}` with this name instead of each named speaker.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",

@@ -129,6 +129,16 @@ export const PARITY: readonly Row[] = [
     note: "akou_ask is listed only when a provider can answer, and hidden from a harness client when that harness is the provider (src/main/mcp/server.ts askListed)",
   },
   {
+    action: "Ask presets",
+    cli: ["presets", "ask"],
+    api: ["GET /presets"],
+    mcp: {
+      none: "the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7)",
+    },
+    window: [ui("ask.ts", "`/presets?call=#{encodeURIComponent(call)}`")],
+    note: "`akou ask --preset NAME` asks one; the files live in the config folder's presets/ (PG-F2)",
+  },
+  {
     action: "Search one call",
     cli: ["search"],
     api: ["GET /calls/:id/search"],
