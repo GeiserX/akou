@@ -251,8 +251,12 @@ async function checkInner(
   allowMissingHelper: boolean,
 ): Promise<void> {
   const unpacked = unpackApp(work);
-  if (!check(typeof unpacked !== "string", "the packed app unpacks", String(unpacked))) return;
-  const { resources, app, main, bun } = unpacked as UnpackedApp;
+  if (typeof unpacked === "string") {
+    check(false, "the packed app unpacks", unpacked);
+    return;
+  }
+  check(true, "the packed app unpacks");
+  const { resources, app, main, bun } = unpacked;
   if (MAC) {
     checkPlist(join(app, ".."), "app", version);
     checkSignature(join(app, ".."), "app");
@@ -371,7 +375,16 @@ console.log(JSON.stringify({ bun: Bun.version, open }));
     where = JSON.parse(located.stdout.toString());
   } catch {}
   const helper = join(main, `akou-capture${EXE}`);
-  const found = where.source === "bundled" && where.command[0] === realpathSync(helper);
+  // Both sides through the system's own resolution: on Windows the temporary folder may come back
+  // under its short 8.3 name on one side only (`RUNNER~1` against `runneradmin`).
+  const same = (a: string | undefined, b: string) => {
+    try {
+      return !!a && realpathSync.native(a) === realpathSync.native(b);
+    } catch {
+      return false;
+    }
+  };
+  const found = where.source === "bundled" && same(where.command[0], helper);
   if (existsSync(helper) || where.source === "bundled") {
     if (
       check(
