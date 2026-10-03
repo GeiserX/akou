@@ -77,12 +77,16 @@ export function desktopPlatform(
 }
 
 export const PLATFORM = desktopPlatform() ?? "macos-arm64";
-/** Hutch's output for this machine: the app (and on macOS the wrapper bundle) and its artifacts. */
-export const BUILD_DIR = join(ROOT, "build", `stable-${PLATFORM}`);
+/** Hutch's output for this machine, the app (on macOS the wrapper bundle); Windows is `win-x64` there. */
+export const BUILD_DIR = join(
+  ROOT,
+  "build",
+  `stable-${PLATFORM === "windows-x64" ? "win-x64" : PLATFORM}`,
+);
 /** The app folder Hutch builds on Windows and Linux: a launcher and the packed app. */
 export const APP_DIR = join(BUILD_DIR, "akou");
 export const ARTIFACTS_DIR = join(ROOT, "artifacts");
-export const WRAPPER_APP = join(ROOT, "build", `stable-${PLATFORM}`, "akou.app");
+export const WRAPPER_APP = join(BUILD_DIR, "akou.app");
 export const HUTCH_DMG = join(ROOT, "artifacts", `${PLATFORM}-akou.dmg`);
 export const RELEASE_DIR = join(ROOT, "dist", "release");
 
