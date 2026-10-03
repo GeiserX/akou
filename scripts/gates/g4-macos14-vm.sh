@@ -3,7 +3,7 @@
 # process tap the capture helper records the call with deliver audio on macOS 14.3? The answer
 # decides whether the 14.4 floor (`MIN_MACOS` in scripts/build-app.ts) can drop.
 #
-#   TART_HOME=/Volumes/Data/tart scripts/gates/g4-macos14-vm.sh <akou-capture> [out folder]
+#   TART_HOME=<folder on a disk with 80 GB free> scripts/gates/g4-macos14-vm.sh <akou-capture> [out folder]
 #
 # <akou-capture> is the shipping helper built on the host (`cargo build --release` in
 # native/akou-capture). The VM is `ghcr.io/cirruslabs/macos-sonoma-vanilla:14.3` (override with
@@ -83,7 +83,6 @@ verdict="$(awk -v t="$tone_rms" -v s="$silent_rms" 'BEGIN {
   quiet = (s == "-inf") ? -999 : (s == "" ? 0 : s + 0)
   print (tone > -60 && quiet < -90) ? "pass" : "fail"
 }')"
-cp "$share"/*.opus "$share"/*.err "$out/"
 cat > "$out/verdict.json" <<EOF
 {
   "gate": "G4, macOS 14.2 or 14.3",
@@ -94,5 +93,7 @@ cat > "$out/verdict.json" <<EOF
   "verdict": "$verdict"
 }
 EOF
+# After the verdict, so a helper that wrote nothing still leaves one.
+for f in "$share"/*.opus "$share"/*.err; do if [ -e "$f" ]; then cp "$f" "$out/"; fi; done
 cat "$out/verdict.json"
 [ "$verdict" = pass ]
