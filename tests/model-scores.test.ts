@@ -87,7 +87,10 @@ describe("[SV-U6] every catalog model is scored with a source, or marked not mea
     const speech = MODELS.filter((m) => m.serves.includes("final"));
     for (const m of speech) {
       const s = scoresOf(m) as ModelScores;
-      expect([m.id, "metric" in s.accuracy && s.accuracy.metric]).toEqual([m.id, "wer"]);
+      // A recognizer a job can pick has a FLEURS bar. transcribe-cpp's engines (no job runs them)
+      // were scored on other sets, so theirs stays empty rather than compare unlike numbers.
+      if (!(m.runtime === "transcribe-cpp" && "notMeasured" in s.accuracy))
+        expect([m.id, "metric" in s.accuracy && s.accuracy.metric]).toEqual([m.id, "wer"]);
       expect([m.id, "metric" in s.speed && s.speed.what.includes(REFERENCE_MACHINE)]).toEqual([
         m.id,
         true,

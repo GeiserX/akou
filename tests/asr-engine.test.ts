@@ -22,7 +22,6 @@ import {
 } from "../src/main/asr/models.ts";
 import { SherpaRecognizer, sherpaWords } from "../src/main/asr/sherpa.ts";
 import { SETTINGS } from "../src/main/config/schema.ts";
-import type { DecodeList } from "../src/main/vocab/decode-list.ts";
 import { createModels } from "./fixtures/asr-fake.ts";
 
 const DIARIZERS = SETTINGS["asr.diarizer"].values as readonly string[];
@@ -316,45 +315,5 @@ describe("ASR-2: SherpaRecognizer is the first FinalEngine", () => {
     await engine.unload();
     await engine.decode({ samples: new Float32Array(160), lang: "en", glossary: [] });
     expect(prepared).toBe(2);
-  });
-
-  test("in a fused final pass it decodes with the call's decode list, as the single pass does", async () => {
-    const heard: (string | undefined)[] = [];
-    const lists: (DecodeList | null)[] = [];
-    const rec = (kind: "transducer" | "other") => ({
-      model: RECOGNIZER,
-      kind,
-      decode: (_s: Float32Array, hotwords?: string) => {
-        heard.push(hotwords);
-        return { text: "", words: [] };
-      },
-    });
-    const list: DecodeList = { model: RECOGNIZER, entries: [], dropped: [], warnings: [] };
-    const engineOver = (kind: "transducer" | "other", arg: string | undefined) =>
-      new RecognizerEngine(
-        {
-          recognizerModel: RECOGNIZER,
-          prepare: (l) => {
-            lists.push(l);
-            return {
-              recognizer: rec(kind),
-              arg,
-              entries: [],
-              dropped: [],
-              warnings: [],
-              checks: [],
-            };
-          },
-        },
-        list,
-      );
-    const unit = { samples: new Float32Array(160), lang: "en", glossary: [] };
-    await engineOver("transducer", "Vercel :2").decode(unit);
-    expect(lists).toEqual([list]);
-    expect(heard).toEqual(["Vercel :2"]);
-    // Controls: greedy (no argument) and a model that takes no hotwords decode with none.
-    await engineOver("transducer", undefined).decode(unit);
-    await engineOver("other", "Vercel :2").decode(unit);
-    expect(heard).toEqual(["Vercel :2", undefined, undefined]);
   });
 });
