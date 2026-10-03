@@ -175,6 +175,11 @@ describe("the toolchain pins", () => {
       PATH: "/bin",
     });
     expect(env).toEqual({ PATH: "/bin", HUTCH_NO_UPDATE_CHECK: "1", ELECTROBUN_DEVELOPER_ID: "-" });
+    // On Windows, Windows' own tar before Git's, whatever the variable's case.
+    expect(hutchEnv({ Path: "C:\\Git\\usr\\bin", SystemRoot: "C:\\Windows" }, "win32").Path).toBe(
+      "C:\\Windows\\System32;C:\\Git\\usr\\bin",
+    );
+    expect(hutchEnv({ PATH: "/bin" }, "linux").PATH).toBe("/bin");
     expect(
       hutchEnv({ ELECTROBUN_DEVELOPER_ID: "Developer ID Application: X (T)" })
         .ELECTROBUN_DEVELOPER_ID,

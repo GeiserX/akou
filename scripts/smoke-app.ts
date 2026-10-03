@@ -1,23 +1,26 @@
 /**
- * Checks a built macOS app without opening it (docs/DESIGN.md section 9, TRAPS "Packaging"):
+ * Checks a built app without opening it (docs/DESIGN.md section 9, TRAPS "Packaging"), on the
+ * machine that built it:
  *
  *   bun scripts/smoke-app.ts [--allow-missing-helper]
  *
- * It reads `build/stable-macos-arm64/akou.app` (the wrapper `build-app.ts` made) and the release
+ * On macOS it reads `build/stable-macos-arm64/akou.app` (the wrapper `build-app.ts` made), on
+ * Windows and Linux `build/stable-<platform>/akou` (a launcher and the packed app), and the release
  * files in `dist/release/`, unpacks the inner app into a temporary folder, and fails on the first
  * of these that does not hold:
  *
- * - both `Info.plist` files carry both usage strings, the bundle id, the version (as
- *   `CFBundleVersion` and `CFBundleShortVersionString`) and the macOS 14.4 floor;
- * - both bundles pass `codesign --verify --deep --strict` (ad-hoc when unsigned);
+ * - on macOS, both `Info.plist` files carry both usage strings, the bundle id, the version (as
+ *   `CFBundleVersion` and `CFBundleShortVersionString`) and the macOS 14.4 floor, and both
+ *   bundles pass `codesign --verify --deep --strict` (ad-hoc when unsigned);
  * - the inner app runs ElectroBun 2.0.1 with its bundled Bun 1.4.0 and says the version;
  * - every file the app loads by path is beside its main process: the Workers, the browser pages,
  *   the templates, the word lists, the tray icon, sherpa-onnx-node with its `.node` file and both
  *   libraries, the capture helper;
  * - NOTICE and LICENSE are there too: the word lists' CC BY-SA 4.0 wants its credit to travel;
  * - the bundled Bun loads sherpa-onnx-node from inside the bundle, and the process has the `.node`
- *   file and both libraries open from the bundle's own folder (`lsof`; the hardened runtime ignores
- *   `DYLD_PRINT_LIBRARIES`) (TRAPS "Native libraries missing from the bundle");
+ *   file and its libraries open from the bundle's own folder (`lsof` on macOS, where the hardened
+ *   runtime ignores `DYLD_PRINT_LIBRARIES`; `/proc/self/maps` on Linux; on Windows the load
+ *   alone) (TRAPS "Native libraries missing from the bundle");
  * - the `akou` command line the akou menu links into PATH runs from the bundle and says the
  *   version;
  * - the bundled Bun imports both Worker modules;
@@ -41,10 +44,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SHERPA_LIBS as SHERPA_LIBS_BY_OS } from "../electrobun.config.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { parseStderrLine } from "../src/main/capture/protocol.ts";
 import { DICTIONARY_LANGUAGES } from "../src/main/vocab/dictionary.ts";
 import {
+  APP_DIR,
   diarizeArchive,
   MIN_MACOS,
   PINS,
@@ -56,8 +61,23 @@ import { sourceVersion } from "./stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const USAGE_KEYS = ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"];
-const SHERPA_PLATFORM = "sherpa-onnx-darwin-arm64";
-const SHERPA_LIBS = ["libsherpa-onnx-c-api.dylib", "libonnxruntime.dylib"];
+const MAC = process.platform === "darwin";
+const EXE = process.platform === "win32" ? ".exe" : "";
+const SHERPA_PLATFORM = `sherpa-onnx-${process.platform === "win32" ? "win" : process.platform}-${process.arch}`;
+const SHERPA_LIBS = SHERPA_LIBS_BY_OS[process.platform] ?? [];
+/** `tar` that reads a drive letter as a drive: Windows' own, never Git's GNU tar. */
+const TAR =
+  process.platform === "win32"
+    ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
+    : MAC
+      ? "/usr/bin/tar"
+      : "tar";
+/** The tray images each system loads (src/main/window/shell.ts `trayImage`). */
+const TRAY = MAC
+  ? ["akou-template.png", "akou-recording-macos.png"]
+  : process.platform === "win32"
+    ? ["akou.ico", "akou-recording.ico"]
+    : ["akou.png", "akou-recording.png"];
 
 let failures = 0;
 function check(ok: boolean, what: string, detail = ""): boolean {
@@ -176,23 +196,44 @@ async function smokeHelper(helper: string, version: string, work: string): Promi
   check(opusChannels(opus) === 2, "helper wrote a two-channel Ogg Opus file");
 }
 
+/** The folder holding `app/bun/index.js` under `dir`, wherever the packed app put it; or null. */
+function findResources(dir: string): string | null {
+  for (const f of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const p = join(f.parentPath, f.name);
+    if (f.name === "index.js" && p.endsWith(join("Resources", "app", "bun", "index.js"))) {
+      return join(p, "..", "..", "..");
+    }
+  }
+  return null;
+}
+
 /** The inner app, unpacked into `work` the way the wrapper does on first launch. */
 async function checkInner(
   work: string,
   version: string,
   allowMissingHelper: boolean,
 ): Promise<void> {
-  const res = join(WRAPPER_APP, "Contents", "Resources");
+  const res = MAC ? join(WRAPPER_APP, "Contents", "Resources") : join(APP_DIR, "Resources");
   const packed = readdirSync(res).filter((f) => f.endsWith(".tar.zst"));
   if (!check(packed.length === 1, "the wrapper carries one packed app", packed.join(", "))) return;
-  const tar = Bun.zstdDecompressSync(readFileSync(join(res, packed[0] as string)));
-  const untar = spawnSync("/usr/bin/tar", ["-x", "-C", work], { input: tar });
-  if (!check(untar.status === 0, "the packed app unpacks", untar.stderr.toString())) return;
-  const app = join(work, "akou.app");
-  checkPlist(app, "app", version);
-  checkSignature(app, "app");
+  const tarFile = join(work, "app.tar");
+  writeFileSync(tarFile, Bun.zstdDecompressSync(readFileSync(join(res, packed[0] as string))));
+  const untar = spawnSync(TAR, ["-x", "-f", tarFile, "-C", work]);
+  rmSync(tarFile);
+  if (!check(untar.status === 0, "the packed app unpacks", String(untar.stderr ?? untar.error))) {
+    return;
+  }
+  // The app's own `Resources` folder holds `app/bun/index.js`, the bundled main process.
+  const resources = findResources(work);
+  if (!check(resources !== null, "the packed app has Resources/app/bun/index.js")) return;
+  // The folder above Resources: `Contents` in the macOS bundle, the app folder elsewhere.
+  const app = join(resources as string, "..");
+  if (MAC) {
+    checkPlist(join(app, ".."), "app", version);
+    checkSignature(join(app, ".."), "app");
+  }
 
-  const build = JSON.parse(readFileSync(join(app, "Contents", "Resources", "build.json"), "utf8"));
+  const build = JSON.parse(readFileSync(join(resources as string, "build.json"), "utf8"));
   check(
     build.electrobunVersion === PINS.electrobun,
     `ElectroBun ${PINS.electrobun}`,
@@ -204,11 +245,12 @@ async function checkInner(
     build.runtimeVersions?.bun,
   );
   check(build.mainProcess === "bun", "the main process is Bun");
-  const ver = JSON.parse(readFileSync(join(app, "Contents", "Resources", "version.json"), "utf8"));
+  const ver = JSON.parse(readFileSync(join(resources as string, "version.json"), "utf8"));
   check(ver.version === version && ver.identifier === BUNDLE_ID, `version.json says ${version}`);
 
-  const main = join(app, "Contents", "Resources", "app", "bun");
-  const bun = join(app, "Contents", "MacOS", "bun");
+  const main = join(resources as string, "app", "bun");
+  const bun = join(app, MAC ? "MacOS" : "bin", `bun${EXE}`);
+  if (!check(existsSync(bun), "the bundled Bun is in the app", bun)) return;
   const need = [
     "NOTICE",
     "LICENSE",
@@ -220,8 +262,7 @@ async function checkInner(
       (t) => `templates/${t}.md`,
     ),
     ...DICTIONARY_LANGUAGES.map((l) => `dictionaries/${l}.txt.gz`),
-    "tray/akou-template.png",
-    "tray/akou-recording-macos.png",
+    ...TRAY.map((t) => `tray/${t}`),
     "node_modules/sherpa-onnx-node/addon.js",
     `node_modules/${SHERPA_PLATFORM}/sherpa-onnx.node`,
     ...SHERPA_LIBS.map((l) => `node_modules/${SHERPA_PLATFORM}/${l}`),
@@ -231,7 +272,7 @@ async function checkInner(
 
   // The command line the akou menu links into PATH (DK-M6), run from inside the bundle: it must
   // start under the bundle's signature and say the app's version.
-  const cli = join(main, "akou");
+  const cli = join(main, `akou${EXE}`);
   const said = spawnSync(cli, ["--version"]);
   check(
     said.status === 0 && said.stdout.toString().trim() === version,
@@ -247,9 +288,17 @@ async function checkInner(
 import { createRequire } from "node:module";
 const s = createRequire(${JSON.stringify(join(main, "index.js"))})("sherpa-onnx-node");
 if (typeof s.OfflineRecognizer !== "function") throw new Error("no OfflineRecognizer");
-// The files this process has mapped, one "n<path>" line each.
-const open = spawnSync("/usr/sbin/lsof", ["-p", String(process.pid), "-Fn"]).stdout.toString();
-console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l) => l.startsWith("n")).map((l) => l.slice(1)) }));
+// The files this process has mapped: lsof's "n<path>" lines on macOS, /proc/self/maps on Linux,
+// none on Windows.
+let open = [];
+if (process.platform === "darwin") {
+  const out = spawnSync("/usr/sbin/lsof", ["-p", String(process.pid), "-Fn"]).stdout.toString();
+  open = out.split("\\n").filter((l) => l.startsWith("n")).map((l) => l.slice(1));
+} else if (process.platform === "linux") {
+  const { readFileSync } = await import("node:fs");
+  open = readFileSync("/proc/self/maps", "utf8").split("\\n").map((l) => l.split(/\\s+/).slice(5).join(" ")).filter((p) => p.startsWith("/"));
+}
+console.log(JSON.stringify({ bun: Bun.version, open }));
 `,
   );
   const load = spawnSync(bun, [probe]);
@@ -263,7 +312,9 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
     load.status === 0 ? `Bun ${loaded.bun}` : load.stderr.toString().slice(-400),
   );
   const inBundle = join(main, "node_modules", SHERPA_PLATFORM);
-  for (const lib of [...SHERPA_LIBS, "sherpa-onnx.node"]) {
+  // Windows has no list of a process's mapped files without a native call; the load above is the
+  // check there.
+  for (const lib of process.platform === "win32" ? [] : [...SHERPA_LIBS, "sherpa-onnx.node"]) {
     const path = loaded.open.find((p) => p.endsWith(`/${lib}`)) ?? "(not open)";
     check(path.endsWith(join(inBundle, lib)), `${lib} is loaded from the bundle`, path);
   }
@@ -296,7 +347,7 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
   try {
     where = JSON.parse(located.stdout.toString());
   } catch {}
-  const helper = join(main, "akou-capture");
+  const helper = join(main, `akou-capture${EXE}`);
   const found = where.source === "bundled" && where.command[0] === realpathSync(helper);
   if (existsSync(helper) || where.source === "bundled") {
     if (
@@ -313,7 +364,7 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
     console.log("SKIP the capture helper is not in the bundle (--allow-missing-helper)");
   else check(false, "the capture helper is in the bundle", helper);
   // The diarization helper: beside the capture helper, and it runs.
-  const diarize = join(main, "akou-diarize");
+  const diarize = join(main, `akou-diarize${EXE}`);
   if (check(existsSync(diarize), "the diarization helper is in the bundle", diarize)) {
     const v = spawnSync(diarize, ["--version"]);
     const out = v.stdout.toString().trim();
@@ -328,29 +379,44 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
 async function main(argv: string[]): Promise<void> {
   const allowMissingHelper = argv.includes("--allow-missing-helper");
   const version = sourceVersion(ROOT);
-  if (!existsSync(WRAPPER_APP)) {
-    console.error(`smoke-app: no app at ${WRAPPER_APP}; run bun scripts/build-app.ts first`);
+  const built = MAC ? WRAPPER_APP : APP_DIR;
+  if (!existsSync(built)) {
+    console.error(`smoke-app: no app at ${built}; run bun scripts/build-app.ts first`);
     process.exit(1);
   }
 
-  // The release files.
-  for (const ext of ["dmg", "zip"]) {
-    check(
-      existsSync(join(RELEASE_DIR, `${releaseName(version)}.${ext}`)),
-      `${releaseName(version)}.${ext} exists`,
-    );
-  }
+  if (MAC) {
+    // The release files.
+    for (const ext of ["dmg", "zip"]) {
+      check(
+        existsSync(join(RELEASE_DIR, `${releaseName(version)}.${ext}`)),
+        `${releaseName(version)}.${ext} exists`,
+      );
+    }
 
-  // The diarization helper alone: one file, the binary, at the archive's top.
-  const tgz = join(RELEASE_DIR, diarizeArchive(version));
-  if (check(existsSync(tgz), `${diarizeArchive(version)} exists`)) {
-    const listed = spawnSync("tar", ["-tzf", tgz]).stdout.toString().trim();
-    check(listed === "akou-diarize", `${diarizeArchive(version)} holds akou-diarize alone`, listed);
-  }
+    // The diarization helper alone: one file, the binary, at the archive's top.
+    const tgz = join(RELEASE_DIR, diarizeArchive(version));
+    if (check(existsSync(tgz), `${diarizeArchive(version)} exists`)) {
+      const listed = spawnSync("tar", ["-tzf", tgz]).stdout.toString().trim();
+      check(
+        listed === "akou-diarize",
+        `${diarizeArchive(version)} holds akou-diarize alone`,
+        listed,
+      );
+    }
 
-  // The wrapper.
-  checkPlist(WRAPPER_APP, "wrapper", version);
-  checkSignature(WRAPPER_APP, "wrapper");
+    // The wrapper.
+    checkPlist(WRAPPER_APP, "wrapper", version);
+    checkSignature(WRAPPER_APP, "wrapper");
+  } else {
+    // The installer, and the launcher the installed app starts from.
+    const setup = existsSync(RELEASE_DIR)
+      ? readdirSync(RELEASE_DIR).filter((f) => f.startsWith(`${releaseName(version)}-setup.`))
+      : [];
+    check(setup.length === 1, `one ${releaseName(version)}-setup installer`, setup.join(", "));
+    const launcher = join(APP_DIR, "bin", `launcher${EXE}`);
+    check(existsSync(launcher), "the app has its launcher", launcher);
+  }
 
   const work = mkdtempSync(join(tmpdir(), "akou-smoke-"));
   try {

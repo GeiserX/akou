@@ -79,6 +79,8 @@ export function desktopPlatform(
 export const PLATFORM = desktopPlatform() ?? "macos-arm64";
 /** Hutch's output for this machine: the app (and on macOS the wrapper bundle) and its artifacts. */
 export const BUILD_DIR = join(ROOT, "build", `stable-${PLATFORM}`);
+/** The app folder Hutch builds on Windows and Linux: a launcher and the packed app. */
+export const APP_DIR = join(BUILD_DIR, "akou");
 export const ARTIFACTS_DIR = join(ROOT, "artifacts");
 export const WRAPPER_APP = join(ROOT, "build", `stable-${PLATFORM}`, "akou.app");
 export const HUTCH_DMG = join(ROOT, "artifacts", `${PLATFORM}-akou.dmg`);
@@ -86,6 +88,11 @@ export const RELEASE_DIR = join(ROOT, "dist", "release");
 
 export function releaseName(version: string): string {
   return `akou-${version}-${PLATFORM}`;
+}
+
+/** The release name of a Windows or Linux installer Hutch named `<platform>-akou-Setup.<ext>`. */
+export function setupName(version: string, hutchName: string): string {
+  return `${releaseName(version)}-setup${hutchName.slice(hutchName.indexOf("-Setup.") + 6)}`;
 }
 
 /** The release file holding the diarization helper alone. */
@@ -114,9 +121,14 @@ export function cachedHutch(env: Record<string, string | undefined> = process.en
 
 /**
  * The environment Hutch runs in: no proxy variables, no update check, and an ad-hoc signing
- * identity unless a Developer ID is given.
+ * identity unless a Developer ID is given. On Windows, Windows' own `tar` comes first on `PATH`:
+ * Hutch unpacks its toolchains with `tar`, and Git's GNU tar, first on a runner's `PATH`, reads a
+ * drive letter such as `D:` as a remote host.
  */
-export function hutchEnv(env: Record<string, string | undefined>): Record<string, string> {
+export function hutchEnv(
+  env: Record<string, string | undefined>,
+  platform: string = process.platform,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined || /^(https?|all)_proxy$/i.test(k)) continue;
@@ -124,6 +136,11 @@ export function hutchEnv(env: Record<string, string | undefined>): Record<string
   }
   out.HUTCH_NO_UPDATE_CHECK = "1";
   if (!out.ELECTROBUN_DEVELOPER_ID) out.ELECTROBUN_DEVELOPER_ID = "-";
+  if (platform === "win32") {
+    const key = Object.keys(out).find((k) => k.toUpperCase() === "PATH") ?? "Path";
+    const system32 = `${out.SystemRoot ?? "C:\\Windows"}\\System32`;
+    out[key] = out[key] ? `${system32};${out[key]}` : system32;
+  }
   return out;
 }
 
@@ -239,6 +256,18 @@ async function main(argv: string[]): Promise<void> {
     fail(`the build ran Hutch ${ran ?? "(unknown)"}, the release pins ${PINS.hutch}`);
   if (process.platform !== "darwin") {
     for (const dir of [BUILD_DIR, ARTIFACTS_DIR]) listTree(dir);
+    // The installer Hutch makes, under the release's name. Not published yet (release.yml).
+    const setup = existsSync(ARTIFACTS_DIR)
+      ? readdirSync(ARTIFACTS_DIR).filter((f) => f.includes("-Setup."))
+      : [];
+    if (setup.length !== 1) {
+      fail(`expected one installer in ${ARTIFACTS_DIR}, found ${setup.join(", ") || "none"}`);
+    }
+    const from = setup[0] as string;
+    const to = setupName(version, from);
+    mkdirSync(RELEASE_DIR, { recursive: true });
+    copyFileSync(join(ARTIFACTS_DIR, from), join(RELEASE_DIR, to));
+    console.log(`build-app: ${to} is in ${RELEASE_DIR} (Hutch ${ran}, unsigned)`);
     return;
   }
   if (!existsSync(WRAPPER_APP)) fail(`no app at ${WRAPPER_APP}`);
