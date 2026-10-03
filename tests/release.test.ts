@@ -14,10 +14,12 @@ import config, {
   helperCopies,
   MAIN_OUT,
   signing,
+  UPDATE_FEED,
 } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { hutchEnv, PINS, pairedHutch } from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
+import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
 import { verdict } from "../scripts/ci/tested-commit.ts";
 import {
   changelogSection,
@@ -539,5 +541,97 @@ describe("[CI-21] every release asset carries a build attestation", () => {
       expect(job.permissions?.["id-token"]).toBeUndefined();
       expect(job.permissions?.attestations).toBeUndefined();
     }
+  });
+});
+
+describe("[CI-23] releases publish the update feed the app reads", () => {
+  const bundle = "stable-macos-arm64-akou.app.tar.zst";
+  const manifest = (version: string, over: Record<string, unknown> = {}) => ({
+    schemaVersion: 1,
+    identifier: "io.github.geiserx.akou",
+    channel: "stable",
+    version,
+    hash: "abc123",
+    platform: "macos",
+    arch: "arm64",
+    artifact: { file: bundle },
+    ...over,
+  });
+
+  test("the app's updater reads the fixed update-feed release, which a prerelease can fill", () => {
+    expect(UPDATE_FEED).toBe("https://github.com/GeiserX/akou/releases/download/update-feed");
+    expect(config.release).toEqual({ baseUrl: UPDATE_FEED, generatePatch: false });
+  });
+
+  test("a manifest for this app, channel and version passes; positive control: any other fails", () => {
+    expect(manifestProblems(manifest("0.6.0"), "0.6.0")).toEqual([]);
+    expect(manifestProblems(manifest("0.5.4"), "0.6.0")).toEqual([
+      'version is "0.5.4", expected "0.6.0"',
+    ]);
+    expect(manifestProblems(manifest("0.6.0", { identifier: "x" }), "0.6.0")).toHaveLength(1);
+    expect(manifestProblems(manifest("0.6.0", { channel: "canary" }), "0.6.0")).toHaveLength(1);
+    expect(
+      manifestProblems(manifest("0.6.0", { artifact: { file: "akou.app.tar.zst" } }), "0.6.0"),
+    ).toHaveLength(1);
+    expect(manifestProblems(null, "0.6.0")).toHaveLength(1);
+  });
+
+  test("the build's feed folder needs the manifest and the bundle it names", () => {
+    const t = tempDir();
+    try {
+      expect(checkDir(t.dir, "0.6.0")[0]).toContain(`no ${MANIFEST}`);
+      writeFileSync(join(t.dir, MANIFEST), JSON.stringify(manifest("0.6.0")));
+      expect(checkDir(t.dir, "0.6.0")).toEqual([`the bundle ${bundle} is not in ${t.dir}`]);
+      writeFileSync(join(t.dir, bundle), "x");
+      expect(checkDir(t.dir, "0.6.0")).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("the smoke test fetches the published manifest and the bundle's first byte, as the updater does", async () => {
+    const base = "https://feed.invalid";
+    const seen: string[] = [];
+    const feed =
+      (version: string, bundleStatus = 206) =>
+      async (url: string, init?: RequestInit) => {
+        seen.push(`${url.split("?")[0]} ${new Headers(init?.headers).get("range") ?? ""}`);
+        if (url.startsWith(`${base}/${MANIFEST}?`)) return Response.json(manifest(version));
+        if (url.startsWith(`${base}/${bundle}?cache=`))
+          return new Response("x", { status: bundleStatus });
+        return new Response("", { status: 404 });
+      };
+    expect(await checkUrl(base, "0.6.0", feed("0.6.0"))).toEqual([]);
+    expect(seen).toEqual([`${base}/${MANIFEST} `, `${base}/${bundle} bytes=0-0`]);
+    // Positive controls: a feed still on the previous version, a missing bundle, no feed at all.
+    expect(await checkUrl(base, "0.6.0", feed("0.5.4"))).toEqual([
+      'version is "0.5.4", expected "0.6.0"',
+    ]);
+    expect((await checkUrl(base, "0.6.0", feed("0.6.0", 404)))[0]).toContain("HTTP 404");
+    expect((await checkUrl("https://none.invalid", "0.6.0", feed("0.6.0")))[0]).toContain(
+      "HTTP 404",
+    );
+  });
+
+  test("the release replaces the feed, bundle before manifest, then fetches it; the build checks it first", () => {
+    const wf = releaseWorkflow();
+    const app = (wf.jobs.app?.steps ?? []).map((s) => s.run ?? "");
+    expect(app.findIndex((r) => r.includes("check-feed.ts --dir dist/release"))).toBeGreaterThan(
+      app.findIndex((r) => r.includes("scripts/build-app.ts")),
+    );
+    const steps = wf.jobs.release?.steps ?? [];
+    const versioned = steps.findIndex((s) => s.run?.includes('gh release create "$TAG"'));
+    const feed = steps.findIndex((s) => s.run?.includes("gh release upload update-feed"));
+    const smoke = steps.findIndex((s) => s.run === "bun scripts/check-feed.ts --url");
+    expect(steps[versioned]?.run).toContain("-- akou-* stable-* SHA256SUMS");
+    expect(feed).toBeGreaterThan(versioned);
+    expect(smoke).toBeGreaterThan(feed);
+    const upload = steps[feed]?.run ?? "";
+    expect(upload).toContain("gh release create update-feed");
+    expect(upload).toContain("--latest=false");
+    expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeGreaterThan(-1);
+    expect(upload.indexOf("--clobber -- stable-*.tar.zst")).toBeLessThan(
+      upload.indexOf("--clobber -- stable-*-update.json"),
+    );
   });
 });
