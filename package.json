@@ -5,7 +5,9 @@
   "type": "module",
   "license": "GPL-3.0-or-later",
   "scripts": {
-    "check": "bun scripts/ci/bun-version.ts && biome check && tsc --noEmit && tsc --noEmit -p tsconfig.ui.json && bun test --reporter=junit --reporter-outfile=.junit-check.xml && bun scripts/ci/test-floor.ts check .junit-check.xml",
+    "check": "bun run check:static && bun test --reporter=junit --reporter-outfile=.junit-check.xml && bun scripts/ci/test-floor.ts check .junit-check.xml",
+    "check:coverage": "bun run check:static && bun test --coverage --coverage-reporter=lcov --reporter=junit --reporter-outfile=.junit-check.xml && bun scripts/ci/test-floor.ts check .junit-check.xml && bun scripts/ci/coverage-floor.ts coverage/lcov.info",
+    "check:static": "bun scripts/ci/bun-version.ts && biome check && tsc --noEmit && tsc --noEmit -p tsconfig.ui.json",
     "lint": "biome check",
     "format": "biome check --write",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json",
