@@ -11,7 +11,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 bad vocabulary term, 69 unavailab
 ```text
 akou start: Start a call; answers once audio is being written
 
-usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--engines A,B] [--without-models] [--attach] [--json]
+usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]
 
   -w, --workspace WS    the workspace the call goes in
   -t, --title TITLE     the call's title
@@ -22,7 +22,6 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
       --live MODEL      the live model for this call only: auto, a model id from `akou models list`, nemotron or parakeet (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen
       --review MODEL    the second pass for this call only: none, a model id, qwen or parakeet (default: asr.review.model)
       --review-every S  how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)
-      --engines A,B     the final pass's models for this call, in order, their words combined: qwen, parakeet or model ids (default: asr.final.engines)
       --without-models  record audio now and transcribe later, before the models are downloaded
       --attach          if a call is already recording, answer with that call (exit 0) instead of exit 75
       --json            print the answer as JSON, errors included
@@ -32,7 +31,6 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
 example: akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform
 example: akou start --live nemotron
 example: akou start --live nemotron --review qwen --review-every 120
-example: akou start --engines qwen,parakeet
 example: akou start --attach --json
 ```
 
@@ -506,7 +504,7 @@ example: akou import hark-viewer ~/Recordings/calls/work -w work
 ## jobs
 
 ```text
-akou jobs: The transcription jobs your key can see
+akou jobs: The file transcription jobs on this akou, or those your key sees on a server
 
 usage: akou jobs list [--status queued|running|done|failed|cancelled]   [--json]
 
@@ -728,7 +726,7 @@ example: akou admin set-password < password.txt
 ## transcribe
 
 ```text
-akou transcribe: Transcribe an audio file as a job and print the transcript
+akou transcribe: Transcribe an audio file on this akou, or on a server (AKOU_URL), and print the text
 
 usage: akou transcribe FILE [--preset lite|fast|best|fusion|auto] [--language L] [--diarize]   [--json]
 
@@ -739,8 +737,17 @@ usage: akou transcribe FILE [--preset lite|fast|best|fusion|auto] [--language L]
   -h, --help        show this help
       --restart     if akou takes the connection and never answers, restart it first, even for a command that only reads
 
+The desktop app on this machine transcribes the file itself, with no setting to turn on.
+Long audio is cut at its pauses, so a long recording works, up to server.max_audio_minutes
+(240). The command waits until the job ends; Ctrl-C cancels it.
+The job then stays in `akou jobs list` for server.retain_days.
+AKOU_URL sends the file to an akou server instead, with the key in AKOU_API_KEY or in the
+file AKOU_API_KEY_FILE names; the server deletes the job once the text is printed.
+Exit codes: 0 done (no speech prints nothing), 64 usage, 69 no akou to reach, 70 the job failed.
+
 example: akou transcribe voice-note.ogg
-example: akou transcribe call.m4a --language es --diarize
+example: akou transcribe call.m4a --preset best --language es --diarize
+example: AKOU_URL=https://akou.example AKOU_API_KEY_FILE=~/.config/akou-key akou transcribe note.ogg
 ```
 
 ## dictate
