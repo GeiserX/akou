@@ -478,6 +478,7 @@ const quit: Command = {
     const deadline = performance.now() + QUIT_WAIT_MS;
     const appAlive = () => ctx.client.runtime() !== null || (!!rt && processAlive(rt.pid));
     while (appAlive() && performance.now() < deadline) {
+      // clock: polling a real app while it quits, bounded by the deadline.
       await new Promise((res) => setTimeout(res, 50));
     }
     if (appAlive() && rt) {
@@ -513,6 +514,7 @@ const quit: Command = {
       // The launcher and the helpers end with the app; any still there a moment later are stopped.
       const settle = performance.now() + 2000;
       while (others.some(processAlive) && performance.now() < settle) {
+        // clock: polling the launcher and helpers, bounded by `settle`.
         await new Promise((res) => setTimeout(res, 50));
       }
       gone = (await stopAll(others.filter(processAlive))).length === 0;

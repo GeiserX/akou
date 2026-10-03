@@ -347,6 +347,7 @@ export class LivePipeline {
     private readonly models: ModelSet,
     opts: Partial<LiveOptions>,
     private readonly emit: (o: LiveOut) => void,
+    // clock: the default of an injected clock; tests pass their own.
     private readonly now: () => number = () => Date.now(),
   ) {
     this.o = { ...DEFAULT_LIVE, ...opts };
@@ -1025,6 +1026,7 @@ export class LivePipeline {
         await Promise.race([
           s.d.flush(),
           new Promise<void>((_, reject) => {
+            // clock: a deadline on an engine's flush, which runs in real time.
             timer = setTimeout(
               () => reject(new Error(`no answer in ${STREAM_FLUSH_MS} ms`)),
               STREAM_FLUSH_MS,
@@ -1384,6 +1386,7 @@ export class WorkerSide {
           slowest = Math.max(slowest, r.ms);
           model = r.model;
           if (r.text !== "") texts.push(r.text);
+          // clock: yields to the event loop between decodes, no deadline.
           setTimeout(() => {
             this.queue = this.queue.then(step(i + 1));
           }, 0);
@@ -1431,6 +1434,7 @@ export class WorkerSide {
           if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
           if (r.text !== "") texts.push(r.text);
           words.push(...r.words);
+          // clock: yields to the event loop between decodes, no deadline.
           setTimeout(() => {
             this.queue = this.queue.then(step(i + 1));
           }, 0);

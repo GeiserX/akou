@@ -666,6 +666,7 @@ export function createMcpServer(o: McpOptions): McpServer {
         query: {
           format: "json",
           since: a.since,
+          // clock: `lastSeconds` counts back from the moment the tool is called.
           from: a.lastSeconds !== undefined ? Date.now() - a.lastSeconds * 1000 : undefined,
           // From a cursor, the earliest new lines that fit and a cursor after them (`more` counts
           // the rest); without one, the newest that fit (`omitted` counts the rest). PG-M5.

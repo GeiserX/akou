@@ -6,6 +6,12 @@ import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
 /** 2026-09-23 20:36:12 UTC, 15:36:12 in America/Chicago. */
 export const T0 = Date.UTC(2026, 8, 23, 20, 36, 12);
 export const TZ = "America/Chicago";
+/**
+ * The nightly year-ahead run (docs/TESTING.md TS-5) moves `Date` and not the kernel, which stamps
+ * a file's mtime with the real time. A test that writes a file and compares its mtime with
+ * `Date.now()` reads it a year old there, so it skips under the shift with this as its reason.
+ */
+export const CLOCK_SHIFTED = !!process.env.AKOU_CLOCK_SHIFTED;
 
 /** Builds a valid log in memory: seq is assigned in order, t advances by 1 ms per event. */
 export class LogBuilder {

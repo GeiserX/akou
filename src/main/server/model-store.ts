@@ -417,6 +417,7 @@ function writeJson(dir: string, name: string, value: unknown): void {
  * Marks models used at `at`: a job on them starts or ends, or `akou models pull` or an on-demand
  * download finishes them (SV-M4).
  */
+// clock: the default of an injected time; tests pass their own.
 export function touchUsage(dir: string, ids: readonly string[], at = Date.now()): void {
   if (ids.length === 0) return;
   const l = readUsage(dir);
@@ -618,6 +619,7 @@ export class ModelStore {
    */
   private clearStaleCopies(): void {
     const dir = this.o.dir();
+    // clock: a copy left by a crash is judged by its file's real age.
     const before = Date.now() - STALE_COPY_MS;
     try {
       for (const id of readdirSync(dir)) {

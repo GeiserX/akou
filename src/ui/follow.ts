@@ -47,10 +47,13 @@ export class Follower {
   private retry: ReturnType<typeof setTimeout> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private pending: LogEvent[] = [];
+  // clock: when the stream last spoke, by the page's own clock.
   private lastAlive = Date.now();
+  // clock: the last tick, to notice a page that slept.
   private lastTick = Date.now();
   private readonly ticker: ReturnType<typeof setInterval>;
   private readonly onVisible = () => {
+    // clock: a page back from the background checks how long the stream was quiet.
     if (document.visibilityState === "visible" && Date.now() - this.lastAlive > TICK_MS * 2) {
       this.reconnect("visible again");
     }
@@ -62,6 +65,7 @@ export class Follower {
     readonly call: string,
     private readonly on: FollowEvents,
   ) {
+    // clock: the follower's liveness tick.
     this.ticker = setInterval(() => this.tick(), TICK_MS);
     document.addEventListener("visibilitychange", this.onVisible);
     addEventListener("online", this.onOnline);
@@ -98,6 +102,7 @@ export class Follower {
     if (this.stopped || this.retry) return;
     const wait = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)] as number;
     this.attempt++;
+    // clock: the reconnect backoff.
     this.retry = setTimeout(() => {
       this.retry = null;
       this.connect();
@@ -105,6 +110,7 @@ export class Follower {
   }
 
   private tick(): void {
+    // clock: the liveness tick reads the page's own clock.
     const now = Date.now();
     const jumped = now - this.lastTick > WAKE_JUMP_MS;
     this.lastTick = now;
@@ -115,6 +121,7 @@ export class Follower {
 
   private connect(): void {
     if (this.stopped) return;
+    // clock: when the stream last spoke, by the page's own clock.
     this.lastAlive = Date.now();
     let closed = false;
     const handle = this.t.follow(this.call, this.cursor, {
@@ -122,30 +129,36 @@ export class Follower {
         if (closed) return;
         this.attempt = 0;
         this.stats.opens++;
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
         this.on.connection("open");
       },
       event: (e) => {
         if (closed) return;
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
         this.accept(e);
       },
       partial: (p) => {
         if (closed) return;
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
         this.on.partial(p);
       },
       level: (l) => {
         if (closed) return;
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
         this.on.level(l);
       },
       read: (r) => {
         if (closed) return;
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
         this.applyRead(r);
       },
       alive: () => {
+        // clock: when the stream last spoke, by the page's own clock.
         this.lastAlive = Date.now();
       },
       closed: (why) => {
@@ -195,6 +208,7 @@ export class Follower {
     this.view.apply(e);
     this.stats.applied++;
     this.pending.push(e);
+    // clock: batches events into one paint per frame.
     this.flushTimer ??= setTimeout(() => this.flush(), 16);
   }
 

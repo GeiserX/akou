@@ -112,6 +112,7 @@ export async function queryDevices(
       "no-helper",
     );
   }
+  // clock: a deadline on the helper's device query.
   const timer = setTimeout(() => proc.kill(), o.timeoutMs ?? DEVICES_TIMEOUT_MS);
   try {
     const [out, err, code] = await Promise.all([
