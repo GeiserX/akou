@@ -3658,6 +3658,7 @@ export class AkouApp implements ApiApp {
         remotes: () => (server ? s()["server.remotes"] : []),
         env: this.o.env ?? process.env,
         concurrency: () => s()["server.concurrency"],
+        modelIdleMinutes: () => s()["server.model_idle_minutes"],
         queueMax: () => s()["server.queue_max"],
         queueMaxPerKey: () => s()["server.queue_max_per_key"],
         dictationSlots: () => (server ? s()["server.dictation_slots"] : 0),

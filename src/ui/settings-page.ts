@@ -221,6 +221,7 @@ const SUBS: Record<string, SubPage> = {
           "server.default_language",
           "server.default_diarize",
           "server.concurrency",
+          "server.model_idle_minutes",
           "server.queue_max",
           "server.queue_max_per_key",
           "server.retain_days",

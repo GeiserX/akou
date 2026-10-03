@@ -7,8 +7,14 @@
  *   `POST /v1/jobs`, the OpenAI endpoint or `akou transcribe`.
  * - **A queue a backlog can lean on** (SV-Q1 to SV-Q4). Up to `server.concurrency` jobs run at
  *   once, each in its own Worker with its models loaded; the next is the highest `priority`, then
- *   the oldest. A submit past `server.queue_max` or `server.queue_max_per_key` is refused with a
- *   retry time from the jobs that ended, and the same numbers give the queue's ETA.
+ *   the oldest, except that among jobs of one priority a job on a model an idle Worker holds goes
+ *   first, so a switch of preset does not reload a model (at most `WARM_PASS_LIMIT` times past one
+ *   job). An idle Worker keeps its models for `server.model_idle_minutes`, then lets them go. A
+ *   submit past `server.queue_max` or `server.queue_max_per_key` is refused with a retry time
+ *   from the jobs that ended, and the same numbers give the queue's ETA.
+ * - **One Metal llama-server at a time.** Two on Metal stop each other (llama-server.ts), so a job
+ *   whose engine runs on a Metal llama-server waits while another such job runs, in any Worker,
+ *   the dictation lane's included.
  * - **Every state change is one transaction** in the store: the job's state, its feed event and its
  *   delivery. A job the last process left running is queued again at start, in its place.
  * - **Remotes** (section 14): a queued job this server cannot run, or one a `server.remotes` entry
@@ -75,6 +81,14 @@ export { DAY_MS };
  */
 export const MAX_JOB_STARTS = 2;
 
+/** `server.model_idle_minutes`' default: an idle Worker keeps its models this long. */
+export const MODEL_IDLE_MINUTES = 60;
+/**
+ * How many times a queued job may be passed over for a job of its priority on a model an idle
+ * Worker holds, so a steady stream on one model never starves a job on another.
+ */
+export const WARM_PASS_LIMIT = 8;
+
 /** The most Workers `server.dictation_slots` reserves. */
 export const MAX_DICTATION_SLOTS = 8;
 
@@ -116,6 +130,8 @@ export interface QueueStats {
   mean_job_seconds: number | null;
   /** Seconds until the queue is empty at that pace; null before a job has ended. */
   eta_seconds: number | null;
+  /** The recognizers a job Worker holds loaded now, so a client can batch its jobs by them. */
+  loaded: string[];
 }
 
 /** A submit refused because the queue is full (SV-Q3). */
@@ -134,7 +150,10 @@ interface Slot {
   worker: JobWorker | null;
   spec: string;
   model: string | null;
-  job: { id: string; abort: AbortController } | null;
+  /** The running job and the model it runs (the Worker takes it only once the upload is read). */
+  job: { id: string; abort: AbortController; model: string } | null;
+  /** When the Worker last ended a job (the service's clock), while it has none. */
+  idleSince: number | null;
 }
 
 export interface JobServiceOptions {
@@ -168,6 +187,11 @@ export interface JobServiceOptions {
   remoteFetch?: typeof fetch;
   /** `server.concurrency`: jobs run at once. Default 1. */
   concurrency?(): number;
+  /**
+   * `server.model_idle_minutes`: how long an idle Worker keeps its models before it is closed; 0
+   * closes it once no queued job needs its model. Default `MODEL_IDLE_MINUTES`.
+   */
+  modelIdleMinutes?(): number;
   /** `server.queue_max`: jobs queued or running across keys; 0 or absent, no limit. */
   queueMax?(): number;
   /** `server.queue_max_per_key`: the same for one key; 0 or absent, no limit. */
@@ -368,6 +392,10 @@ export class JobService {
   private readonly progress = new Map<string, JobProgress>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
+  /** Wakes `releaseIdle` when the next idle Worker's time is up. */
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How many times each queued job was passed over for a job on a loaded model. */
+  private readonly passedOver = new Map<string, number>();
   /** The other akou servers jobs are sent to (section 14). */
   readonly remotes: Remotes;
   /** The jobs out on a remote now, and how to stop following one. */
@@ -531,6 +559,7 @@ export class JobService {
       jobs_last_hour: this.ended.length,
       audio_seconds_last_hour: Math.round(this.ended.reduce((a, e) => a + e.audio_s, 0)),
       mean_job_seconds: mean === null ? null : Math.round(mean / 100) / 10,
+      loaded: this.loaded(),
       eta_seconds: depth === 0 ? 0 : this.secondsFor(depth),
     };
   }
@@ -658,6 +687,14 @@ export class JobService {
   /** The recognizer a live worker holds (the first, with several), or null. */
   workerModel(): string | null {
     return this.slots.find((s) => s.worker && s.model)?.model ?? null;
+  }
+
+  /** The recognizers the job Workers hold loaded now, the queue's and the dictation lane's. */
+  loaded(): string[] {
+    const ids = [...this.slots, ...this.laneSlots]
+      .filter((s) => s.worker && s.model)
+      .map((s) => s.model as string);
+    return [...new Set(ids)];
   }
 
   /** Every queued job waiting on `model` fails: its download failed for good (SV-M3). */
@@ -824,8 +861,10 @@ export class JobService {
       slot.worker?.cancel("the job was deleted");
       // The slot is free now: an aborted run touches neither it nor its Worker again.
       slot.job = null;
+      slot.idleSince = this.now();
     }
     this.heldUntil.delete(id);
+    this.passedOver.delete(id);
     // A job sent to a remote is deleted there too, so its audio and text do not outlive it.
     this.sent.get(id)?.abort.abort();
     if (r.job.remote && r.job.remote_job) this.remotes.cancel(r.job.remote, r.job.remote_job);
@@ -935,38 +974,55 @@ export class JobService {
 
   /**
    * An idle slot for a job on `model`: one whose Worker holds it already, so its models stay
-   * loaded, else an empty one, else any idle one, whose Worker is rebuilt.
+   * loaded, else an empty one, else a new one while there is room for it, else any idle one,
+   * whose Worker is rebuilt.
    */
-  private slotFor(model: string, slots: Slot[] = this.slots): Slot {
+  private slotFor(model: string, slots: Slot[], room: number): Slot {
     const idle = slots.filter((s) => !s.job);
     const slot =
-      idle.find((s) => s.worker && s.model === model) ?? idle.find((s) => !s.worker) ?? idle[0];
+      idle.find((s) => s.worker && s.model === model) ??
+      idle.find((s) => !s.worker) ??
+      (slots.length < room ? undefined : idle[0]);
     if (slot) return slot;
-    const fresh: Slot = { worker: null, spec: "", model: null, job: null };
+    const fresh: Slot = { worker: null, spec: "", model: null, job: null, idleSince: null };
     slots.push(fresh);
     return fresh;
   }
 
+  private idleMs(): number {
+    const m = this.o.modelIdleMinutes?.() ?? MODEL_IDLE_MINUTES;
+    return Number.isFinite(m) ? Math.max(0, m) * 60_000 : 0;
+  }
+
   /**
-   * Idle Workers are closed when they hold a model other than the default's that no queued job
-   * needs, so an idle worker never pins a model the sweep should free (SV-M4), when there are
-   * more of them than `server.concurrency` allows, and, where idle Workers are not kept warm (the
-   * desktop app), when no queued job needs their model.
+   * Closes the idle Workers whose time is up: an idle Worker keeps its models while a queued job
+   * needs them, and where idle Workers are kept warm (a server) for `server.model_idle_minutes`
+   * after its last job; at most as many Workers as `server.concurrency` stay. So consecutive jobs
+   * reuse one model load, and an idle box gets its memory back. The desktop app keeps no idle
+   * Worker: one no queued job needs is closed at once. The idle timer calls it; a test with its own
+   * clock calls it too.
    */
-  private releaseWorkers(): void {
+  releaseIdle(): void {
+    if (this.closed) return;
     let kept = this.slots.filter((s) => s.job).length;
     const room = this.concurrency();
     const queued = this.store.queued();
-    const fallback = this.defaultRecognizer();
     const warm = this.o.keepIdleWorkers?.() ?? true;
+    const idleMs = this.idleMs();
+    const now = this.now();
+    let wake = Number.POSITIVE_INFINITY;
     for (const s of this.slots) {
       if (s.job || !s.worker) continue;
-      const wanted =
-        s.model !== null &&
-        ((warm && s.model === fallback) || queued.some((j) => this.modelOf(j) === s.model));
-      if (wanted && kept < room) {
+      const needed = s.model !== null && queued.some((j) => this.modelOf(j) === s.model);
+      const left = idleMs - (now - (s.idleSince ?? now));
+      // Kept warm (a server) for its idle minutes; the desktop app keeps none.
+      if ((needed || (warm && s.model !== null && left > 0)) && kept < room) {
         kept++;
+        if (!needed) wake = Math.min(wake, left);
         continue;
+      }
+      if (!needed && s.model !== null && idleMs > 0 && left <= 0) {
+        this.o.log("info", `jobs: ${s.model} unloaded after ${idleMs / 60_000} min with no job`);
       }
       s.worker.close();
       s.worker = null;
@@ -977,23 +1033,66 @@ export class JobService {
       const s = this.slots[i] as Slot;
       if (!s.job && !s.worker) this.slots.splice(i, 1);
     }
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+    if (Number.isFinite(wake)) {
+      // clock: wakes when the next idle Worker's time is up; the check reads the service's clock.
+      this.idleTimer = setTimeout(() => this.releaseIdle(), Math.max(1000, wake));
+      this.idleTimer.unref?.();
+    }
+  }
+
+  /** Whether a model's engine runs on a Metal llama-server (Qwen on Apple silicon). */
+  private onMetal(model: string): boolean {
+    try {
+      return this.o.models(model)?.final?.accelerator === "metal";
+    } catch {
+      return false;
+    }
+  }
+
+  /** A job on a Metal llama-server runs now, in any Worker (the queue's or the lane's). */
+  private metalBusy(): boolean {
+    return [...this.slots, ...this.laneSlots].some((s) => s.job && this.onMetal(s.job.model));
   }
 
   /**
    * The next queued job whose models are on disk, in the queue's order. A job whose models are
-   * missing starts their download and waits, holding no worker (SV-M1).
+   * missing starts their download and waits, holding no worker (SV-M1). A job on a Metal
+   * llama-server waits while another one runs. Among the jobs of the first one's priority, a job
+   * on a model an idle Worker holds goes first, unless the first was passed over
+   * `WARM_PASS_LIMIT` times already.
    */
   private nextRunnable(): Job | null {
     const lane = this.laneSize() > 0;
+    const warm = new Set(
+      this.slots.filter((s) => !s.job && s.worker && s.model).map((s) => s.model as string),
+    );
+    let head: Job | null = null;
     for (const j of this.store.queued()) {
       // The lane's jobs are the lane's while it has slots; with none, they queue as any other.
       if (lane && j.interactive) continue;
       if (this.routeOf(j).where !== "local") continue;
+      if (head && j.priority !== head.priority) break;
       const needs = this.localNeeds(j);
-      if (this.o.shelf.missing(needs).length === 0) return j;
-      this.o.shelf.fetch(needs);
+      if (this.o.shelf.missing(needs).length > 0) {
+        if (!head) this.o.shelf.fetch(needs);
+        continue;
+      }
+      const model = this.modelOf(j);
+      if (this.onMetal(model) && this.metalBusy()) continue;
+      if (!head) {
+        head = j;
+        if (warm.size === 0 || warm.has(model)) return j;
+        if ((this.passedOver.get(j.id) ?? 0) >= WARM_PASS_LIMIT) return j;
+        continue;
+      }
+      if (warm.has(model)) {
+        this.passedOver.set(head.id, (this.passedOver.get(head.id) ?? 0) + 1);
+        return j;
+      }
     }
-    return null;
+    return head;
   }
 
   /**
@@ -1005,8 +1104,12 @@ export class JobService {
     queued.sort((a, b) => a.seq - b.seq);
     for (const j of queued) {
       const needs = this.localNeeds(j);
-      if (this.o.shelf.missing(needs).length === 0) return j;
-      this.o.shelf.fetch(needs);
+      if (this.o.shelf.missing(needs).length > 0) {
+        this.o.shelf.fetch(needs);
+        continue;
+      }
+      if (this.onMetal(this.modelOf(j)) && this.metalBusy()) continue;
+      return j;
     }
     return null;
   }
@@ -1017,7 +1120,7 @@ export class JobService {
     while (this.laneSlots.filter((s) => s.job).length < size) {
       const next = this.nextInteractive();
       if (!next) break;
-      this.start1(next, this.laneSlots);
+      this.start1(next, this.laneSlots, size);
     }
     // Past a lower `server.dictation_slots`, idle lane Workers go.
     for (let i = this.laneSlots.length - 1; i >= 0 && this.laneSlots.length > size; i--) {
@@ -1029,15 +1132,21 @@ export class JobService {
   }
 
   /** Marks one queued job running in a slot of `slots`, and runs it. */
-  private start1(next: Job, slots: Slot[]): void {
+  private start1(next: Job, slots: Slot[], room: number): void {
     const job = this.store.markRunning(next.id);
     if (job?.status !== "running") return;
-    const slot = this.slotFor(this.modelOf(job), slots);
+    this.passedOver.delete(job.id);
+    const model = this.modelOf(job);
+    const slot = this.slotFor(model, slots, room);
     const abort = new AbortController();
-    slot.job = { id: job.id, abort };
+    slot.job = { id: job.id, abort, model };
+    slot.idleSince = null;
     this.notify(job.id, "running");
     void this.run(job, slot, abort).finally(() => {
-      if (slot.job?.id === job.id) slot.job = null;
+      if (slot.job?.id === job.id) {
+        slot.job = null;
+        slot.idleSince = this.now();
+      }
       this.pump();
     });
   }
@@ -1049,9 +1158,9 @@ export class JobService {
     while (this.slots.filter((s) => s.job).length < this.concurrency()) {
       const next = this.nextRunnable();
       if (!next) break;
-      this.start1(next, this.slots);
+      this.start1(next, this.slots, this.concurrency());
     }
-    this.releaseWorkers();
+    this.releaseIdle();
   }
 
   private async run(job: Job, slot: Slot, abort: AbortController): Promise<void> {
@@ -1174,6 +1283,9 @@ export class JobService {
       | { status: "failed"; error: JobError },
     remote: string | null = null,
   ): void {
+    // A queued job that ends without starting (a failed download, a remote's answer) is not
+    // passed over again.
+    this.passedOver.delete(job.id);
     const r =
       end.status === "done"
         ? this.store.finish(job.id, end, {
@@ -1374,6 +1486,7 @@ export class JobService {
     this.remotes.close();
     for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
+    if (this.idleTimer) clearTimeout(this.idleTimer);
     this.deliverer.close();
     for (const s of [...this.slots, ...this.laneSlots]) {
       s.job?.abort.abort();
