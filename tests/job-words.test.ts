@@ -99,7 +99,7 @@ describe("akou-5an.24.1: words in a job's result", () => {
     expect(r.words).toEqual([]);
     expect(r.skipped.length).toBeGreaterThan(0);
     for (const s of r.skipped) {
-      expect(s.reason).toBe("span too long for the fake engine");
+      expect(s.error).toBe("span too long for the fake engine");
       expect(s.e).toBeGreaterThan(s.s);
     }
   });

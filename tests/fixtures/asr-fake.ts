@@ -180,6 +180,13 @@ export interface FakeOptions {
   loadMs?: number;
   /** Each speaker-label pass busy-waits this long. */
   diarizeMs?: number;
+  /** Each speaker-label pass fails with this message, as a missing `akou-diarize` does. */
+  diarizeFails?: string;
+  /**
+   * The recognizer reports its words, one per tone burst, timed into the span and with a
+   * confidence, as sherpa-onnx does; by default it reports text only.
+   */
+  words?: boolean;
   /** A span longer than this is refused (throws), seconds. */
   refuseOver?: number;
   /** Terms the tokenization check would drop. */
@@ -212,13 +219,6 @@ export interface FakeOptions {
    * sentence on noise, as Qwen3, Moonshine and Cohere did before sherpa-onnx 1.13.8 (SV-R5).
    */
   hallucinate?: string;
-  /**
-   * The recognizer reports words as sherpa-onnx does: each word's burst as its times (seconds into
-   * the span) and how much of the burst's energy is the word's tone as its confidence.
-   */
-  words?: boolean;
-  /** The speaker-label pass throws this, as a missing or crashed `akou-diarize` would. */
-  diarizeFails?: string;
   /** The fake streaming engine's chunk, ms: how long after a word ends it is emitted (560). */
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
@@ -305,12 +305,11 @@ export class FakeRecognizer implements Recognizer {
       const tone = goertzel(samples, a, b, freqs[k] as number) / (energy * ((b - a) / 2));
       if (tone < 0.3) continue;
       const w = WORDS[k] as (typeof WORDS)[number];
-      const said = w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound);
-      out.push(said);
-      words.push({ w: said, conf: Math.min(1, tone), t0: a / RATE, t1: b / RATE });
+      out.push(w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound));
+      words.push({ w: out.at(-1) as string, t0: a / RATE, t1: b / RATE, conf: 0.9 });
     }
     if (out.length === 0 && this.o.hallucinate) return { text: this.o.hallucinate };
-    return { text: out.join(" "), ...(this.o.words ? { words } : {}) };
+    return this.o.words ? { text: out.join(" "), words } : { text: out.join(" ") };
   }
 }
 

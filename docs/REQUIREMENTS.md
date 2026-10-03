@@ -63,17 +63,17 @@ Status words:
 
 ## Engines and models
 
-- F1.0, I1.0 engine registry (whisper, apple, whisperkit, parakeet, cloud): **changed (M1)**. One engine layer, sherpa-onnx, with Parakeet TDT v3, Moonshine and Whisper as models. Apple Speech, WhisperKit and the cloud stub are dropped; nothing platform-specific.
+- F1.0, I1.0 engine registry (whisper, apple, whisperkit, parakeet, cloud): **changed (M1)**. A registry of engines per job, over two runtimes and no Python: sherpa-onnx in the app runs streaming Nemotron, the live default (`asr.live` `auto`), and Parakeet TDT v3; a pinned llama-server, a child process akou downloads per OS, runs Qwen3-ASR 1.7B, the final pass's default wherever it and its model are downloaded (`asr.final.model` `auto`). Parakeet takes either job on a machine without the default's model. The engine interfaces and the confidence ROVER fuser are built (`src/main/asr/engine.ts`, `src/main/asr/rover.ts`); a final pass that runs several engines and fuses them is designed, not built (ASR-6 in [asr-architecture.md](research/asr-architecture.md#9-plan)). Apple Speech, WhisperKit and the cloud stub are dropped.
 - F1.1 to F1.3 whisper.cpp batch and server: **dropped**; Whisper runs through sherpa-onnx.
 - F1.4 Apple Speech: **dropped** (macOS-only).
 - F1.5 WhisperKit: **dropped** (macOS-only).
 - F1.6 Parakeet v3 through FluidAudio: **changed (M1)**. Same model family through sherpa-onnx on every OS. FluidAudio's Neural Engine speed is given up in v1.
 - F1.7 one shared engine instance: **carried (M1)**, one recognizer per model behind a queue.
 - F1.41, I1.15 model management and folders: **carried (M1)** as `akou models list | pull | import`, pinned SHA-256, one models folder.
-- F1.40 hint when a model belongs to another engine: **dropped** (one engine).
-- F1.20 to F1.22 streaming recognizer with fallbacks and ignored-flag notices: **dropped**. Live text comes from segmented Parakeet plus a re-decoded provisional line, which was better in Spanish. A streaming model stays a later option behind the same interface.
+- F1.40 hint when a model belongs to another engine: **changed (M1)**. Each job's setting (`asr.live`, `asr.review.model`, `asr.final.model`) takes only the models that can do that job, and any other value is refused with the allowed ones listed. A chosen model that is not downloaded never runs: the live model and the final pass fall back to the other one, a second pass is off for the call, and the log says why.
+- F1.20 to F1.22 streaming recognizer with fallbacks and ignored-flag notices: **changed (M1)**. Streaming is the live-engine choice: `asr.live` `auto` picks streaming Nemotron when its model is downloaded, else Parakeet re-decoding the stretch between pauses, and a named model that cannot run falls back the same way and logs why. Measured in Spanish on FLEURS through akou's own live path: 6.31 to 6.36 % WER, no word ever taken back ([asr-architecture.md section 3.1](research/asr-architecture.md#31-what-replaces-the-12-s-windows)). The Spanish floor from real calls is not recorded yet (TRN-02 in [COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md)).
 - F1.23 to F1.25 streaming sink runtime, line cutting, open-line publishing: **changed (M1)**. The provisional line has the same contract (sequence, newest wins, cleared on close, 3 s expiry).
-- F1.6 language auto-detection: **changed (M1)**. Parakeet transcribes 25 languages with no language switch, but sherpa-onnx does not report which language it heard for this model, so akou fills the segment's `lang` only when the model reports it (Whisper). A separate language-id step is an open item.
+- F1.6 language auto-detection: **designed**, and required: the per-call model switch depends on it. Today the user sets the call's languages (`asr.languages`), which pick the live Nemotron; Qwen's final pass names the language of each line, choosing among them when several are set, and Parakeet reports none. A language-id step that picks the models for a call and reports its other-language lines is TRN-14 in [COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md), tested by TS-18 in [TESTING.md](TESTING.md).
 
 ## Batch and file transcription
 
@@ -92,7 +92,7 @@ Status words:
 - F1.17 one continuous resampler per stream: **carried (M1)** in the helper.
 - F1.18 gain on the engine copy only: **carried (M1)**.
 - F1.19, I1.1 segment pause and window, validated ranges: **carried (M1)** in the settings schema.
-- I1.2 `--live-streaming`: **dropped** (see F1.20).
+- I1.2 `--live-streaming`: **changed (M1)**. `akou start --live` picks the live model for one call, streaming Nemotron among them (see F1.20).
 
 ## Speakers
 
@@ -150,7 +150,7 @@ Status words:
 - F2.27 final transcript per part, Microphone and Others, on the call's clock: **carried (M1)** as the final layer with `you` and diarized clusters, all parts diarized together.
 - F2.28 retry a refused part in halving pieces down to 20 s: **carried (M1)**.
 - F2.29 warning when every accurate line is on one channel: **carried (M1)** as a `final.done` warning.
-- F2.30, F2.31 language detection with a one-line verdict: **changed (M1)**. Languages are listed in status and the export only when a model reported them (Whisper); with Parakeet there is no verdict until a language-id step exists.
+- F2.30, F2.31 language detection with a one-line verdict: **changed (M1)**. Languages are listed in status and the export only when a model reported them (Qwen); with Parakeet there is no verdict until a language-id step exists (F1.6).
 - F2.32, I2.14 third-party comparison transcript lane: **dropped**; nothing downstream read it, and it was macOS-only.
 - F2.33, F2.34 job liveness by pid, cleanup on signals: **changed (M1)**. The final pass is a Worker; boot reconciliation restarts an unfinished one.
 - F2.35, I2.7 `relabel`: **dropped**. Whole-call diarization plus click-to-rename, merge and unmerge replace it.

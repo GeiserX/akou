@@ -223,7 +223,10 @@ import {
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
 import {
+  type AutoChoice,
+  autoChoice,
   type Held,
+  hardwareChoice,
   kindOf,
   ModelRefused,
   ModelStore,
@@ -2240,7 +2243,7 @@ export class AkouApp implements ApiApp {
 
   async call(id: string): Promise<CallController> {
     const c = await this.manager.open(id);
-    if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    if (!c) throw new HttpError(404, "not_found", `no call ${id}`, { call: id });
     await this.readyRead(c);
     return c;
   }
@@ -2894,6 +2897,39 @@ export class AkouApp implements ApiApp {
       return jobs.obtainable(fusionModelId(f.fuser, f.engines));
     }
     return undefined;
+  }
+
+  /** The last `auto` verdict logged, so each change is logged once. */
+  private autoLogged = "";
+
+  /**
+   * What a job that names no model runs here, and why (SV-R2): `autoChoice` over the models on
+   * disk and the GPU `asr.accelerator` found. A recognizer given at start (tests) is `fast`.
+   */
+  autoChoice(): AutoChoice {
+    const v = this.givenRecognizer()
+      ? {
+          ...hardwareChoice(),
+          preset: "fast" as const,
+          reason: "akou was started with one recognizer.",
+        }
+      : this.autoFromDisk();
+    const line = `auto runs ${v.preset}: ${v.reason}`;
+    if (line !== this.autoLogged) {
+      this.autoLogged = line;
+      this.log("info", line);
+    }
+    return v;
+  }
+
+  private autoFromDisk(): AutoChoice {
+    const c = this.liveContext();
+    return autoChoice({
+      present: c.present,
+      catalog: c.catalog ?? [],
+      runtime: c.runtime ?? null,
+      ...(c.machine ? { machine: c.machine } : {}),
+    });
   }
 
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
@@ -3594,6 +3630,7 @@ export class AkouApp implements ApiApp {
         models: (recognizer) => this.jobModels(recognizer),
         shelf,
         defaultModel: () => s()["server.default_model"],
+        auto: () => this.autoChoice(),
         fusion: () => fusionChoice(s()),
         diarizer: () => this.runningDiarizer(),
         secrets: (id) => {

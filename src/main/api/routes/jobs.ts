@@ -9,17 +9,21 @@
  *   422 `idempotency_conflict` for the same key with another file or options, 429 `queue_full`
  *   with `Retry-After` past a queue limit (SV-Q3), answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
  *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
+ * - `POST /v1/jobs?wait=0..60` (SI-5): the same, holding the answer until the job ends: 200 with the
+ *   job and its `result`, or the submit's own answer when the wait runs out first.
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
  * - `GET /v1/jobs?status=&q=&cursor=&limit=`: the key's jobs, newest first; `q` finds them by
  *   title, id or state (SV-J10).
  * - `PATCH /v1/jobs/{id}` `{title}` (SV-J10): names or renames a job, in any state.
- * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
+ * - `GET /v1/jobs/{id}/result?format=` (SV-J4, SV-J5): the result of a done job, as JSON, the
+ *   OpenAI shape, text, SRT or WebVTT.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
  * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
- *   first, as JSON `{events, cursor, has_more}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
+ *   first, as JSON `{events, cursor, has_more, feed_id}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
  *   `Last-Event-ID`.
  */
 
+import { QWEN_LANGUAGE_CODES } from "../../asr/llama-catalog.ts";
 import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
@@ -40,6 +44,7 @@ import { readMultipart, type SpooledFile, type StreamedForm } from "../multipart
 import type { ApiApp } from "../server.ts";
 import { checkTitle } from "./calls.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
+import { RESULT_FORMATS, type ResultFormat, renderResult } from "./openai.ts";
 
 export const MAX_WAIT_SECONDS = 60;
 export const MAX_KEYWORDS = 24;
@@ -152,6 +157,40 @@ export function keywordsOf(form: Form, extra: string[] = []): string[] {
   return out;
 }
 
+/** The ISO codes a job's `languages[]` may name: the ones the language-choosing engine (Qwen) has. */
+export const BOUND_LANGUAGES: readonly string[] = QWEN_LANGUAGE_CODES;
+
+/**
+ * `languages[]` (also `languages`, and a comma list): the ISO 639 codes an `auto` language may come
+ * out as, lower case, once each, in the order sent. A code no engine here can choose is refused with
+ * 422 `unsupported_language` naming it, never dropped: a job told "es or bg" that silently became
+ * "es" would hide that its Bulgarian notes come out wrong.
+ */
+export function languagesOf(form: Form): string[] {
+  const out: string[] = [];
+  for (const v of [...form.getAll("languages[]"), ...form.getAll("languages")]) {
+    if (typeof v !== "string") throw bad("languages[]", "languages are text");
+    for (const part of v.split(",")) {
+      const code = part.trim().toLowerCase();
+      if (code === "") continue;
+      if (!/^[a-z]{2,3}$/.test(code)) {
+        throw bad("languages[]", `"${part.trim()}" is not an ISO 639 code, such as en or es`);
+      }
+      if (!out.includes(code)) out.push(code);
+    }
+  }
+  const unsupported = out.filter((c) => !BOUND_LANGUAGES.includes(c));
+  if (unsupported.length > 0) {
+    throw new HttpError(
+      422,
+      "unsupported_language",
+      `no engine here can choose ${unsupported.join(", ")}; GET /v1/server lists the codes languages[] may name (bound_languages)`,
+      { field: "languages[]", codes: unsupported },
+    );
+  }
+  return out;
+}
+
 /**
  * The request's language; `auto` or none means no opinion, and `fallback` decides
  * (`server.default_language`, SV-S2).
@@ -218,6 +257,8 @@ const JOB_FIELDS = new Set([
   "language",
   "keywords[]",
   "keywords",
+  "languages[]",
+  "languages",
   "diarize",
   "callback_url",
   "metadata",
@@ -269,9 +310,10 @@ export function metadataOf(form: Form): unknown {
   }
 }
 
-async function submit(c: RouteContext<ApiApp>): Promise<Response> {
+async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
+  const wait = waitParam(c);
   const idem = c.req.headers.get("idempotency-key");
   if (idem !== null && !IDEMPOTENCY.test(idem)) {
     throw new HttpError(400, "bad_header", "Idempotency-Key is 1 to 255 printable characters");
@@ -297,6 +339,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     const interactive = interactiveOf(jobs, form);
     const diarize = booleanOf(form, "diarize");
     const keywords = keywordsOf(form);
+    const languages = languagesOf(form);
     // The options as sent, before a server default fills a gap: what a repeated Idempotency-Key is
     // compared against (SV-J2), so a retry still matches after a default changes.
     const request: JobRequest = {
@@ -304,6 +347,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       model: model?.trim() || null,
       language: textField(form, "language")?.trim() || "auto",
       keywords,
+      languages,
       diarize,
     };
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
@@ -317,6 +361,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       // A request with no opinion gets the server's defaults (SV-S2).
       language: languageOf(form, settings["server.default_language"]),
       keywords,
+      languages,
       diarize: diarize ?? settings["server.default_diarize"],
       callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
       metadata: metadataOf(form),
@@ -355,10 +400,32 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     const r = jobs.submit({ ...job, file_sha256: file.sha256, audio: file.path });
     // A repeated submit's file is deleted by `submit` itself.
     kept = file;
-    return answerSubmit(jobs, r);
+    const answer = answerSubmit(jobs, r);
+    return wait > 0 && "job" in r ? await waitForEnd(c, jobs, r.job.id, wait, answer) : answer;
   } finally {
     await form.discard(kept);
   }
+}
+
+/**
+ * `wait` on a submit (SI-5): the job once it ends inside the wait, 200, with its `result` when it is
+ * done; else the submit's own answer (202 for a new job), the job as it is now.
+ */
+async function waitForEnd(
+  c: RoutedContext<ApiApp>,
+  jobs: JobService,
+  id: string,
+  wait: number,
+  answer: Response,
+): Promise<Response> {
+  const who = caller(c);
+  const j = await jobs.wait(who, id, wait * 1000, c.req.signal);
+  if (!j || !("seq" in j)) return answer;
+  if (j.status === "queued" || j.status === "running") return json(answer.status, jobs.view(j));
+  return json(200, {
+    ...jobs.view(j),
+    ...(j.status === "done" && j.result ? { result: j.result } : {}),
+  });
 }
 
 function answerSubmit(jobs: JobService, r: ReturnType<JobService["submit"]>): Response {
@@ -400,8 +467,9 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
       ...JOB_ROUTE,
+      query: { wait: WAIT },
       body: {
         multipart: {
           file: "file",
@@ -410,6 +478,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "model?": "string",
           "language?": "string",
           "keywords[]?": "string[]",
+          "languages[]?": "string[]",
           "diarize?": "boolean",
           "callback_url?": "string",
           "metadata?": "string",
@@ -418,6 +487,20 @@ export function jobRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 202,
+      errors: {
+        400: ["bad_header", "unknown_field"],
+        404: ["not_found"],
+        409: ["preset_unavailable"],
+        422: [
+          "bad_field",
+          "callback_not_allowed",
+          "idempotency_conflict",
+          "missing_field",
+          "unknown_model",
+          "unsupported_language",
+        ],
+        429: ["queue_full"],
+      },
     },
     submit,
   );
@@ -448,6 +531,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         limit: { type: "integer", min: 1, max: 200, default: 50, doc: "Jobs per page." },
       },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const jobs = jobsOf(c);
@@ -484,6 +568,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       params: { id: JOB_ID },
       query: { wait: WAIT },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
@@ -505,6 +590,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       params: { id: JOB_ID },
       body: { title: "string" },
       ok: 200,
+      errors: { 404: ["not_found"], 422: ["bad_field"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
@@ -521,21 +607,31 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/result",
     {
       id: "jobs.result",
-      doc: "The transcript of a done job: text, words, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null when the engine gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null when the engine gives none. `confidence` is the mean word confidence, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null. `skipped` lists `{s, e, reason}` for each piece the engine refused even at 20 s. 409 `not_done` before the job is done.",
+      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
+      query: {
+        format: {
+          type: "string",
+          values: RESULT_FORMATS,
+          default: "json",
+          doc: "The result's format: json, verbose_json, text, srt or vtt.",
+        },
+      },
       ok: 200,
+      errors: { 404: ["not_found"], 409: ["not_done"] },
     },
     (c) => {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
       if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      const format = c.query.oneOf<ResultFormat>("format");
       if (j.status !== "done" || !j.result) {
         throw new HttpError(409, "not_done", `the job is ${j.status}`, {
           status: j.status,
           ...(j.error ? { job_error: j.error } : {}),
         });
       }
-      return json(200, j.result);
+      return renderResult(j, format);
     },
   );
 
@@ -548,6 +644,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     (c) => {
       const gone = jobsOf(c).remove(caller(c), c.params.id as string);
@@ -561,7 +658,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/events",
     {
       id: "events.list",
-      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more, feed_id}`; `wait` holds the request until one arrives. `feed_id` is made once when the job store is created: when it changes, the store was reset and its cursors started again at 0, so read again from `after=0`. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
       ...JOB_ROUTE,
       query: {
         after: {
@@ -575,6 +672,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         wait: WAIT,
       },
       ok: 200,
+      errors: { 404: ["not_found"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
@@ -611,6 +709,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         events: events.map(eventView),
         cursor,
         has_more: jobs.hasEventsAfter(who, cursor),
+        feed_id: jobs.feedId,
       });
     },
   );

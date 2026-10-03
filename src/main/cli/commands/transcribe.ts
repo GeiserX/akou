@@ -109,7 +109,7 @@ export const transcribeCommand: Command = {
       return finish(ctx, result, (b: Body) => b.text as string);
     } catch (err) {
       // Ctrl-C: the job is cancelled below, and the exit is the shell's for SIGINT.
-      if (ctx.io.signal?.aborted) return 130;
+      if (ctx.io.signal?.aborted) return EXIT.interrupted;
       throw err;
     } finally {
       if (!keep || !ended) {

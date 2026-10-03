@@ -25,6 +25,7 @@ import {
   afterCallHelp,
   allModelsText,
   autoHelp,
+  autoJobsHelp,
   bestHelp,
   catalogGroups,
   catalogLine,
@@ -32,6 +33,7 @@ import {
   DIARIZERS,
   gbText,
   hourText,
+  jobModelChoices,
   joinAnd,
   keptText,
   liveHelp,
@@ -191,6 +193,20 @@ describe("[SV-U6] the live transcript's Automatic row", () => {
   });
 });
 
+describe("[SV-U5] the Jobs section's Automatic row says what auto runs here and why", () => {
+  test("the server's verdict follows the line; with none, the line stands alone", () => {
+    expect(autoJobsHelp({ preset: "best", reason: "Qwen3-ASR is downloaded here." })).toBe(
+      "Chosen for each job by what this server has. Now Best: Qwen3-ASR is downloaded here.",
+    );
+    expect(
+      autoJobsHelp({ preset: "fast", reason: "Parakeet is downloaded here and Qwen3-ASR is not." }),
+    ).toBe(
+      "Chosen for each job by what this server has. Now Fast: Parakeet is downloaded here and Qwen3-ASR is not.",
+    );
+    expect(autoJobsHelp(null)).toBe("Chosen for each job by what this server has.");
+  });
+});
+
 describe("[SV-U6] kept, removed, or deleted on a date", () => {
   test("the default and a model in use are kept, and say why", () => {
     // A default a setting chooses can be chosen away; one no setting chooses, akou needs.
@@ -299,6 +315,30 @@ describe("[SV-U6] sizes and the page's own names", () => {
     for (const [key, value] of Object.entries(DEFAULTS))
       expect([key, reg[key]?.default]).toEqual([key, value]);
     expect(MODELS_KEYS.filter((k) => !(k in SETTINGS))).toEqual([]);
+  });
+});
+
+describe("[SV-S1] a job's model is chosen by name, never by its catalog id", () => {
+  test("Automatic, each preset, then each engine by its model's name, each value once", () => {
+    const choices = jobModelChoices({
+      presets: PRESETS.map((p) => ({ name: p.name })),
+      engines: [{ id: RECOGNIZER }, { id: QWEN_ASR }, { id: "an-unnamed-engine" }],
+    });
+    expect(choices[0]).toEqual(["auto", "Automatic"]);
+    expect(choices).toContainEqual(["fast", "Fast"]);
+    expect(choices).toContainEqual(["best", "Best"]);
+    expect(choices).toContainEqual([RECOGNIZER, "Parakeet v3"]);
+    expect(choices).toContainEqual([QWEN_ASR, "Qwen3-ASR 1.7B"]);
+    // An engine nobody named keeps its id, the one word the page has for it.
+    expect(choices.at(-1)).toEqual(["an-unnamed-engine", "an-unnamed-engine"]);
+    // The presets list `auto` too: it is offered once, as Automatic.
+    const values = choices.map(([v]) => v);
+    expect(new Set(values).size).toBe(values.length);
+    expect(values.filter((v) => v === "auto")).toHaveLength(1);
+  });
+
+  test("nothing read yet offers Automatic alone", () => {
+    expect(jobModelChoices({})).toEqual([["auto", "Automatic"]]);
   });
 });
 

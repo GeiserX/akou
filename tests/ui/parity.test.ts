@@ -4,7 +4,7 @@
  * recognizer). Seeded calls are generated logs; live calls run the fake helper.
  */
 
-import { describe, expect, test } from "bun:test";
+import { test as bunTest, describe, expect } from "bun:test";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { HUES, YOU_HUE } from "../../src/ui/model.ts";
@@ -27,6 +27,21 @@ import {
 const text = (page: import("playwright-core").Page, sel: string) =>
   page.locator(sel).first().textContent();
 
+/** The parity row whose test is running, its place, and how many rigs it opened (TS-15c). */
+let row = { name: "", n: 0, rigs: 0 };
+
+/** `test`, remembering the row for the screenshots of every screen it reaches (TS-15c). */
+function test(name: string, fn: () => Promise<unknown>, timeout?: number): void {
+  bunTest(
+    name,
+    async () => {
+      row = { name, n: row.n + 1, rigs: 0 };
+      await fn();
+    },
+    timeout,
+  );
+}
+
 async function withRig<T>(
   o: Parameters<typeof uiRig>[0] & { seed?: (home: string) => void },
   fn: (rig: UiRig) => Promise<T>,
@@ -34,6 +49,13 @@ async function withRig<T>(
   const t = tempDir("akou-ui-");
   o.seed?.(t.dir);
   const rig = await uiRig({ ...o, home: t.dir });
+  // `parity-<nn>-<the row's first words>`, with `-b` for a row's second rig.
+  row.rigs++;
+  const words = row.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, 40);
+  rig.shots = `parity-${String(row.n).padStart(2, "0")}-${words.replace(/^-|-$/g, "")}${row.rigs > 1 ? `-${String.fromCharCode(96 + row.rigs)}` : ""}`;
   try {
     return await fn(rig);
   } finally {

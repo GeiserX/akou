@@ -12,13 +12,13 @@ import { join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
 import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
-import { asKey, type Key, newKey, SERVER, submit } from "./server-helpers.ts";
+import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helpers.ts";
 
 setDefaultTimeout(60_000);
 
@@ -97,6 +97,16 @@ describe("akou-5an.93: preset best", () => {
     expect(res.text).toBe("hello world ok great");
     expect(res.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
     expect(res.metadata).toEqual({ chat: 1 });
+    // akou-5an.24.1: SV-J4's shape, with Qwen's words: a confidence each, no times.
+    expect(RESULT.safeParse(res).error?.issues ?? []).toEqual([]);
+    expect(res.words.map((w: { w: string }) => w.w)).toEqual(["hello", "world", "ok", "great"]);
+    for (const w of res.words) {
+      expect(w.c).toBeGreaterThan(0);
+      expect(w.c).toBeLessThanOrEqual(1);
+      expect([w.s, w.e]).toEqual([null, null]);
+    }
+    expect(res.confidence).toBeGreaterThan(0);
+    expect(res.confidence).toBeLessThanOrEqual(1);
     expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
   });
 
@@ -223,6 +233,72 @@ describe("akou-5an.93: best is listed available only when a job on it can run", 
   });
 });
 
+describe("[SV-R2] auto runs best wherever Qwen is on disk, else fast", () => {
+  test("Parakeet only: auto is fast and says why; once Qwen is there, a job that names nothing runs it", async () => {
+    const reg = modelRegistry();
+    const catalog = [
+      reg.entry(RECOGNIZER, ["a.onnx"]),
+      reg.entry("silero-vad", ["vad.onnx"]),
+      reg.entry(NEMOTRON, ["diar.onnx"]),
+      reg.entry(QWEN_ASR, ["q.gguf", "p.gguf"]),
+    ];
+    const t = tempDir("akou-best-auto-");
+    const models = join(t.dir, "models");
+    for (const e of catalog.slice(0, 3)) reg.install(models, e);
+    // An own llama-server (the fake), as an image has: Qwen's own files are all `best` needs.
+    const r = await appRig({
+      modelRegistry: catalog,
+      models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+      settings: {
+        ...SERVER,
+        "asr.modelsDir": models,
+        "server.auto_download": false,
+        "asr.llamaServer": [process.execPath, FAKE_LLAMA],
+      },
+      jobs: { modelStore: { freeBytes: () => 1e12 } },
+    });
+    const auto = async () => (await r.api("GET", "/server")).body.auto;
+    try {
+      const k = await newKey(r, "archive");
+      const run = async () => {
+        const s = await submit(r, k.key, DIALOGUE, { preset: "auto", language: "auto" });
+        expect(s.status).toBe(202);
+        const j = await asKey(r, k.key, "GET", `/jobs/${s.body.id}?wait=30`);
+        expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+        const res = (await asKey(r, k.key, "GET", `/jobs/${s.body.id}/result`)).body;
+        return { job: j.body, res };
+      };
+      expect(await auto()).toEqual({
+        model: RECOGNIZER,
+        preset: "fast",
+        reason: "Parakeet is downloaded here and Qwen3-ASR is not.",
+      });
+      const fast = await run();
+      expect(fast.job).toMatchObject({
+        model: RECOGNIZER,
+        preset: "fast",
+        model_source: "hardware",
+      });
+
+      reg.install(models, catalog[3] as (typeof catalog)[number]);
+      expect(await auto()).toEqual({
+        model: QWEN_ASR,
+        preset: "best",
+        reason: "Qwen3-ASR is downloaded here.",
+      });
+      const best = await run();
+      expect(best.job).toMatchObject({ model: QWEN_ASR, preset: "best", model_source: "hardware" });
+      expect(best.res.engine.models[0]).toBe(QWEN_ASR);
+      // Qwen names the language it heard, which Parakeet never does.
+      expect(best.res.language).toBe("en");
+    } finally {
+      await r.close();
+      reg.stop();
+      t.cleanup();
+    }
+  });
+});
+
 describe("lidc on the server: asr.languages", () => {
   test("a language outside asr.languages is replaced by the better forced decode", async () => {
     const t = tempDir("akou-best-lidc-");
@@ -331,5 +407,144 @@ describe("akou-5an.119: a best job in the desktop app takes its turn on the one 
     } finally {
       await r.close();
     }
+  });
+});
+
+describe("akou-5an.106: lidc per job, languages[]", () => {
+  // The fake hears Chinese on auto; forced, Spanish scores better than English.
+  const CHINESE = [
+    process.execPath,
+    FAKE_LLAMA,
+    "--fake-lang",
+    "Chinese",
+    "--fake-lp",
+    "Spanish=-0.1",
+    "--fake-lp",
+    "English=-2",
+  ];
+  let r: AppRig;
+  let k: Key;
+
+  beforeAll(async () => {
+    r = await appRig({ settings: { ...SERVER, "asr.llamaServer": CHINESE } });
+    k = await newKey(r, "archive");
+  });
+
+  afterAll(async () => {
+    await r?.close();
+  });
+
+  async function languageOf(fields: Record<string, string>) {
+    const s = await submit(r, k.key, DIALOGUE, { preset: "best", ...fields });
+    expect(s.status).toBe(202);
+    const j = await asKey(r, k.key, "GET", `/jobs/${s.body.id}?wait=30`);
+    expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+    return {
+      job: j.body,
+      language: (await asKey(r, k.key, "GET", `/jobs/${s.body.id}/result`)).body.language,
+    };
+  }
+
+  test("a clip Qwen names Chinese comes back in a listed language, and the job echoes the list", async () => {
+    const bound = await languageOf({ "languages[]": "es,EN" });
+    // Spanish: the forced decode among the listed ones that scores higher.
+    expect(bound.language).toBe("es");
+    expect(bound.job.languages).toEqual(["es", "en"]);
+    // Positive control: no list and asr.languages empty, so whatever the model names stands.
+    const free = await languageOf({});
+    expect(free.language).toBe("zh");
+    expect(free.job.languages).toEqual([]);
+  });
+
+  test("the request's list wins over asr.languages; with none, asr.languages bounds it", async () => {
+    const admin = await newKey(r, "admin", "admin");
+    expect(
+      (await asKey(r, admin.key, "PATCH", "/config", { "asr.languages": ["en"] })).status,
+    ).toBe(200);
+    try {
+      expect((await languageOf({})).language).toBe("en");
+      expect((await languageOf({ "languages[]": "es" })).language).toBe("es");
+    } finally {
+      await asKey(r, admin.key, "PATCH", "/config", { "asr.languages": [] });
+    }
+  });
+
+  test("a code no engine here can choose is refused with 422, never dropped", async () => {
+    const s = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "es,bg" });
+    expect(s.status).toBe(422);
+    expect(s.body).toMatchObject({ error: "unsupported_language", codes: ["bg"] });
+    const bad = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "spanish" });
+    expect(bad.status).toBe(422);
+    expect(bad.body).toMatchObject({ error: "bad_field", field: "languages[]" });
+    // The OpenAI door refuses it the same way.
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+    form.append("model", "best");
+    form.append("languages[]", "bg");
+    const o = await fetch(`http://127.0.0.1:${r.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(o.status).toBe(422);
+    expect(((await o.json()) as { error: string }).error).toBe("unsupported_language");
+  });
+
+  test("the OpenAI door bounds auto with languages[] too", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+    form.append("model", "best");
+    form.append("response_format", "verbose_json");
+    form.append("languages[]", "es");
+    form.append("languages[]", "en");
+    const o = await fetch(`http://127.0.0.1:${r.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(o.status).toBe(200);
+    expect(((await o.json()) as { language: string }).language).toBe("es");
+  });
+
+  test("languages[] is in the Idempotency-Key fingerprint, in any order and case", async () => {
+    const send = async (languages: string) => {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+      form.append("preset", "best");
+      form.append("languages[]", languages);
+      const res = await fetch(`http://127.0.0.1:${r.port}/v1/jobs`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${k.key}`, "idempotency-key": "lang-fp-1" },
+        body: form,
+      });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    const first = await send("es,en");
+    expect(first.status).toBe(202);
+    const same = await send("EN, es");
+    expect(same.status).toBe(200);
+    expect(same.body.id).toBe(first.body.id);
+    const other = await send("es");
+    expect(other.status).toBe(422);
+    expect(other.body).toMatchObject({
+      error: "idempotency_conflict",
+      id: first.body.id,
+      fields: ["languages"],
+    });
+    // Without a key, two submits differing only in languages are two jobs.
+    const a = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "es" });
+    const b = await submit(r, k.key, DIALOGUE, { preset: "best", "languages[]": "en" });
+    expect(a.body.id).not.toBe(b.body.id);
+    for (const id of [first.body.id, a.body.id, b.body.id]) {
+      await asKey(r, k.key, "GET", `/jobs/${id}?wait=30`);
+    }
+  });
+
+  test("GET /v1/server says jobs take languages[], and which codes", async () => {
+    const s = (await asKey(r, k.key, "GET", "/server")).body;
+    expect(s.capabilities.languages_bound).toBe(true);
+    expect(s.bound_languages).toContain("es");
+    expect(s.bound_languages).toContain("yue");
+    expect(s.bound_languages).not.toContain("bg");
   });
 });

@@ -205,7 +205,7 @@ export class TranscribeCppEngine implements FinalEngine {
       if (this.o.languages.includes(c)) return c;
       throw new TranscribeCppError(`${this.id} does not hear ${c}`, "unit_failed", false);
     }
-    const allowed = this.allowed();
+    const allowed = this.allowed(unit);
     if (this.o.family === "whisper") return allowed.length === 1 ? allowed[0] : undefined;
     if (allowed[0]) return allowed[0];
     throw new TranscribeCppError(
@@ -215,10 +215,11 @@ export class TranscribeCppEngine implements FinalEngine {
     );
   }
 
-  /** The user's languages this model hears, in their order. */
-  private allowed(): string[] {
+  /** The user's languages this model hears, in their order: the unit's (a job's), else the engine's. */
+  private allowed(unit: FinalUnit): string[] {
     const out: string[] = [];
-    for (const c of (this.o.allowed ?? []).map(base)) {
+    const listed = unit.allowed?.length ? unit.allowed : (this.o.allowed ?? []);
+    for (const c of listed.map(base)) {
       if (this.o.languages.includes(c) && !out.includes(c)) out.push(c);
     }
     return out;
@@ -255,7 +256,7 @@ export class TranscribeCppEngine implements FinalEngine {
     let r = await this.run(m, unit.samples, forced, family);
     let lang = forced ?? (r.language ? (ISO_CODE[r.language] ?? r.language) : undefined);
     // Whisper chose a language the user does not speak: decode again, forced into theirs.
-    const allowed = this.allowed();
+    const allowed = this.allowed(unit);
     if (!forced && lang && allowed.length > 0 && !allowed.includes(lang)) {
       this.o.log?.(
         "info",

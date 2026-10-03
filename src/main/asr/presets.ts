@@ -10,9 +10,9 @@
  * without Parakeet. `fusion` is every engine of its list (`asr.final.engines`, else Qwen3-ASR,
  * Whisper large-v3 and Parakeet), the llama-server build when Qwen is among them, and the same VAD
  * and speaker models; transcribe-cpp, which runs Whisper and Canary, ships with akou and is never a
- * download. `lite` waits for its engines and says so instead of pulling something else. `auto`
- * resolves to `fast` until hardware detection (SV-R2) can pick `best` on a GPU or `lite` on a small
- * arm64 board.
+ * download. `lite` waits for its engines and says so instead of pulling something else. `auto` is
+ * resolved before it gets here (`autoChoice` in server/model-store.ts, SV-R2) to the preset a job
+ * that names no model would run; given unresolved, it is `fast`.
  */
 
 import { FUSION_DEFAULT } from "./fusion.ts";

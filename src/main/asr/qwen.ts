@@ -2,8 +2,9 @@
  * Qwen3-ASR-1.7B as a `FinalEngine` (docs/research/asr-architecture.md ASR-5), over llama-server's
  * OpenAI-style chat route. Checked against llama.cpp b11200 with the Q8_0 GGUF on an M4:
  *
- * - One unit is one request: the audio as a 16-bit WAV `input_audio` part, greedy
- *   (`temperature: 0`), with `logprobs`. The answer is `language <Name><asr_text><text>`.
+ * - One unit is one request (up to `QWEN_MAX_REQUEST_SECONDS`, below): the audio as a 16-bit WAV
+ *   `input_audio` part, greedy (`temperature: 0`), with `logprobs`. The answer is
+ *   `language <Name><asr_text><text>`.
  * - **The prefix is stripped**, and the language name becomes an ISO code.
  * - **A known language is forced**: Qwen's own prefix for it is sent as the start of the assistant's
  *   answer, and the model writes only the text. Forcing is right when the language is known; on
@@ -22,6 +23,11 @@
  *   silence instead of None, and lidc forces those into words.
  * - **Word confidence** is exp of the lowest log-probability of the word's tokens, as for sherpa.
  *   Qwen gives no word times.
+ *
+ * - **No request is longer than `QWEN_MAX_REQUEST_SECONDS`.** A longer unit (a whole dictation, a
+ *   file through the API) is cut at its quietest tenth of a second before the limit, each piece is
+ *   decoded as a unit of its own, and their texts are joined. Past the limit llama-server's
+ *   context fills before the answer ends, and the words of the rest are lost with no error.
  *
  * A dropped connection or a 500 restarts the server and retries the unit once; a second failure is
  * `engine_unavailable` and marked `fatal`, so the pass fails the job instead of dropping the text.
@@ -160,6 +166,49 @@ function wordsOf(text: string, tokens: readonly Token[]): WordHyp[] {
   return out;
 }
 
+/**
+ * The most audio one request carries, seconds: the second pass's longest request
+ * (`REVIEW_CAP_MAX_SECONDS`). The audio (about 13 tokens a second) and the answer share
+ * llama-server's 4096-token context, and the answer stops where it fills. On b11200 with Q8_0 on
+ * an M4, joined FLEURS clips (about 2 words a second) came back whole up to 242 s and kept 100 of
+ * 679 words at 305 s; denser speech (3.3 words a second) came back whole at 180 s and lost its
+ * tail from 210 s; 360 s was refused with HTTP 400. Every loss but the refusal came with no error.
+ */
+export const QWEN_MAX_REQUEST_SECONDS = 180;
+
+/** The window the cut between two pieces looks for the quietest of, samples (0.1 s). */
+const CUT_WINDOW = ASR_RATE / 10;
+
+/**
+ * `samples` in pieces of at most `maxSeconds`, in order and with nothing left out. Each cut falls
+ * on the quietest 0.1 s window of the last third before the limit, a pause where there is one.
+ */
+export function qwenPieces(samples: Float32Array, maxSeconds: number): Float32Array[] {
+  const max = Math.floor(maxSeconds * ASR_RATE);
+  const out: Float32Array[] = [];
+  let from = 0;
+  while (samples.length - from > max) {
+    let cut = from + max;
+    let quietest = Number.POSITIVE_INFINITY;
+    for (
+      let at = from + Math.ceil((2 * max) / 3);
+      at + CUT_WINDOW <= from + max;
+      at += CUT_WINDOW
+    ) {
+      let e = 0;
+      for (let i = at; i < at + CUT_WINDOW; i++) e += (samples[i] as number) ** 2;
+      if (e < quietest) {
+        quietest = e;
+        cut = at + CUT_WINDOW / 2;
+      }
+    }
+    out.push(samples.subarray(from, cut));
+    from = cut;
+  }
+  out.push(samples.subarray(from));
+  return out;
+}
+
 export interface QwenServer {
   url(): Promise<string>;
   restart(): Promise<string>;
@@ -175,6 +224,11 @@ export interface QwenOptions {
   timeoutMs?: number;
   /** Aborts the request in flight: its caller gave it up. */
   signal?: AbortSignal;
+  /**
+   * The most audio one request carries, seconds; a longer unit goes in pieces. Default
+   * `QWEN_MAX_REQUEST_SECONDS`; only the nightly's uncut control raises it.
+   */
+  maxSeconds?: number;
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -201,13 +255,35 @@ export class QwenEngine implements FinalEngine {
   }
 
   async decode(unit: FinalUnit): Promise<Hypothesis> {
+    const pieces = qwenPieces(unit.samples, this.o.maxSeconds ?? QWEN_MAX_REQUEST_SECONDS);
+    if (pieces.length === 1) return await this.decodeWhole(unit);
+    const t = performance.now();
+    const hs: Hypothesis[] = [];
+    for (const samples of pieces) hs.push(await this.decodeWhole({ ...unit, samples }));
+    const h: Hypothesis = {
+      engine: this.id,
+      text: hs
+        .map((x) => x.text)
+        .filter(Boolean)
+        .join(" "),
+      words: hs.flatMap((x) => x.words),
+      ms: performance.now() - t,
+    };
+    const lang = hs.find((x) => x.text !== "" && x.lang)?.lang ?? hs.find((x) => x.lang)?.lang;
+    if (lang) h.lang = lang;
+    return h;
+  }
+
+  /** One unit no longer than a request may carry. */
+  private async decodeWhole(unit: FinalUnit): Promise<Hypothesis> {
     const t = performance.now();
     const forced = unit.lang === "auto" ? undefined : qwenLanguage(unit.lang);
     // Auto first, even with a language set: greedy decoding makes the forced decode identical
     // when the model chose that language, and a None answer must never be forced into words.
     let a = await this.ask(unit);
     if (forced && a.lang !== "None" && a.lang !== forced) a = await this.ask(unit, forced);
-    const allowed = (this.o.allowed ?? []).filter((c) => qwenLanguage(c));
+    const listed = unit.allowed?.length ? unit.allowed : (this.o.allowed ?? []);
+    const allowed = listed.filter((c) => qwenLanguage(c));
     if (!forced && a.lang && a.lang !== "None" && allowed.length > 0) {
       const names = allowed.map((c) => qwenLanguage(c) as string);
       if (!names.includes(a.lang)) {

@@ -750,7 +750,7 @@ export async function runFinalPass(
  */
 export async function decodeUnit(
   engine: FinalEngine,
-  unit: { lang: string; glossary: readonly string[] },
+  unit: { lang: string; glossary: readonly string[]; allowed?: readonly string[] },
   samples: Float32Array,
   from: number,
   to: number,
@@ -870,6 +870,8 @@ export interface EnginesOptions {
   /** The job's or call's language: forced on every engine when it is not `auto`. */
   lang: string;
   glossary: readonly string[];
+  /** The languages an `auto` decode may choose among (a job's `languages[]`), over the engine's. */
+  allowed?: readonly string[];
   minSplitSeconds: number;
   /** An engine whose `memoryMb` is over this is dropped before it loads. 0 or absent: none. */
   memoryBudgetMb?: number;
@@ -1003,7 +1005,7 @@ export async function runEngines(
         try {
           h = await decodeUnit(
             e,
-            { lang, glossary: o.glossary },
+            { lang, glossary: o.glossary, allowed: o.allowed },
             unit.samples,
             unit.from,
             unit.to,
@@ -1378,6 +1380,8 @@ export interface JobPassInput {
   language?: string;
   /** The job's keywords as a glossary, for an engine that takes one (Qwen's context). */
   glossary?: readonly string[];
+  /** The languages an `auto` decode may choose among (the job's `languages[]`), over the engine's. */
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 }
 
@@ -1389,23 +1393,24 @@ export interface JobSegment {
   speaker: string | null;
 }
 
-/** One word of a job's result (SV-J4). */
+/**
+ * One word of a job (SV-J4). `s` and `e` are seconds into the file, null from an engine that gives
+ * no word times (Qwen); `c` is the engine's confidence, 0 to 1, null from one that gives none.
+ */
 export interface JobWord {
   w: string;
-  /** Seconds into the file; null when the engine gives no word times (Qwen). */
   s: number | null;
   e: number | null;
-  /** 0 to 1, or null when the engine gives no confidence for the word. */
   c: number | null;
 }
 
-/** Whether a job's segments carry speaker labels (SV-J4). */
+/** Whether a job's speaker labels were made (SV-J4). */
 export interface JobSpeakers {
   /** The job asked for `diarize`. */
   asked: boolean;
-  /** The speaker model ran and found turns, so every segment carries a label. */
+  /** Its segments carry speaker labels: the speaker model ran and found turns. */
   labelled: boolean;
-  /** Why the speaker model failed (it crashed, was missing or missed its deadline), else null. */
+  /** Why the speaker model failed (a missing helper, a missed deadline), or null. */
   error: string | null;
 }
 
@@ -1424,9 +1429,11 @@ export interface JobPassResult {
   duration_s: number;
   /** The recognizer's registry name, or null when nothing was decoded. */
   model: string | null;
-  /** Pieces the engine still refused at `minSplitSeconds`, seconds into the file. */
-  skipped: { s: number; e: number; reason: string }[];
+  /** Spans the engine refused even after halving to `minSplitSeconds`: their words are missing. */
+  skipped: { s: number; e: number; error: string }[];
   speakers: JobSpeakers;
+  /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
+  diarized: boolean;
   /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
@@ -1478,7 +1485,9 @@ export async function runJobPass(
     duration_s,
     model: null,
     skipped: [],
+    // Nothing to label: no speech, so no speaker model runs.
     speakers: { asked: input.diarize, labelled: false, error: null },
+    diarized: false,
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
   // With an engine the model set's recognizer is never prepared, so it never loads; in a fusion
@@ -1543,6 +1552,7 @@ export async function runJobPass(
       fuser: fusion?.fuser ?? "first",
       lang: input.language ?? "auto",
       glossary: input.glossary ?? [],
+      allowed: input.languages,
       minSplitSeconds: o.minSplitSeconds,
       memoryBudgetMb: fusion?.memoryBudgetMb,
       log,
@@ -1553,7 +1563,7 @@ export async function runJobPass(
     skipped.push({
       s: round3((from + k.from) / ASR_RATE),
       e: round3((from + k.to) / ASR_RATE),
-      reason: k.error,
+      error: k.error,
     });
   }
   for (const [u, piece] of pieces.entries()) {
@@ -1587,6 +1597,7 @@ export async function runJobPass(
     model: modelId,
     skipped,
     speakers: { asked: input.diarize, labelled: spans.length > 0, error: diarizeError },
+    diarized: input.diarize && diarizeError === null,
     decode_s,
     ...(fusion
       ? { fusion: { fuser: fusion.fuser, engines: pass.ran, dropped: pass.dropped } }
@@ -1628,6 +1639,7 @@ type ToJob = {
   diarize: boolean;
   language?: string;
   glossary?: readonly string[];
+  languages?: readonly string[];
   options?: Partial<FinalOptions>;
 };
 
@@ -1783,6 +1795,7 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         decode: m.decode,
         language: m.language,
         glossary: m.glossary,
+        languages: m.languages,
         options: m.options,
       },
       models,
@@ -1869,6 +1882,7 @@ export class JobWorker {
         diarize: input.diarize,
         language: input.language,
         glossary: input.glossary,
+        languages: input.languages,
         options: input.options,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.

@@ -419,6 +419,43 @@ describe("the desktop shell over a fake NativeUi", () => {
     );
   });
 
+  test("[DK-T2] With no display the tray keeps its item: the mark changes once a display is back", async () => {
+    const f = fakeUi();
+    const a = fakeApp();
+    let lifecycle = () => {};
+    const bridge = {
+      ...bridgeStub,
+      watchLifecycle: (fn: () => void) => {
+        lifecycle = fn;
+        return () => {};
+      },
+    } as unknown as Bridge;
+    // A Mac with no display: on macOS a new mark is a new status item, which crashed the SDK there.
+    const display = f.areas;
+    f.areas = [];
+    const shell = new Shell(a.app, bridge, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    await shell.start();
+    f.tray("record");
+    await until(() => a.state.live, 1000, "tray record");
+    lifecycle();
+    // The login item's check proves a refresh ran after the call started.
+    f.tray("login");
+    const checked = () =>
+      f.trayMenu().some((i) => (i as { action?: string; checked?: boolean }).checked === true);
+    await until(checked, 1000, "the login item checked");
+    expect(f.trayImages).toEqual([]);
+    expect(f.trays).toHaveLength(1);
+    // A display again: the next refresh shows the recording mark.
+    f.areas = display;
+    lifecycle();
+    await until(() => f.trayImages.length === 1, 1000, "the recording image");
+    expect(f.trayImages[0]).toEqual(trayImage("darwin", true));
+    await shell.close();
+  });
+
   test("the tray icons on disk are the ones scripts/tray-icons.ts draws", () => {
     const files = trayIconFiles();
     expect(Object.keys(files).sort()).toEqual([

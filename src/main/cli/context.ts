@@ -145,7 +145,7 @@ export function describeError(r: ApiResponse): string {
  * stderr otherwise. Returns the exit code.
  */
 export function finish(ctx: Ctx, r: ApiResponse, human: (body: Body) => string): number {
-  const code = exitFor(r.status, r.body?.error);
+  const code = exitFor(r.status, r.body?.error, r.body);
   if (ctx.json) {
     ctx.io.out(JSON.stringify(r.body ?? { error: `http_${r.status}`, message: r.text }));
     return code;
