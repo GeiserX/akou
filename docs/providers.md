@@ -94,7 +94,7 @@ What we know:
 
 What we have not verified:
 
-- Whether the consumer terms of Anthropic ([Consumer Terms](https://www.anthropic.com/legal/consumer-terms), [Usage Policy](https://www.anthropic.com/legal/aup)) and of OpenAI ([Terms of Use](https://openai.com/policies/terms-of-use/)) cover a separate application starting their command-line tool for its user, with that user's subscription.
+- Whether the consumer terms of Anthropic ([Consumer Terms](https://www.anthropic.com/legal/consumer-terms), [Usage Policy](https://www.anthropic.com/legal/aup)) and of OpenAI ([Terms of Use](https://openai.com/policies/row-terms-of-use/)) cover a separate application starting their command-line tool for its user, with that user's subscription.
 - Whether that changes when the application is distributed to other people, as akou is.
 - Whether either vendor limits how often, or how unattended, such runs may be.
 
