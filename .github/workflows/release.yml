@@ -3,7 +3,8 @@ name: release
 # The release (docs/DESIGN.md section 9, scripts/release-checklist.md). On a `v*` tag it checks that
 # every version string equals the tag, builds the capture helper, the macOS app (unsigned: ad-hoc
 # signed, not notarized) and the CLI binaries, checks each built artifact without opening anything,
-# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS.
+# and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS. It also
+# builds and checks the desktop app on Windows and Linux, which it does not publish yet.
 #
 # Run it by hand (workflow_dispatch) for a dry run: the same builds and checks, the artifacts
 # uploaded to the run, and no release. `allow_missing_helper` lets a dry run build the app before
