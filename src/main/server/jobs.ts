@@ -696,6 +696,7 @@ export class JobService {
       if (fields.length > 0) return { conflict: r.job, fields };
       return r;
     }
+    this.o.log("info", `job.created ${r.job.id} key ${r.job.key_id}`);
     this.dispatch();
     this.pump();
     return r;

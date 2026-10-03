@@ -502,6 +502,15 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Change a key's callback hosts (server mode)",
+    cli: ["keys"],
+    api: ["PATCH /keys/:id"],
+    mcp: { none: "made by the operator, on the box, not by an agent (SV-K2)" },
+    window: {
+      none: "the Keys page creates and revokes; changing hosts is the CLI's and the API's (SV-K7)",
+    },
+  },
+  {
     action: "Transcribe a clip through the dictation path",
     cli: ["dictate"],
     api: ["POST /dictations"],

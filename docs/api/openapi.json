@@ -6830,6 +6830,92 @@
       }
     },
     "/v1/keys/{id}": {
+      "patch": {
+        "operationId": "keys.update",
+        "tags": [
+          "keys"
+        ],
+        "description": "Replace a key's callback hosts. The key, its webhook secret, its jobs and its event feed stay; the next request with the key uses the new hosts. An empty list allows no callback.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id, `key_…`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "callback_hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "callback_hosts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
       "delete": {
         "operationId": "keys.revoke",
         "tags": [
