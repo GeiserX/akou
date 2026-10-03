@@ -1992,6 +1992,8 @@ export class AkouApp implements ApiApp {
         after["dictation.preferBuiltInOverBluetooth"]
     )
       this.dictationSvc?.rebuildMic();
+    if (before["dictation.muteMedia"] !== after["dictation.muteMedia"])
+      this.dictationSvc?.pauseMedia();
     // Fewer days, or the audio no longer kept: what is past it goes now, not at the next sweep.
     if (
       before["dictation.retainDays"] !== after["dictation.retainDays"] ||
@@ -3081,6 +3083,7 @@ export class AkouApp implements ApiApp {
         device: this.cfg.settings["dictation.mic"],
         preferBuiltIn: this.cfg.settings["dictation.preferBuiltInOverBluetooth"],
       }),
+      pauseMedia: () => this.cfg.settings["dictation.muteMedia"],
       onLog: (level, msg) => this.log(level, msg),
     });
     // Qwen landing while `best` waits for it: it is warmed at once (DC-E3).

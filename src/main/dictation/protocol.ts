@@ -183,6 +183,11 @@ export type AppToHelper =
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
   /**
+   * `dictation.muteMedia` (DC-U8): while on, a session pauses the media players that are playing
+   * and its end plays again only those. Off until it arrives.
+   */
+  | { type: "pause_media"; on: boolean }
+  /**
    * The Dictation page's meter (DC-U4, DC-N3): while on, the helper keeps the mic open and sends
    * `level` 20 times a second with no session.
    */

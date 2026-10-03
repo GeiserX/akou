@@ -462,7 +462,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "dictation.spokenSend": { label: "Say “send it” to send" },
   "dictation.format": {
     label: "Tidy the text with AI",
-    help: "Fixes punctuation and capitals before the text goes in. History keeps what you said.",
+    help: "Fixes punctuation and capitals. History keeps what you said. A local model is the quickest.",
     choices: [
       ["off", "Off"],
       ["provider", "With your assistant"],

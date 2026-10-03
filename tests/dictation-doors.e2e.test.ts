@@ -80,6 +80,8 @@ describe("DC-G1: GET /v1/dictation", () => {
       lost: [],
       backend: "fake",
       swallow_keys: true,
+      // A retry can use only the engines whose model is here: fast's.
+      engines: ["fast"],
     });
   });
 

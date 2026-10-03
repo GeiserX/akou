@@ -203,6 +203,28 @@ describe("DC-U4: the microphone goes to the helper", () => {
   });
 });
 
+describe("DC-U8: dictation.muteMedia goes to the helper", () => {
+  test("after ready, the setting as it is; a change sends it again", async () => {
+    const media = { on: false };
+    const r = rig([], { pauseMedia: () => media.on });
+    await started(r);
+    await until(() => sent(r, "pause_media").length === 1, 5000, "pause_media after ready");
+    expect(sent(r, "pause_media")[0]).toEqual({ type: "pause_media", on: false });
+    media.on = true;
+    r.svc.pauseMedia();
+    await until(() => sent(r, "pause_media").length === 2, 5000, "pause_media on a change");
+    expect(sent(r, "pause_media")[1]).toEqual({ type: "pause_media", on: true });
+  });
+
+  test("negative control: with no media setting, none is sent", async () => {
+    const r = rig([]);
+    await started(r);
+    await until(() => sent(r, "rebind").length === 1, 5000, "the rebind");
+    await Bun.sleep(200);
+    expect(sent(r, "pause_media")).toEqual([]);
+  });
+});
+
 describe("DC-U4, DC-N3: the page's meter moves on the helper's level", () => {
   /** The window's RPC over `svc`, and the levels it sent the page. */
   function window(svc: DictationService | null) {

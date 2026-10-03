@@ -152,6 +152,39 @@ function box(o: Partial<DraftBoxOptions> & { outcome?: InsertOutcome } = {}) {
   };
 }
 
+describe("DC-U6: the box shows what was heard beside the AI tidy's text", () => {
+  /** A drafted dictation the engine heard as `raw` and akou wrote as `text`. */
+  const drafted = (f: ReturnType<typeof box>, id: string, text: string, formatted: boolean) => {
+    f.log.append({ type: "dictation.started", id, target: TARGET, engine: "fast", by: "user" });
+    f.log.append({ type: "dictation.ended", id, reason: "release", seconds: 2 });
+    f.log.append({
+      type: "dictation.text",
+      id,
+      raw: "um three apples",
+      text,
+      language: "en",
+      words: [],
+      engine: "fast",
+      model: "parakeet",
+      ms: 80,
+      ...(formatted ? { formatted: true } : {}),
+    });
+    f.log.append({ type: "dictation.drafted", id, reason: "focus-changed" });
+  };
+
+  test("a tidied dictation opens with what the engine heard; one the tidy did not write, without", () => {
+    const f = box();
+    drafted(f, "t1", "Three apples.", true);
+    f.b.open("t1", { focus: false });
+    expect(f.opens.at(-1)).toMatchObject({ text: "Three apples.", heard: "um three apples" });
+    // The control: fillers and spoken punctuation change the text too, with no tidy.
+    drafted(f, "t2", "three apples", false);
+    f.b.open("t2", { focus: false });
+    expect(f.opens.at(-1)?.text).toBe("three apples");
+    expect(f.opens.at(-1)?.heard).toBeUndefined();
+  });
+});
+
 describe("DC-S1: the draft box's keys", () => {
   test("Enter inserts where the session began with no send key; Ctrl+Enter presses dictation.sendKey", async () => {
     const f = box();

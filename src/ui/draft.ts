@@ -283,6 +283,9 @@ export function mountDraft(t: DraftTransport): DraftSink {
       marks = lowMarks(text, next.words);
       const scored = (next.words ?? []).some((w) => typeof w.c === "number");
       el("draft-noconf").hidden = scored;
+      // The AI tidy changed what was heard (DC-U6): both show, the tidied text in the field.
+      el("draft-heard").hidden = !next.heard;
+      el("draft-heard").textContent = next.heard ? `As heard: ${next.heard}` : "";
       alts.hidden = true;
       el("draft-to").hidden = !next.to;
       el("draft-app").textContent = next.to ?? "";

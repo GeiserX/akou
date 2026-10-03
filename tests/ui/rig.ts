@@ -504,6 +504,8 @@ export interface DictationFixture {
   retry: (d: DictationRow, engine: string) => DictationRow;
   /** The helper's grants on `GET /dictation`; null answers 404, as an app without the route. */
   grants: DictationGrants | null;
+  /** `GET /dictation`'s `engines`, the ones a retry can use; left out, an app that does not say. */
+  engines?: string[];
 }
 
 /**
@@ -568,7 +570,12 @@ export async function dictationFixture(
       fx.grants
         ? route.fulfill({
             status: 200,
-            json: { enabled: fx.settings["dictation.enabled"], state: "idle", grants: fx.grants },
+            json: {
+              enabled: fx.settings["dictation.enabled"],
+              state: "idle",
+              grants: fx.grants,
+              ...(fx.engines ? { engines: fx.engines } : {}),
+            },
           })
         : route.fulfill({ status: 404, json: { error: "not_found", message: "no such route" } }),
   );

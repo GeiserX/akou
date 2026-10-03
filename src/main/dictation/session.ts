@@ -343,6 +343,8 @@ export interface SessionOptions extends TextRules {
    * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
    */
   mic?(): { device: string; preferBuiltIn: boolean };
+  /** `dictation.muteMedia`, sent as `pause_media` after `ready` (DC-U8); absent, never sent. */
+  pauseMedia?(): boolean;
   /**
    * Whether the Dictation page's meter is on (DC-U4, DC-N3): sent as `meter` after `ready`, so a
    * helper started again while the page shows its meter keeps it moving.
@@ -648,6 +650,13 @@ export class DictationSession {
     });
   }
 
+  /** Sends the helper `dictation.muteMedia` (DC-U8); nothing before `ready`. */
+  pauseMedia(): void {
+    const on = this.o.pauseMedia?.();
+    if (!this.ready || on === undefined) return;
+    this.o.send({ type: "pause_media", on });
+  }
+
   /**
    * The tray's and the CLI's door (DC-G1): `session.start`, `session.stop` or `session.cancel`. The
    * helper answers with `session.started` and `session.ended` as for a key.
@@ -771,6 +780,7 @@ export class DictationSession {
         this.set("idle");
         void this.rebind();
         this.rebuildMic();
+        this.pauseMedia();
         if (this.o.metering?.()) this.meter(true);
         if (this.o.recording?.()) this.recordKeys(true);
         return;
@@ -1388,7 +1398,15 @@ export class DictationSession {
  */
 export type DictationResult =
   | { kind: "empty" }
-  | { kind: "text"; d: EngineDecoded; text: string; echoRetry: boolean; send?: boolean };
+  | {
+      kind: "text";
+      d: EngineDecoded;
+      text: string;
+      echoRetry: boolean;
+      send?: boolean;
+      /** The AI tidy (DC-U6) wrote `text`. */
+      formatted?: boolean;
+    };
 
 /**
  * A dictation's buffer through the guards and the text rules (DC-E6, DC-L6, DC-S7, DC-S6): no
@@ -1435,7 +1453,14 @@ export async function decodeDictation(
   const f = await formatted(o, text, x.format);
   if (f?.skipped)
     d = { ...d, notice: d.notice ? `${d.notice}; ${FORMAT_SKIPPED}` : FORMAT_SKIPPED };
-  return { kind: "text", d, text: f?.text ?? text, echoRetry, ...(send ? { send } : {}) };
+  return {
+    kind: "text",
+    d,
+    text: f?.text ?? text,
+    echoRetry,
+    ...(send ? { send } : {}),
+    ...(f && !f.skipped ? { formatted: true } : {}),
+  };
 }
 
 /** The pill's line when the formatting pass was skipped and the raw text went in (DC-U6). */
@@ -1510,6 +1535,7 @@ export function textEvent(
     ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
     ...languageForced(language, d.engine ?? engine),
     ...(r.echoRetry ? { echo_retry: true } : {}),
+    ...(r.formatted ? { formatted: true } : {}),
   };
 }
 
