@@ -64,7 +64,7 @@ export const BUILT = {
   ui: "dist/ui",
   workers: ["dist/workers/live-worker.js", "dist/workers/finalize-worker.js"],
   /** The `akou` command the app carries, for "Install Command-Line Tool…" (DK-M6). */
-  cli: process.platform === "win32" ? "dist/app-cli/akou.exe" : "dist/app-cli/akou",
+  cli: "dist/app-cli/akou",
 } as const;
 
 type Exists = (path: string) => boolean;
@@ -100,11 +100,20 @@ export function helperCopies(
   return out;
 }
 
+/** Where `build-app.ts` compiles the command line the app carries: `akou.exe` on Windows. */
+export function cliBuildPath(platform: string = process.platform): string {
+  return `${BUILT.cli}${platform === "win32" ? ".exe" : ""}`;
+}
+
 /** The Workers, the browser pages and the command line beside the main process, once built. */
-export function builtCopies(exists: Exists = projectFileExists): Record<string, string> {
+export function builtCopies(
+  exists: Exists = projectFileExists,
+  platform: string = process.platform,
+): Record<string, string> {
   const out: Record<string, string> = {};
   if (exists(`${BUILT.ui}/index.js`)) out[BUILT.ui] = `${MAIN_OUT}/ui`;
-  if (exists(BUILT.cli)) out[BUILT.cli] = `${MAIN_OUT}/${BUILT.cli.split("/").pop()}`;
+  const cli = cliBuildPath(platform);
+  if (exists(cli)) out[cli] = `${MAIN_OUT}/${cli.split("/").pop()}`;
   for (const w of BUILT.workers) {
     if (exists(w)) out[w] = `${MAIN_OUT}/${w.split("/").pop()}`;
   }
