@@ -4872,7 +4872,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+        "description": "A spoken dictation's audio as mono Ogg Opus (a 16 kHz WAV, `audio/wav`, for one kept before akou kept Opus), kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
         "parameters": [
           {
             "name": "id",
@@ -4888,7 +4888,7 @@
           "200": {
             "description": "OK",
             "content": {
-              "audio/wav": {
+              "audio/ogg": {
                 "schema": {
                   "type": "string",
                   "format": "binary"

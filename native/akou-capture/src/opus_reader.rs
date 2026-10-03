@@ -247,6 +247,60 @@ mod tests {
         assert_eq!(decode(&path, 0, None, &mut out).unwrap(), info.frames);
     }
 
+    /// A dictation's audio (`encode`, DC-H2): mono from 16 kHz input. It decodes to exactly the
+    /// frames written, in time with the input (the pre-skip is counted at 48 kHz, so a lookahead
+    /// left at 16 kHz would shift it by 69 frames), the same on both channels, at about a tenth of
+    /// the 16-bit WAV it replaces.
+    #[test]
+    fn a_mono_16_khz_dictation_decodes_in_time_and_small() {
+        let path = tmp("dictation.opus");
+        let rate = DECODE_RATE as usize;
+        let slot = rate / 50;
+        // A chirp from 200 Hz to 2 kHz over 3 s: no period, so one lag lines it up.
+        let chirp = |i: usize| {
+            let t = i as f64 / rate as f64;
+            0.3 * (2.0 * std::f64::consts::PI * (200.0 * t + 300.0 * t * t)).sin() as f32
+        };
+        let input: Vec<f32> = (0..3 * rate + 100).map(chirp).collect();
+        let mut w = OpusWriter::create_mono(&path, 3, "akou-capture test", DECODE_RATE).unwrap();
+        let whole = input.len() / slot * slot;
+        for f in input[..whole].chunks(slot) {
+            w.write(f, &[]).unwrap();
+        }
+        let secs = w.finish(&input[whole..], &[]).unwrap();
+        assert!((secs - input.len() as f64 / rate as f64).abs() < 1e-9);
+        assert_eq!(recover(&path).unwrap().channels, 1);
+
+        let info = info(&path).unwrap();
+        assert!(info.ended);
+        assert_eq!(info.frames, input.len() as u64);
+        let mut out = Vec::new();
+        assert_eq!(
+            decode(&path, 0, None, &mut out).unwrap(),
+            input.len() as u64
+        );
+        let (l, r) = channels(&out);
+        assert_eq!(l, r);
+
+        let mid = &input[rate..2 * rate];
+        let lag = (-80i64..=80)
+            .max_by(|a, b| {
+                let c = |lag: i64| -> f64 {
+                    mid.iter()
+                        .enumerate()
+                        .map(|(i, &x)| x as f64 * l[(rate as i64 + i as i64 + lag) as usize] as f64)
+                        .sum()
+                };
+                c(*a).total_cmp(&c(*b))
+            })
+            .unwrap();
+        assert!(lag.abs() <= 2, "decoded {lag} frames off the input");
+
+        let wav = 44 + 2 * input.len() as u64;
+        let opus = std::fs::metadata(&path).unwrap().len();
+        assert!(opus * 8 < wav, "{opus} bytes of Opus against {wav} of WAV");
+    }
+
     #[test]
     fn a_file_that_is_not_ogg_opus_is_an_error() {
         let path = tmp("not.opus");

@@ -223,4 +223,4 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | `dictation.pillPreview` | `true` | Show the words as you speak on the pill's island. akou cannot hide its windows from screen capture yet (DK-P3), so a screen share shows them too: turn this off before sharing your screen if that matters. |
 | `dictation.sounds` | `"auto"` | Cues at start, stop, cancel and done. `auto`: `soft` while the pill is off, silent while it shows, so a dictation is never both silent and invisible. |
 | `dictation.retainDays` | `30` | Days a dictation's text and audio are kept; older ones leave only a tombstone. 0: only the last one, for paste last and fix last. |
-| `dictation.keepAudio` | `true` | Keep each dictation's audio for Retry and for checking a learned word. Off: deleted once the offer to learn is closed. |
+| `dictation.keepAudio` | `true` | Keep each dictation's audio, as Opus at about 180 KB a minute, for Retry and for checking a learned word. Off: deleted once the offer to learn is closed. |

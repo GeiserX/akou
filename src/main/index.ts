@@ -3059,6 +3059,7 @@ export class AkouApp implements ApiApp {
         "dictate",
         "--probe",
       ],
+      helper: () => locateHelper(this.cfg.settings["capture.helper"]).command,
       cue: (moment) => cues.cue(moment),
       mic: () => ({
         device: this.cfg.settings["dictation.mic"],

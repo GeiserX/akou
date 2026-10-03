@@ -3521,7 +3521,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
         [id, "example.com", true],
       ]);
 
-      const audio = d.audio.path(id);
+      const audio = (await d.audio.file(id))?.path as string;
       expect(existsSync(audio)).toBe(true);
       await page.click(`${row} .hist-more`);
       await page.click(`${row} button.delete`);
