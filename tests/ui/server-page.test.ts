@@ -252,7 +252,7 @@ describe("SV-U7: the server-mode page", () => {
       );
       await search("done", [true, true], "the state search");
       await search("failed", [false, false], "a state neither is in");
-      // Escape clears the search and every row comes back: the field does it by itself.
+      // Escape clears the search and every row comes back, in Chromium and in WebKit alike.
       await page.press("#jobs-search", "Escape");
       expect(await page.inputValue("#jobs-search")).toBe("");
       await until(async () => JSON.stringify(await both()) === "[true,true]", 3000, "every row");

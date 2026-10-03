@@ -153,6 +153,13 @@ export class JobsPage implements ServerScreen {
     this.key.addEventListener("change", () => void this.read());
     // Escape empties the field by itself in Chromium and WebKit (a search field does there).
     this.search.addEventListener("input", () => void this.read());
+    // Escape empties the search: Chromium's search field does that by itself, WebKit's (the Mac
+    // window, WebKitGTK) does not.
+    this.search.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || this.search.value === "") return;
+      this.search.value = "";
+      void this.read();
+    });
   }
 
   show(): void {

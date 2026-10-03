@@ -681,6 +681,15 @@ describe("the player bar (W5.3 to W5.6)", () => {
           expect(await text(page, "#readout")).toBe("");
           expect(await page.locator("#marks .mk").count()).toBe(0);
           await playRow(page, "l000003");
+          // WebKit starts the audio a moment after the line's metadata: pause it once it plays.
+          await until(
+            async () =>
+              !(await page.evaluate(
+                () => (document.getElementById("player") as HTMLAudioElement).paused,
+              )),
+            5000,
+            "the line playing",
+          );
           await pauseNow(page);
           await until(
             async () => (await page.locator("#marks .mk").count()) === 2,
