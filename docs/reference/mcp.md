@@ -1260,7 +1260,6 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
 | `mic` | `string` | no | The microphone: an input id from akou_devices |
 | `vocab` | `string[]` | no |  |
-| `engines` | `string[]` | no | The final pass's models for this call, in order, their words combined: "qwen", "parakeet" or model ids. Omit for the setting |
 | `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
 <details markdown>
@@ -1288,13 +1287,6 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "type": "string"
     },
     "vocab": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "engines": {
-      "description": "The final pass's models for this call, in order, their words combined: \"qwen\", \"parakeet\" or model ids. Omit for the setting",
       "type": "array",
       "items": {
         "type": "string"

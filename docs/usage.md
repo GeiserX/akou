@@ -75,6 +75,16 @@ akou keeps an item in the macOS menu bar, the akou mark, with a red dot while a 
 
 ![The akou item in the menu bar with its red recording dot and its menu open: Stop recording, Start dictation, Show akou, Open at login, Quit akou](images/screenshots/menu-bar.png)
 
+## Transcribing a file
+
+A recording you already have, a voice note or a call from another app, is transcribed from the command line. The desktop app does it on this Mac with the same models, and there is nothing to turn on first:
+
+```sh
+akou transcribe "voice note.m4a" --preset best --language es --diarize
+```
+
+The command waits until the transcript is ready and prints it; `--json` prints the whole result with times and speakers. Long audio is cut at its pauses, so a long recording works, up to 240 minutes (`server.max_audio_minutes`). `akou jobs list` shows the files transcribed this way, and akou deletes them after `server.retain_days` (7 days). M4A, MP3, Ogg and the other formats need ffmpeg on the Mac (`brew install ffmpeg`); a 16 kHz WAV does not. See [Agents and the command line](agents.md).
+
 ## Models and Settings
 
 The **Models** page lists the speech models on this Mac with their sizes, downloads the ones that are missing, and lets you cancel a download. The live models for the Record row's **Live:** menu, such as streaming Nemotron, are downloaded from here too.
