@@ -153,6 +153,59 @@ describe("a request during recovery", () => {
   });
 });
 
+describe("POST /calls checks the call scope at the door", () => {
+  test("a scope the helper would refuse is a 422 on field call, and nothing starts", async () => {
+    const asked: (string | undefined)[] = [];
+    const app = {
+      manager: { init: async () => [] },
+      start: async (req: { call?: string }) => {
+        asked.push(req.call);
+        return { ok: true, call: "c1", folder: "/f", part: 1, startMs: 5 };
+      },
+    } as unknown as ApiApp;
+    const token = "t".repeat(64);
+    const server = startApiServer({ app, port: 0, token: () => token });
+    const post = async (body: object) => {
+      const res = await fetch(`${server.url}/calls`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const b = (await res.json()) as { error?: string; field?: string; message?: string };
+      return [res.status, b.error, b.field, b.message];
+    };
+    try {
+      expect(await post({ call: "zoom" })).toEqual([
+        422,
+        "bad_field",
+        "call",
+        'call must be system, none or app:<id>[,<id>], not "zoom"',
+      ]);
+      expect(await post({ call: "" })).toEqual([
+        422,
+        "bad_field",
+        "call",
+        'call must be system, none or app:<id>[,<id>], not ""',
+      ]);
+      expect(await post({ call: "app:" })).toEqual([
+        422,
+        "bad_field",
+        "call",
+        "call app: needs at least one id, as in app:us.zoom.xos",
+      ]);
+      expect(asked).toEqual([]);
+      // Positive control: every shape the helper takes reaches the start unchanged.
+      for (const call of ["system", "none", "app:us.zoom.xos,com.microsoft.teams2"]) {
+        expect((await post({ call }))[0]).toBe(201);
+      }
+      expect((await post({}))[0]).toBe(201);
+      expect(asked).toEqual(["system", "none", "app:us.zoom.xos,com.microsoft.teams2", undefined]);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
 describe("an export queued behind the call's hand-off work", () => {
   test("the route lifts the server's idle timeout before it waits", async () => {
     const seen: string[] = [];

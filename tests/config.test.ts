@@ -239,6 +239,63 @@ describe("the API may not name a program to run", () => {
   });
 });
 
+describe("capture.call is checked by the helper's own rule", () => {
+  test("a value the helper would refuse is refused when saved; every shape it accepts is kept", () => {
+    for (const bad of ["zoom", "app:", "app: , ", "System", " system", "app"]) {
+      expect(validateSetting("capture.call", bad).ok).toBe(false);
+    }
+    for (const good of [
+      "system",
+      "none",
+      "app:us.zoom.xos",
+      "app:us.zoom.xos,com.microsoft.teams2",
+      "app: zoom , ,teams",
+      "app:1234",
+    ]) {
+      expect(validateSetting("capture.call", good)).toEqual({
+        ok: true,
+        key: "capture.call",
+        value: good,
+      });
+    }
+    const paths = resolvePaths({ AKOU_HOME: "/t" });
+    expect(patchConfig({}, { "capture.call": "zoom" }, paths)).toEqual({
+      ok: false,
+      errors: ['capture.call: must be system, none or app:<id>[,<id>], not "zoom"'],
+    });
+  });
+
+  test("a malformed value already in the file loads as system, with one issue", () => {
+    const h = home({ "capture.call": "zoom", "capture.mic": "none" });
+    try {
+      const c = loadConfig(h.env);
+      expect(c.settings["capture.call"]).toBe("system");
+      expect(c.settings["capture.mic"]).toBe("none");
+      expect(c.issues).toEqual([
+        {
+          key: "capture.call",
+          source: "file",
+          message:
+            'capture.call: must be system, none or app:<id>[,<id>], not "zoom"; using the default',
+        },
+      ]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("positive control: a per-app value in the file loads unchanged", () => {
+    const h = home({ "capture.call": "app:us.zoom.xos" });
+    try {
+      const c = loadConfig(h.env);
+      expect(c.settings["capture.call"]).toBe("app:us.zoom.xos");
+      expect(c.issues).toEqual([]);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
+
 test("the reference table is generated from the registry and lists every key", () => {
   const table = settingsReference();
   for (const k of SETTING_KEYS) expect(table).toContain(`\`${k}\``);

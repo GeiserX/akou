@@ -98,7 +98,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `capture.helper` (file only) | `[]` | Command that starts the capture helper, before its own arguments. Empty: the akou-capture bundled with the app, else the one on PATH. |
 | `capture.mic` | `"default"` | Microphone: `default`, `none`, or a device id (akou cannot list the ids yet). |
-| `capture.call` | `"system"` | Call audio: `system`, `none`, or `app:<id>[,<id>]`. |
+| `capture.call` | `"system"` | Call audio: `system` (the whole computer), `none`, or `app:<id>[,<id>]` for only those apps. An app id is a bundle id on macOS (`us.zoom.xos`) and an executable name without `.exe`, or a process id, on Windows; Linux records the whole computer only. Any other value is refused when saved, and one already in the file is replaced by `system` at load with a warning. |
 | `capture.warmStartSeconds` | `3` | Wait for the helper to report capturing, after a helper has captured once this run. |
 | `capture.coldStartSeconds` | `10` | Wait for the helper to report capturing on the first start of a run. |
 | `capture.stopSeconds` | `5` | How long a helper may take to stop before it is killed. |

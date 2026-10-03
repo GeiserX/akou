@@ -31,6 +31,7 @@ import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "../asr/upgrade.ts";
+import { parseCallMode } from "../capture/call-mode.ts";
 import { DICTATION_FINALS } from "../dictation/engines.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
@@ -364,7 +365,11 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: "system",
-    doc: "Call audio: `system`, `none`, or `app:<id>[,<id>]`.",
+    check: (v) => {
+      const m = parseCallMode(v as string);
+      return m.ok ? null : m.why;
+    },
+    doc: "Call audio: `system` (the whole computer), `none`, or `app:<id>[,<id>]` for only those apps. An app id is a bundle id on macOS (`us.zoom.xos`) and an executable name without `.exe`, or a process id, on Windows; Linux records the whole computer only. Any other value is refused when saved, and one already in the file is replaced by `system` at load with a warning.",
   },
   "capture.warmStartSeconds": {
     type: "number",
