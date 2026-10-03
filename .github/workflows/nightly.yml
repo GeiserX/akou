@@ -10,6 +10,9 @@ name: nightly
 #   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts). Today it scores the
 #   default recognizer, and Qwen3-ASR through llama-server on macOS and Linux (ASR-5: WER, silent
 #   clips, and memory flat over 150 requests with the default prompt cache as the failing control).
+# - soak: one call through the app's call manager and the fake helper at 10x speed for one runner
+#   hour, so ten hours of audio, checked for holes in the audio, memory growth, a held event loop
+#   and an unreadable or swelling log (docs/TESTING.md TS-24, scripts/soak.ts).
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
 #   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
@@ -162,6 +165,19 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun test tests/dictation-remote.e2e.test.ts -t "after release"
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/soak.ts --speed 10 --minutes 60
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).
