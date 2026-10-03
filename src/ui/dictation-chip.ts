@@ -78,6 +78,7 @@ export function mountChip(
     );
     root.hidden = false;
     changed(true);
+    // clock: how long the Undo chip stays on screen.
     timer = setTimeout(close, CHIP_UNDO_MS);
   };
 
@@ -150,6 +151,7 @@ export function mountChip(
     );
     root.hidden = false;
     changed(true);
+    // clock: how long the question chip stays on screen.
     timer = setTimeout(() => done("ignore"), CHIP_ASK_MS);
   };
 

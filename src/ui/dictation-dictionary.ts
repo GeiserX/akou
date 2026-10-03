@@ -84,12 +84,34 @@ export function heardForms(typed: string): string[] {
     .filter((x) => x !== "");
 }
 
-/** Two terms are the same entry under the server's key (`termKey`): words folded, accents off. */
-const key = (s: string) =>
-  tokenize(s)
-    .map((t) => t.folded)
-    .join(" ");
+/**
+ * Two terms are the same entry under the server's key (`termKey`): words folded, accents off, and
+ * a symbol alone (`@`) its own key.
+ */
+const key = (s: string) => {
+  const words = tokenize(s).map((t) => t.folded);
+  return words.length > 0 ? words.join(" ") : s.trim();
+};
 const same = (a: string, b: string) => key(a) === key(b);
+
+/**
+ * `GET /vocab` for the workspace of the call on screen. A call folder can have a name the
+ * vocabulary refuses as a workspace (`con`, `a..b`), which answers 400: the words are read again
+ * without it, so the global ones still show. A request that throws (the app gone) answers 599 with
+ * the reason, so the page still opens and says it.
+ */
+export async function readVocab(
+  t: Transport,
+  ws: string | undefined,
+): Promise<{ status: number; body: { entries?: DictionaryEntry[] } }> {
+  const get = (path: string) =>
+    t.request<{ entries?: DictionaryEntry[] }>("GET", path).catch((err: Error) => ({
+      status: 599,
+      body: { message: err.message } as { entries?: DictionaryEntry[] },
+    }));
+  const r = await get(ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab");
+  return ws && r.status >= 400 && r.status < 500 ? get("/vocab") : r;
+}
 
 /** A section shows this many entries, then a row that shows the rest. */
 export const WORDS_SHOWN = 8;
@@ -246,18 +268,8 @@ export class DictationDictionary {
 
   async load(): Promise<void> {
     const read = ++this.reads;
-    const ws = this.workspace();
-    // A request that throws (the app gone) is said in the list, so the page still opens.
     const [r, review] = await Promise.all([
-      this.t
-        .request<{ entries?: DictionaryEntry[] }>(
-          "GET",
-          ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
-        )
-        .catch((err: Error) => ({
-          status: 599,
-          body: { message: err.message } as { entries?: DictionaryEntry[] },
-        })),
+      readVocab(this.t, this.workspace()),
       readDictationReview(this.t),
     ]);
     if (read !== this.reads) return;
@@ -560,7 +572,7 @@ export class DictationDictionary {
     const n = r.body.imported ?? 0;
     const skipped = r.body.skipped?.length ?? 0;
     toast(
-      `Imported ${n} ${n === 1 ? "word" : "words"}${skipped > 0 ? `; ${skipped} ${skipped === 1 ? "line was" : "lines were"} not a word` : ""}.`,
+      `Imported ${n} ${n === 1 ? "word" : "words"}${skipped > 0 ? `; ${skipped} ${skipped === 1 ? "line needs" : "lines need"} a look` : ""}.`,
       "info",
     );
     await this.load();

@@ -76,6 +76,17 @@ describe("SV-S2: server defaults for language and speaker labels", () => {
     await rig.api("PATCH", "/config", { "server.default_diarize": false });
   });
 
+  test("[akou-5an.97] GET /v1/server reports server.default_diarize, and follows a change", async () => {
+    const reported = async () => (await rig.api("GET", "/server")).body.default_diarize;
+    expect(await reported()).toBe(false);
+    await rig.api("PATCH", "/config", { "server.default_diarize": true });
+    try {
+      expect(await reported()).toBe(true);
+    } finally {
+      await rig.api("PATCH", "/config", { "server.default_diarize": false });
+    }
+  });
+
   test("an invalid language tag is refused by PATCH /v1/config and nothing changes", async () => {
     const bad = await rig.api("PATCH", "/config", { "server.default_language": "not a tag" });
     expect(bad.status).toBe(400);
@@ -84,5 +95,37 @@ describe("SV-S2: server defaults for language and speaker labels", () => {
     const cfg = await rig.api("GET", "/config");
     expect(cfg.body.settings["server.default_language"]).toBe("auto");
     expect(cfg.body.settings["server.default_diarize"]).toBe(false);
+  });
+});
+
+describe("SV-K1: the auto preset in GET /v1/server", () => {
+  const auto = async () =>
+    ((await rig.api("GET", "/server")).body.presets as { name: string }[]).find(
+      (p) => p.name === "auto",
+    );
+
+  test("it names what it resolves to, and is available when that is", async () => {
+    // A job on auto runs fast here, so auto is available and says fast.
+    expect(await auto()).toMatchObject({ available: true, resolves_to: "fast" });
+    const job = await done({ preset: "auto" });
+    expect(job.job.preset).toBe("fast");
+    try {
+      // server.default_model moves it: auto then runs best, and is available exactly when best is.
+      await rig.api("PATCH", "/config", { "server.default_model": "best" });
+      const presets = (await rig.api("GET", "/server")).body.presets as {
+        name: string;
+        available: boolean;
+      }[];
+      const best = presets.find((p) => p.name === "best");
+      expect(await auto()).toMatchObject({ available: best?.available, resolves_to: "best" });
+      // Positive control: a default that refuses every job (an unbuilt preset) leaves auto
+      // unavailable, resolving to nothing.
+      await rig.api("PATCH", "/config", { "server.default_model": "lite" });
+      expect(await auto()).toMatchObject({ available: false, resolves_to: null });
+    } finally {
+      await rig.api("PATCH", "/config", {
+        "server.default_model": "auto",
+      });
+    }
   });
 });

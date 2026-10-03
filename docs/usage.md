@@ -36,7 +36,7 @@ The first Record asks macOS for the microphone and for the system audio of the c
 
 Over the transcript, the header shows the call's title, day, length, workspace and number of lines, and a chip for each speaker with their talk time. Click the title to rename the call, live or saved; the call's folder keeps its first name. **Copy transcript** copies the transcript so far as Markdown, and **Share** turns on a read-only live link to the call on your own network (off until you turn it on; `share.bind` in [Configuration](configuration.md#share) picks the network).
 
-Every line of the transcript carries its time of day and its speaker. Lines still being spoken are drafts and change as more audio arrives; after the call, the final pass rewrites the transcript with its accurate model and labels the speakers again. While you scroll back during a call, **Back to live** returns to the newest line.
+Every line of the transcript carries its time of day and its speaker. Lines still being spoken are drafts and change as more audio arrives; after the call, the final pass rewrites the transcript with its accurate model and labels the speakers again. While you scroll back during a call, **Back to live** returns to the newest line; on a saved call the same button reads **Back to the end**.
 
 Right-click a line, or press `Shift+F10` on it, for its menu: **Play from here**, **Copy line**, **Copy with time and speaker** (`[15:41:07 Maya] ...`), **Name this speaker…** and **Fix this line…**. A word you fix once on its line is fixed on every line of the call that has the same heard form, and a name or term you fix is learned for the workspace too.
 

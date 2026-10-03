@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
+import { memoryMb, pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -99,6 +99,18 @@ describe("a pinned download", () => {
   });
 });
 
+describe("a process's memory (the Qwen stage's flat-memory bound)", () => {
+  // Windows reads private bytes through PowerShell (the Windows gate, ASR-12); before that it read
+  // Linux's /proc there and threw, so the stage could not run on Windows at all.
+  // A cold Windows PowerShell start on a shared CI runner takes longer than bun test's 5 s default,
+  // which killed the child and left nothing to read; 30 s covers it.
+  test("this test's own process reads a plausible size on the OS it runs on", () => {
+    const mb = memoryMb(process.pid);
+    expect(mb).toBeGreaterThan(10);
+    expect(mb).toBeLessThan(64 * 1024);
+  }, 30_000);
+});
+
 describe("the committed baselines", () => {
   test("every platform with numbers names the decoder they were measured with", () => {
     const b = JSON.parse(
@@ -111,6 +123,23 @@ describe("the committed baselines", () => {
       /\b(greedy|beam)\b/.test(b._measured[p] ?? ""),
     );
     expect(named).toEqual(Object.keys(b.platforms));
+  });
+
+  test("each OS the night runs on has a baseline for every gated number", () => {
+    const b = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "docs", "gates", "nightly-baselines.json"),
+        "utf8",
+      ),
+    ) as { platforms: Record<string, Record<string, number>> };
+    const gated = [
+      "wer.fleurs_en.parakeet-tdt-0.6b-v3-fp32",
+      "wer.fleurs_es.parakeet-tdt-0.6b-v3-fp32",
+      "der.ami_test2.nemotron-3-diarization",
+    ];
+    // nightly.yml's matrix: macos-latest, ubuntu-latest and windows-latest.
+    for (const p of ["darwin-arm64", "linux-x64", "win32-x64"])
+      expect(Object.keys(b.platforms[p] ?? {}).sort()).toEqual([...gated].sort());
   });
 });
 

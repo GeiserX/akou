@@ -443,20 +443,35 @@ export function resolveTimeCitation(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// The ask box presets (DESIGN 7)
-
-export function presets(speakers: readonly string[]): { label: string; question: string }[] {
-  const out = [
-    { label: "Catch me up", question: "Catch me up: what has been said so far?" },
-    { label: "Was my name mentioned?", question: "Was my name mentioned? By whom and when?" },
-    { label: "Decisions so far", question: "What decisions have been made so far?" },
-    { label: "Action items", question: "What are the action items so far, with owners?" },
-  ];
-  for (const s of speakers) {
-    out.push({ label: `What did ${s} say?`, question: `What did ${s} say so far?` });
+/**
+ * Why no assistant answered, as the Ask card says it: a provider names its settings by key
+ * (`provider.apiKey is not set`), which is right in the CLI and over MCP but not in the window
+ * (PRINCIPLES 13). A missing or signed-out assistant reads as one plain line that points at
+ * Settings; any other reason is already plain and stays as it was said.
+ */
+export function askUnavailable(reason: string | undefined, kind: string | undefined): string {
+  const said = reason ? `${reason}.` : "";
+  if (kind === "missing") {
+    const none = /^no harness found \(([^)]+)\)/.exec(reason ?? "");
+    if (none) {
+      // The reason names the harnesses by id (`claude-code or codex`).
+      const names = (none[1] as string)
+        .replace("claude-code", "Claude Code")
+        .replace("codex", "Codex");
+      return `${names} was not found. Install one, or choose another assistant in Settings.`;
+    }
+    if (/\bprovider\.\w/.test(reason ?? ""))
+      return "The assistant is not set up yet. Finish it in Settings, or choose another assistant.";
   }
-  return out;
+  if (kind === "auth") {
+    const out = /^(.+?) is not logged in/.exec(reason ?? "");
+    if (out)
+      return `${out[1]} is not signed in. Sign in to it, or choose another assistant in Settings.`;
+    if (/\bprovider\.apiKey\b/.test(reason ?? ""))
+      return "The assistant has no API key. Add one in Settings, or choose another assistant.";
+    return "The assistant did not accept its key. Check it in Settings, or choose another assistant.";
+  }
+  return said;
 }
 
 /** The markers the notepad knows: `- `, `[] ` (action), `? ` (open question), `# ` (section). */
@@ -546,6 +561,23 @@ export function positionText(v: CallView, part: number, a: number): string {
   const p = v.part(part);
   if (!p) return "";
   return formatWall(p.clock.wallFromAudio(a), v.call?.tz ?? "UTC");
+}
+
+/**
+ * Where the call's notes fall on the scrubber of the part being played, as fractions of its length
+ * (0 to 1): a note taken at wall time `w` marks the instant of the part that was recorded then.
+ * Notes taken outside the part, or in a pause inside it, draw no mark.
+ */
+export function noteMarks(v: CallView, part: number, duration: number): number[] {
+  const p = v.part(part);
+  if (!p || !(duration > 0)) return [];
+  const out: number[] = [];
+  for (const n of v.notes()) {
+    const a = p.clock.audioFromWall(n.w);
+    if (a > duration || Math.abs(p.clock.wallFromAudio(a) - n.w) > 1000) continue;
+    out.push(a / duration);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

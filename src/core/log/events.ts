@@ -33,6 +33,11 @@ export interface CallCreated extends Envelope {
   user: string;
   akou: string;
   template?: string;
+  /**
+   * The final pass's engines for this call (`akou start --engines`), in order, instead of
+   * `asr.final.engines`.
+   */
+  engines?: string[];
 }
 
 /**
@@ -43,6 +48,17 @@ export interface CallRenamed extends Envelope {
   type: "call.renamed";
   rev: number;
   title: string;
+  by: Author;
+}
+
+/**
+ * The call's workspace from now on, after its folder moved to that workspace's folder
+ * (PROGRAMMABILITY PG-A4). Like a rename, the highest `rev` wins over `call.created`'s.
+ */
+export interface CallMoved extends Envelope {
+  type: "call.moved";
+  rev: number;
+  workspace: string;
   by: Author;
 }
 
@@ -357,8 +373,12 @@ export interface FinalDone extends Envelope {
   languages?: string[];
   skipped: unknown[];
   warning?: string;
-  /** The recognizer the pass decoded with. */
+  /** The recognizer the pass decoded with: `rover-conf(<ids>)` when several engines were fused. */
   model?: string;
+  /** A pass over several engines (`asr.final.engines`): the engines that decoded to its end. */
+  engines?: string[];
+  /** And the ones left out: not downloaded, over the memory budget, or failed during the pass. */
+  dropped?: { engine: string; reason: string }[];
 }
 
 export interface FinalFailed extends Envelope {
@@ -404,6 +424,7 @@ export interface WebhookDone extends Envelope {
 export type LogEvent =
   | CallCreated
   | CallRenamed
+  | CallMoved
   | CallEnded
   | CallFailed
   | PartStarted
@@ -506,8 +527,10 @@ const SPECS: { [T in EventType]: Spec } = {
     user: req("string"),
     akou: req("string"),
     template: opt("string"),
+    engines: opt("string[]"),
   },
   "call.renamed": { rev: req("int"), title: req("string"), by: req("author") },
+  "call.moved": { rev: req("int"), workspace: req("string"), by: req("author") },
   "call.ended": { reason: req(["stop", "interrupted", "abandoned"]) },
   "call.failed": { stage: req("string"), error: req("string") },
   "part.started": {
@@ -649,6 +672,8 @@ const SPECS: { [T in EventType]: Spec } = {
     skipped: req("array"),
     warning: opt("string"),
     model: opt("string"),
+    engines: opt("string[]"),
+    dropped: opt("array"),
   },
   "final.failed": { step: req("string"), error: req("string") },
   "share.started": { bind: req("string"), expires: req("any"), include: req("object") },
@@ -765,6 +790,9 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
   if (type === "call.renamed" && (o.title as string).trim() === "") {
     return "call.renamed: title must not be empty";
   }
+  if (type === "call.moved" && (o.workspace as string).trim() === "") {
+    return "call.moved: workspace must not be empty";
+  }
   if (type === "vocab.add" && typeof o.term === "string") {
     if (o.term.trim() === "") return "vocab.add: term must not be empty";
     if (o.heard === undefined) return 'vocab.add: missing field "heard"';
@@ -777,7 +805,8 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
       type === "remember" ||
       type === "vocab.add" ||
       type === "vocab.learned" ||
-      type === "call.renamed") &&
+      type === "call.renamed" ||
+      type === "call.moved") &&
     (o.rev as number) < 1
   ) {
     return `${type}: rev must be >= 1`;

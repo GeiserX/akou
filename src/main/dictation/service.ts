@@ -30,7 +30,8 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
+import type { ShortcutName } from "../../core/dictation/activation.ts";
+import type { DictationEvent, DictationItem, Target } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
 import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Chip, ChipAnswer, PillAction } from "../../ui/pill-protocol.ts";
@@ -40,6 +41,7 @@ import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions, NO_TARGET } from "./draft.ts";
 import { type DictationFinal, finalOf, forcesLanguage } from "./engines.ts";
+import { dictationLatency, type Latency, type LatencyChoice } from "./latency.ts";
 import { Learner } from "./learner.ts";
 import {
   type Bindings,
@@ -188,10 +190,17 @@ export interface DictationServiceOptions extends TextRules {
    * without asking and exits (DC-U2, DC-N3). Absent, the grants are known only while it runs.
    */
   probe?(): readonly string[];
+  /**
+   * The capture helper's command, which keeps a dictation's audio as Opus (`encode`) and reads it
+   * back (`decode`); absent or null, the audio is kept as WAV (DC-H2).
+   */
+  helper?(): readonly string[] | null;
   /** Plays the cue for a moment of a spoken dictation, or nothing, as the settings say (DC-O3). */
   cue?(moment: CueMoment): void;
   /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
   mic?(): { device: string; preferBuiltIn: boolean };
+  /** `dictation.muteMedia`, for `pause_media` (DC-U8). */
+  pauseMedia?(): boolean;
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
   /** `dictation.keepAudio` as it is now; absent, the audio is kept. */
@@ -269,6 +278,13 @@ export interface DictationStatus {
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
   remote: DictationRemoteStatus | null;
+  /**
+   * How long each choice takes after the key is let go, for 10 s of speech (DC-T3): measured on
+   * this platform, or the estimate where it was not.
+   */
+  latency: Partial<Record<LatencyChoice, Latency>>;
+  /** The engines a retry can use now (`fast`, `best`, `live`, `remote`): those this machine runs. */
+  engines: string[];
 }
 
 /**
@@ -352,7 +368,10 @@ export class DictationService {
 
   constructor(private readonly o: DictationServiceOptions) {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
-    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO));
+    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO), {
+      helper: () => o.helper?.() ?? null,
+      onLog: (level, msg) => o.onLog?.(level, msg),
+    });
     this.uploadDir = join(o.configDir, DICTATION_DIR, "uploads");
     const d = o.draft ?? {};
     this.draft = new DraftBox({
@@ -401,10 +420,12 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
-      if (SETTLED.has(e.type)) this.settledAudio(e.id, e.type);
+      if (SETTLED.has(e.type))
+        this.settledAudio(e.id, e.type, e.type === "dictation.drafted" && e.reason === "append");
       this.tell({ kind: "event", e });
     };
     this.sweep();
+    // clock: the hourly sweep of old dictation audio.
     this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
     this.sweeper.unref?.();
   }
@@ -453,14 +474,17 @@ export class DictationService {
     }
   }
 
-  /** A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed. */
-  private settledAudio(id: string, type: string): void {
+  /**
+   * A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed.
+   * `appended`: its text went into another dictation's draft (DC-A4), which never decodes it again.
+   */
+  private settledAudio(id: string, type: string, appended: boolean): void {
     if ((this.o.keepAudio?.() ?? true) || !this.audio.has(id)) return;
     clearTimeout(this.windows.get(id));
     this.windows.delete(id);
     // A draft waits in the box for as long as the user takes, and the box's Retry decodes this
     // audio again: its window has no timer, and the box closes it when the draft is answered.
-    if (type === "dictation.drafted") {
+    if (type === "dictation.drafted" && !appended) {
       this.windows.set(id, undefined);
       return;
     }
@@ -469,6 +493,7 @@ export class DictationService {
       this.dropAudio(id);
       return;
     }
+    // clock: how long a dictation's text is watched for the user's corrections, in real time.
     const t = setTimeout(() => this.closeLearnWindow(id), this.o.learnWindowMs ?? LEARN_WINDOW_MS);
     t.unref?.();
     this.windows.set(id, t);
@@ -537,6 +562,7 @@ export class DictationService {
     const later =
       this.o.draft?.later ??
       ((ms: number, fn: () => void) => {
+        // clock: the real timer behind the injected `later`; tests pass their own.
         const t = setTimeout(fn, ms);
         t.unref?.();
         return () => clearTimeout(t);
@@ -784,7 +810,9 @@ export class DictationService {
     }
     s.command(action, action === "start" && o.language ? { language: o.language } : {});
     const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
+    // clock: waiting on a real session to change state, bounded by `waitMs`.
     const t0 = Date.now();
+    // clock: waiting on a real session to change state, bounded by `waitMs`.
     while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);
     const state = this.helper?.session.state ?? "off";
     // The helper can drop the command (still settling an insert, say): a script must not be told
@@ -825,6 +853,8 @@ export class DictationService {
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
       remote: this.o.remote?.() ?? null,
+      latency: dictationLatency(),
+      engines: this.o.draft?.engines?.() ?? [],
     };
   }
 
@@ -869,6 +899,8 @@ export class DictationService {
       saveAudio: (id, samples) => this.audio.write(id, samples),
       onDraft: (id, _reason, focus, rule) =>
         this.draft.open(id, { focus, ...(rule ? { rule } : {}) }).ok,
+      draftFocused: () => this.draft.takesDictation(),
+      onAppend: (id, text) => this.draft.append(id, text),
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
       appRule: (app) => this.o.apps?.().find((r) => r.app === app),
       onBusy: () => this.tell({ kind: "busy" }),
@@ -888,8 +920,11 @@ export class DictationService {
       onGrantLost: (name) => this.grantLost(h, name),
       onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
+      onHotkey: (name, target) => this.lastHotkey(session, name, target),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
+      ...(this.o.pauseMedia ? { pauseMedia: this.o.pauseMedia } : {}),
       metering: () => this.metering,
+      recording: () => this.recorder !== null,
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -940,6 +975,27 @@ export class DictationService {
   }
 
   /**
+   * Fix last and paste last (DC-A5), on the newest dictation with text: fix last opens it in the
+   * draft box for teaching, touching nothing in the app it went into; paste last inserts its text
+   * again into `target`, which had the keyboard at the press.
+   */
+  private lastHotkey(session: DictationSession, name: ShortcutName, target: Target): void {
+    const last = this.log.items().find((it) => it.text);
+    if (!last?.text) {
+      this.o.onLog?.("info", `dictation: ${name} found no dictation with text`);
+      return;
+    }
+    if (name === "fixLast") {
+      const r = this.draft.open(last.id, { focus: true, fix: true });
+      if (!r.ok) this.o.onLog?.("warn", `dictation: fix last did not open: ${r.message}`);
+      return;
+    }
+    void session.pasteText(last.text, target).then((r) => {
+      if (!r.ok) this.o.onLog?.("warn", `dictation: paste last did not go in: ${r.reason}`);
+    });
+  }
+
+  /**
    * Sends the running helper the keys (a setting changed, DC-A7) and resolves with its answer; with
    * no helper up there is nothing to refuse.
    */
@@ -952,6 +1008,8 @@ export class DictationService {
    * included, while no session can start; null closes it. False with no helper ready.
    */
   recordKeys(fn: ((name: string) => void) | null): boolean {
+    // Closed always takes, so a helper started later never opens a recorder nobody shows.
+    if (fn === null) this.recorder = null;
     const s = this.helper?.session;
     if (!s?.ready) return false;
     this.recorder = fn;
@@ -971,6 +1029,11 @@ export class DictationService {
   /** `dictation.mic` or `dictation.preferBuiltInOverBluetooth` changed: the helper opens it now. */
   rebuildMic(): void {
     this.helper?.session.rebuildMic();
+  }
+
+  /** Sends the running helper `dictation.muteMedia` as it is now (DC-U8). */
+  pauseMedia(): void {
+    this.helper?.session.pauseMedia();
   }
 
   /**
@@ -1008,6 +1071,7 @@ export class DictationService {
   private probeGrants(): Promise<Grants | null> {
     const argv = this.o.probe?.();
     if (!argv) return Promise.resolve(null);
+    // clock: a probe's answer is reused for `PROBE_MS` of real time.
     const at = Date.now();
     if (this.probed && at - this.probed.at < PROBE_MS) return this.probed.grants;
     const grants = (async (): Promise<Grants | null> => {
@@ -1045,6 +1109,7 @@ export class DictationService {
     this.tell({ kind: "grant-lost", name });
 
     if (h.regrant) return;
+    // clock: polling the OS for a grant given back in System Settings.
     h.regrant = setInterval(() => {
       if (this.helper !== h || h.session.lost.size === 0) {
         clearInterval(h.regrant);
@@ -1068,7 +1133,10 @@ export class DictationService {
     const mine = this.stops;
     void stop.then(() => {
       if (this.stops !== mine || this.helper) return;
+      // The page's recorder stays open across the restart, unless it closed meanwhile.
+      const recorder = this.recorder;
       this.start(argv, keys);
+      this.recorder = recorder;
       // `start` sets the helper; the check above narrowed it to null.
       const started = this.helper as Helper | null;
       if (started) started.regranted = true;

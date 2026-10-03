@@ -12,10 +12,23 @@
  *   nothing recording is `404 no_live_call` carrying the last call. `last` is refused with `400`
  *   on the live controls (`stop`, `pause`, `resume`, `mute`, `unmute`), so a control can never land
  *   on a finished call (TRAPS T3.14). `last` never names a failed start.
+ * - **Move, trash, restore (PROGRAMMABILITY PG-A4).** A finished call's folder moves to another
+ *   workspace's folder, or to the trash, `<root>/.trash/<workspace>/<folder>` with a
+ *   `<folder>.json` beside it saying when; `init()` purges what has been there 30 days. A restore
+ *   moves the folder back, untouched. A live or busy call never moves.
  */
 
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, join } from "node:path";
 import type { LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
@@ -28,6 +41,7 @@ import { CallController, type CaptureChoice, type StartOk } from "./call.ts";
 import { checkWorkspace, createCallFolder, ulid } from "./folder.ts";
 import {
   type CallSummary,
+  CHANGES,
   listCallDirs,
   type RecoveryAction,
   recoverCall,
@@ -89,6 +103,11 @@ export interface StartRequest {
   review?: string;
   reviewEvery?: number;
   /**
+   * This call's final-pass engines (`asr.final.engines`' values, as ids), instead of the setting.
+   * Written into `call.created`, so a pass after a restart still runs them.
+   */
+  engines?: string[];
+  /**
    * An agent's start: when a call is already starting, recording or paused, start nothing and
    * answer with that call (`attached`) instead of `409 already_recording`. A call still starting
    * is answered once its capture opened, or with its failure.
@@ -103,6 +122,18 @@ export type CallRef = string;
 
 /** Controls that must never land on a finished call. */
 export const LIVE_CONTROLS = ["stop", "pause", "resume", "mute", "unmute"] as const;
+
+/** The trash under the recordings root: not a workspace name, so no list ever shows it. */
+export const TRASH_DIR = ".trash";
+/** How long a trashed call is kept before `init()` deletes it. */
+export const TRASH_DAYS = 30;
+
+/** What the trash keeps beside a trashed call's folder. */
+interface Trashed {
+  id: string;
+  workspace: string;
+  trashedAt: number;
+}
 
 export class CallManager {
   private readonly clock: Clock;
@@ -130,6 +161,7 @@ export class CallManager {
   }
 
   private async runInit(): Promise<RecoveryAction[]> {
+    this.purgeTrash();
     const actions: RecoveryAction[] = [];
     for (const { dir, workspace } of listCallDirs(this.o.root)) {
       if ([...this.controllers.values()].some((c) => c.dir === dir)) continue;
@@ -192,6 +224,9 @@ export class CallManager {
       state: c.view.state,
       endedAt: live ? null : ends ? e.t : (prev?.endedAt ?? e.t),
       parts: c.view.parts().length,
+      updatedAt: CHANGES.has(e.type)
+        ? Math.max(e.t, prev?.updatedAt ?? 0)
+        : (prev?.updatedAt ?? c.view.call?.t ?? e.t),
     });
   }
 
@@ -295,7 +330,7 @@ export class CallManager {
       return last ? { ok: true, id: last.id } : fail(404, "no_calls", "there are no calls yet");
     }
     if (this.index.has(ref) || this.controllers.has(ref)) return { ok: true, id: ref };
-    return fail(404, "not_found", `no call ${ref}`);
+    return fail(404, "not_found", `no call ${ref}`, { call: ref });
   }
 
   view(ref: CallRef): CallView | null {
@@ -360,6 +395,7 @@ export class CallManager {
           user: this.o.user ?? "",
           akou: this.o.akouVersion ?? "0.0.0",
           ...(req.template ? { template: req.template } : {}),
+          ...(req.engines && req.engines.length > 0 ? { engines: [...req.engines] } : {}),
         },
         this.deps(workspace),
         capture,
@@ -504,7 +540,7 @@ export class CallManager {
       // Two restarts at once (the window and an agent) share one load and one controller; the
       // second then finds the call starting and is refused, never a second helper.
       const loaded = await this.open(r.id);
-      if (!loaded) return fail(404, "not_found", `no call ${r.id}`);
+      if (!loaded) return fail(404, "not_found", `no call ${r.id}`, { call: r.id });
       c = loaded;
       const other = this.live();
       if (other && other !== c) {
@@ -553,6 +589,114 @@ export class CallManager {
   async adopt(dir: string, workspace: string): Promise<void> {
     await this.init();
     await this.reindex(dir, workspace);
+  }
+
+  // -------------------------------------------------------------------------
+  // Move, trash, restore (PG-A4)
+
+  /**
+   * Moves a finished call's folder out of the way of every reader: to `to` (another workspace),
+   * or to the trash (`null`). The controller in memory is dropped, so the next open reads the
+   * folder where it now is. Refuses a live call (409 `live_call`) and one still busy (409 `busy`).
+   */
+  private async relocate(
+    id: string,
+    to: { workspace: string } | null,
+    now: number,
+  ): Promise<Outcome<{ dir: string; from: string }>> {
+    await this.init();
+    const s = this.index.get(id);
+    if (!s) return fail(404, "not_found", `no call ${id}`);
+    const c = this.controllers.get(id);
+    if (c?.live || this.live()?.id === id) {
+      return fail(409, "live_call", "the call is recording; stop it first", { call: id });
+    }
+    if (c?.busy() || this.loading.has(id)) {
+      return fail(409, "busy", "the call is still being written; try again in a moment", {
+        call: id,
+      });
+    }
+    const parent = to ? join(this.o.root, to.workspace) : join(this.o.root, TRASH_DIR, s.workspace);
+    const dir = join(parent, basename(s.dir));
+    // Already in that workspace: nothing moves.
+    if (dir === s.dir) return { ok: true, dir, from: s.dir };
+    if (existsSync(dir)) {
+      return fail(409, "folder_taken", `${dir} already exists`, { call: id });
+    }
+    mkdirSync(parent, { recursive: true });
+    try {
+      renameSync(s.dir, dir);
+    } catch (err) {
+      return fail(409, "busy", `the call's folder cannot move now: ${(err as Error).message}`, {
+        call: id,
+      });
+    }
+    this.controllers.delete(id);
+    if (to) this.index.set(id, { ...s, dir, workspace: to.workspace });
+    else {
+      this.index.delete(id);
+      const t: Trashed = { id, workspace: s.workspace, trashedAt: now };
+      writeFileSync(`${dir}.json`, `${JSON.stringify(t)}\n`);
+    }
+    return { ok: true, dir, from: s.dir };
+  }
+
+  /** Moves a finished call's folder into another workspace's folder. */
+  move(id: string, workspace: string): Promise<Outcome<{ dir: string; from: string }>> {
+    const bad = checkWorkspace(workspace);
+    if (bad) return Promise.resolve(fail(400, "bad_workspace", bad));
+    return this.relocate(id, { workspace: this.spelling(workspace, this.folders()) }, 0);
+  }
+
+  /** Moves a finished call to the trash: no list shows it until it is restored. */
+  trash(id: string): Promise<Outcome<{ dir: string; from: string }>> {
+    return this.relocate(id, null, this.clock.now());
+  }
+
+  /** The trashed calls, each with its folder in the trash. */
+  private trashed(): (Trashed & { dir: string })[] {
+    const root = join(this.o.root, TRASH_DIR);
+    if (!existsSync(root)) return [];
+    const out: (Trashed & { dir: string })[] = [];
+    for (const ws of readdirSync(root, { withFileTypes: true })) {
+      if (!ws.isDirectory()) continue;
+      for (const f of readdirSync(join(root, ws.name))) {
+        if (!f.endsWith(".json")) continue;
+        const dir = join(root, ws.name, f.slice(0, -".json".length));
+        try {
+          const t = JSON.parse(readFileSync(`${dir}.json`, "utf8")) as Trashed;
+          if (typeof t.id === "string" && existsSync(dir)) out.push({ ...t, dir });
+        } catch {}
+      }
+    }
+    return out;
+  }
+
+  /** Brings a trashed call back to the workspace it was in, exactly as it was. */
+  async restore(id: string): Promise<Outcome<{ dir: string; workspace: string }>> {
+    await this.init();
+    if (this.index.has(id)) return fail(409, "not_trashed", `call ${id} is not in the trash`);
+    const t = this.trashed().find((x) => x.id === id);
+    if (!t) return fail(404, "not_found", `no call ${id} in the trash`);
+    const dir = join(this.o.root, t.workspace, basename(t.dir));
+    if (existsSync(dir)) return fail(409, "folder_taken", `${dir} already exists`, { call: id });
+    mkdirSync(join(this.o.root, t.workspace), { recursive: true });
+    renameSync(t.dir, dir);
+    rmSync(`${t.dir}.json`, { force: true });
+    await this.reindex(dir, t.workspace);
+    return { ok: true, dir, workspace: t.workspace };
+  }
+
+  /** Deletes what has been in the trash for `TRASH_DAYS` days. */
+  private purgeTrash(): void {
+    const cutoff = this.clock.now() - TRASH_DAYS * 24 * 3600_000;
+    for (const t of this.trashed()) {
+      if (t.trashedAt > cutoff) continue;
+      try {
+        rmSync(t.dir, { recursive: true, force: true });
+        rmSync(`${t.dir}.json`, { force: true });
+      } catch {}
+    }
   }
 
   /** The folder and workspace of a known call, loaded or not. */

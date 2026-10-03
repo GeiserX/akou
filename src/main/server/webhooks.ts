@@ -265,7 +265,10 @@ export interface DelivererOptions extends SendOptions {
   now?: () => number;
   random?: () => number;
   schedule?: readonly number[];
-  /** Audit lines: `webhook.done`, `webhook.failed`, `webhook.disabled`, `webhook.refused`. */
+  /**
+   * Audit lines: `webhook.done`, `webhook.retry` (a failed try with another to come),
+   * `webhook.failed`, `webhook.disabled`, `webhook.refused`.
+   */
   audit?(what: string, d: Delivery, detail: string): void;
 }
 
@@ -353,6 +356,9 @@ export class Deliverer {
     const headers = webhookHeaders(secrets, event.id, Math.floor(this.now() / 1000), body);
     let status: number | null = null;
     let error: string | null = null;
+    // The transport error's class (`ConnectionRefused`, `TimeoutError`), for the log: never its
+    // message, which may name the URL.
+    let errorClass = "Error";
     try {
       const host = hostOf(new URL(d.url));
       const publicOnly = !this.o.hostListed(d.key_id, host);
@@ -372,6 +378,7 @@ export class Deliverer {
         return;
       }
       error = (err as Error).message;
+      errorClass = (err as { code?: string }).code || (err as Error).name || errorClass;
     }
     if (this.closed) return;
     // Each write below lands only on a delivery still pending: one whose job was deleted while the
@@ -401,15 +408,25 @@ export class Deliverer {
     }
     const why = error ?? `status ${status}`;
     // The next delay runs from this answer, not from the try's start (SV-E4).
+    const next = after === null ? null : this.now() + after;
     const wrote = store.recordAttempt(d.event_id, {
       attempts: n + 1,
-      state: after === null ? "failed" : "pending",
-      next_at: after === null ? null : this.now() + after,
+      state: next === null ? "failed" : "pending",
+      next_at: next,
       status,
       error: why,
     });
-    if (wrote && after === null)
-      this.o.audit?.("webhook.failed", d, `${why}, after ${n + 1} tries`);
+    if (wrote && next === null) this.o.audit?.("webhook.failed", d, `${why}, after ${n + 1} tries`);
+    // Each failed try with another to come, so an operator sees callbacks failing and why, with
+    // no URL and no body.
+    if (wrote && next !== null) {
+      const what = status === null ? errorClass : `status ${status}`;
+      this.o.audit?.(
+        "webhook.retry",
+        d,
+        `try ${n + 1} failed (${what}), next try at ${new Date(next).toISOString()}`,
+      );
+    }
   }
 
   close(): void {
