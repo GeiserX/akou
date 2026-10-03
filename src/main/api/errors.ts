@@ -43,6 +43,8 @@ export const ERROR_CODES = {
   dictation_busy: "A dictation is already running.",
   dictation_off: "Dictation is off (`dictation.enabled`).",
   dictation_starting: "The dictation helper is still starting.",
+  engine_unavailable:
+    "A speech engine of the job's preset is down or could not load, so the job failed rather than come back with its text missing.",
   enhance_running: "The notes of this call are being written already.",
   export_not_configured: "No export folder: set `export.dir` or name one.",
   final_running: "The final pass of this call is running.",

@@ -103,11 +103,6 @@ export interface StartRequest {
   review?: string;
   reviewEvery?: number;
   /**
-   * This call's final-pass engines (`asr.final.engines`' values, as ids), instead of the setting.
-   * Written into `call.created`, so a pass after a restart still runs them.
-   */
-  engines?: string[];
-  /**
    * An agent's start: when a call is already starting, recording or paused, start nothing and
    * answer with that call (`attached`) instead of `409 already_recording`. A call still starting
    * is answered once its capture opened, or with its failure.
@@ -395,7 +390,6 @@ export class CallManager {
           user: this.o.user ?? "",
           akou: this.o.akouVersion ?? "0.0.0",
           ...(req.template ? { template: req.template } : {}),
-          ...(req.engines && req.engines.length > 0 ? { engines: [...req.engines] } : {}),
         },
         this.deps(workspace),
         capture,
