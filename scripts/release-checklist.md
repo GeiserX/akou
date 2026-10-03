@@ -34,7 +34,7 @@ git tag -a v0.1.0 -m "akou 0.1.0"
 git push origin v0.1.0
 ```
 
-The workflow checks the tag equals every version string, builds and checks everything again, and publishes the release with `SHA256SUMS`. Only a version with a prerelease part, such as `0.6.0-rc.1`, is published as a prerelease. Any other version, 0.x included, becomes the latest release. It is never a draft.
+The workflow checks the tag equals every version string, builds and checks everything again, and publishes the release with `SHA256SUMS`. A 0.x version is published as a prerelease. It is never a draft.
 
 ## After the workflow
 

@@ -118,7 +118,7 @@ flowchart LR
 - It does not join a meeting as a bot, and it never sends anything to a meeting service.
 - It has no cloud, no account and no sync between machines.
 - The desktop app ships for macOS only today. Dictation is macOS only too.
-- The builds are not signed by Apple, so the first open needs one extra step, and an update may ask for the microphone and system audio grants again.
+- The 0.x builds are prereleases and are not signed by Apple, so the first open needs one extra step, and an update may ask for the microphone and system audio grants again.
 
 ## Privacy
 

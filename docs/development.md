@@ -38,7 +38,7 @@ It builds the capture helper with `cargo build --locked --release`, the window, 
 
 ## Releases
 
-A release is a `v<version>` tag on `main`. `bun scripts/stamp-version.ts --set <version>` writes the version into every file that carries it, and `--check` confirms they agree. The [release workflow](https://github.com/GeiserX/akou/blob/main/.github/workflows/release.yml) then builds the app and the command lines, runs the smoke checks, writes `SHA256SUMS` and publishes the release. Only a version with a prerelease part, such as `0.6.0-rc.1`, is published as a prerelease. What a person does around the tag, including the checks on a real Mac, is in the [release checklist](https://github.com/GeiserX/akou/blob/main/scripts/release-checklist.md), and the pipeline is described in [CI-CD.md](https://github.com/GeiserX/akou/blob/main/docs/CI-CD.md).
+A release is a `v<version>` tag on `main`. `bun scripts/stamp-version.ts --set <version>` writes the version into every file that carries it, and `--check` confirms they agree. The [release workflow](https://github.com/GeiserX/akou/blob/main/.github/workflows/release.yml) then builds the app and the command lines, runs the smoke checks, writes `SHA256SUMS` and publishes the release. While the version is 0.x the release is a prerelease. What a person does around the tag, including the checks on a real Mac, is in the [release checklist](https://github.com/GeiserX/akou/blob/main/scripts/release-checklist.md), and the pipeline is described in [CI-CD.md](https://github.com/GeiserX/akou/blob/main/docs/CI-CD.md).
 
 ## Design notes
 
