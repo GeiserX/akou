@@ -45,10 +45,12 @@ export const PLATFORMS = ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64
 export type Platform = (typeof PLATFORMS)[number];
 
 /**
- * How an entry runs: in-process sherpa-onnx, the `akou-diarize` helper, or a `llama-server` child
- * process (llama.cpp), which is itself a catalog entry per platform and accelerator.
+ * How an entry runs: in-process sherpa-onnx, the `akou-diarize` helper, a `llama-server` child
+ * process (llama.cpp), which is itself a catalog entry per platform and accelerator, or
+ * transcribe-cpp (transcribe.cpp through koffi, transcribe-cpp.ts), an npm dependency that ships its
+ * native library per platform and so is never a download.
  */
-export const RUNTIMES = ["sherpa-onnx", "akou-diarize", "llama-server"] as const;
+export const RUNTIMES = ["sherpa-onnx", "akou-diarize", "llama-server", "transcribe-cpp"] as const;
 export type Runtime = (typeof RUNTIMES)[number];
 
 /** The llama.cpp backends akou ships builds of (llama-catalog.ts), in the order `asr.accelerator` lists them. */
@@ -314,6 +316,85 @@ const LIVE_MODELS: readonly CatalogEntry[] = [
   },
 ];
 
+export const WHISPER_LARGE_V3 = "whisper-large-v3";
+export const WHISPER_LARGE_V3_FILE = "whisper-large-v3-Q8_0.gguf";
+export const CANARY_1B_V2 = "canary-1b-v2";
+export const CANARY_1B_V2_FILE = "canary-1b-v2-Q8_0.gguf";
+
+/**
+ * Whisper large-v3's languages as the model lists them (`capabilities.languages`: 100, Cantonese
+ * included), except Javanese: Whisper calls it `jw`, the catalog the ISO `jv`, and
+ * transcribe-cpp.ts maps it back when it forces the language.
+ */
+export const WHISPER_LANGUAGES: readonly string[] = (
+  "af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo fr gl gu haw ha he " +
+  "hi hr ht hu hy id is it ja jv ka kk km kn ko la lb ln lo lt lv mg mi mk ml mn mr ms mt my ne nl " +
+  "nn no oc pa pl ps pt ro ru sa sd si sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz " +
+  "vi yi yo yue zh"
+).split(" ");
+
+/**
+ * The GGUF conversions transcribe.cpp runs, pinned to a revision. Each SHA-256 was computed from
+ * the downloaded file and matches the LFS digest Hugging Face lists at that revision.
+ */
+const HF_WHISPER =
+  "https://huggingface.co/handy-computer/whisper-large-v3-gguf/resolve/b33a05f1459f33b0c876f014a57d51618b77d754";
+const HF_CANARY =
+  "https://huggingface.co/handy-computer/canary-1b-v2-gguf/resolve/e2d8e6d7f2accc1259dc5497b517b4083047e44b";
+
+/**
+ * The final-pass engines on the transcribe-cpp runtime (docs/research/asr-architecture.md section
+ * 2.3, ASR-8): one GGUF each, fetched only when named. The runtime is not an entry: it is the
+ * `transcribe-cpp` npm dependency, whose per-platform package carries the native library (Metal on
+ * Apple silicon, Vulkan or the CPU on Linux and Windows), so it ships with akou and is never
+ * downloaded, verified or swept like a model. Only one Metal engine runs at a time; the engine's
+ * `load` and `unload` let the final pass keep to that.
+ */
+const TRANSCRIBE_CPP_MODELS: readonly CatalogEntry[] = [
+  {
+    id: WHISPER_LARGE_V3,
+    ...MODEL_TEXT[WHISPER_LARGE_V3],
+    job: "final recognition, 99 languages and Cantonese, run by transcribe-cpp on Metal, Vulkan or the CPU; takes the vocabulary as its initial prompt",
+    licence: "MIT",
+    source: "https://huggingface.co/openai/whisper-large-v3",
+    serves: ["final"],
+    runtime: "transcribe-cpp",
+    platforms: PLATFORMS,
+    accelerators: ["metal", "vulkan", "cpu"],
+    languages: WHISPER_LANGUAGES,
+    onDemand: true,
+    files: [
+      {
+        name: WHISPER_LARGE_V3_FILE,
+        url: `${HF_WHISPER}/${WHISPER_LARGE_V3_FILE}`,
+        sha256: "2fa1a5f179f8a511a53e2108db270aa4af3ce08cd976af4180e2854666bb4ba3",
+        size: 1668741440,
+      },
+    ],
+  },
+  {
+    id: CANARY_1B_V2,
+    ...MODEL_TEXT[CANARY_1B_V2],
+    job: "final recognition, 25 European languages, run by transcribe-cpp on Metal, Vulkan or the CPU; always told the language",
+    licence: "CC-BY-4.0",
+    source: "https://huggingface.co/nvidia/canary-1b-v2",
+    serves: ["final"],
+    runtime: "transcribe-cpp",
+    platforms: PLATFORMS,
+    accelerators: ["metal", "vulkan", "cpu"],
+    languages: PARAKEET_LANGUAGES,
+    onDemand: true,
+    files: [
+      {
+        name: CANARY_1B_V2_FILE,
+        url: `${HF_CANARY}/${CANARY_1B_V2_FILE}`,
+        sha256: "224f83d1bc487b3303b495a7d6874912fdece93de19d1a04b550829c30a5d289",
+        size: 1144290016,
+      },
+    ],
+  },
+];
+
 /**
  * The full-precision (fp32) export: a third fewer word errors in English and a fifth fewer in Spanish
  * than the int8 build on FLEURS, and more names found under biasing (docs/research/asr-benchmark.md).
@@ -456,6 +537,7 @@ export const MODELS: readonly CatalogEntry[] = [
   ...LIVE_MODELS,
   ...MORE_TIERS,
   ...LLAMA_CATALOG,
+  ...TRANSCRIBE_CPP_MODELS,
 ];
 
 /** The models only one speaker-label engine needs. */

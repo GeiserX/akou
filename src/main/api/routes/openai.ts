@@ -451,6 +451,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
         499: ["cancelled"],
         500: [
           "diarize_unavailable",
+          "engine_unavailable",
           "interrupted",
           "model_download_failed",
           "models_missing",
