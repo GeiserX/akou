@@ -1,5 +1,6 @@
 /**
- * Builds the macOS app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md):
+ * Builds the desktop app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md),
+ * on macOS arm64, Windows x64 or Linux x64, each on its own machine (ElectroBun cannot cross-compile):
  *
  *   bun scripts/build-app.ts [--allow-missing-helper]
  *
@@ -24,13 +25,21 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { BUILT } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
-import { compileCli } from "./build-cli.ts";
+import { compileCli, hostTarget } from "./build-cli.ts";
 import { drift, sourceVersion } from "./stamp-version.ts";
 
 /** The toolchain the release is built with (DESIGN 9, ROADMAP M0). */
@@ -51,7 +60,26 @@ export const PINS = {
 export const MIN_MACOS = "14.4";
 
 export const ROOT = join(import.meta.dir, "..");
-export const PLATFORM = "macos-arm64";
+
+/** Hutch's name for each machine the desktop app is built on. */
+export const DESKTOP_PLATFORMS: Readonly<Record<string, string>> = {
+  "darwin-arm64": "macos-arm64",
+  "win32-x64": "windows-x64",
+  "linux-x64": "linux-x64",
+};
+
+/** Hutch's name for this machine, or null where no desktop app is built. */
+export function desktopPlatform(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string | null {
+  return DESKTOP_PLATFORMS[`${platform}-${arch}`] ?? null;
+}
+
+export const PLATFORM = desktopPlatform() ?? "macos-arm64";
+/** Hutch's output for this machine: the app (and on macOS the wrapper bundle) and its artifacts. */
+export const BUILD_DIR = join(ROOT, "build", `stable-${PLATFORM}`);
+export const ARTIFACTS_DIR = join(ROOT, "artifacts");
 export const WRAPPER_APP = join(ROOT, "build", `stable-${PLATFORM}`, "akou.app");
 export const HUTCH_DMG = join(ROOT, "artifacts", `${PLATFORM}-akou.dmg`);
 export const RELEASE_DIR = join(ROOT, "dist", "release");
@@ -114,10 +142,22 @@ function run(cmd: string[], env: Record<string, string | undefined> = process.en
   if (r.status !== 0) fail(`${cmd[0]} exited ${r.status ?? r.signal}`);
 }
 
+/** Every file under `dir`, with its size, for the build log. */
+function listTree(dir: string): void {
+  if (!existsSync(dir)) {
+    console.log(`build-app: ${dir} does not exist`);
+    return;
+  }
+  for (const f of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const p = join(f.parentPath, f.name);
+    console.log(`build-app: ${f.isDirectory() ? "dir " : statSync(p).size} ${p}`);
+  }
+}
+
 async function main(argv: string[]): Promise<void> {
-  if (process.platform !== "darwin" || process.arch !== "arm64") {
+  if (desktopPlatform() === null) {
     fail(
-      `the app is built on macOS arm64 only (ElectroBun cannot cross-compile); this is ${process.platform}-${process.arch}`,
+      `the app is built on ${Object.keys(DESKTOP_PLATFORMS).join(", ")} only (ElectroBun cannot cross-compile); this is ${process.platform}-${process.arch}`,
     );
   }
   const allowMissingHelper = argv.includes("--allow-missing-helper");
@@ -180,7 +220,7 @@ async function main(argv: string[]): Promise<void> {
 
   rmSync(join(ROOT, "dist", "app-cli"), { recursive: true, force: true });
   mkdirSync(join(ROOT, "dist", "app-cli"), { recursive: true });
-  compileCli(join(ROOT, BUILT.cli), "darwin-arm64", version);
+  compileCli(join(ROOT, BUILT.cli), hostTarget() as string, version);
 
   // 4. ElectroBun, through the paired Hutch.
   rmSync(join(ROOT, "build"), { recursive: true, force: true });
@@ -197,6 +237,10 @@ async function main(argv: string[]): Promise<void> {
   const ran = cachedHutch();
   if (ran !== PINS.hutch)
     fail(`the build ran Hutch ${ran ?? "(unknown)"}, the release pins ${PINS.hutch}`);
+  if (process.platform !== "darwin") {
+    for (const dir of [BUILD_DIR, ARTIFACTS_DIR]) listTree(dir);
+    return;
+  }
   if (!existsSync(WRAPPER_APP)) fail(`no app at ${WRAPPER_APP}`);
   if (!existsSync(HUTCH_DMG)) fail(`no DMG at ${HUTCH_DMG}`);
 
