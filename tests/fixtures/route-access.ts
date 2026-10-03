@@ -14,6 +14,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/config": "admin",
   "PATCH /v1/config": "admin",
   "GET /v1/templates": "admin",
+  "GET /v1/templates/{name}": "admin",
   "GET /v1/share": "admin",
   "POST /v1/share": "admin",
   "DELETE /v1/share": "admin",

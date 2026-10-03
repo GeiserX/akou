@@ -76,6 +76,35 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 </details>
 
+## akou_config_get
+
+**Read the settings**
+
+akou's settings as they are in force, secrets redacted, or one with `key` (`asr.live`). Read-only: changing one is the user's, in the window or with `akou config set`.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `key` | `string` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_context
 
 **Context for a question**
@@ -115,6 +144,44 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   },
   "required": [
     "question"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_delete_note
+
+**Delete a note**
+
+Delete one notepad line, by its id from akou_get_notes. Only when the user asks: the line may be theirs.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "call": {
+      "default": "live",
+      "description": "Which call: \"live\" (the one recording now), \"last\", or a call id. Use the live call unless the user names another one.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
   ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
@@ -189,6 +256,50 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
       "type": "string"
     }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_edit_note
+
+**Edit a note**
+
+Replace the text of one notepad line, by its id from akou_get_notes (`n0003`). The old text stays in the call's log.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes |  |
+| `text` | `string` | yes |  |
+| `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "call": {
+      "default": "live",
+      "description": "Which call: \"live\" (the one recording now), \"last\", or a call id. Use the live call unless the user names another one.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "text"
+  ],
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
 ```
@@ -319,6 +430,48 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "required": [
     "call"
   ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_finalize
+
+**Run the final pass**
+
+Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen or parakeet for this run only.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `call` | `string` | no |  |
+| `force` | `boolean` | no |  |
+| `model` | `"qwen" or "parakeet"` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "call": {
+      "default": "last",
+      "type": "string"
+    },
+    "force": {
+      "type": "boolean"
+    },
+    "model": {
+      "type": "string",
+      "enum": [
+        "qwen",
+        "parakeet"
+      ]
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
 ```
@@ -714,6 +867,35 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 </details>
 
+## akou_open_window
+
+**Show the window**
+
+Show akou's window to the user, on a call if one is named (`live`, `last` or an id). With no window (headless), answers a browser address that works once, within a minute.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `call` | `string` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "call": {
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_pause
 
 **Pause recording**
@@ -950,6 +1132,95 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 </details>
 
+## akou_share_off
+
+**Stop sharing**
+
+Stop sharing a call's live link, or every link when no `call` is named.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `call` | `string` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "call": {
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_share_on
+
+**Share a live link**
+
+Start a read-only live link to a call (default the live one), only when the user asks to share it. `notes` shares the notepad too; `expires` turns it off after a while (`2h`). Answers the address to hand over.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `call` | `string` | no |  |
+| `notes` | `boolean` | no |  |
+| `expires` | `string` | no |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "call": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "boolean"
+    },
+    "expires": {
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_share_status
+
+**Live links that are on**
+
+The read-only live links that are on, one per shared call, with their address.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+Parameters: none.
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_start
 
 **Start recording**
@@ -964,7 +1235,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `title` | `string` | no |  |
 | `template` | `string` | no |  |
 | `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
+| `mic` | `string` | no | The microphone: a device id or "none" |
 | `vocab` | `string[]` | no |  |
+| `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -986,11 +1259,19 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "description": "What to capture as the call side: \"system\", \"app:ID\" or \"none\"",
       "type": "string"
     },
+    "mic": {
+      "description": "The microphone: a device id or \"none\"",
+      "type": "string"
+    },
     "vocab": {
       "type": "array",
       "items": {
         "type": "string"
       }
+    },
+    "withoutModels": {
+      "description": "Record audio now and transcribe it later, when the speech models are not downloaded yet.",
+      "type": "boolean"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -1029,6 +1310,62 @@ Parameters: none.
 Stop the live call.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`.
+
+Parameters: none.
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {},
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_template_get
+
+**Read a note template**
+
+One note template as akou would use it (the user's own file when it replaces the shipped one): read it before writing enhanced notes with akou_enhanced_put.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | yes |  |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_template_list
+
+**List note templates**
+
+The note templates enhanced notes can follow: the shipped ones and the user's own, with each one's sections and title keywords. Read one with akou_template_get.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 Parameters: none.
 

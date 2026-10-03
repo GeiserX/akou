@@ -145,7 +145,7 @@ describe("starting and controlling", () => {
       ]);
       const ms = performance.now() - t0;
       expect(r.code).toBe(0);
-      expect(r.json).toMatchObject({ part: 1, url: `akou://call/${r.json.call}` });
+      expect(r.json).toMatchObject({ part: 1, url: null });
       // The design's target with the app running is 1 s.
       console.log(`akou start (app running): ${ms.toFixed(0)} ms`);
       expect(ms).toBeLessThan(1000);
@@ -187,7 +187,7 @@ describe("starting and controlling", () => {
       const first = await run(["start", "--attach", "-w", "work", "-t", "Standup", "--json"]);
       expect(first.code).toBe(0);
       expect(first.json.attached).toBeUndefined();
-      expect(first.json).toMatchObject({ part: 1, url: `akou://call/${first.json.call}` });
+      expect(first.json).toMatchObject({ part: 1, url: null });
       // A call records: --attach hands it back and starts nothing.
       const again = await run(["start", "--attach", "-t", "Other", "--json"]);
       expect(again.code).toBe(0);
@@ -198,7 +198,7 @@ describe("starting and controlling", () => {
         workspace: "work",
         state: "recording",
         part: 1,
-        url: `akou://call/${first.json.call}`,
+        url: null,
       });
       expect(typeof again.json.startedAt).toBe("number");
       expect(again.json.folder).toBe(first.json.folder);

@@ -230,6 +230,13 @@ const OUT = {
   merge: z.object({ from: z.string(), into: z.string() }),
   unmerge: z.object({ spk: z.string() }),
   id: z.object({ id: z.string() }),
+  note: z.object({ id: z.string(), rev: INT }),
+  template: z.object({
+    name: z.string(),
+    bundled: z.boolean(),
+    sections: z.array(z.string()),
+    text: z.string(),
+  }),
   notes: z.object({
     call: z.string().nullable(),
     notes: INT.min(0),
@@ -322,6 +329,10 @@ const DESTRUCTIVE: Hints = { ...WRITE, destructiveHint: true };
 const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
 /** Runs akou's configured provider, which may be a remote API. */
 const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
+/** Takes away what the user wrote (a note): the harness should confirm. */
+const REMOVES = DESTRUCTIVE;
+/** Lets people outside this machine read the call: the harness should confirm. */
+const SHARES: Hints = { ...WRITE, openWorldHint: true };
 
 /**
  * Every tool's title and annotations (PG-M2): one row per tool, and registering a tool without a
@@ -344,6 +355,8 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
   akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
   akou_add_note: { title: "Add a note", hints: WRITE },
+  akou_edit_note: { title: "Edit a note", hints: IDEMPOTENT },
+  akou_delete_note: { title: "Delete a note", hints: REMOVES },
   akou_get_notes: { title: "Read the notepad", hints: READ, less: "page with `offset`" },
   akou_remember: { title: "Remember a fact", hints: WRITE },
   akou_forget: { title: "Forget a fact", hints: WRITE },
@@ -367,10 +380,18 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   },
   akou_enhanced_put: { title: "Save enhanced notes", hints: WRITE },
   akou_enhance: { title: "Enhance notes with akou's provider", hints: PROVIDER },
+  akou_template_list: { title: "List note templates", hints: READ },
+  akou_template_get: { title: "Read a note template", hints: READ },
+  akou_finalize: { title: "Run the final pass", hints: WRITE },
   akou_rename_call: { title: "Rename a call", hints: IDEMPOTENT },
   akou_list_calls: { title: "List past calls", hints: READ },
   akou_get_call: { title: "Read a named call", hints: READ },
   akou_export: { title: "Export a call", hints: WRITE },
+  akou_share_status: { title: "Live links that are on", hints: READ },
+  akou_share_on: { title: "Share a live link", hints: SHARES },
+  akou_share_off: { title: "Stop sharing", hints: IDEMPOTENT },
+  akou_open_window: { title: "Show the window", hints: WRITE },
+  akou_config_get: { title: "Read the settings", hints: READ },
   akou_dictation_list: { title: "List past dictations", hints: READ, less: "a smaller `limit`" },
   akou_dictation_get: { title: "Read a dictation", hints: READ },
   akou_transcribe: { title: "Transcribe a file on a server", hints: WRITE },
@@ -521,7 +542,14 @@ export function createMcpServer(o: McpOptions): McpServer {
           .string()
           .optional()
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
+        mic: z.string().optional().describe('The microphone: a device id or "none"'),
         vocab: z.array(z.string()).optional(),
+        withoutModels: z
+          .boolean()
+          .optional()
+          .describe(
+            "Record audio now and transcribe it later, when the speech models are not downloaded yet.",
+          ),
       }),
       outputSchema: OUT.start,
     },
@@ -531,9 +559,10 @@ export function createMcpServer(o: McpOptions): McpServer {
       void refreshAsk();
       return asResult(r, (b) => ({
         text: b.attached
-          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder} url: ${b.url}`
-          : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder} url: ${b.url}`,
-        data: b,
+          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder}`
+          : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder}`,
+        // An older app still answers a dead `akou://` link here (PG-U1): never pass it on.
+        data: { ...b, url: null },
       }));
     },
   );
@@ -822,6 +851,39 @@ export function createMcpServer(o: McpOptions): McpServer {
           ...(next < all.length ? { nextOffset: next } : {}),
         }))({ ...b, notes: page });
       });
+    },
+  );
+
+  tool(
+    "akou_edit_note",
+    {
+      description:
+        "Replace the text of one notepad line, by its id from akou_get_notes (`n0003`). The old text stays in the call's log.",
+      inputSchema: z.object({ id: z.string(), text: z.string().min(1), call: CALL }),
+      outputSchema: OUT.note,
+    },
+    async (a) => {
+      const r = await req("PATCH", `/calls/${id(a.call)}/notes/${id(a.id)}`, {
+        body: { text: a.text },
+      });
+      return asResult(r, (b) => ({
+        text: `Edited ${b.note.id} (rev ${b.note.rev})`,
+        data: { id: String(b.note.id), rev: b.note.rev },
+      }));
+    },
+  );
+
+  tool(
+    "akou_delete_note",
+    {
+      description:
+        "Delete one notepad line, by its id from akou_get_notes. Only when the user asks: the line may be theirs.",
+      inputSchema: z.object({ id: z.string(), call: CALL }),
+      outputSchema: OUT.id,
+    },
+    async (a) => {
+      const r = await req("DELETE", `/calls/${id(a.call)}/notes/${id(a.id)}`);
+      return asResult(r, () => ({ text: `Deleted ${a.id}`, data: { id: a.id } }));
     },
   );
 
@@ -1141,6 +1203,62 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
+  tool(
+    "akou_template_list",
+    {
+      description:
+        "The note templates enhanced notes can follow: the shipped ones and the user's own, with each one's sections and title keywords. Read one with akou_template_get.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.body,
+    },
+    async () => {
+      const r = await req("GET", "/templates");
+      return asResult(r, (b) => compact({ dir: b.dir, templates: b.details }));
+    },
+  );
+
+  tool(
+    "akou_template_get",
+    {
+      description:
+        "One note template as akou would use it (the user's own file when it replaces the shipped one): read it before writing enhanced notes with akou_enhanced_put.",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      outputSchema: OUT.template,
+    },
+    async (a) => {
+      const r = await req("GET", `/templates/${id(a.name)}`);
+      return asResult(r, (b) => ({
+        text: String(b.text),
+        data: {
+          name: String(b.name),
+          bundled: b.bundled === true,
+          sections: b.sections ?? [],
+          text: String(b.text),
+        },
+      }));
+    },
+  );
+
+  tool(
+    "akou_finalize",
+    {
+      description:
+        "Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen or parakeet for this run only.",
+      inputSchema: z.object({
+        call: z.string().default("last"),
+        force: z.boolean().optional(),
+        model: z.enum(["qwen", "parakeet"]).optional(),
+      }),
+      outputSchema: OUT.body,
+    },
+    async (a) => {
+      const r = await req("POST", `/calls/${id(a.call)}/finalize`, {
+        body: { force: a.force, model: a.model },
+      });
+      return asResult(r, compact);
+    },
+  );
+
   // --- past calls -------------------------------------------------------------------------------
 
   tool(
@@ -1294,6 +1412,80 @@ export function createMcpServer(o: McpOptions): McpServer {
     async (a) => {
       const r = await req("POST", `/calls/${id(a.call)}/export`);
       return asResult(r, compact);
+    },
+  );
+
+  // --- sharing, the window, the settings --------------------------------------------------------
+  // The settings are read-only here (PROGRAMMABILITY.md section 1): a tool can be auto-approved, so
+  // an agent never switches the provider, the share bind or the webhook. For the same reason
+  // akou_share_on takes no `bind`: the link listens where `share.bind` says.
+
+  tool(
+    "akou_share_status",
+    {
+      description: "The read-only live links that are on, one per shared call, with their address.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.body,
+    },
+    async () => asResult(await req("GET", "/share"), compact),
+  );
+
+  tool(
+    "akou_share_on",
+    {
+      description:
+        "Start a read-only live link to a call (default the live one), only when the user asks to share it. `notes` shares the notepad too; `expires` turns it off after a while (`2h`). Answers the address to hand over.",
+      inputSchema: z.object({
+        call: z.string().optional(),
+        notes: z.boolean().optional(),
+        expires: z.string().optional(),
+      }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("POST", "/share", { body: a }), compact),
+  );
+
+  tool(
+    "akou_share_off",
+    {
+      description: "Stop sharing a call's live link, or every link when no `call` is named.",
+      inputSchema: z.object({ call: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("DELETE", "/share", a.call ? { body: a } : {}), compact),
+  );
+
+  tool(
+    "akou_open_window",
+    {
+      description:
+        "Show akou's window to the user, on a call if one is named (`live`, `last` or an id). With no window (headless), answers a browser address that works once, within a minute.",
+      inputSchema: z.object({ call: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("POST", "/window", { body: a.call ? a : {} }), compact),
+  );
+
+  tool(
+    "akou_config_get",
+    {
+      description:
+        "akou's settings as they are in force, secrets redacted, or one with `key` (`asr.live`). Read-only: changing one is the user's, in the window or with `akou config set`.",
+      inputSchema: z.object({ key: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => {
+      const r = await req("GET", "/config");
+      if (r.status === 200 && a.key !== undefined && !Object.hasOwn(r.body.settings, a.key)) {
+        return errorText(`unknown_key: no setting "${a.key}"; leave out \`key\` to list them`);
+      }
+      return asResult(r, (b) =>
+        compact(
+          a.key !== undefined
+            ? { key: a.key, value: b.settings[a.key] ?? null }
+            : { file: b.file, settings: b.settings, issues: b.issues ?? [] },
+        ),
+      );
     },
   );
 

@@ -629,7 +629,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/export` `{to?}` · `POST /calls/{id}/hooks` `{stage?}` · `POST /calls/{id}/finalize` | Hand-off, re-run. `to` is an absolute folder in place of `export.dir`; `409 export_not_configured` when neither is set, `409 not_ended` on a live call. `hooks` waits for the hooks and answers each run |
 | `POST /import/hark-viewer` `{dirs[], workspace?}` | Imports predecessor call folders (absolute paths); `422 not_imported` with the reasons when none could be |
 | `POST /share` · `DELETE /share` · `GET /share` | Sharing |
-| `GET /templates` · `GET /config` · `PATCH /config` | Settings |
+| `GET /templates` · `GET /templates/{name}` · `GET /config` · `PATCH /config` | Settings |
 | `POST /window` `{call?}` | Shows the window on a call (`akou open`). With no window (headless), answers `{url}`: the window in a browser, with a one-time code (section 6.3 rule 8) |
 | `POST /quit` | Clean shutdown |
 
@@ -658,7 +658,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 
 | Tool | Purpose |
 |---|---|
-| `akou_start {workspace?, title?, template?, call?, vocab?}` | Start; returns `{call, url}` once audio is being written. `vocab` is a list of call-scoped words (attendees, title terms). A call already recording is returned instead, with `attached: true`: the agent follows it, never a dead end |
+| `akou_start {workspace?, title?, template?, call?, mic?, vocab?, withoutModels?}` | Start; returns `{call, folder}` once audio is being written (`url` is always null: `akou_open_window` shows the call). `vocab` is a list of call-scoped words (attendees, title terms). A call already recording is returned instead, with `attached: true`: the agent follows it, never a dead end |
 | `akou_stop`, `akou_pause`, `akou_resume`, `akou_mute`, `akou_unmute`, `akou_restart {force?}` | Controls |
 | `akou_status` | Live or not, health, lag, models, provider, share |
 | `akou_context {question, call = "live", budget = 6000}` | The pack. The main tool for answering |
@@ -666,12 +666,16 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_search {query, call = "live", k = 6}` | BM25 hits with wall-time citations |
 | `akou_ask {question, call = "live"}` | Answer with akou's configured provider. Listed only when one is configured, and hidden when the provider is `harness` and the MCP client is that same harness. Its description says: prefer `akou_context`; `akou_ask` spawns another agent run on your subscription |
 | `akou_name_speaker {speaker, name}` · `akou_merge_speakers {a, b}` · `akou_unmerge_speaker {speaker}` | Speakers |
-| `akou_add_note {text}` · `akou_get_notes` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
+| `akou_add_note {text}` · `akou_get_notes` · `akou_edit_note {id, text, call = "live"}` · `akou_delete_note {id, call = "live"}` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
 | `akou_enhance_context {template?}` · `akou_enhanced_put {markdown, coversSeq}` · `akou_enhance {template?}` | The agent writes the enhancement, or asks akou's provider to |
+| `akou_template_list` · `akou_template_get {name}` | The note templates, and one as the notes would use it, the user's own file included |
+| `akou_finalize {call = "last", force?, model?}` | Start the final pass on an ended call |
 | `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best", cursor?}` (a page at a time, with `nextCursor`) · `akou_export {call}` | Past calls by name only |
 | `akou_rename_call {call = "live", title}` | Rename a call when the user names it |
+| `akou_share_status` · `akou_share_on {call?, notes?, expires?}` · `akou_share_off {call?}` | The read-only live link. No `bind`: where it listens is the `share.bind` setting |
+| `akou_open_window {call?}` · `akou_config_get {key?}` | Show the window; read the settings. No tool writes a setting |
 
 Tool descriptions carry the rules: cite wall time, never quote a draft line as fact, answer only from the live call unless a call is named, say when a call has ended.
 
