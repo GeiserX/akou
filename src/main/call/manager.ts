@@ -577,5 +577,6 @@ export function liveBrief(c: CallController): LiveBrief {
     workspace: call?.workspace ?? "",
     startedAt: c.view.parts()[0]?.wallStart ?? call?.t ?? 0,
     state: c.status,
+    callMode: c.view.parts().at(-1)?.call.mode ?? c.capture.call,
   };
 }

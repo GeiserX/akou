@@ -140,6 +140,7 @@ describe("starting a call", () => {
         workspace: detail.workspace,
         startedAt: detail.startedAt,
         state: "recording",
+        callMode: "system",
       },
     });
   });
@@ -157,6 +158,7 @@ describe("starting a call", () => {
       workspace: detail.workspace,
       startedAt: detail.startedAt,
       state: "recording",
+      callMode: "system",
       part: 1,
       folder: detail.folder,
       url: `akou://call/${id}`,

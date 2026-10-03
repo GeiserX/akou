@@ -29,3 +29,12 @@ export function parseCallMode(s: string): ParsedCallMode {
   }
   return { ok: true, mode: { kind: "apps", ids } };
 }
+
+/** What a call with this mode records, as a clause: "it records the whole computer". */
+export function callModeWords(mode: string): string {
+  const m = parseCallMode(mode);
+  if (!m.ok) return `it records ${mode || "an unknown call side"}`;
+  if (m.mode.kind === "system") return "it records the whole computer";
+  if (m.mode.kind === "none") return "it records no call audio, only the microphone";
+  return `it records only ${mode}`;
+}
