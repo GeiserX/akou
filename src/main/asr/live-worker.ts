@@ -1039,6 +1039,18 @@ export class LivePipeline {
     this.drain(true);
   }
 
+  /**
+   * Lets go of what the last call and the dictations loaded (`LiveAsr.releaseIdle`): the call's
+   * streams and its stream diarizer, the streaming engine, the recognizer and the embedder. Only
+   * while no call is on the Worker and no dictation is open; the next use loads what it needs.
+   */
+  release(): void {
+    this.stop();
+    this.engine = null;
+    this.prepared = null;
+    this.embedder = null;
+  }
+
   /** Stops the stream diarizer and the live streams (the transcriber is closing). */
   /**
    * Opens a dictation's stream (DC-E5 live words) on the streaming engine a call is running when it
@@ -1080,14 +1092,15 @@ export class LivePipeline {
   }
 
   /**
-   * Loads what a dictation needs before its first press (DC-E7): its VAD, the recognizer, and the
-   * streaming model its words would come from, so the first press after launch waits for none of
-   * them. A running call's engine is never replaced for it; an ended call's is let go first, as
-   * `openDictation` does.
+   * Loads what a dictation needs before its first press (DC-E7): its VAD, the streaming model its
+   * words would come from, and the recognizer only when its text comes from it (`recognizer`: no
+   * streaming model, or `fast`), so the first press after launch waits for none of them and an idle
+   * app holds no Parakeet it does not use. A running call's engine is never replaced for it; an
+   * ended call's is let go first, as `openDictation` does.
    */
-  warmDictation(want: LiveChoice | null, callActive: boolean): void {
+  warmDictation(want: LiveChoice | null, callActive: boolean, recognizer = want === null): void {
     this.dictationVad ??= this.models.vad();
-    if (this.models.recognizerHere?.() !== false) this.hot();
+    if (recognizer && this.models.recognizerHere?.() !== false) this.hot();
     if (!want || !this.models.liveEngine) return;
     if (!callActive && this.engine && this.engine.id !== want.engine) this.startEngine(undefined);
     if (!this.engine) this.models.liveEngine(want.engine);
@@ -1200,8 +1213,22 @@ export type ToWorker =
     }
   | { type: "dstream-audio"; token: number; samples: Float32Array }
   | { type: "dstream-close"; token: number; flush: boolean }
-  /** Loads a dictation's models ahead of its first press (DC-E7), the streaming one on `choice`. */
-  | { type: "dwarm"; token: number; choice: LiveChoice | null; callActive: boolean };
+  /**
+   * Loads a dictation's models ahead of its first press (DC-E7): the streaming one on `choice`, and
+   * the recognizer when `recognizer` says the dictation's text comes from it.
+   */
+  | {
+      type: "dwarm";
+      token: number;
+      choice: LiveChoice | null;
+      callActive: boolean;
+      recognizer: boolean;
+    }
+  /**
+   * Lets go of every model the Worker holds (`LiveAsr.releaseIdle`): sent only while no call is on
+   * it and no dictation is open. What comes after it loads its models again.
+   */
+  | { type: "release" };
 
 export type FromWorker =
   | { type: "ready"; loads: Record<string, number> }
@@ -1294,7 +1321,7 @@ export class WorkerSide {
           break;
         }
         case "dwarm":
-          p.warmDictation(m.choice, m.callActive);
+          p.warmDictation(m.choice, m.callActive, m.recognizer);
           this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
           this.reply({ type: "dwarmed", token: m.token });
           break;
@@ -1322,6 +1349,12 @@ export class WorkerSide {
           break;
         case "unmerge":
           p.unmerge(m.from, m.into);
+          break;
+        case "release":
+          p.release();
+          // The native memory comes back once the models are collected (`ModelSet.release`).
+          await this.models?.release?.();
+          this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
           break;
         case "flush":
           if (m.call === this.callId) await p.flush();
@@ -1514,6 +1547,13 @@ export interface LiveAsrOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /** Runs the pipeline on this thread. Tests only: the app always uses the Worker. */
   inThread?: boolean;
+  /**
+   * `asr.modelIdleMinutes`, read at each check: the Worker lets go of its models once no call and
+   * no dictation has used them for this long (0: as soon as none does). Absent: they stay loaded.
+   */
+  idleMinutes?(): number;
+  /** The Worker let go of its models: the host loads again what a dictation needs to start fast. */
+  onRelease?(): void;
 }
 
 interface Transport {
@@ -1690,6 +1730,15 @@ interface HostCall {
   upgrade?: HostUpgrade | null;
 }
 
+/** Worker answers that end a use of the models (`LiveAsr.releaseIdle`). */
+const USE_ENDS: ReadonlySet<FromWorker["type"]> = new Set([
+  "decoded",
+  "decode.failed",
+  "speech",
+  "dstream.failed",
+  "dstream-words",
+]);
+
 /** A Worker that dies is replaced at most this many times in `RESPAWN_WINDOW_MS`. */
 const RESPAWN_LIMIT = 3;
 const RESPAWN_WINDOW_MS = 10 * 60_000;
@@ -1725,6 +1774,11 @@ export class LiveAsr {
   private readonly warms = new Map<number, { resolve(): void; reject(e: Error): void }>();
   private failed: string | null = null;
   private closed = false;
+  /** A call or a dictation used the Worker's models since they were last let go. */
+  private used = false;
+  private lastUse = 0;
+  /** Wakes `releaseIdle` when the models' idle time is up. */
+  private idleTimer: unknown = null;
   private readonly respawns: number[] = [];
   private resolveReady!: (v: { loads: Record<string, number> }) => void;
   private rejectReady!: (e: Error) => void;
@@ -1847,16 +1901,23 @@ export class LiveAsr {
 
   /**
    * Loads a dictation's models on the Worker before its first press (DC-E7): its VAD, the
-   * recognizer, and the streaming model on `choice` unless a call runs one. Sent before the Worker
-   * is ready, it runs right after the Worker's start, ahead of anything asked later.
+   * streaming model on `choice` unless a call runs one, and the recognizer when the dictation's
+   * text comes from it (`recognizer`; by default only with no streaming model). Sent before the
+   * Worker is ready, it runs right after the Worker's start, ahead of anything asked later.
    */
-  warmDictation(choice: LiveChoice | null): Promise<void> {
+  warmDictation(choice: LiveChoice | null, recognizer = choice === null): Promise<void> {
     if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
     if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
     const token = ++this.decodeToken;
     return new Promise<void>((resolve, reject) => {
       this.warms.set(token, { resolve, reject });
-      this.transport.post({ type: "dwarm", token, choice, callActive: this.current !== null });
+      this.transport.post({
+        type: "dwarm",
+        token,
+        choice,
+        callActive: this.current !== null,
+        recognizer,
+      });
     });
   }
 
@@ -1870,6 +1931,7 @@ export class LiveAsr {
     languages: readonly string[],
     onWords: (tokens: LiveToken[]) => void,
   ): DictationStream {
+    this.touch();
     const token = ++this.decodeToken;
     let resolveOpened!: (c: LiveChoice & { ms: number }) => void;
     let rejectOpened!: (e: Error) => void;
@@ -1935,6 +1997,7 @@ export class LiveAsr {
   decode(samples: Float32Array, o: { language?: string } = {}): Promise<Decoded> {
     if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
     if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    this.touch();
     const token = ++this.decodeToken;
     const copy = samples.slice();
     return new Promise<Decoded>((resolve, reject) => {
@@ -1960,6 +2023,7 @@ export class LiveAsr {
     if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
     if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
     if (signal?.aborted) return Promise.reject(new Error("the review was given up"));
+    this.touch();
     const token = ++this.decodeToken;
     const copies = parts.map((p) => p.slice());
     return new Promise<Decoded>((resolve, reject) => {
@@ -1988,6 +2052,7 @@ export class LiveAsr {
   speech(samples: Float32Array): Promise<boolean> {
     if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
     if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    this.touch();
     const token = ++this.decodeToken;
     const copy = samples.slice();
     return new Promise<boolean>((resolve, reject) => {
@@ -2039,6 +2104,8 @@ export class LiveAsr {
         this.calls.delete(callId);
         if (isCurrent) this.current = null;
         this.endUpgrade(c);
+        // The idle time counts from the call's end.
+        this.touch();
         break;
       default:
         break;
@@ -2059,9 +2126,55 @@ export class LiveAsr {
     });
   }
 
+  /**
+   * Lets the Worker go of its models once nothing has used them for `idleMinutes`: no call on it,
+   * no dictation open or decoding. What a dictation needs to start fast is loaded again at once
+   * (`onRelease`); everything else waits for its next use. The idle timer calls it; a test with its
+   * own clock calls it too. Answers whether the models were let go.
+   */
+  releaseIdle(): boolean {
+    this.disarmIdle();
+    const minutes = this.o.idleMinutes?.();
+    if (minutes === undefined || !this.used || this.closed || this.failed) return false;
+    const idleMs = Math.max(0, minutes) * 60_000;
+    const busy =
+      this.current !== null ||
+      this.dstreams.size > 0 ||
+      this.decodes.size > 0 ||
+      this.speeches.size > 0;
+    const left = busy ? idleMs : idleMs - (this.clock.now() - this.lastUse);
+    if (busy || left > 0) {
+      this.idleTimer = this.clock.setTimeout(() => this.releaseIdle(), Math.max(1000, left));
+      return false;
+    }
+    this.used = false;
+    this.transport.post({ type: "release" });
+    this.log("info", `models unloaded after ${minutes} min with no call or dictation`);
+    this.o.onRelease?.();
+    return true;
+  }
+
+  /** A call or a dictation uses the models: the idle time starts again. */
+  private touch(): void {
+    this.used = true;
+    this.lastUse = this.clock.now();
+    const minutes = this.o.idleMinutes?.();
+    if (this.idleTimer !== null || minutes === undefined) return;
+    this.idleTimer = this.clock.setTimeout(
+      () => this.releaseIdle(),
+      Math.max(1000, minutes * 60_000),
+    );
+  }
+
+  private disarmIdle(): void {
+    if (this.idleTimer !== null) this.clock.clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
   /** Stops the Worker. */
   async close(): Promise<void> {
     this.closed = true;
+    this.disarmIdle();
     for (const c of this.calls.values()) this.endUpgrade(c);
     this.transport.close();
     for (const done of this.flushes.values()) done();
@@ -2103,6 +2216,7 @@ export class LiveAsr {
     };
     this.calls.set(callId, c);
     this.current = c;
+    this.touch();
     this.beginCall(c);
     return c;
   }
@@ -2214,6 +2328,8 @@ export class LiveAsr {
   private onWorker(m: FromWorker): void {
     // Results belong to the call they are tagged with; one whose call has ended is dropped.
     const c = "call" in m ? this.calls.get(m.call) : undefined;
+    // A dictation's answer ends a use: the idle time counts from it.
+    if (USE_ENDS.has(m.type)) this.touch();
     switch (m.type) {
       case "ready":
         this.loads = m.loads;

@@ -329,6 +329,8 @@ function rig(
     root?: string;
     inThread?: boolean;
     flushMs?: number;
+    idleMinutes?: number;
+    onRelease?: () => void;
   } = {},
 ): Rig {
   const root =
@@ -370,6 +372,8 @@ function rig(
       clock,
       vocab: o.vocab ? () => o.vocab as VocabSource : undefined,
       onLog: (level, msg) => logs.push({ level, msg }),
+      ...(o.idleMinutes !== undefined ? { idleMinutes: () => o.idleMinutes as number } : {}),
+      ...(o.onRelease ? { onRelease: o.onRelease } : {}),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
   );
@@ -697,6 +701,75 @@ describe("speakers through the log", () => {
       model: "fake-parakeet",
     });
     expect(r.events.length).toBe(before);
+  });
+});
+
+describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
+  const UNLOADED = "models unloaded after 5 min with no call or dictation";
+  const MIN = 60_000;
+
+  /** A call with a few words on the mic, stopped: the Worker loaded the recognizer for it. */
+  async function oneCall(r: Rig): Promise<void> {
+    await startCall(r);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    await r.mgr.stop();
+    await settle(r, () => (r.asr.loads["fake-parakeet"] ?? 0) >= 1);
+  }
+
+  test("five minutes after a call ends the models go, the host is told, and the next call loads them again", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await oneCall(r);
+    await r.clock.advance(4 * MIN);
+    expect(told).toBe(0);
+    expect(r.models().releases).toBe(0);
+    await r.clock.advance(1 * MIN + 1000);
+    expect(told).toBe(1);
+    await settle(r, () => r.models().releases === 1);
+    expect(r.logs.some((l) => l.msg === UNLOADED)).toBe(true);
+    // Nothing used them since: no second release however long the app sits.
+    await r.clock.advance(60 * MIN);
+    expect(told).toBe(1);
+    await oneCall(r);
+    await settle(r, () => r.asr.loads["fake-parakeet"] === 2);
+  });
+
+  test("a call on the Worker keeps them however long it runs; the idle time counts from its end", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await startCall(r);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    await r.clock.advance(30 * MIN);
+    expect(told).toBe(0);
+    await r.mgr.stop();
+    await r.clock.advance(4 * MIN);
+    expect(told).toBe(0);
+    await r.clock.advance(1 * MIN + 1000);
+    expect(told).toBe(1);
+  });
+
+  test("an open dictation keeps them; the idle time counts from its end", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await r.asr.ready;
+    const s = r.asr.openDictation({ engine: "nemotron-en-560", lang: "en" }, ["en"], () => {});
+    await s.opened;
+    await r.clock.advance(12 * MIN);
+    expect(told).toBe(0);
+    await s.finish();
+    await r.clock.advance(4 * MIN);
+    expect(told).toBe(0);
+    await r.clock.advance(1 * MIN + 1000);
+    expect(told).toBe(1);
+  });
+
+  test("positive control: without the setting nothing is let go", async () => {
+    const r = rig();
+    await oneCall(r);
+    await r.clock.advance(24 * 60 * MIN);
+    await flush();
+    expect(r.models().releases).toBe(0);
+    expect(r.logs.some((l) => l.msg === UNLOADED)).toBe(false);
   });
 });
 
