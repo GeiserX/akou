@@ -38,6 +38,7 @@ const TABLE: Readonly<Record<string, ((call?: string) => string[]) | string>> = 
   show: (x) => ["show", "-c", x ?? "last"],
   finalize: (x) => ["finalize", ...c(x)],
   enhance: (x) => ["enhance", ...c(x)],
+  templates: "lists and prints the note templates",
   quit: "quits the app",
   tail: (x) => ["tail", ...c(x)],
   context: (x) => ["context", "what was decided?", ...c(x)],
