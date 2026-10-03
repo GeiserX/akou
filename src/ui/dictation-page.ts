@@ -81,9 +81,18 @@ type DictationReply = {
   live?: string | null;
   /** What a dictation inserts now, as the engines resolve here (DC-E7). */
   final?: string | null;
+  /** Each choice's time after the key is let go for 10 s of speech, measured or estimated (DC-T3). */
+  latency?: Record<string, { ms: number; measured: boolean } | undefined>;
   /** The engines a retry can use on this machine now: History offers only these. */
   engines?: string[];
 };
+
+/** A choice's time after the key is let go, in words: "0.4 s after you let go, measured". */
+export function latencyWords(l: { ms: number; measured: boolean } | undefined): string {
+  if (!l) return "";
+  const s = Math.max(0.1, Math.round(l.ms / 100) / 10);
+  return `About ${s} s after you let go of 10 s of speech, ${l.measured ? "measured on this kind of computer" : "estimated"}.`;
+}
 
 /** Pausing other media while dictating (DC-U8), which macOS cannot do. */
 const MEDIA_KEY = "dictation.muteMedia";
@@ -1163,11 +1172,12 @@ export class DictationPage {
     };
     const choices = (wordsFor(FINAL_KEY).choices ?? []).filter(([v]) => spec.values?.includes(v));
     const rows = choices.map(([value, label]) => {
+      const time = latencyWords(this.dictation?.latency?.[value]);
       const r = choiceRow({
         name: "dictation-final",
         value,
         label,
-        help: lines[value],
+        help: time ? `${lines[value]} ${time}` : lines[value],
         checked: value === now,
         isDefault: value === "live",
         disabled: remote,

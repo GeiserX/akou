@@ -4,7 +4,8 @@
  * compared with the baselines committed in docs/gates/nightly-baselines.json.
  *
  *   bun scripts/eval/nightly.ts --models <dir> --data <dir> --diarize <akou-diarize> --nemotron <onnx>
- *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen] [--out results.json]
+ *                               [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,dictation]
+ *                               [--out results.json] [--latency-table <json> [--machine <what>]]
  *                               [--accelerator cpu|vulkan|cuda|metal]
  *
  * What it measures, per OS:
@@ -28,6 +29,10 @@
  *   And a five-minute unit of joined clips, which the engine sends in requests of at most
  *   `QWEN_MAX_REQUEST_SECONDS`, under a WER bound; the same unit sent uncut is the failing
  *   control, which must lose words past it.
+ * - Dictation's release-to-text time per engine (DC-T3, `scripts/eval/dictation-latency.ts`): the
+ *   streaming model, Qwen and a loopback remote akou, p50 and p95 for 3, 10 and 30 s of FLEURS
+ *   speech. Recorded, and with `--latency-table` written as `docs/gates/dictation-latency.json`'s
+ *   entry for this platform.
  *
  * Every download is pinned by revision and checked by SHA-256: the published hash where the host
  * has one, and otherwise the hash of the file as first fetched (the AMI audio).
@@ -39,19 +44,51 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
+import { chooseLiveEngine } from "../../src/main/asr/live-engines.ts";
+import { LiveAsr } from "../../src/main/asr/live-worker.ts";
 import {
   llamaBuildId,
   QWEN_ASR,
   QWEN_MMPROJ_FILE,
   QWEN_MODEL_FILE,
 } from "../../src/main/asr/llama-catalog.ts";
-import { extractBuild, LlamaServer, resolveAccelerator } from "../../src/main/asr/llama-server.ts";
-import { downloadModels, MODELS, modelFile, RECOGNIZER } from "../../src/main/asr/models.ts";
+import {
+  createLlamaServer,
+  extractBuild,
+  LlamaServer,
+  resolveAccelerator,
+} from "../../src/main/asr/llama-server.ts";
+import {
+  downloadModels,
+  hostPlatform,
+  MODELS,
+  modelFile,
+  modelsFor,
+  RECOGNIZER,
+} from "../../src/main/asr/models.ts";
 import { NemotronDiarizer } from "../../src/main/asr/nemotron.ts";
 import { QWEN_MAX_REQUEST_SECONDS, QwenEngine } from "../../src/main/asr/qwen.ts";
 import { SherpaModels } from "../../src/main/asr/sherpa.ts";
+import { BestEngine } from "../../src/main/dictation/best.ts";
+import { LiveWords } from "../../src/main/dictation/live.ts";
+import { RemoteUpload, testRemote } from "../../src/main/dictation/remote.ts";
 import { replay } from "../../tests/eval/replay.ts";
 import { synthCall, synthQuestions } from "../../tests/synth.ts";
+import {
+  atPeak,
+  DICTATION_LENGTHS,
+  DICTATION_PEAK,
+  DICTATIONS_PER_LENGTH,
+  type Dictate,
+  type EngineLatency,
+  engineLatency,
+  hold,
+  type LatencyEngine,
+  type LatencyTable,
+  measure,
+  utterances,
+  withPlatform,
+} from "./dictation-latency.ts";
 import {
   compare,
   der,
@@ -594,6 +631,223 @@ export function joinClips(
   return { samples, ref: taken.map((c) => c.ref).join(" ") };
 }
 
+// --- dictation latency (DC-T3) ----------------------------------------------------------------
+
+/** The streaming model a dictation's words come from by default: `auto` over any language. */
+async function liveDictate(
+  modelsDir: string,
+  dataDir: string,
+): Promise<{ model: string; dictate: Dictate; close(): Promise<void> }> {
+  const choice = chooseLiveEngine("auto", [], () => true).choice;
+  if (!choice) throw new Error("no streaming model for dictation");
+  await downloadModels(modelsDir, ["silero-vad", choice.engine], { env: {} });
+  const asr = new LiveAsr(
+    { models: { kind: "sherpa", dir: modelsDir, cacheDir: join(dataDir, "sherpa-cache") } },
+    () => undefined,
+  );
+  await asr.warmDictation(choice);
+  return {
+    model: choice.engine,
+    dictate: async (samples) => {
+      const words = new LiveWords(
+        (onWords) => asr.openDictation(choice, [], onWords),
+        () => {},
+      );
+      await hold(samples, (p) => words.push(p));
+      const t = performance.now();
+      const d = await words.finish();
+      if (d.text.trim() === "") throw new Error("the streaming model heard nothing");
+      return performance.now() - t;
+    },
+    close: () => asr.close(),
+  };
+}
+
+/** Qwen on its warm llama-server, as `best` runs it for dictation. */
+async function qwenDictate(
+  modelsDir: string,
+  platform: string,
+): Promise<{ model: string; dictate: Dictate; close(): Promise<void> }> {
+  const { accelerator } = resolveAccelerator("auto", platform);
+  const buildId = llamaBuildId(platform, accelerator);
+  const build = MODELS.find((m) => m.id === buildId);
+  if (!build) throw new Error(`no llama-server build for ${platform}`);
+  await downloadModels(modelsDir, [QWEN_ASR, buildId], { env: {} });
+  const spec = {
+    kind: "llama-server" as const,
+    engine: QWEN_ASR,
+    model: modelFile(modelsDir, QWEN_ASR, QWEN_MODEL_FILE),
+    mmproj: modelFile(modelsDir, QWEN_ASR, QWEN_MMPROJ_FILE),
+    accelerator,
+    build: {
+      dir: join(modelsDir, buildId),
+      archives: build.files.map((f) => modelFile(modelsDir, buildId, f.name)),
+      platform,
+    },
+  };
+  const best = new BestEngine({
+    spec: () => spec,
+    fast: () => null,
+    settings: () => ({ timeoutSeconds: 120, idleMinutes: 0, languages: [] }),
+    keepWarm: () => true,
+    clock: { setTimeout, clearTimeout },
+    server: (s) => createLlamaServer(s),
+    onLog: (level, msg) => {
+      if (level !== "info") console.error(msg);
+    },
+  });
+  return {
+    model: `${QWEN_ASR} (${accelerator})`,
+    dictate: async (samples) => {
+      const t = performance.now();
+      // `dictation.language` is `auto` by default: no language is forced.
+      const d = await best.decode(samples, {});
+      if (d.engine !== "best") throw new Error(`best answered as ${d.engine}`);
+      return performance.now() - t;
+    },
+    close: () => best.stop(),
+  };
+}
+
+/** A free TCP port on the loopback. */
+function freePort(): number {
+  const s = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const port = s.port;
+  s.stop(true);
+  return port;
+}
+
+/**
+ * Another akou on this machine's loopback (`akou serve`, its own default engine), reached as the
+ * desktop app reaches a remote: the audio streamed during the hold, the tail and the answer timed.
+ */
+async function remoteDictate(
+  modelsDir: string,
+  dataDir: string,
+): Promise<{ model: string; dictate: Dictate; close(): Promise<void> }> {
+  // A job on `akou serve` waits for every model of the machine's set, the speaker labels' too, and
+  // the server downloads nothing under CI: they are fetched here. The labels are not timed (the
+  // dictation asks for no speakers), so the small `embeddings` set stands in for Nemotron's 400 MB.
+  const diarizer = "embeddings";
+  const set = modelsFor({ "asr.diarizer": diarizer }, hostPlatform()).map((m) => m.id);
+  await downloadModels(modelsDir, set, { env: {} });
+  const home = join(dataDir, "dictation-remote-home");
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(join(home, ".config", "akou"), { recursive: true });
+  const port = freePort();
+  writeFileSync(
+    join(home, ".config", "akou", "config.json"),
+    JSON.stringify({ "api.bind": "127.0.0.1", "api.port": port, "asr.diarizer": diarizer }),
+  );
+  const env = { ...process.env, AKOU_HOME: home, AKOU_MODELS_DIR: modelsDir };
+  const cli = [process.execPath, join(ROOT, "src", "main", "cli", "cli.ts")];
+  const serve = Bun.spawn([...cli, "serve"], {
+    env,
+    stdin: "ignore",
+    stdout: Bun.file(join(home, "serve.log")),
+    stderr: Bun.file(join(home, "serve.err")),
+  });
+  const close = async () => {
+    serve.kill();
+    await serve.exited;
+  };
+  try {
+    const url = `http://127.0.0.1:${port}`;
+    const deadline = Date.now() + 120_000;
+    for (;;) {
+      if (
+        await fetch(`${url}/healthz`).then(
+          (r) => r.ok,
+          () => false,
+        )
+      )
+        break;
+      if (Date.now() > deadline) throw new Error("akou serve: no /healthz within 120 s");
+      await Bun.sleep(500);
+    }
+    const made = Bun.spawnSync(
+      [...cli, "keys", "create", "--name", "eval", "--scope", "jobs", "--json"],
+      { env },
+    );
+    if (made.exitCode !== 0) throw new Error(`akou keys create: ${made.stderr.toString()}`);
+    const key = (JSON.parse(made.stdout.toString()) as { key: string }).key;
+    const test = await testRemote({ url, key });
+    if (!test.ok) throw new Error(`the remote's Test failed: ${test.error}`);
+    return {
+      model: `akou serve on loopback (${test.engine} on ${test.accelerator})`,
+      dictate: async (samples) => {
+        const up = new RemoteUpload({ url, key, timeoutSeconds: 120 });
+        await hold(samples, (p) => up.push(p));
+        const t = performance.now();
+        const r = await up.finish(samples);
+        if (r.text.trim() === "") throw new Error("the remote heard nothing");
+        return performance.now() - t;
+      },
+      close,
+    };
+  } catch (err) {
+    await close();
+    throw err;
+  }
+}
+
+async function dictationStage(
+  o: { modelsDir: string; qwenModelsDir: string; dataDir: string; platform: string },
+  measures: Measure[],
+  notes: string[],
+): Promise<Partial<Record<LatencyEngine, EngineLatency>>> {
+  // Most FLEURS clips are recorded quietly (a peak of a few thousandths), where the streaming model
+  // hears nothing and answers at once, which says nothing about the time. Each clip is brought to
+  // the same peak, as a microphone's gain would.
+  const clips = (await fleurs("en", o.dataDir))
+    .map((u) => readWav(new Uint8Array(readFileSync(u.wav))))
+    .map((x) => atPeak(x, DICTATION_PEAK))
+    .filter((x): x is Float32Array => x !== null);
+  // Each length takes its utterances from the clips in order, so the three sets differ.
+  const byLength = new Map<number, Float32Array[]>();
+  let from = 0;
+  for (const s of DICTATION_LENGTHS) {
+    const need = Math.ceil((s * DICTATIONS_PER_LENGTH) / 5) + 2;
+    byLength.set(s, utterances(clips.slice(from, from + need), s, DICTATIONS_PER_LENGTH));
+    from += need;
+  }
+  type Make = () => ReturnType<typeof liveDictate>;
+  // The streaming model goes with Qwen, outside the nightly's cached recognizer folder.
+  const engines: [LatencyEngine, Make][] = [
+    ["live", () => liveDictate(o.qwenModelsDir, o.dataDir)],
+  ];
+  if (!o.platform.startsWith("win32"))
+    engines.push(["qwen", () => qwenDictate(o.qwenModelsDir, o.platform)]);
+  engines.push(["remote", () => remoteDictate(o.modelsDir, o.dataDir)]);
+  const out: Partial<Record<LatencyEngine, EngineLatency>> = {};
+  for (const [name, make] of engines) {
+    const e = await make();
+    try {
+      const times = await measure(e.dictate, byLength, (line) => console.error(`${name} ${line}`));
+      const row = engineLatency(e.model, times);
+      out[name] = row;
+      for (const [s, t] of Object.entries(row.seconds)) {
+        for (const p of ["p50", "p95"] as const) {
+          measures.push({
+            key: `dictation.release_to_text.${s}s.${name}.${p}`,
+            value: t[p],
+            unit: "ms",
+            better: "lower",
+            gate: "record",
+          });
+        }
+      }
+      notes.push(`Dictation ${name}: ${e.model}`);
+    } finally {
+      await e.close();
+    }
+  }
+  notes.push(
+    `Dictation release-to-text: ${DICTATIONS_PER_LENGTH} dictations each of ${DICTATION_LENGTHS.join(", ")} s of FLEURS en_us speech, held at real-time pace, after one warm-up`,
+  );
+  return out;
+}
+
 // --- the run -----------------------------------------------------------------------------------
 
 export function platformKey(): string {
@@ -607,10 +861,10 @@ async function main(argv: string[]): Promise<number> {
   };
   const modelsDir = flag("--models");
   const dataDir = flag("--data");
-  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen").split(","));
+  const only = new Set((flag("--only") ?? "fleurs,ami,replay,qwen,dictation").split(","));
   if (!modelsDir || !dataDir) {
     console.error(
-      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--qwen-models <dir>] [--only fleurs,ami,replay,qwen] [--out results.json]",
+      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--qwen-models <dir>] [--only fleurs,ami,replay,qwen,dictation] [--out results.json] [--latency-table <json> [--machine <what>]]",
     );
     return 64;
   }
@@ -741,6 +995,28 @@ async function main(argv: string[]): Promise<number> {
         notes,
         accelerator ?? "auto",
       );
+  }
+
+  if (only.has("dictation")) {
+    const engines = await dictationStage(
+      {
+        modelsDir,
+        qwenModelsDir: flag("--qwen-models") ?? modelsDir,
+        dataDir,
+        platform,
+      },
+      measures,
+      notes,
+    );
+    const tableFile = flag("--latency-table");
+    if (tableFile) {
+      const old = existsSync(tableFile)
+        ? (JSON.parse(readFileSync(tableFile, "utf8")) as LatencyTable)
+        : null;
+      const day = new Date().toISOString().slice(0, 10);
+      const entry = { measured: `${day}, ${flag("--machine") ?? platform}`, engines };
+      writeFileSync(tableFile, `${JSON.stringify(withPlatform(old, platform, entry), null, 2)}\n`);
+    }
   }
 
   notes.push(

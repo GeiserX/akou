@@ -41,6 +41,7 @@ import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions, NO_TARGET } from "./draft.ts";
 import { type DictationFinal, finalOf, forcesLanguage } from "./engines.ts";
+import { dictationLatency, type Latency, type LatencyChoice } from "./latency.ts";
 import { Learner } from "./learner.ts";
 import {
   type Bindings,
@@ -277,6 +278,11 @@ export interface DictationStatus {
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
   remote: DictationRemoteStatus | null;
+  /**
+   * How long each choice takes after the key is let go, for 10 s of speech (DC-T3): measured on
+   * this platform, or the estimate where it was not.
+   */
+  latency: Partial<Record<LatencyChoice, Latency>>;
   /** The engines a retry can use now (`fast`, `best`, `live`, `remote`): those this machine runs. */
   engines: string[];
 }
@@ -847,6 +853,7 @@ export class DictationService {
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
       remote: this.o.remote?.() ?? null,
+      latency: dictationLatency(),
       engines: this.o.draft?.engines?.() ?? [],
     };
   }
