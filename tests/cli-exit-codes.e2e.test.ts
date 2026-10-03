@@ -43,6 +43,7 @@ const TABLE: Readonly<Record<string, ((call?: string) => string[]) | string>> = 
   tail: (x) => ["tail", ...c(x)],
   context: (x) => ["context", "what was decided?", ...c(x)],
   ask: (x) => ["ask", "what was decided?", ...c(x)],
+  presets: "lists the ask presets",
   search: (x) => ["search", "deploy", ...c(x)],
   wait: (x) => ["wait", "--for", "final.done", "--timeout", "5s", ...c(x)],
   watch: (x) => ["watch", ...c(x)],
