@@ -68,7 +68,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 
 | Group | Commands | Today |
 |---|---|---|
-| Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--engines A,B] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
+| Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
 | Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
