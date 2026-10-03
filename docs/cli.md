@@ -728,14 +728,17 @@ example: akou admin set-password < password.txt
 ```text
 akou transcribe: Transcribe an audio file on this akou, or on a server (AKOU_URL), and print the text
 
-usage: akou transcribe FILE [--preset lite|fast|best|fusion|auto] [--language L] [--diarize]   [--json]
+usage: akou transcribe FILE [--preset lite|fast|best|fusion|auto] [--language L] [--diarize] [--keyword WORD…] [--keywords-file PATH] [--priority N] [--json]
 
-      --preset P    lite, fast, best, fusion, auto (default auto)
-      --language L  a BCP-47 tag such as en or es-ES, or auto
-      --diarize     label the speakers
-      --json        print the answer as JSON, errors included
-  -h, --help        show this help
-      --restart     if akou takes the connection and never answers, restart it first, even for a command that only reads
+      --preset P            lite, fast, best, fusion, auto (default auto)
+      --language L          a BCP-47 tag such as en or es-ES, or auto
+      --diarize             label the speakers
+      --keyword WORD        a name or term the recognizer should expect; repeat for more (at most 24 in all)
+      --keywords-file PATH  more keywords, one per line
+      --priority N          -10 to 10 (default 0); a higher job runs before every lower one queued
+      --json                print the answer as JSON, errors included
+  -h, --help                show this help
+      --restart             if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 The desktop app on this machine transcribes the file itself, with no setting to turn on.
 Long audio is cut at its pauses, so a long recording works, up to server.max_audio_minutes
@@ -748,6 +751,7 @@ Exit codes: 0 done (no speech prints nothing), 64 usage, 69 no akou to reach, 70
 example: akou transcribe voice-note.ogg
 example: akou transcribe call.m4a --preset best --language es --diarize
 example: AKOU_URL=https://akou.example AKOU_API_KEY_FILE=~/.config/akou-key akou transcribe note.ogg
+example: akou transcribe call.m4a --keywords-file terms.txt --priority 5
 ```
 
 ## dictate
