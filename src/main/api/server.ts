@@ -213,7 +213,10 @@ export interface ApiApp {
   recognizer?(): "loading" | "ready" | "unavailable";
   /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
-  /** The file jobs (docs/ux/SERVER.md section 5), in both modes; null while akou starts. */
+  /**
+   * The file jobs (docs/ux/SERVER.md section 5), in both modes: in app mode the one token owns
+   * every job, as the key id `app`.
+   */
   jobs?(): import("../server/jobs.ts").JobService | null;
   /** Dictation (docs/ux/DICTATION.md); app mode only. */
   dictation?(): import("../dictation/service.ts").DictationService | null;
@@ -260,10 +263,10 @@ export interface ApiServer {
 }
 
 /**
- * The route table. With a mode, the routes that akou serves: the keys and the OpenAI door exist in
- * server mode only, so the desktop app answers 404 for them; the job routes are in both, so the
- * desktop app takes a file job with its own token (SV-J1). With none, every route, for the OpenAPI
- * file (`scripts/openapi.ts`), which marks each with its modes.
+ * The route table. With a mode, the routes that akou serves: the job routes in both modes, so the
+ * desktop app takes a file job with its one token (SV-J1, `akou transcribe`); the key routes and
+ * the OpenAI-compatible ones in server mode only, so the desktop app answers 404 for them. With
+ * none, every route, for the OpenAPI file (`scripts/openapi.ts`), which marks each with its modes.
  */
 export function buildRouter(mode?: Mode): Router<ApiApp> {
   const r = new Router<ApiApp>();
