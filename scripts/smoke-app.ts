@@ -208,32 +208,57 @@ function findResources(dir: string): string | null {
 }
 
 /** The inner app, unpacked into `work` the way the wrapper does on first launch. */
+/** Where the parts of an unpacked app are. */
+export interface UnpackedApp {
+  /** The app's own `Resources` folder. */
+  resources: string;
+  /** The folder above it: `Contents` in the macOS bundle, the app folder elsewhere. */
+  app: string;
+  /** The bundled main process's folder, where everything it loads by path sits. */
+  main: string;
+  /** The Bun the app runs on. */
+  bun: string;
+}
+
+/**
+ * The built app's packed inner app, unpacked into `work` the way the wrapper does on first launch;
+ * or what went wrong. Also used by the gate runners that run code inside the app (G2).
+ */
+export function unpackApp(work: string): UnpackedApp | string {
+  const res = MAC ? join(WRAPPER_APP, "Contents", "Resources") : join(APP_DIR, "Resources");
+  const packed = existsSync(res) ? readdirSync(res).filter((f) => f.endsWith(".tar.zst")) : [];
+  if (packed.length !== 1) return `expected one packed app in ${res}, found ${packed.join(", ")}`;
+  const tarFile = join(work, "app.tar");
+  writeFileSync(tarFile, Bun.zstdDecompressSync(readFileSync(join(res, packed[0] as string))));
+  const untar = spawnSync(TAR, ["-x", "-f", tarFile, "-C", work]);
+  rmSync(tarFile);
+  if (untar.status !== 0) return `the packed app does not unpack: ${untar.stderr ?? untar.error}`;
+  // The app's own `Resources` folder holds `app/bun/index.js`, the bundled main process.
+  const resources = findResources(work);
+  if (resources === null) return "the packed app has no Resources/app/bun/index.js";
+  const app = join(resources, "..");
+  return {
+    resources,
+    app,
+    main: join(resources, "app", "bun"),
+    bun: join(app, MAC ? "MacOS" : "bin", `bun${EXE}`),
+  };
+}
+
 async function checkInner(
   work: string,
   version: string,
   allowMissingHelper: boolean,
 ): Promise<void> {
-  const res = MAC ? join(WRAPPER_APP, "Contents", "Resources") : join(APP_DIR, "Resources");
-  const packed = readdirSync(res).filter((f) => f.endsWith(".tar.zst"));
-  if (!check(packed.length === 1, "the wrapper carries one packed app", packed.join(", "))) return;
-  const tarFile = join(work, "app.tar");
-  writeFileSync(tarFile, Bun.zstdDecompressSync(readFileSync(join(res, packed[0] as string))));
-  const untar = spawnSync(TAR, ["-x", "-f", tarFile, "-C", work]);
-  rmSync(tarFile);
-  if (!check(untar.status === 0, "the packed app unpacks", String(untar.stderr ?? untar.error))) {
-    return;
-  }
-  // The app's own `Resources` folder holds `app/bun/index.js`, the bundled main process.
-  const resources = findResources(work);
-  if (!check(resources !== null, "the packed app has Resources/app/bun/index.js")) return;
-  // The folder above Resources: `Contents` in the macOS bundle, the app folder elsewhere.
-  const app = join(resources as string, "..");
+  const unpacked = unpackApp(work);
+  if (!check(typeof unpacked !== "string", "the packed app unpacks", String(unpacked))) return;
+  const { resources, app, main, bun } = unpacked as UnpackedApp;
   if (MAC) {
     checkPlist(join(app, ".."), "app", version);
     checkSignature(join(app, ".."), "app");
   }
 
-  const build = JSON.parse(readFileSync(join(resources as string, "build.json"), "utf8"));
+  const build = JSON.parse(readFileSync(join(resources, "build.json"), "utf8"));
   check(
     build.electrobunVersion === PINS.electrobun,
     `ElectroBun ${PINS.electrobun}`,
@@ -245,11 +270,9 @@ async function checkInner(
     build.runtimeVersions?.bun,
   );
   check(build.mainProcess === "bun", "the main process is Bun");
-  const ver = JSON.parse(readFileSync(join(resources as string, "version.json"), "utf8"));
+  const ver = JSON.parse(readFileSync(join(resources, "version.json"), "utf8"));
   check(ver.version === version && ver.identifier === BUNDLE_ID, `version.json says ${version}`);
 
-  const main = join(resources as string, "app", "bun");
-  const bun = join(app, MAC ? "MacOS" : "bin", `bun${EXE}`);
   if (!check(existsSync(bun), "the bundled Bun is in the app", bun)) return;
   const need = [
     "NOTICE",
