@@ -443,6 +443,37 @@ export function resolveTimeCitation(
   return null;
 }
 
+/**
+ * Why no assistant answered, as the Ask card says it: a provider names its settings by key
+ * (`provider.apiKey is not set`), which is right in the CLI and over MCP but not in the window
+ * (PRINCIPLES 13). A missing or signed-out assistant reads as one plain line that points at
+ * Settings; any other reason is already plain and stays as it was said.
+ */
+export function askUnavailable(reason: string | undefined, kind: string | undefined): string {
+  const said = reason ? `${reason}.` : "";
+  if (kind === "missing") {
+    const none = /^no harness found \(([^)]+)\)/.exec(reason ?? "");
+    if (none) {
+      // The reason names the harnesses by id (`claude-code or codex`).
+      const names = (none[1] as string)
+        .replace("claude-code", "Claude Code")
+        .replace("codex", "Codex");
+      return `${names} was not found. Install one, or choose another assistant in Settings.`;
+    }
+    if (/\bprovider\.\w/.test(reason ?? ""))
+      return "The assistant is not set up yet. Finish it in Settings, or choose another assistant.";
+  }
+  if (kind === "auth") {
+    const out = /^(.+?) is not logged in/.exec(reason ?? "");
+    if (out)
+      return `${out[1]} is not signed in. Sign in to it, or choose another assistant in Settings.`;
+    if (/\bprovider\.apiKey\b/.test(reason ?? ""))
+      return "The assistant has no API key. Add one in Settings, or choose another assistant.";
+    return "The assistant did not accept its key. Check it in Settings, or choose another assistant.";
+  }
+  return said;
+}
+
 // ---------------------------------------------------------------------------
 // The ask box presets (DESIGN 7)
 

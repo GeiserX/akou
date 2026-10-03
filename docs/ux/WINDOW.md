@@ -38,7 +38,7 @@ Columns:
 │ ▮ Calls      │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       ├─────────────────────────────┤
 │ [⌕ Search  ] ├ banner, when something needs attention ──┤ What did Ben say?           │
 │ ▾ PRODUCT  2 ├ call header ─────────────────────────────┤ ┌ ✦ Answer ───────────────┐ │
-│   Weekly…  ● │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
+│   Weekly…  ● │ Weekly sync       [review] Restart Share │ │ Move the build [15:41]    │ │
 │   1:1 Ana    │ Wed, 15:36 · 27 min · work               │ └─────────────────────────┘ │
 │ ▸ HIRING   1 │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
 │              ├──────────────────────────────────────────┤ Notes 3                     │
@@ -60,7 +60,7 @@ Columns:
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
-| Side column | on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count; at the foot the note input with its markers as hints | the fold and the ask stream |
+| Side column | 340 px wide; on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count; at the foot the note input with its markers as hints | the fold and the ask stream |
 | Player bar | under the transcript, only for a saved call with a recorded part (never with no call or during a live call): play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | the call's words to review, share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
@@ -215,14 +215,16 @@ The side column has three parts, top to bottom. Ask is always on top, so asking 
  Notes 4
  15:38  •  budget review first
  15:41  ☐  Ben: move build box
+            Action
  15:44  ?  which region
+            Open question
  15:47     Ben owns the migration  agent claude-code   (agent colour)
  ──────────────────────────────────────────────────────
  [ Type a note, Enter to add it                      ]
  - bullet   [] action   ? question   # section
 ```
 
-A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, and the note keeps it: an edit starts from the whole line. The markers are listed as small hints under the input, never inside its placeholder.
+A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, and the note keeps it: an edit starts from the whole line. An action reads "Action" under its text and an open question "Open question". The time gutter is hours and minutes. The markers are listed as small hints under the input, never inside its placeholder.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -239,12 +241,12 @@ A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, a
  ─────────────────────────────────────────────────────
  What did Ben say about the budget?
  ┌ ✦ Answer                        answered by claude-code ┐
- │ Ben asked to move the build to the new box [15:41 Ben]  │
+ │ Ben asked to move the build to the new box [15:41]      │
  └──────────────────────────────────────────────────────────┘
    15:41 Ben "we should move the build…"          (the excerpts that matched)
 ```
 
-The column shows one question and its answer: the last one asked here, or, until one is, the call's last answered question from the log, marked with who asked it when an agent did. The answer card is in the agent's colour; its citations are chips that scroll to the line and play it. Enter asks; the presets are a menu on the input (arrow keys move, Escape closes), never a row of buttons.
+The column shows one question and its answer: the last one asked here, or, until one is, the call's last answered question from the log, marked with who asked it when an agent did. The answer card is in the agent's colour; its citations are chips that show the time alone (the speaker is in the chip's label) and scroll to the line and play it. The status beside "Answer" stays on one line and ends in an ellipsis when it is long. Enter asks; the presets are a menu on the input (arrow keys move, Escape closes), never a row of buttons.
 
 With no assistant set up, the same box is a search of the call. It reads "Search this call" behind a plain magnifier, with no presets, and what comes back is only the lines that contain the words, under the muted label "Excerpts from the call", with each excerpt's time and speaker as a chip, or "No line has these words." when none does. There is no answer card and no reason: nothing failed. A search writes nothing to the call, so it never shows up as a question in the context an agent reads later. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" stays under the excerpts. Until akou says whether an assistant is set up, the box shows neither Ask's words nor Search's. As soon as an assistant is set up, the box is Ask again. What shipped: [the search box](design-explorations/built/ow-2-search-dark.png), [its excerpts](design-explorations/built/ow-2-search-excerpts-dark.png), [a search that matches nothing](design-explorations/built/ow-2-search-miss-dark.png) and [Ask with an assistant](design-explorations/built/ow-2-ask-dark.png).
 
@@ -253,7 +255,7 @@ With no assistant set up, the same box is a search of the call. It reads "Search
  ─────────────────────────────────────────────────────
  the build
  Excerpts from the call
-   [15:41 Ben]  15:41:07 Ben: we should move the build to the new box
+   [15:41]  15:41:07 Ben: we should move the build to the new box
  [ Copy context for my agent ]
 ```
 
@@ -497,7 +499,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the call header if it runs out |
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
 | Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
-| Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
+| Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated in plain words (a missing or signed-out assistant is one line that points at Settings, never a setting's key), excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |
