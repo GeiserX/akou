@@ -2141,7 +2141,9 @@ export class LiveAsr {
       this.current !== null ||
       this.dstreams.size > 0 ||
       this.decodes.size > 0 ||
-      this.speeches.size > 0;
+      this.speeches.size > 0 ||
+      // A warm-up still loading: a release now would undo it.
+      this.warms.size > 0;
     const left = busy ? idleMs : idleMs - (this.clock.now() - this.lastUse);
     if (busy || left > 0) {
       this.idleTimer = this.clock.setTimeout(() => this.releaseIdle(), Math.max(1000, left));
