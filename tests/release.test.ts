@@ -18,7 +18,16 @@ import config, {
 import pkg from "../package.json" with { type: "json" };
 import { hutchEnv, PINS, pairedHutch } from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
-import { drift, main, readAll, stamp, tagVersion } from "../scripts/stamp-version.ts";
+import { verdict } from "../scripts/ci/tested-commit.ts";
+import {
+  changelogSection,
+  drift,
+  main,
+  readAll,
+  releaseNotes,
+  stamp,
+  tagVersion,
+} from "../scripts/stamp-version.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { siblingModule } from "../src/main/asr/sibling.ts";
 import { HELPER_NAME } from "../src/main/capture/helper.ts";
@@ -43,6 +52,11 @@ function repoCopy(): { dir: string; cleanup(): void } {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
   }
+  // The tests below also release a 0.1.0, which needs its changelog section (CI-20).
+  writeFileSync(
+    join(t.dir, "CHANGELOG.md"),
+    `${readFileSync(join(ROOT, "CHANGELOG.md"), "utf8")}\n## 0.1.0\n\n- a change\n`,
+  );
   mkdirSync(join(t.dir, "native", "akou-capture"), { recursive: true });
   writeFileSync(
     join(t.dir, "native", "akou-capture", "Cargo.toml"),
@@ -387,40 +401,143 @@ describe("the unsigned first open", () => {
   });
 });
 
-describe("the release workflow's version job", () => {
-  test("the version job gives the whole check suite as long as ci.yml's check job does", () => {
-    const release = Bun.YAML.parse(
-      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
-    ) as { jobs: { version: { "timeout-minutes"?: number; steps: { run?: string }[] } } };
-    const ci = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
-    // ci.yml's check job: `timeout-minutes: ${{ inputs.repeat > 1 && 180 || 30 }}`, 30 on one run.
-    const checkJob = ci.slice(ci.indexOf("\n  check:"));
-    const ciMinutes = Number(/timeout-minutes: \$\{\{[^}]*\|\| (\d+) \}\}/.exec(checkJob)?.[1]);
-    expect(ciMinutes).toBeGreaterThan(0);
-    expect(release.jobs.version.steps.some((s) => s.run?.trim() === "bun run check")).toBe(true);
-    expect(release.jobs.version["timeout-minutes"] ?? 0).toBeGreaterThanOrEqual(ciMinutes);
+/** The release workflow, parsed. */
+function releaseWorkflow(): {
+  jobs: Record<
+    string,
+    {
+      permissions?: Record<string, string>;
+      steps?: {
+        name?: string;
+        uses?: string;
+        if?: string;
+        run?: string;
+        with?: Record<string, string>;
+      }[];
+    }
+  >;
+} {
+  return Bun.YAML.parse(
+    readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+  ) as never;
+}
+
+describe("[CI-19] a release publishes only a commit whose ci-ok is green", () => {
+  const sha = "0".repeat(40);
+  const run = (status: string, conclusion: string | null) => ({
+    id: 1,
+    status,
+    conclusion,
+    html_url: "https://example.invalid/run/1",
+  });
+  const job = (conclusion: string | null) => ({ name: "ci-ok", status: "completed", conclusion });
+
+  test("green only when the newest CI run finished and its ci-ok passed", () => {
+    expect(verdict(sha, run("completed", "success"), job("success"))).toEqual({ state: "green" });
+    // Still running, including a rerun of the failed legs: wait for it.
+    expect(verdict(sha, run("in_progress", null), null).state).toBe("wait");
+    expect(verdict(sha, run("queued", null), job("failure")).state).toBe("wait");
   });
 
-  test("the version job installs ffmpeg as ci.yml's Linux check does, since the skip floor counts on it", () => {
-    type Steps = { steps: { run?: string }[] };
-    const release = Bun.YAML.parse(
-      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
-    ) as { jobs: { version: Steps } };
-    const ci = Bun.YAML.parse(
-      readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8"),
-    ) as {
-      jobs: { check: Steps };
-    };
-    const install = (job: Steps) =>
-      job.steps.findIndex((s) => /apt-get install[^\n]*\bffmpeg\b/.test(s.run ?? ""));
-    const runs = (job: Steps) => job.steps.findIndex((s) => s.run?.trim() === "bun run check");
-    const ciStep = ci.jobs.check.steps[install(ci.jobs.check)];
-    // Positive control: ci.yml's check installs it before the suite, so the pattern finds a real step.
-    expect(install(ci.jobs.check)).toBeGreaterThanOrEqual(0);
-    expect(install(ci.jobs.check)).toBeLessThan(runs(ci.jobs.check));
-    const v = release.jobs.version;
-    expect(install(v)).toBeGreaterThanOrEqual(0);
-    expect(install(v)).toBeLessThan(runs(v));
-    expect(v.steps[install(v)]?.run?.trim()).toBe(ciStep?.run?.trim());
+  test("positive control: a red, cancelled, missing or never-run ci-ok stops the release", () => {
+    const red = verdict(sha, run("completed", "failure"), job("failure"));
+    expect(red).toMatchObject({ state: "stop" });
+    expect(red.state !== "green" && red.why).toContain("ci-ok is failure");
+    expect(verdict(sha, run("completed", "cancelled"), job("cancelled")).state).toBe("stop");
+    expect(verdict(sha, run("completed", "success"), null).state).toBe("stop");
+    const never = verdict(sha, null, null);
+    expect(never.state !== "green" && never.why).toContain("never ran");
+  });
+
+  test("the tag looks up ci-ok instead of running check again", () => {
+    const version = releaseWorkflow().jobs.version;
+    const runs = (version?.steps ?? []).map((s) => s.run ?? "");
+    expect(runs.some((r) => r.includes("bun run check"))).toBe(false);
+    const gate = version?.steps?.find((s) => s.run?.includes("scripts/ci/tested-commit.ts"));
+    expect(gate?.if).toBe("github.ref_type == 'tag'");
+    expect(gate?.run).toContain('"$SHA"');
+    expect(version?.permissions).toEqual({ contents: "read", actions: "read" });
+  });
+});
+
+describe("[CI-20] every release has a changelog section", () => {
+  const md =
+    "# Changelog\n\n## 0.2.0 — two\n\nSee [the docs](docs/a.md), [x](https://x.test/) and [y](#y).\n\n## 0.1.0\n\n- one\n";
+
+  test("the section runs from its heading to the next version's", () => {
+    expect(changelogSection(md, "0.2.0")).toBe(
+      "## 0.2.0 — two\n\nSee [the docs](docs/a.md), [x](https://x.test/) and [y](#y).",
+    );
+    expect(changelogSection(md, "0.1.0")).toBe("## 0.1.0\n\n- one");
+    // A prefix is not a match: 0.1 is not 0.1.0, and 0.1.0 is not 0.1.01.
+    expect(changelogSection(md, "0.1")).toBeNull();
+    expect(changelogSection(md.replace("## 0.1.0", "## 0.1.01"), "0.1.0")).toBeNull();
+  });
+
+  test("the notes point relative links at the tagged tree and leave the rest", () => {
+    expect(releaseNotes(md, "0.2.0", "o/r")).toBe(
+      "## 0.2.0 — two\n\nSee [the docs](https://github.com/o/r/blob/v0.2.0/docs/a.md), [x](https://x.test/) and [y](#y).",
+    );
+    expect(releaseNotes(md, "0.3.0", "o/r")).toBeNull();
+  });
+
+  test("this version has its section", () => {
+    expect(
+      changelogSection(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), pkg.version),
+    ).not.toBeNull();
+  });
+
+  test("positive control: --check fails without the version's section, and --notes prints it", () => {
+    const t = repoCopy();
+    try {
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--notes", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--set", "0.1.1", "--root", t.dir]))).toBe(0);
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(1);
+      expect(quiet(() => main(["--notes", "--root", t.dir]))).toBe(1);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("the release notes start with the section the version job wrote", () => {
+    const wf = releaseWorkflow();
+    const write = wf.jobs.version?.steps?.find((s) => s.run?.includes("--notes"));
+    expect(write?.run).toContain("> notes/changelog.md");
+    const publish = wf.jobs.release?.steps?.find((s) => s.run?.includes("gh release create"));
+    const body = publish?.run ?? "";
+    expect(body).toMatch(/\{ cat \.\.\/notes\/changelog\.md; echo; \} > notes\.md\n/);
+    expect(body.indexOf("> notes.md")).toBeLessThan(body.indexOf(">> notes.md"));
+    expect(body).toContain("--generate-notes");
+  });
+});
+
+describe("[CI-21] every release asset carries a build attestation", () => {
+  test("the release job attests every file SHA256SUMS lists and verifies each before publishing", () => {
+    const wf = releaseWorkflow();
+    const steps = wf.jobs.release?.steps ?? [];
+    const attest = steps.findIndex((s) => s.uses?.startsWith("actions/attest-build-provenance@"));
+    const verify = steps.findIndex((s) => s.run?.includes("gh attestation verify"));
+    const publish = steps.findIndex((s) => s.run?.includes("gh release create"));
+    expect(steps[attest]?.uses).toMatch(/@[0-9a-f]{40}$/);
+    expect(steps[attest]?.with).toEqual({ "subject-checksums": "dist/SHA256SUMS" });
+    expect(steps[verify]?.run).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(attest).toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(attest);
+    expect(publish).toBeGreaterThan(verify);
+  });
+
+  test("only the release job may mint an identity token or write attestations", () => {
+    const wf = releaseWorkflow();
+    expect(wf.jobs.release?.permissions).toEqual({
+      contents: "write",
+      "id-token": "write",
+      attestations: "write",
+    });
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      if (name === "release") continue;
+      expect(job.permissions?.["id-token"]).toBeUndefined();
+      expect(job.permissions?.attestations).toBeUndefined();
+    }
   });
 });
