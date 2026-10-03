@@ -31,6 +31,7 @@ export function commandHelp(cmd: Command): string {
     "",
     ...rows.map(([label, desc]) => `  ${label.padEnd(w)}  ${desc}`),
     "",
+    ...(cmd.notes?.length ? [...cmd.notes, ""] : []),
     ...cmd.examples.map((e) => `example: ${e}`),
     ...(cmd.unbuilt ? ["", `not built yet: ${cmd.unbuilt}`] : []),
   ].join("\n");
