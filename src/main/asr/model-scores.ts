@@ -98,6 +98,33 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
       source: `${ARCH}#4-final-pass-default-engines-and-what-n-engines-buy`,
     },
   },
+  // transcribe-cpp's engines. The benchmark scored them pooled over eight sets, not as the FLEURS
+  // English and Spanish mean every other recognizer's bar uses, so their accuracy bar stays empty
+  // rather than compare two different things. Their speed is the benchmark's, on the same machine.
+  "whisper-large-v3": {
+    accuracy: {
+      notMeasured:
+        "the benchmark scored the Q8_0 GGUF pooled over eight sets (11.19 % WER) and FLEURS Spanish alone (2.73 %), not FLEURS English and Spanish together as the other recognizers",
+    },
+    speed: {
+      metric: "rtfx",
+      value: perHour(4.8),
+      what: `4.8 min of compute per audio hour over eight public sets, the Q8_0 GGUF through transcribe.cpp, on the ${REFERENCE_MACHINE}`,
+      source: `${ARCH}#4-final-pass-default-engines-and-what-n-engines-buy`,
+    },
+  },
+  "canary-1b-v2": {
+    accuracy: {
+      notMeasured:
+        "the benchmark scored the Q8_0 GGUF pooled over eight sets (11.52 % WER), not FLEURS English and Spanish together as the other recognizers",
+    },
+    speed: {
+      metric: "rtfx",
+      value: perHour(1.5),
+      what: `1.5 min of compute per audio hour over eight public sets, the Q8_0 GGUF through transcribe.cpp, on the ${REFERENCE_MACHINE}`,
+      source: `${ARCH}#4-final-pass-default-engines-and-what-n-engines-buy`,
+    },
+  },
   "nemotron-en-560": {
     accuracy: {
       metric: "wer",
