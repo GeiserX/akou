@@ -30,7 +30,7 @@ if (!cliPath || !home || !Number.isFinite(seconds)) {
   throw new Error("AKOU_HOME, --cli and --seconds are required");
 }
 const configDir = join(home, ".config", "akou");
-const cliCommand = cliPath.endsWith(".ts") ? ["bun", cliPath] : [cliPath];
+const cliCommand = cliPath.endsWith(".ts") ? [process.execPath, cliPath] : [cliPath];
 const memory = opt("--memory");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
