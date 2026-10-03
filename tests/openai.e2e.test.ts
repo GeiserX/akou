@@ -207,6 +207,23 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
     expect(check(OK["application/json"].schema, { ...b, segments: [seg] })).not.toEqual([]);
   });
 
+  test("[SV-C1] verbose_json with no language anywhere says und, never unknown; words stay empty", async () => {
+    // The fake engine, as Parakeet, names no language: only the request's hint could.
+    const r = await post([
+      ["response_format", "verbose_json"],
+      ["timestamp_granularities[]", "word"],
+    ]);
+    const b = JSON.parse(r.text);
+    expect([b.language, b.words]).toEqual(["und", []]);
+    expect(check(OK["application/json"].schema, b)).toEqual([]);
+    // Positive control: a hint is the language when the engine names none.
+    const es = await post([
+      ["language", "es"],
+      ["response_format", "verbose_json"],
+    ]);
+    expect(JSON.parse(es.text).language).toBe("es");
+  });
+
   test("text, srt and vtt answer plain text", async () => {
     const text = await post([["response_format", "text"]]);
     expect(text.type).toContain("text/plain");

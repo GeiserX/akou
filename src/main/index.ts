@@ -145,6 +145,7 @@ import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
+import { type CaptureDevices, queryDevices } from "./capture/devices.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
 import {
@@ -713,7 +714,13 @@ export class AkouApp implements ApiApp {
     this.headless = o.headless ?? cfg.settings["app.headless"];
     this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
     this.keyStore =
-      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+      this.runMode === "server"
+        ? new KeyStore(
+            this.configDir,
+            () => Date.now(),
+            (line) => this.log("info", line),
+          )
+        : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.appLog = o.supervise ? new AppLog(join(this.configDir, APP_LOG)) : null;
@@ -1995,6 +2002,11 @@ export class AkouApp implements ApiApp {
     );
   }
 
+  /** `GET /devices`, `GET /apps`: the device query of the helper `capture.helper` names (PG-A8). */
+  devices(): Promise<CaptureDevices> {
+    return queryDevices(locateHelper(this.cfg.settings["capture.helper"]).command);
+  }
+
   /** What the API key is saved in: the Keychain, or null for the config file. */
   secretStore(): "keychain" | null {
     // A key the store refused at start is still in the file, and the page must not say otherwise.
@@ -3056,6 +3068,7 @@ export class AkouApp implements ApiApp {
         "dictate",
         "--probe",
       ],
+      helper: () => locateHelper(this.cfg.settings["capture.helper"]).command,
       cue: (moment) => cues.cue(moment),
       mic: () => ({
         device: this.cfg.settings["dictation.mic"],

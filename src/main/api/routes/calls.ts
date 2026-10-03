@@ -150,6 +150,20 @@ export function callRoutes(r: Router<ApiApp>): void {
       },
       ok: 201,
       alsoOk: [200],
+      reply: {
+        type: "object",
+        properties: {
+          call: { type: "string" },
+          folder: { type: "string" },
+          part: { type: "integer" },
+          url: {
+            type: ["string", "null"],
+            description:
+              "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call.",
+          },
+        },
+        required: ["call", "folder", "part", "url"],
+      },
       errors: {
         400: ["bad_term", "bad_workspace"],
         403: ["permission"],
@@ -226,7 +240,7 @@ export function callRoutes(r: Router<ApiApp>): void {
           ...brief,
           part: res.part,
           folder: res.folder,
-          url: `akou://call/${id}`,
+          url: null,
         });
       }
       return json(201, {
@@ -234,7 +248,9 @@ export function callRoutes(r: Router<ApiApp>): void {
         folder: res.folder,
         part: res.part,
         firstAudioMs: res.startMs,
-        url: `akou://call/${res.call}`,
+        // Always null (PG-U1): nothing registers `akou://`, and `/v1` never drops a field. A
+        // client that wants the window on this call asks `POST /window {call}`.
+        url: null,
       });
     },
   );

@@ -545,8 +545,15 @@ describe("SV-K1: GET /v1/server", () => {
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
       // `fast` (Parakeet), `best` (Qwen on llama-server) and `fusion` (both and Whisper) are built;
       // each is available once the default models are there; best and fusion fetch theirs on demand.
+      // `auto` runs fast here, so it is available too, and says so.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best", "fusion"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual([
+        "fast",
+        "best",
+        "fusion",
+        "auto",
+      ]);
+      expect(b.presets.at(-1)).toMatchObject({ name: "auto", resolves_to: "fast" });
       expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
         "parakeet-tdt-0.6b-v3-fp32",
         "qwen3-asr-1.7b",

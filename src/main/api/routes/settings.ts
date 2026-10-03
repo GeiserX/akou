@@ -7,6 +7,7 @@
  * to a call (default `live`), `DELETE /share` stops it.
  */
 
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   isSettingKey,
@@ -144,6 +145,38 @@ export function settingsRoutes(r: Router<ApiApp>): void {
           sections: t.sections.map((s) => s.heading),
           bundled: t.bundled,
         })),
+      });
+    },
+  );
+
+  r.add(
+    "GET",
+    "/templates/:name",
+    {
+      id: "templates.get",
+      doc: "One note template as the enhanced notes would use it: the user's own file when one of that name replaces the shipped one. `text` is the whole file, frontmatter included; `path` is where it was read from.",
+      access: "admin",
+      modes: ["app"],
+      params: { name: "The template's name (`standup`), as `GET /templates` lists it." },
+      ok: 200,
+      errors: { 404: ["not_found"] },
+    },
+    (c) => {
+      const t = c.app.templates().find((x) => x.name === c.params.name);
+      if (!t) throw new HttpError(404, "not_found", `no template "${c.params.name}"`);
+      let text: string;
+      try {
+        text = readFileSync(t.source, "utf8");
+      } catch {
+        throw new HttpError(404, "not_found", `template "${t.name}" is gone from ${t.source}`);
+      }
+      return json(200, {
+        name: t.name,
+        match: t.match,
+        sections: t.sections.map((s) => s.heading),
+        bundled: t.bundled,
+        path: t.source,
+        text,
       });
     },
   );

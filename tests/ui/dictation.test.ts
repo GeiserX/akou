@@ -3521,7 +3521,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
         [id, "example.com", true],
       ]);
 
-      const audio = d.audio.path(id);
+      const audio = (await d.audio.file(id))?.path as string;
       expect(existsSync(audio)).toBe(true);
       await page.click(`${row} .hist-more`);
       await page.click(`${row} button.delete`);
@@ -3958,10 +3958,27 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
   );
 
   test(
+    "[PG-A8] with no fixture the picker reads the app's own GET /devices, the capture helper's inputs",
+    async () => {
+      const { page } = await openPage({});
+      expect(await page.$eval(mic, (e) => e.tagName)).toBe("SELECT");
+      expect(await options(page)).toEqual([
+        ["", "System default, Fake Microphone"],
+        ["fake-mic-1", "Fake Microphone"],
+        ["fake-usb-2", "Fake USB Microphone"],
+      ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "with no list the field stays a text box with the reason: an app without the route, a refusal",
     async () => {
-      // Positive control for the picker: this app has no `GET /devices` yet, and answers 404.
-      const bare = await openPage({ settings: { "dictation.mic": "mic-usb" } });
+      // Positive control for the picker: an akou without `GET /devices` answers 404.
+      const bare = await openPage({
+        devices: { status: 404, message: "no route /v1/devices" },
+        settings: { "dictation.mic": "mic-usb" },
+      });
       expect(await bare.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
       expect(await bare.page.inputValue(mic)).toBe("mic-usb");
       expect(await text(bare.page, "#dictation-mic-note")).toBe(

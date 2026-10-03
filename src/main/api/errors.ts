@@ -11,6 +11,7 @@
 export const ERROR_CODES = {
   already_final: "The final pass already ran; send `force` to run it again.",
   already_recording: "A call is already recording; `already_recording` names it.",
+  apps_unavailable: "One app cannot be captured on this system; the message says why.",
   bad_bind: "The share's `bind` is not `tailnet`, `lan` or an IPv4 address.",
   bad_entry: "The vocabulary entry is not valid.",
   bad_expires: "The share's `expires` is not one of the accepted values.",
@@ -35,6 +36,7 @@ export const ERROR_CODES = {
   capture_failed: "The capture helper could not start; `stage` says where.",
   cursor_stale: "The cursor is older than what the call still holds; read again from the start.",
   decode_failed: "The audio could not be decoded.",
+  devices_unavailable: "The capture helper cannot list the devices; `helper` says why.",
   diarize_unavailable:
     "The job asked for speaker labels and no `akou-diarize` helper is here; the message names the settings that fix it.",
   dictation_busy: "A dictation is already running.",

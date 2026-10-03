@@ -108,7 +108,7 @@ describe("starting a call", () => {
       const ms = performance.now() - t0;
       steps.push({ step: "started", ok: r.status === 201, status: r.status });
       expect(r.status).toBe(201);
-      expect(r.body).toMatchObject({ part: 1, url: `akou://call/${r.body.call}` });
+      expect(r.body).toMatchObject({ part: 1, url: null });
       expect(existsSync(join(r.body.folder, "events.jsonl"))).toBe(true);
       // "Fast", from the steps: the app's first start arms the cold budget (10 s here) at the
       // spawn and answers on the helper's `capturing`, the budget never firing. The seconds
@@ -159,7 +159,7 @@ describe("starting a call", () => {
       state: "recording",
       part: 1,
       folder: detail.folder,
-      url: `akou://call/${id}`,
+      url: null,
     });
     expect((await rig.api("GET", "/calls")).body.calls.length).toBe(before);
     // An attach started nothing and refused nothing: no "started" or "refused" banner for it.

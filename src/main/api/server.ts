@@ -38,6 +38,7 @@ import {
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
+import { deviceRoutes } from "./routes/devices.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
 import { fixRoutes } from "./routes/fix.ts";
 import { followRoutes } from "./routes/follow.ts";
@@ -141,6 +142,8 @@ export interface ApiApp {
   config(): LoadedConfig;
   /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
   secretStore?(): "keychain" | null;
+  /** The capture helper's device query (`GET /devices`, `GET /apps`). Throws `DevicesRefused`. */
+  devices?(): Promise<import("../capture/devices.ts").CaptureDevices>;
   /** Writes `config.json` and applies it; the running parts pick up what they can. */
   /**
    * Writes the config file. A key the API cannot write keeps its value on disk, except those in
@@ -270,6 +273,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   settingsRoutes(r);
   modelRoutes(r);
   callRoutes(r);
+  deviceRoutes(r);
   workspaceRoutes(r);
   followRoutes(r);
   queryRoutes(r);

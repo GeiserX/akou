@@ -310,7 +310,7 @@ We measured each on the 20 FLEURS clips per language the sections above use. Eac
 |---|---|---|---|
 | English | live, English only (`nemotron-en-560`) | 7.34 | 0.21 / 0.30 |
 | English | live, English and Spanish (`nemotron-3.5-560`) | 8.21 | 0.16 / 0.22 |
-| English | parakeet, as the app runs it (cut at the VAD's pauses) | 21.60 | 0.26 / 0.61 |
+| English | parakeet, as the app runs it (cut at the VAD's pauses) | 7.99 | 0.26 / 0.61 |
 | English | parakeet, the whole recording in one decode | 4.32 | not timed quietly |
 | English | qwen, English only or English and Spanish | 3.02 | 0.95 / 1.48 |
 | Spanish | live, Spanish only (`nemotron-3.5-1120`) | 4.87 | 0.13 / 0.15 |
@@ -322,7 +322,7 @@ We measured each on the 20 FLEURS clips per language the sections above use. Eac
 
 - **What `live` costs in accuracy.** Against Parakeet's engine on the whole recording, 3.0 points in English (7.34 against 4.32) and 0.6 in Spanish (4.87 against 4.24), one point more with the two-language model. Against Qwen, 4.3 and 2.5 points.
 - **What `live` saves in wait.** The text is ready 0.1 to 0.3 s after the release, against about 0.3 to 0.6 s for Parakeet on these clips and about 1 to 1.5 s for a warm Qwen. It also never waits for a second model to load.
-- **Parakeet as the app runs it loses words on quiet English audio.** The Worker cuts a dictation at the pauses its VAD finds. That VAD hears the raw signal, with no gain. On the quiet FLEURS English clips it dropped the end of several sentences and found no span at all in 2 of the 20 clips, which then come back empty. The same clips decoded whole read 4.32. On quiet audio today's `parakeet` is worse than `live`. The fix belongs in the cutter.
+- **The cut is judged on a gained copy.** The Worker cuts a dictation at the pauses its VAD finds, then trims each piece to where it rises above -50 dBFS. On the raw signal of the quiet FLEURS English clips (median peak 0.016, the quietest 0.002) that trim took the ends of several sentences, and the 2 clips whose peak sits under it gave no piece at all and came back empty: 21.60. The cutter now judges a copy gained as each piece is decoded (toward -3 dBFS, +20 dB at most): 7.99 in English with no clip empty, and Spanish, recorded louder, unchanged at 5.51. The rest of the gap to the whole recording (4.32) is the cut itself. A causal gain, as the live stream uses, read 7.78 in English but 7.20 in Spanish. DC-E6's silence guard still hears the raw signal: it found speech in all 40 clips either way, and gaining it made it call one more clip's room tone speech. The waits in the table are from the first run, on a quieter mini.
 - **The waits are from a shared Mac mini** (load average about 10). A second run at load 19 to 29 gave the same WERs to the hundredth and waits two to ten times longer for Parakeet, which is why the whole-recording decode has no quiet timing. `live` was the fastest in both runs.
 - The control reads 113, so the harness pairs each hypothesis with its own reference and the scorer sees errors. Qwen scored the same under both setups.
 
