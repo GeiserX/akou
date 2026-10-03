@@ -41,6 +41,7 @@ import {
   type JobTimings,
   JobWorker,
 } from "../asr/finalize-worker.ts";
+import { engineIds } from "../asr/fusion.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "../asr/nemotron.ts";
@@ -165,6 +166,8 @@ export interface JobServiceOptions {
   shelf: ModelStore;
   /** `server.default_model`, as the settings hold it now. */
   defaultModel(): string;
+  /** The `fusion` preset as the settings make it now (`fusionChoice`); absent: the preset's own. */
+  fusion?(): { fuser: string; engines: readonly string[] };
   /** What `auto` runs here now (SV-R2, `autoChoice`); absent, `fast`. */
   auto?(): { model: string; preset: string };
   diarizer(): DiarizerKind;
@@ -173,11 +176,6 @@ export interface JobServiceOptions {
   /** Does the key list this callback host by name, not only through `*`? (SV-K4) */
   hostListed(keyId: string, host: string): boolean;
   retainDays(): number;
-  /**
-   * Whether the hourly sweep also deletes unused models (SV-M5). Default true; the desktop app
-   * sweeps them itself, since only it knows what its calls and dictation hold.
-   */
-  sweepsModels?: boolean;
   /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
   maxAudioMinutes(): number;
   /** `server.remotes` as the settings hold it now (section 14). */
@@ -202,6 +200,26 @@ export interface JobServiceOptions {
   dictationSlots?(): number;
   /** `server.dictation_engine`: what an interactive job runs when it names no model; `auto` or absent, the server's default. */
   dictationEngine?(): string;
+  /**
+   * Whether an idle Worker holding the default's model stays loaded for the next job. Absent:
+   * yes (a server keeps it warm). The desktop app says no: an idle Worker is closed, so its
+   * memory is free again once the queue is empty.
+   */
+  keepIdleWorkers?(): boolean;
+  /**
+   * The owner's own models, in place of the default model's set: the desktop app's (its
+   * recognizer, its final pass, dictation), whose `defaults` are what its settings name, so a job
+   * queue's fallback recognizer never reads as its default. Its `inUse` adds to what the queue's
+   * jobs and Workers hold. Absent: the default model's set (a server).
+   */
+  ownerHeld?(): Held;
+  /**
+   * The owner's one-at-a-time line for a llama-server engine (Qwen): the desktop app's, which a
+   * call's final pass also waits on, since a second llama-server on Metal stops the first. A job
+   * on such an engine waits for its turn after its audio is read, and calls the function it gets
+   * once its pass ends. Absent: no wait (a server's jobs share the GPU through `concurrency`).
+   */
+  gpuTurn?(jobId: string, signal: AbortSignal): Promise<() => void>;
   /** Test seams: the upload decoder and the delivery's network. */
   decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
@@ -272,11 +290,12 @@ export function eventView(e: FeedEvent): Record<string, unknown> {
 }
 
 /**
- * The model ids a job ran, as the engine registry names them (SV-J4): the speaker models only when
- * they ran, so a job whose labels failed does not name them.
+ * The model ids a job ran, as the engine registry names them (SV-J4): a fused model's engines that
+ * decoded (`rover-conf(a,b)` is `a` and `b`), else the recognizer, then the helpers; the speaker
+ * models only when they ran, so a job whose labels failed does not name them.
  */
 export function jobModels(recognizer: string, diarize: boolean, diarizer: DiarizerKind): string[] {
-  const out = [recognizer, "silero-vad"];
+  const out = [...engineIds(recognizer), "silero-vad"];
   if (diarize) {
     out.push(
       ...(diarizer === "nemotron" ? [NEMOTRON] : ["pyannote-segmentation-3.0", "titanet-small"]),
@@ -301,13 +320,6 @@ export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">):
   ];
 }
 
-/** The mean of the words' confidences, or null when no word has one. */
-function meanConfidence(words: JobPassResult["words"]): number | null {
-  const cs = words.map((w) => w.c).filter((c): c is number => c !== null);
-  if (cs.length === 0) return null;
-  return Math.round((cs.reduce((a, b) => a + b, 0) / cs.length) * 1000) / 1000;
-}
-
 /** The result of a job (SV-J4). */
 export function jobResult(
   job: Job,
@@ -323,10 +335,18 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
+    // Parakeet gives word times; Qwen gives none, so its words' `s` and `e` are null.
     words: pass.words,
     segments: pass.segments,
-    engine: { name: "akou", version: engine.version, preset: job.preset, models: engine.models },
-    confidence: meanConfidence(pass.words),
+    engine: {
+      name: "akou",
+      version: engine.version,
+      preset: job.preset,
+      models: engine.models,
+      // The N-engine pass: which engines decoded, which were left out and why (ASR-6).
+      ...(pass.fusion ? { fusion: pass.fusion } : {}),
+    },
+    confidence: pass.confidence,
     skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
     speakers: pass.speakers,
     warnings: jobWarnings(pass),
@@ -583,6 +603,7 @@ export class JobService {
     return resolveModel(ask, {
       catalog: this.o.shelf.catalog(),
       defaultModel: this.o.defaultModel(),
+      fusion: this.o.fusion?.(),
       unknownIsAuto,
       auto: () => this.auto(),
     });
@@ -860,15 +881,19 @@ export class JobService {
    */
   sweep(): number {
     const n = this.sweepJobs();
-    if (this.o.sweepsModels !== false) this.sweepModels();
+    this.sweepModels();
     return n;
   }
 
-  /** The default's set, and what a queued or running job or the live worker needs. */
+  /**
+   * The default's set (or the owner's own, `ownerHeld`), and what a queued or running job or the
+   * live worker needs.
+   */
   held(): Held & { defaults: Set<string>; inUse: Set<string> } {
     const shelf = this.o.shelf;
-    const defaults = new Set(shelf.needs(this.defaultRecognizer()));
-    const inUse = new Set<string>();
+    const owner = this.o.ownerHeld?.();
+    const defaults = new Set(owner ? owner.defaults : shelf.needs(this.defaultRecognizer()));
+    const inUse = new Set<string>(owner?.inUse ?? []);
     for (const j of [...this.store.queued(), ...this.store.running()]) {
       for (const id of this.localNeeds(j)) inUse.add(id);
     }
@@ -971,15 +996,18 @@ export class JobService {
 
   /**
    * Closes the idle Workers whose time is up: an idle Worker keeps its models while a queued job
-   * needs them or for `server.model_idle_minutes` after its last job, and at most as many Workers
-   * as `server.concurrency` stay. So consecutive jobs reuse one model load, and an idle box gets
-   * its memory back. The idle timer calls it; a test with its own clock calls it too.
+   * needs them, and where idle Workers are kept warm (a server) for `server.model_idle_minutes`
+   * after its last job; at most as many Workers as `server.concurrency` stay. So consecutive jobs
+   * reuse one model load, and an idle box gets its memory back. The desktop app keeps no idle
+   * Worker: one no queued job needs is closed at once. The idle timer calls it; a test with its own
+   * clock calls it too.
    */
   releaseIdle(): void {
     if (this.closed) return;
     let kept = this.slots.filter((s) => s.job).length;
     const room = this.concurrency();
     const queued = this.store.queued();
+    const warm = this.o.keepIdleWorkers?.() ?? true;
     const idleMs = this.idleMs();
     const now = this.now();
     let wake = Number.POSITIVE_INFINITY;
@@ -987,7 +1015,8 @@ export class JobService {
       if (s.job || !s.worker) continue;
       const needed = s.model !== null && queued.some((j) => this.modelOf(j) === s.model);
       const left = idleMs - (now - (s.idleSince ?? now));
-      if ((needed || (s.model !== null && left > 0)) && kept < room) {
+      // Kept warm (a server) for its idle minutes; the desktop app keeps none.
+      if ((needed || (warm && s.model !== null && left > 0)) && kept < room) {
         kept++;
         if (!needed) wake = Math.min(wake, left);
         continue;
@@ -1142,6 +1171,8 @@ export class JobService {
     const needs = this.o.shelf.needs(model);
     // A model is used when a job on it starts and when it ends (SV-M4).
     this.o.shelf.touch(needs);
+    // The GPU line's turn, once taken (`gpuTurn`); given back however the run ends.
+    let release: (() => void) | null = null;
     try {
       const spec = this.o.models(model);
       if (!spec)
@@ -1189,6 +1220,12 @@ export class JobService {
       // A model that takes no hotwords gets none (the engine would refuse them).
       // Read before the run: the samples' buffer is handed to the Worker, which empties it here.
       const audioS = samples.length / ASR_RATE;
+      // A llama-server engine waits for the owner's GPU line (the desktop app's final passes),
+      // whether it is the job's one final engine or one engine of a fused pass.
+      if (takesGpuTurn(spec) && this.o.gpuTurn) {
+        release = await this.o.gpuTurn(job.id, abort.signal);
+        if (abort.signal.aborted) return;
+      }
       const pass = await this.workerFor(slot, spec, model).run({
         samples,
         diarize: job.diarize,
@@ -1202,8 +1239,12 @@ export class JobService {
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
-      // time, without the model loads or the speaker labels.
-      if (pass.decode_s !== undefined) this.o.shelf.recordRun(model, audioS, pass.decode_s);
+      // time, without the model loads or the speaker labels. A fused job times each engine.
+      if (pass.fusion) {
+        for (const e of pass.fusion.engines) this.o.shelf.recordRun(e.id, audioS, e.decode_s);
+      } else if (pass.decode_s !== undefined) {
+        this.o.shelf.recordRun(model, audioS, pass.decode_s);
+      }
       end = {
         status: "done",
         result: jobResult(
@@ -1227,6 +1268,7 @@ export class JobService {
       const code = (err as { code?: string }).code ?? "transcription_failed";
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
+      release?.();
       this.o.shelf.touch(needs);
       this.progress.delete(job.id);
     }
@@ -1434,7 +1476,11 @@ export class JobService {
     }
   }
 
-  close(): void {
+  /**
+   * Stops the queue. `keepShelf` leaves the model store open: the desktop app shares it with the
+   * Models page, so a queue that failed to start must not take the store down with it.
+   */
+  close(o: { keepShelf?: boolean } = {}): void {
     if (this.closed) return;
     this.closed = true;
     this.remotes.close();
@@ -1447,9 +1493,19 @@ export class JobService {
       s.worker?.close();
       s.worker = null;
     }
-    this.o.shelf.close();
+    if (!o.keepShelf) this.o.shelf.close();
     this.store.close();
   }
+}
+
+/**
+ * Whether a job on this spec decodes on llama-server (Qwen) and so waits its turn on the owner's
+ * GPU line: as the spec's final engine, or as one engine of its fused pass.
+ */
+export function takesGpuTurn(spec: ModelSpec): boolean {
+  return (
+    Boolean(spec.final) || (spec.fusion?.engines.some((e) => e.kind === "llama-server") ?? false)
+  );
 }
 
 const REQUEST_FIELDS = [
