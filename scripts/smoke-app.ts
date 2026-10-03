@@ -19,8 +19,8 @@
  * - NOTICE and LICENSE are there too: the word lists' CC BY-SA 4.0 wants its credit to travel;
  * - the bundled Bun loads sherpa-onnx-node from inside the bundle, and the process has the `.node`
  *   file and its libraries open from the bundle's own folder (`lsof` on macOS, where the hardened
- *   runtime ignores `DYLD_PRINT_LIBRARIES`; `/proc/self/maps` on Linux; on Windows the load
- *   alone) (TRAPS "Native libraries missing from the bundle");
+ *   runtime ignores `DYLD_PRINT_LIBRARIES`; `/proc/self/maps` on Linux; the process's module list
+ *   through PowerShell on Windows) (TRAPS "Native libraries missing from the bundle");
  * - the `akou` command line the akou menu links into PATH runs from the bundle and says the
  *   version;
  * - the bundled Bun imports both Worker modules;
@@ -43,7 +43,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { SHERPA_LIBS as SHERPA_LIBS_BY_OS } from "../electrobun.config.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { parseStderrLine } from "../src/main/capture/protocol.ts";
@@ -196,6 +196,18 @@ async function smokeHelper(helper: string, version: string, work: string): Promi
   check(opusChannels(opus) === 2, "helper wrote a two-channel Ogg Opus file");
 }
 
+/**
+ * Two paths to one file, both through the system's own resolution: on Windows the temporary folder
+ * may come back under its short 8.3 name on one side only (`RUNNER~1` against `runneradmin`).
+ */
+function samePath(a: string | undefined, b: string): boolean {
+  try {
+    return !!a && realpathSync.native(a).toLowerCase() === realpathSync.native(b).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 /** The folder holding `app/bun/index.js` under `dir`, wherever the packed app put it; or null. */
 function findResources(dir: string): string | null {
   for (const f of readdirSync(dir, { recursive: true, withFileTypes: true })) {
@@ -316,7 +328,7 @@ import { createRequire } from "node:module";
 const s = createRequire(${JSON.stringify(join(main, "index.js"))})("sherpa-onnx-node");
 if (typeof s.OfflineRecognizer !== "function") throw new Error("no OfflineRecognizer");
 // The files this process has mapped: lsof's "n<path>" lines on macOS, /proc/self/maps on Linux,
-// none on Windows.
+// its loaded modules on Windows.
 let open = [];
 if (process.platform === "darwin") {
   const out = spawnSync("/usr/sbin/lsof", ["-p", String(process.pid), "-Fn"]).stdout.toString();
@@ -324,6 +336,9 @@ if (process.platform === "darwin") {
 } else if (process.platform === "linux") {
   const { readFileSync } = await import("node:fs");
   open = readFileSync("/proc/self/maps", "utf8").split("\\n").map((l) => l.split(/\\s+/).slice(5).join(" ")).filter((p) => p.startsWith("/"));
+} else if (process.platform === "win32") {
+  const ps = spawnSync("powershell.exe", ["-NoProfile", "-Command", \`(Get-Process -Id \${process.pid}).Modules | ForEach-Object { $_.FileName }\`]);
+  open = ps.stdout.toString().split(/\\r?\\n/).filter((l) => l.trim() !== "");
 }
 console.log(JSON.stringify({ bun: Bun.version, open }));
 `,
@@ -339,11 +354,10 @@ console.log(JSON.stringify({ bun: Bun.version, open }));
     load.status === 0 ? `Bun ${loaded.bun}` : load.stderr.toString().slice(-400),
   );
   const inBundle = join(main, "node_modules", SHERPA_PLATFORM);
-  // Windows has no list of a process's mapped files without a native call; the load above is the
-  // check there.
-  for (const lib of process.platform === "win32" ? [] : [...SHERPA_LIBS, "sherpa-onnx.node"]) {
-    const path = loaded.open.find((p) => p.endsWith(`/${lib}`)) ?? "(not open)";
-    check(path.endsWith(join(inBundle, lib)), `${lib} is loaded from the bundle`, path);
+  for (const lib of [...SHERPA_LIBS, "sherpa-onnx.node"]) {
+    const path =
+      loaded.open.find((p) => basename(p).toLowerCase() === lib.toLowerCase()) ?? "(not open)";
+    check(samePath(path, join(inBundle, lib)), `${lib} is loaded from the bundle`, path);
   }
 
   // The Worker modules resolve and evaluate under the bundled Bun (their entry is guarded).
@@ -375,16 +389,7 @@ console.log(JSON.stringify({ bun: Bun.version, open }));
     where = JSON.parse(located.stdout.toString());
   } catch {}
   const helper = join(main, `akou-capture${EXE}`);
-  // Both sides through the system's own resolution: on Windows the temporary folder may come back
-  // under its short 8.3 name on one side only (`RUNNER~1` against `runneradmin`).
-  const same = (a: string | undefined, b: string) => {
-    try {
-      return !!a && realpathSync.native(a) === realpathSync.native(b);
-    } catch {
-      return false;
-    }
-  };
-  const found = where.source === "bundled" && same(where.command[0], helper);
+  const found = where.source === "bundled" && samePath(where.command[0], helper);
   if (existsSync(helper) || where.source === "bundled") {
     if (
       check(
@@ -449,7 +454,26 @@ async function main(argv: string[]): Promise<void> {
     const setup = existsSync(RELEASE_DIR)
       ? readdirSync(RELEASE_DIR).filter((f) => f.startsWith(`${releaseName(version)}-setup.`))
       : [];
-    check(setup.length === 1, `one ${releaseName(version)}-setup installer`, setup.join(", "));
+    if (
+      check(setup.length === 1, `one ${releaseName(version)}-setup installer`, setup.join(", "))
+    ) {
+      // What the installer holds: the packed app, once, and a program to run.
+      const listed = spawnSync(TAR, ["-t", "-f", join(RELEASE_DIR, setup[0] as string)]);
+      const entries = listed.stdout
+        .toString()
+        .split(/\r?\n/)
+        .filter((l) => l !== "");
+      check(
+        entries.filter((e) => e.endsWith(".tar.zst")).length === 1,
+        "the installer holds one packed app",
+        entries.join(", "),
+      );
+      check(
+        entries.some((e) => /(^|\/)(launcher|[^/]*Setup)(\.exe)?$/.test(e)),
+        "the installer holds a program to run",
+        entries.join(", "),
+      );
+    }
     const launcher = join(APP_DIR, "bin", `launcher${EXE}`);
     check(existsSync(launcher), "the app has its launcher", launcher);
   }

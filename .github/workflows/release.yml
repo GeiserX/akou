@@ -191,6 +191,7 @@ jobs:
   # the artifacts stay on the run until the Windows and Linux milestones ship an installer, so the
   # release does not wait for this job.
   app-desktop:
+    needs: version
     strategy:
       fail-fast: false
       matrix:

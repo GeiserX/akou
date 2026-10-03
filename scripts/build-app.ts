@@ -36,7 +36,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BUILT } from "../electrobun.config.ts";
+import { BUILT, cliBuildPath } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
 import { compileCli, hostTarget } from "./build-cli.ts";
@@ -241,7 +241,7 @@ async function main(argv: string[]): Promise<void> {
 
   rmSync(join(ROOT, "dist", "app-cli"), { recursive: true, force: true });
   mkdirSync(join(ROOT, "dist", "app-cli"), { recursive: true });
-  compileCli(join(ROOT, BUILT.cli), hostTarget() as string, version);
+  compileCli(join(ROOT, cliBuildPath()), hostTarget() as string, version);
 
   // 4. ElectroBun, through the paired Hutch.
   rmSync(join(ROOT, "build"), { recursive: true, force: true });
