@@ -19,11 +19,14 @@ import type {
   DiarizedSpan,
   Diarizer,
   Embedder,
+  FinalEngine,
+  Hypothesis,
   LiveEngine,
   LiveStream,
   LiveToken,
   ModelSet,
   PreparedHotwords,
+  Recognized,
   Recognizer,
   SpeakerTurn,
   StreamDiarizer,
@@ -229,6 +232,10 @@ export interface FakeOptions {
   liveLoadMs?: number;
   /** `release` takes this long before it lets go of the models, ms. */
   releaseMs?: number;
+  /** The language a `createEngine` engine reports on `auto` (default `en`). */
+  engineLang?: string;
+  /** Ids of `createEngine` engines whose load fails. */
+  engineLoadFails?: string[];
 }
 
 export interface DecodeCall {
@@ -254,7 +261,7 @@ export class FakeRecognizer implements Recognizer {
     this.kind = modelKind(model);
   }
 
-  decode(samples: Float32Array, hotwords?: string): { text: string; words?: WordHyp[] } {
+  decode(samples: Float32Array, hotwords?: string): Recognized {
     this.calls.push({
       samples: samples.length,
       hotwords,
@@ -295,7 +302,8 @@ export class FakeRecognizer implements Recognizer {
       // A sound that is no word (a hum between the word tones) gives no text.
       let energy = 0;
       for (let i = a; i < b; i++) energy += (samples[i] as number) ** 2;
-      if (goertzel(samples, a, b, freqs[k] as number) / (energy * ((b - a) / 2)) < 0.3) continue;
+      const tone = goertzel(samples, a, b, freqs[k] as number) / (energy * ((b - a) / 2));
+      if (tone < 0.3) continue;
       const w = WORDS[k] as (typeof WORDS)[number];
       out.push(w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound));
       words.push({ w: out.at(-1) as string, t0: a / RATE, t1: b / RATE, conf: 0.9 });
@@ -599,6 +607,39 @@ export function createModels(options: FakeOptions = {}, model?: string): ModelSe
   const m = new FakeModels({ ...options, model: model ?? options.model });
   created.push(m);
   return m;
+}
+
+/**
+ * An engine of a fusion list that the test module stands in for (`createEngine`, the module kind of
+ * `FusionEngineSpec`): Whisper or Canary on transcribe-cpp in the app. It hears the fake words as
+ * the fake recognizer does and, as they do, gives neither word times nor confidences. Its load
+ * fails when its id is in `engineLoadFails`.
+ */
+export function createEngine(options: FakeOptions = {}, engine = "fake-engine"): FinalEngine {
+  const rec = new FakeRecognizer(engine, { ...options, words: false });
+  return {
+    id: engine,
+    features: { confidence: false, timestamps: false, glossary: true, languageId: true },
+    load: async () => {
+      if (options.engineLoadFails?.includes(engine)) throw new Error(`${engine} would not load`);
+    },
+    unload: async () => {},
+    decode: async (u) => {
+      const t = performance.now();
+      const text = rec.decode(u.samples).text;
+      const h: Hypothesis = {
+        engine,
+        text,
+        words: text
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((w) => ({ w })),
+        ms: performance.now() - t,
+      };
+      if (text !== "") h.lang = u.lang === "auto" ? (options.engineLang ?? "en") : u.lang;
+      return h;
+    },
+  };
 }
 
 /** In-memory parts for the final pass: `parts[part] = { mic, call }`. */
