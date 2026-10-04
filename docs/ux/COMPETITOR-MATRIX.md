@@ -104,7 +104,7 @@ The **Owner** column says where the item lives:
 | REC-20 | Stepped-away marker | Teams, Meet | here |
 | REC-21 | Words for this call (attendees, title terms) at start, in every door | Audit | here |
 | REC-22 | Workspace and template suggested from the detected meeting app or the invite title | Superwhisper per-app modes | parked |
-| REC-23 | Record one app, picked from the apps playing now | MacWhisper App Audio | W3.3 per call; the saved default picks from the list already (W11.10) |
+| REC-23 | Record one app, picked per recording from the apps playing now; the whole computer stays the default | MacWhisper (App Audio) | W3.3; the saved default picks from the same list (W11.10) |
 
 ## Live transcript and speakers
 
