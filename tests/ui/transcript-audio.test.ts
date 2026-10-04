@@ -13,6 +13,7 @@ import { stereoWav } from "../fixtures/audio.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   seedCall,
   silentWav,
   standardCall,
@@ -312,7 +313,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         async (rig) => {
           await audio(rig, id, 12);
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const row = '#lines .row[data-id="l000003"] .text';
           const pick = async (label: string) => {
@@ -377,7 +378,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row >> nth=3");
           const back = () =>
             page.evaluate(() => {
@@ -583,7 +584,9 @@ describe("the player bar (W5.3 to W5.6)", () => {
           await page.evaluate(() => {
             (document.getElementById("follow") as HTMLElement).hidden = false;
           });
-          for (const width of [1440, 900, 800]) {
+          // Back to wide from 1248, where the wide layout's column wraps the bar: WebKit kept the
+          // wrapped height there until the shell's last row was min-content (TS-14).
+          for (const width of [1440, 900, 800, 1248, 1440]) {
             await page.setViewportSize({ width, height: 800 });
             const m = await page.evaluate(() => {
               const bar = document.getElementById("player-bar") as HTMLElement;
@@ -678,6 +681,15 @@ describe("the player bar (W5.3 to W5.6)", () => {
           expect(await text(page, "#readout")).toBe("");
           expect(await page.locator("#marks .mk").count()).toBe(0);
           await playRow(page, "l000003");
+          // WebKit starts the audio a moment after the line's metadata: pause it once it plays.
+          await until(
+            async () =>
+              !(await page.evaluate(
+                () => (document.getElementById("player") as HTMLAudioElement).paused,
+              )),
+            5000,
+            "the line playing",
+          );
           await pauseNow(page);
           await until(
             async () => (await page.locator("#marks .mk").count()) === 2,

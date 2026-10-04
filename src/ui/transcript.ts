@@ -317,6 +317,7 @@ export class TranscriptPane {
         added++;
         if (animate) {
           r.classList.add("new");
+          // clock: how long a new line is marked new.
           setTimeout(() => r.classList.remove("new"), NEW_FOR_MS);
         }
       }
@@ -551,6 +552,7 @@ export class TranscriptPane {
     );
     box.hidden = false;
     if (this.partialTimer) clearTimeout(this.partialTimer);
+    // clock: the provisional line goes when it stops updating.
     this.partialTimer = setTimeout(() => this.setPartial([]), PROVISIONAL_TTL_MS);
     this.pin.follow();
   }

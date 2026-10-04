@@ -22,6 +22,7 @@ import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import {
   type DictionaryEntry,
   isReplacement,
+  readVocab,
   WORDS_SHOWN,
 } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
@@ -1121,6 +1122,21 @@ describe("DC-S1: the draft box", () => {
   );
 
   test(
+    "DC-U6: text the AI tidied shows what was heard under the field; other text shows nothing there",
+    async () => {
+      const p = v.page;
+      await v.send("open", draft({ id: "d9", text: "Three apples.", heard: "um three apples" }));
+      expect(await value(p)).toBe("Three apples.");
+      expect(await visible(p, "#draft-heard")).toBe(true);
+      expect(await text(p, "#draft-heard")).toBe("As heard: um three apples");
+      // The control: the next draft, with nothing tidied, hides the line again.
+      await v.send("open", draft({ id: "d10" }));
+      expect(await visible(p, "#draft-heard")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "an automatic open leaves the keyboard where it was; a click moves it into the box",
     async () => {
       const p = v.page;
@@ -1699,6 +1715,60 @@ describe("DC-U1: the Dictation page in the window", () => {
         );
       } finally {
         await m.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[DC-T3] each text-inserted choice says how long it takes after the key is let go, measured or estimated",
+    async () => {
+      const helps = (p: Page) =>
+        p.$$eval("#page-dictation label.pg-choice[data-final]", (l) =>
+          l.map((x) => [
+            (x as HTMLElement).dataset.final,
+            x.querySelector(".pg-help")?.textContent ?? "",
+          ]),
+        );
+      const w = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+        latency: {
+          live: { ms: 180, measured: true },
+          parakeet: { ms: 150, measured: false },
+          qwen: { ms: 1240, measured: true },
+        },
+      });
+      try {
+        await w.page.click("#dictation-open");
+        await w.page.waitForSelector("#dictation-live-words");
+        const got = Object.fromEntries(await helps(w.page));
+        expect(got.live).toEndWith(
+          "About 0.2 s after you let go of 10 s of speech, measured on this kind of computer.",
+        );
+        expect(got.parakeet).toEndWith(
+          "About 0.2 s after you let go of 10 s of speech, estimated.",
+        );
+        expect(got.qwen).toEndWith(
+          "About 1.2 s after you let go of 10 s of speech, measured on this kind of computer.",
+        );
+      } finally {
+        await w.close();
+      }
+      // An akou that sends no times shows none: the line is the choice's own, nothing invented.
+      const old = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+      });
+      try {
+        await old.page.click("#dictation-open");
+        await old.page.waitForSelector("#dictation-live-words");
+        for (const [, help] of await helps(old.page))
+          expect(help).not.toContain("of 10 s of speech");
+      } finally {
+        await old.close();
       }
     },
     UI_TIMEOUT,
@@ -3030,13 +3100,18 @@ describe("DC-H1: the History page", () => {
     t?.cleanup();
   });
 
-  const openHistory = async (history: DictationRow[], settings: Record<string, unknown> = {}) => {
+  const openHistory = async (
+    history: DictationRow[],
+    settings: Record<string, unknown> = {},
+    engines?: string[],
+  ) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
         await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
         fx = await dictationFixture(p, { history });
         Object.assign(fx.settings, settings);
+        if (engines) fx.engines = engines;
       },
     });
     await page.click("#dictation-open");
@@ -3235,6 +3310,23 @@ describe("DC-H1: the History page", () => {
   );
 
   test(
+    "the menu offers only the engines GET /dictation lists, so one whose model is gone is never offered",
+    async () => {
+      // A Mac with Parakeet deleted: no fast, and best heard this one.
+      const { page } = await openHistory(
+        [dictationRow(1, { engine: "best" })],
+        { "dictation.remote.url": "https://studio.example" },
+        ["best", "live", "remote"],
+      );
+      await page.click(`${row("d001")} .hist-more`);
+      expect(
+        await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
+      ).toEqual(["Retry with Live", "Retry on the other computer", "Delete"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "a row under the pointer keeps its height, and a menu at the window's bottom opens upwards",
     async () => {
       const long =
@@ -3374,6 +3466,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     rig.app.dictation()?.draft.attach({
       open: (d) => draftOpens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });
@@ -3521,7 +3614,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
         [id, "example.com", true],
       ]);
 
-      const audio = d.audio.path(id);
+      const audio = (await d.audio.file(id))?.path as string;
       expect(existsSync(audio)).toBe(true);
       await page.click(`${row} .hist-more`);
       await page.click(`${row} button.delete`);
@@ -3551,6 +3644,65 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       // The global file's words open to their switch and Remove (positive control).
       await page.click(`${term("Vercel")} .pg-link`);
       expect(await page.isVisible(`${term("Vercel")} button.remove`)).toBe(true);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "DC-L5: a fix left unanswered waits under To review; Learn it writes it, and Remove in the editor gives the heard form back",
+    async () => {
+      // The fake engine hears "kubernetes" as "kubernetis" unless the vocabulary fixes it.
+      const clip = monoWav(concat(silence(0.6), speak(["deploy", "to", "kubernetes"]), silence(1)));
+      const dictate = async () => {
+        const form = new FormData();
+        form.append("file", new Blob([new Uint8Array(clip)]), "clip.wav");
+        form.append("engine", "fast");
+        const res = await fetch(`http://127.0.0.1:${rig.port}/v1/dictations`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${rig.token}`, "x-akou-client": "test" },
+          body: form,
+        });
+        return ((await res.json()) as { text: string }).text;
+      };
+      expect(await dictate()).toBe("deploy to kubernetis");
+      const d = rig.app.dictation();
+      if (!d) throw new Error("the app runs no dictation");
+      const id = [...d.log.events()].reverse().find((e) => e.type === "dictation.started")
+        ?.id as string;
+      // As the draft box's chip writes a fix the user let go.
+      const pair = {
+        type: "dictation.learn",
+        id,
+        term: "Kubernetes",
+        heard: "kubernetis",
+      } as const;
+      d.log.append({ ...pair, status: "proposed", evidence: "none" });
+      d.log.append({ ...pair, status: "ignored", evidence: "none" });
+
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.click("#dictation-review-open");
+      const review = (x: string) => `#dictionary-list .review-dictation [data-term='${x}']`;
+      await page.waitForSelector(review("Kubernetes"));
+      expect(await text(page, "#dictionary-list .review-dictation .pg-sec")).toBe("To review");
+      expect(await page.getAttribute(review("Kubernetes"), "data-state")).toBe("waiting");
+      await page.click(`${review("Kubernetes")} button[data-action='approve']`);
+      await page.waitForSelector(`${review("Kubernetes")}[data-state='accepted']`);
+      expect(vocabFile().find((e) => e.term === "Kubernetes")).toMatchObject({
+        heard: ["kubernetis"],
+        entryScope: "dictation",
+      });
+      expect(await dictate()).toBe("deploy to Kubernetes");
+
+      // The editor's one click: the entry leaves the file, and the next dictation writes what
+      // it heard again, read through the fold.
+      const word = "section[data-section='Words'] li[data-term='Kubernetes']";
+      await page.waitForSelector(word);
+      await page.click(`${word} .pg-link`);
+      await page.click(`${word} button.remove`);
+      await page.waitForSelector(word, { state: "detached" });
+      expect(vocabFile().some((e) => e.term === "Kubernetes")).toBe(false);
+      expect(await dictate()).toBe("deploy to kubernetis");
     },
     UI_TIMEOUT,
   );
@@ -3863,6 +4015,58 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
   );
 });
 
+describe("DC-U8, DC-U6: the page says what a setting does on this machine", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-honest-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const openPage = async (platform: string) => {
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        await dictationFixture(p, { platform });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector("#page-dictation div.pg-row[data-key='dictation.muteMedia']");
+    return page;
+  };
+  const help = (key: string) =>
+    `#page-dictation div.pg-row[data-key='${key}'] .pg-lbl > div.pg-help`;
+  const media = "#page-dictation input[data-key='dictation.muteMedia']";
+
+  test(
+    "on macOS, pausing other media says it does nothing there and cannot be turned on; on Linux it can",
+    async () => {
+      const mac = await openPage("darwin");
+      expect(await mac.isDisabled(media)).toBe(true);
+      expect(await text(mac, help("dictation.muteMedia"))).toBe(
+        "macOS does not let akou see what is playing, so this does nothing on a Mac yet.",
+      );
+      // The control: Linux has a way to pause players, so the switch works and says so.
+      const linux = await openPage("linux");
+      expect(await linux.isDisabled(media)).toBe(false);
+      expect(await text(linux, help("dictation.muteMedia"))).toBe("It plays again when you stop.");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the AI tidy recommends a local model as the quickest",
+    async () => {
+      const page = await openPage("linux");
+      expect(await text(page, help("dictation.format"))).toContain("A local model is the quickest");
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("DC-U4: reading the microphones", () => {
   // `readMics` makes one request; nothing else of a transport is reached.
   const answering = (status: number, body: unknown) =>
@@ -3878,6 +4082,42 @@ describe("DC-U4: reading the microphones", () => {
     expect(await readMics(answering(200, { inputs }))).toEqual({
       inputs: [{ id: "m1", name: "Desk Mic" }],
     });
+  });
+});
+
+describe("DC-U5: the Words page reads the vocabulary of the call on screen", () => {
+  /** A transport that answers each path as `answers` says, recording the paths asked. */
+  const answering = (answers: Record<string, { status: number; body: unknown }>) => {
+    const asked: string[] = [];
+    const t = {
+      kind: "browser",
+      request: async (_m: string, path: string) => {
+        asked.push(path);
+        return answers[path] ?? { status: 404, body: {} };
+      },
+    } as unknown as Transport;
+    return { t, asked };
+  };
+  const words = {
+    status: 200,
+    body: {
+      entries: [
+        { term: "Vercel", heard: [], confirmed: true, scope: "global", file: "/c/vocabulary.yaml" },
+      ] as DictionaryEntry[],
+    },
+  };
+
+  test("a call folder named so the vocabulary refuses it as a workspace still shows the global words", async () => {
+    const a = answering({
+      "/vocab?workspace=con": { status: 400, body: { message: 'invalid workspace "con"' } },
+      "/vocab": words,
+    });
+    expect(await readVocab(a.t, "con")).toEqual(words);
+    expect(a.asked).toEqual(["/vocab?workspace=con", "/vocab"]);
+    // The control: a workspace the vocabulary takes is read once, as it is.
+    const b = answering({ "/vocab?workspace=work": words });
+    expect(await readVocab(b.t, "work")).toEqual(words);
+    expect(b.asked).toEqual(["/vocab?workspace=work"]);
   });
 });
 
@@ -3958,10 +4198,27 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
   );
 
   test(
+    "[PG-A8] with no fixture the picker reads the app's own GET /devices, the capture helper's inputs",
+    async () => {
+      const { page } = await openPage({});
+      expect(await page.$eval(mic, (e) => e.tagName)).toBe("SELECT");
+      expect(await options(page)).toEqual([
+        ["", "System default, Fake Microphone"],
+        ["fake-mic-1", "Fake Microphone"],
+        ["fake-usb-2", "Fake USB Microphone"],
+      ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "with no list the field stays a text box with the reason: an app without the route, a refusal",
     async () => {
-      // Positive control for the picker: this app has no `GET /devices` yet, and answers 404.
-      const bare = await openPage({ settings: { "dictation.mic": "mic-usb" } });
+      // Positive control for the picker: an akou without `GET /devices` answers 404.
+      const bare = await openPage({
+        devices: { status: 404, message: "no route /v1/devices" },
+        settings: { "dictation.mic": "mic-usb" },
+      });
       expect(await bare.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
       expect(await bare.page.inputValue(mic)).toBe("mic-usb");
       expect(await text(bare.page, "#dictation-mic-note")).toBe(

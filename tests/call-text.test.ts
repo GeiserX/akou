@@ -289,7 +289,18 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_rename_call: "the call id and the title the agent gave",
   akou_list_calls: "titles, dates and states, no content",
   akou_export: "file paths",
+  akou_edit_note: "the note's id and revision",
+  akou_delete_note: "an id",
+  akou_template_list: "the templates' names, sections and title keywords",
+  akou_template_get: "a template file the user or akou wrote, never the call",
+  akou_finalize: "the call id and the model",
+  akou_share_status: "the links' addresses and viewers",
+  akou_share_on: "the link's address",
+  akou_share_off: "how many links stopped",
+  akou_open_window: "whether the window showed, or its address",
+  akou_config_get: "settings, secrets redacted",
   akou_jobs_list: "ids, titles, states and times, no transcript",
+  akou_devices: "device and app names the OS reports",
 };
 
 describe("[PG-Z1] every MCP answer that carries call text quotes it", () => {

@@ -381,16 +381,18 @@ describe("[SV-M4, SV-M5] the ledger, the worker that lets go, and the sweep", ()
     }
   });
 
-  test("a job on a non-default model moves its last use to the job's end, and no worker keeps it", async () => {
+  test("a job on a non-default model moves its last use to the job's end, and no worker keeps it past server.model_idle_minutes", async () => {
     rig.clock.t = T + DAY_MS;
     const j = await submit(rig, { model: B });
     await ended(rig, j.body.id);
     expect(ledger()[B]).toBe(new Date(T + DAY_MS).toISOString());
-    await until(() => rig.app.jobs()?.workerModel() === null, 5000, "the worker to close");
-    // Positive control: a job on the default keeps its worker.
-    const d = await submit(rig, { preset: "auto" });
-    await ended(rig, d.body.id);
-    expect(rig.app.jobs()?.workerModel()).toBe(RECOGNIZER);
+    // Positive control: within the idle period the worker keeps it (akou-5an.104).
+    rig.app.jobs()?.releaseIdle();
+    expect(rig.app.jobs()?.workerModel()).toBe(B);
+    rig.clock.t += 61 * 60_000;
+    rig.app.jobs()?.releaseIdle();
+    expect(rig.app.jobs()?.workerModel()).toBeNull();
+    rig.clock.t = T + DAY_MS;
   });
 
   test("31 days on: the unused model goes with one model.evicted line; the default and a queued job's stay", async () => {

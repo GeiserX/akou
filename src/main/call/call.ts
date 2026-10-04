@@ -296,6 +296,14 @@ export class CallController {
     });
   }
 
+  /**
+   * Whether something still works in the call's folder: the call is live, its log is held open
+   * (a final pass), or a stop or restart is running. Its folder must not move until it is not.
+   */
+  busy(): boolean {
+    return this.live || this.holds > 0 || this.pending.size > 0 || this.background.size > 0;
+  }
+
   /** Settles when every stop and automatic restart this call started has finished. For tests. */
   async idle(): Promise<void> {
     while (this.pending.size > 0 || this.background.size > 0) {
