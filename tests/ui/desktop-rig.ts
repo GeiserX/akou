@@ -110,6 +110,8 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
   let indicator: Page | null = null;
   let shown = false;
   let indicatorFrame: Rect | null = null;
+  /** The indicator's last resize: a close waits for it, or the resize lands on a closed page. */
+  let sizing: Promise<unknown> = Promise.resolve();
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
   let exits = 0;
 
@@ -200,8 +202,11 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
         : w.rpc.handlers;
       const p = open("indicator", handlers);
       // The page is as big as the window, as a webview fills its window.
-      const size = (f: Rect) =>
-        void p.ready.then((page) => page.setViewportSize({ width: f.width, height: f.height }));
+      const size = (f: Rect) => {
+        sizing = p.ready
+          .then((page) => page.setViewportSize({ width: f.width, height: f.height }))
+          .catch(() => {});
+      };
       indicatorFrame = w.frame;
       size(w.frame);
       void p.ready.then((page) => {
@@ -220,10 +225,12 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
         },
         close: () => {
           shown = false;
-          void p.ready.then((page) => {
-            if (indicator === page) indicator = null;
-            return page.close();
-          });
+          void sizing
+            .then(() => p.ready)
+            .then((page) => {
+              if (indicator === page) indicator = null;
+              return page.close();
+            });
         },
         onClose: () => {},
         onFrame: () => {},
@@ -273,6 +280,7 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
   const close = rig.close;
   rig.close = async () => {
     await shell.close();
+    await sizing;
     for (const p of pages) await p.close().catch(() => {});
     await close();
   };
