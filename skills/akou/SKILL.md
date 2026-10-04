@@ -1,13 +1,13 @@
 ---
 name: akou
-description: Record a call or meeting on this computer with akou and answer questions about it while it runs. Use when the user says record this call or meeting, starts a call, names a speaker, spells a word, or asks what was said, decided or is being discussed.
+description: Record a call or meeting on this computer with akou and answer questions about it while it runs, or transcribe an audio file. Use when the user says record this call or meeting, starts a call, names a speaker, spells a word, asks what was said, decided or is being discussed, or hands over a recording or voice note to transcribe.
 metadata:
-  version: "0.5.5"
+  version: "0.6.0"
 ---
 
 # akou
 
-akou records calls locally and answers questions about them. Drive it through the `akou_*` MCP tools, or the `akou` command with `--json`.
+akou records calls locally and answers questions about them, and transcribes audio files. Drive it through the `akou_*` MCP tools, or the `akou` command with `--json`. For a file, go to section 7.
 
 ## 1. Start first
 
@@ -56,3 +56,11 @@ Tell the user once that they can also start with the hotkey or by typing `! akou
 
 - The models and the provider in use come from `akou_status`, never from this text.
 - History beyond this call lives in the user's own notes. Ask akou about another call only when the user names it.
+
+## 7. A file, not a call
+
+```sh
+akou transcribe "<file>" --preset best --language <lang> --diarize --json
+```
+
+The desktop app on this machine runs it with its own token: no setting to change, and never `server.enabled` or `akou serve` for this. The command waits until the job ends and prints the result; long audio is cut at its pauses. `akou jobs list` shows the job afterwards. Exit 69 means no akou answered; 70 means the job failed, with the reason. M4A, MP3 and Ogg need ffmpeg on the machine. `akou dictate FILE` is for a short clip only: it sends the whole clip as one piece. With `AKOU_URL` and `AKOU_API_KEY_FILE` set, the same command goes to an akou server instead.

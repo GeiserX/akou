@@ -1,0 +1,109 @@
+{
+  "_about": "ASR-12, the Windows gate (docs/gates/asr-12-windows.md). Streaming RTF from scripts/gates/asr-12-stream-rtf.ts (nemotron-en-560, 30 FLEURS English clips, 296 s of audio, one stream per clip, 100 ms pushes); Qwen from scripts/eval/nightly.ts --only qwen --accelerator <backend> (llama-server b11200, Qwen3-ASR-1.7B Q8_0). Latency is per clip; the 150 English clips have a median length of 9.5 s.",
+  "date": "2026-10-02",
+  "machine": {
+    "platform": "win32-x64",
+    "os": "Windows 11 Pro",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900",
+    "cores": "16 (8 performance with two threads each, 8 efficiency), 24 logical",
+    "memoryGb": 32,
+    "gpus": ["Intel UHD Graphics 770 (integrated)", "NVIDIA GeForce RTX 4070 Ti SUPER"]
+  },
+  "stream": {
+    "win32-x64, all 24 logical CPUs": [
+      [
+        {
+          "threads": 2,
+          "rtf": 0.531,
+          "wer": 6.471
+        },
+        {
+          "threads": 4,
+          "rtf": 0.526,
+          "wer": 6.471
+        }
+      ],
+      [
+        {
+          "threads": 2,
+          "rtf": 0.532,
+          "wer": 6.471
+        },
+        {
+          "threads": 4,
+          "rtf": 0.524,
+          "wer": 6.471
+        }
+      ]
+    ],
+    "win32-x64, pinned to 4 performance cores (affinity 0x55)": [
+      [
+        {
+          "threads": 2,
+          "rtf": 0.292,
+          "wer": 6.471
+        },
+        {
+          "threads": 4,
+          "rtf": 0.731,
+          "wer": 6.471
+        }
+      ],
+      [
+        {
+          "threads": 2,
+          "rtf": 0.284,
+          "wer": 6.471
+        },
+        {
+          "threads": 4,
+          "rtf": 0.979,
+          "wer": 6.471
+        }
+      ]
+    ],
+    "darwin-arm64, Apple M4, same script (control)": [
+      [
+        {
+          "threads": 2,
+          "rtf": 0.132,
+          "wer": 7.059
+        },
+        {
+          "threads": 4,
+          "rtf": 0.1,
+          "wer": 7.059
+        }
+      ]
+    ]
+  },
+  "qwen": {
+    "cpu": {
+      "wer.fleurs_en_30.qwen3-asr-1.7b": 3.82,
+      "wer.fleurs_es_30.qwen3-asr-1.7b": 1.73,
+      "words.ami_silence_25.qwen3-asr-1.7b": 0,
+      "latency.fleurs_en.qwen3-asr-1.7b.p50": 2689.56,
+      "restarts.qwen3-asr-1.7b": 0,
+      "memory_growth.150_requests.qwen3-asr-1.7b": 5.71,
+      "memory_growth.50_requests.qwen3-asr-1.7b.default_cache_control": 824.23
+    },
+    "vulkan (Intel UHD Graphics 770, the one device Vulkan listed)": {
+      "wer.fleurs_en_30.qwen3-asr-1.7b": 3.53,
+      "wer.fleurs_es_30.qwen3-asr-1.7b": 1.73,
+      "words.ami_silence_25.qwen3-asr-1.7b": 0,
+      "latency.fleurs_en.qwen3-asr-1.7b.p50": 4744.15,
+      "restarts.qwen3-asr-1.7b": 0,
+      "memory_growth.150_requests.qwen3-asr-1.7b": 6.55,
+      "memory_growth.50_requests.qwen3-asr-1.7b.default_cache_control": 834.74
+    },
+    "cuda (RTX 4070 Ti SUPER)": {
+      "wer.fleurs_en_30.qwen3-asr-1.7b": 3.53,
+      "wer.fleurs_es_30.qwen3-asr-1.7b": 1.73,
+      "words.ami_silence_25.qwen3-asr-1.7b": 0,
+      "latency.fleurs_en.qwen3-asr-1.7b.p50": 236.79,
+      "restarts.qwen3-asr-1.7b": 0,
+      "memory_growth.150_requests.qwen3-asr-1.7b": 40.5,
+      "memory_growth.50_requests.qwen3-asr-1.7b.default_cache_control": 863.7
+    }
+  }
+}

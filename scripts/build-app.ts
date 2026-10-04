@@ -18,8 +18,10 @@
  *    Hutch then signs both bundles with `ELECTROBUN_DEVELOPER_ID`, which is `-` (ad-hoc) unless a
  *    Developer ID is given, and notarizes only with a real one and Apple credentials.
  * 5. The DMG Hutch makes (the app and an Applications link) and a zip of the same app are copied
- *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, and the diarization helper alone to
- *    `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`, for a source checkout.
+ *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, the update feed Hutch makes
+ *    (`stable-macos-arm64-update.json` and the bundle it names) beside them, under its own names,
+ *    and the diarization helper alone to `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`,
+ *    for a source checkout.
  *
  * Nothing here opens the app. `scripts/smoke-app.ts` checks what was built.
  */
@@ -40,6 +42,7 @@ import { BUILT, cliBuildPath } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
 import { compileCli, hostTarget } from "./build-cli.ts";
+import { bundleName, checkDir, MANIFEST } from "./check-feed.ts";
 import { drift, sourceVersion } from "./stamp-version.ts";
 
 /** The toolchain the release is built with (DESIGN 9, ROADMAP M0). */
@@ -233,7 +236,7 @@ async function main(argv: string[]): Promise<void> {
       target: "bun",
       format: "esm",
       // Loaded at run time from the bundle's own node_modules, beside the Workers.
-      external: ["sherpa-onnx-node"],
+      external: ["sherpa-onnx-node", "transcribe-cpp"],
     });
     if (!r.success || !r.outputs[0]) fail(`the ${name} bundle failed: ${r.logs.join("; ")}`);
     await Bun.write(join(ROOT, out), r.outputs[0]);
@@ -291,6 +294,14 @@ async function main(argv: string[]): Promise<void> {
     WRAPPER_APP,
     join(RELEASE_DIR, `${name}.zip`),
   ]);
+  // The update feed (docs/CI-CD.md CI-23): the manifest the updater reads and the bundle it names,
+  // under Hutch's own names, since the manifest and the updater use them.
+  const feed = checkDir(join(ROOT, "artifacts"), version);
+  if (feed.length > 0) fail(`the update feed: ${feed.join("; ")}`);
+  const feedManifest = join(ROOT, "artifacts", MANIFEST);
+  const bundle = bundleName(JSON.parse(readFileSync(feedManifest, "utf8"))) as string;
+  copyFileSync(feedManifest, join(RELEASE_DIR, MANIFEST));
+  copyFileSync(join(ROOT, "artifacts", bundle), join(RELEASE_DIR, bundle));
   // The diarization helper on its own, the binary at the archive's top: a server run from a source
   // checkout has no app to carry it (akou-5an.110). No AppleDouble files beside it.
   const helper = join(ROOT, "native", "akou-diarize", "target", "release", "akou-diarize");

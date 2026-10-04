@@ -250,7 +250,8 @@ button.lang[data-switchable]:hover:not(:disabled) {
 button.lang[data-forced] {
   box-shadow: inset 0 0 0 1px var(--strong);
 }
-#draft-noconf {
+#draft-noconf,
+#draft-heard {
   margin: 4px 0 0;
   font-size: 12px;
 }

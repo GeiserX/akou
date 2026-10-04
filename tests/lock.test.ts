@@ -23,7 +23,7 @@ import {
 import { APP_LOCK, startApp } from "../src/main/index.ts";
 import { writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
-import { tempDir } from "./helpers.ts";
+import { CLOCK_SHIFTED, tempDir } from "./helpers.ts";
 
 const WRITER = join(import.meta.dir, "..", "src", "core", "log", "writer.ts");
 const ENTRY = join(import.meta.dir, "..", "src", "main", "index.ts");
@@ -103,26 +103,30 @@ describe("SI-4: a lock that survives a container restart", () => {
     }
   });
 
-  test("the same lock with a fresh mtime is refused, then taken once 30 s pass", () => {
-    const t = tempDir("akou-lock-");
-    try {
-      const lock = join(t.dir, "akou.lock");
-      writeFileSync(lock, `${process.pid} 0123456789abcdef\n`);
-      const now = Date.now();
-      expect(refused(() => acquireLock(lock, process.pid, processAlive, { now: () => now }))).toBe(
-        true,
-      );
-      expect(
-        refused(() => acquireLock(lock, process.pid, processAlive, { now: () => now + 29_000 })),
-      ).toBe(true);
-      expect(acquireLock(lock, process.pid, processAlive, { now: () => now + 31_000 })).toBe(
-        process.pid,
-      );
-      expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
-    } finally {
-      t.cleanup();
-    }
-  });
+  // Compares a file it writes with `Date.now()`: skipped a year ahead (CLOCK_SHIFTED).
+  test.skipIf(CLOCK_SHIFTED)(
+    "the same lock with a fresh mtime is refused, then taken once 30 s pass",
+    () => {
+      const t = tempDir("akou-lock-");
+      try {
+        const lock = join(t.dir, "akou.lock");
+        writeFileSync(lock, `${process.pid} 0123456789abcdef\n`);
+        const now = Date.now();
+        expect(
+          refused(() => acquireLock(lock, process.pid, processAlive, { now: () => now })),
+        ).toBe(true);
+        expect(
+          refused(() => acquireLock(lock, process.pid, processAlive, { now: () => now + 29_000 })),
+        ).toBe(true);
+        expect(acquireLock(lock, process.pid, processAlive, { now: () => now + 31_000 })).toBe(
+          process.pid,
+        );
+        expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
+      } finally {
+        t.cleanup();
+      }
+    },
+  );
 
   test("a second acquire inside the same process is refused, even when old", () => {
     const t = tempDir("akou-lock-");
@@ -159,28 +163,33 @@ describe("SI-4: a lock that survives a container restart", () => {
     }
   });
 
-  test("in app mode a lock whose pid is dead is taken at once, fresh or not", async () => {
-    const t = tempDir("akou-lock-");
-    try {
-      const child = Bun.spawn([process.execPath, "--version"], { stdout: "ignore" });
-      await child.exited;
-      const lock = join(t.dir, "akou.lock");
-      writeFileSync(lock, `${child.pid} 0123456789abcdef\n`);
-      expect(acquireLock(lock, process.pid, processAlive)).toBe(child.pid);
-      // In server mode the same fresh lock waits for its heartbeat to stop: the pid may be alive
-      // in another container.
-      writeFileSync(lock, `${child.pid} 0123456789abcdef\n`);
-      expect(
-        refused(() => acquireLock(lock, process.pid, processAlive, { serverMode: true })),
-      ).toBe(true);
-      aged(lock, 31);
-      expect(acquireLock(lock, process.pid, processAlive, { serverMode: true })).toBe(child.pid);
-    } finally {
-      t.cleanup();
-    }
-  });
+  // Compares a file it writes with `Date.now()`: skipped a year ahead (CLOCK_SHIFTED).
+  test.skipIf(CLOCK_SHIFTED)(
+    "in app mode a lock whose pid is dead is taken at once, fresh or not",
+    async () => {
+      const t = tempDir("akou-lock-");
+      try {
+        const child = Bun.spawn([process.execPath, "--version"], { stdout: "ignore" });
+        await child.exited;
+        const lock = join(t.dir, "akou.lock");
+        writeFileSync(lock, `${child.pid} 0123456789abcdef\n`);
+        expect(acquireLock(lock, process.pid, processAlive)).toBe(child.pid);
+        // In server mode the same fresh lock waits for its heartbeat to stop: the pid may be alive
+        // in another container.
+        writeFileSync(lock, `${child.pid} 0123456789abcdef\n`);
+        expect(
+          refused(() => acquireLock(lock, process.pid, processAlive, { serverMode: true })),
+        ).toBe(true);
+        aged(lock, 31);
+        expect(acquireLock(lock, process.pid, processAlive, { serverMode: true })).toBe(child.pid);
+      } finally {
+        t.cleanup();
+      }
+    },
+  );
 
-  test("a call's log writer follows the same rule", () => {
+  // Compares a file it writes with `Date.now()`: skipped a year ahead (CLOCK_SHIFTED).
+  test.skipIf(CLOCK_SHIFTED)("a call's log writer follows the same rule", () => {
     const t = tempDir("akou-lock-");
     try {
       const lock = join(t.dir, ".akou.lock");
@@ -214,39 +223,44 @@ describe("SI-4: a lock that survives a container restart", () => {
     expect(new TextDecoder().decode(value)).toContain("held");
   }
 
-  test("two containers on one volume: the second stays refused while the first runs, and takes the lock after SIGKILL", async () => {
-    const t = tempDir("akou-lock-");
-    const beat = 1000;
-    const stale = 3000;
-    const a = container(join(t.dir, "akou.lock"), beat);
-    try {
-      await heldBy(a);
-      const lock = join(t.dir, "akou.lock");
-      // Container B cannot see A's pid (another namespace): every pid looks dead to it.
-      const tryB = () =>
-        acquireLock(lock, process.pid, () => false, {
-          serverMode: true,
-          staleMs: stale,
-          id: "b0b0b0b0b0b0b0b0",
-        });
-      // Refused for longer than the threshold: only A's heartbeat can keep the lock fresh.
-      const until1 = Date.now() + stale + 1500;
-      while (Date.now() < until1) {
-        expect(refused(tryB)).toBe(true);
-        await Bun.sleep(250);
+  // Compares a file it writes with `Date.now()`: skipped a year ahead (CLOCK_SHIFTED).
+  test.skipIf(CLOCK_SHIFTED)(
+    "two containers on one volume: the second stays refused while the first runs, and takes the lock after SIGKILL",
+    async () => {
+      const t = tempDir("akou-lock-");
+      const beat = 1000;
+      const stale = 3000;
+      const a = container(join(t.dir, "akou.lock"), beat);
+      try {
+        await heldBy(a);
+        const lock = join(t.dir, "akou.lock");
+        // Container B cannot see A's pid (another namespace): every pid looks dead to it.
+        const tryB = () =>
+          acquireLock(lock, process.pid, () => false, {
+            serverMode: true,
+            staleMs: stale,
+            id: "b0b0b0b0b0b0b0b0",
+          });
+        // Refused for longer than the threshold: only A's heartbeat can keep the lock fresh.
+        const until1 = Date.now() + stale + 1500;
+        while (Date.now() < until1) {
+          expect(refused(tryB)).toBe(true);
+          await Bun.sleep(250);
+        }
+        const killedAt = Date.now();
+        a.kill("SIGKILL");
+        await a.exited;
+        await until(async () => !refused(tryB), stale + beat + 2000, "B takes the lock");
+        // Within the scaled 40 s: the threshold plus one heartbeat, as the acceptance says.
+        expect(Date.now() - killedAt).toBeLessThan(stale + beat);
+        expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} b0b0b0b0b0b0b0b0`);
+      } finally {
+        a.kill("SIGKILL");
+        t.cleanup();
       }
-      const killedAt = Date.now();
-      a.kill("SIGKILL");
-      await a.exited;
-      await until(async () => !refused(tryB), stale + beat + 2000, "B takes the lock");
-      // Within the scaled 40 s: the threshold plus one heartbeat, as the acceptance says.
-      expect(Date.now() - killedAt).toBeLessThan(stale + beat);
-      expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} b0b0b0b0b0b0b0b0`);
-    } finally {
-      a.kill("SIGKILL");
-      t.cleanup();
-    }
-  }, 20_000);
+    },
+    20_000,
+  );
 
   test("positive control: the pid-and-id rule without the mtime check lets the second container in", async () => {
     const t = tempDir("akou-lock-");

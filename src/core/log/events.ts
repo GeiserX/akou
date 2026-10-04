@@ -46,6 +46,17 @@ export interface CallRenamed extends Envelope {
   by: Author;
 }
 
+/**
+ * The call's workspace from now on, after its folder moved to that workspace's folder
+ * (PROGRAMMABILITY PG-A4). Like a rename, the highest `rev` wins over `call.created`'s.
+ */
+export interface CallMoved extends Envelope {
+  type: "call.moved";
+  rev: number;
+  workspace: string;
+  by: Author;
+}
+
 export interface CallEnded extends Envelope {
   type: "call.ended";
   reason: "stop" | "interrupted" | "abandoned";
@@ -404,6 +415,7 @@ export interface WebhookDone extends Envelope {
 export type LogEvent =
   | CallCreated
   | CallRenamed
+  | CallMoved
   | CallEnded
   | CallFailed
   | PartStarted
@@ -508,6 +520,7 @@ const SPECS: { [T in EventType]: Spec } = {
     template: opt("string"),
   },
   "call.renamed": { rev: req("int"), title: req("string"), by: req("author") },
+  "call.moved": { rev: req("int"), workspace: req("string"), by: req("author") },
   "call.ended": { reason: req(["stop", "interrupted", "abandoned"]) },
   "call.failed": { stage: req("string"), error: req("string") },
   "part.started": {
@@ -765,6 +778,9 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
   if (type === "call.renamed" && (o.title as string).trim() === "") {
     return "call.renamed: title must not be empty";
   }
+  if (type === "call.moved" && (o.workspace as string).trim() === "") {
+    return "call.moved: workspace must not be empty";
+  }
   if (type === "vocab.add" && typeof o.term === "string") {
     if (o.term.trim() === "") return "vocab.add: term must not be empty";
     if (o.heard === undefined) return 'vocab.add: missing field "heard"';
@@ -777,7 +793,8 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
       type === "remember" ||
       type === "vocab.add" ||
       type === "vocab.learned" ||
-      type === "call.renamed") &&
+      type === "call.renamed" ||
+      type === "call.moved") &&
     (o.rev as number) < 1
   ) {
     return `${type}: rev must be >= 1`;

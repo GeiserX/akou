@@ -620,6 +620,7 @@ export class SetupWizard {
     };
     draw();
     // A grant given in System Settings shows here without a click.
+    // clock: polls the OS for a grant given in System Settings.
     this.timer = setInterval(async () => {
       try {
         const r = await this.d.t.request<{ grants?: Grants }>("GET", "/dictation");
@@ -696,6 +697,7 @@ export class SetupWizard {
     );
     list.hidden = false;
     if (best.state === "downloading" && !this.bestTimer) {
+      // clock: polls the best model's download while it runs.
       this.bestTimer = setInterval(() => {
         if (this.step === "models" && this.running) void this.bestRow();
       }, 1000);

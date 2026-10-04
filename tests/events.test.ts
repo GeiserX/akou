@@ -22,6 +22,7 @@ export const EXAMPLES: Record<string, Record<string, unknown>> = {
     template: "standup",
   },
   "call.renamed": { rev: 1, title: "Q3 planning", by: "user" },
+  "call.moved": { rev: 1, workspace: "clients", by: "user" },
   "call.ended": { reason: "stop" },
   "call.failed": { stage: "open", error: "exit 77" },
   "part.started": {

@@ -11,6 +11,7 @@ import { existsSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
+import { fusionChoice } from "../../asr/fusion.ts";
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
 import { llamaRuntime } from "../../asr/llama-server.ts";
 import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
@@ -230,6 +231,7 @@ function pullPlan(
       preset,
       reg.map((m) => m.id),
       runtime,
+      fusionChoice(settings).engines,
     );
     if ("unavailable" in p) {
       return {
@@ -237,10 +239,11 @@ function pullPlan(
         message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
       };
     }
-    // `best` names on-demand entries (Qwen, a llama-server build) that the machine's list leaves out.
+    // `best` and `fusion` name on-demand entries (Qwen, a llama-server build, Whisper, Canary)
+    // that the machine's list leaves out.
     return {
       ids: [...p.models],
-      registry: preset === "best" ? all : reg,
+      registry: preset === "best" || preset === "fusion" ? all : reg,
       preset: name,
       named: name,
     };
@@ -508,23 +511,61 @@ function unbuilt(
   };
 }
 
+/** One device line: `* id  Name`, the default marked. */
+function deviceLine(d: Body): string {
+  return `${d.default ? "*" : " "} ${d.id}  ${d.name}`;
+}
+
+/** One app line: `id  Name  pid N`; macOS names an app by its bundle id, printed once. */
+function appLine(a: Body): string {
+  const name = String(a.name).toLowerCase() === String(a.id).toLowerCase() ? "" : `  ${a.name}`;
+  return `  ${a.id}${name}  pid ${a.pid}`;
+}
+
+const devices: Command = {
+  name: "devices",
+  summary: "Microphones and outputs, with the ids --mic takes",
+  usage: "akou devices [--json]",
+  flags: {},
+  examples: ["akou devices", "akou devices --json"],
+  run: async (ctx, p) => {
+    if (p.positional.length > 0) return usage(ctx, "devices takes no words");
+    const r = await api(ctx, "GET", "/devices");
+    return finish(ctx, r, (b) =>
+      [
+        "Microphones (* is the default; start --mic ID):",
+        ...((b.inputs as Body[]).length ? (b.inputs as Body[]).map(deviceLine) : ["  none"]),
+        "Outputs:",
+        ...((b.outputs as Body[]).length ? (b.outputs as Body[]).map(deviceLine) : ["  none"]),
+      ].join("\n"),
+    );
+  },
+};
+
+const apps: Command = {
+  name: "apps",
+  summary: "Apps with audio, with the ids --call app:ID takes",
+  usage: "akou apps [--json]",
+  flags: {},
+  examples: ["akou apps", "akou apps --json"],
+  run: async (ctx, p) => {
+    if (p.positional.length > 0) return usage(ctx, "apps takes no words");
+    const r = await api(ctx, "GET", "/apps");
+    return finish(ctx, r, (b) =>
+      (b.apps as Body[]).length === 0
+        ? "No app has audio open."
+        : ["Apps with audio (start --call app:ID):", ...(b.apps as Body[]).map(appLine)].join("\n"),
+    );
+  },
+};
+
 export const setupCommands: Command[] = [
   config,
   token,
   models,
   share,
-  unbuilt(
-    "devices",
-    "Microphones and outputs",
-    "akou devices",
-    "listing devices needs the capture helper's device query, which is not built yet",
-  ),
-  unbuilt(
-    "apps",
-    "Apps playing audio, for --call app:ID",
-    "akou apps",
-    "listing apps needs the capture helper's app query, which is not built yet",
-  ),
+  devices,
+  apps,
   unbuilt(
     "self-update",
     "Update the Linux CLI tarball",

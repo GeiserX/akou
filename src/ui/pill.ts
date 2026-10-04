@@ -173,6 +173,7 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
   return e as T;
 }
 
+// clock: the default of an injected `now`; tests pass their own.
 export function mountPill(t: PillTransport, now: () => number = () => Date.now()): PillSink {
   let s: PillState = { state: "hidden" };
   /** The preview's words and how many characters at their start are settled, for this session. */
@@ -355,6 +356,7 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
   el("lang").addEventListener("click", () => {
     if (s.state === "listening" && s.language?.switchable === true) t.control("language");
   });
+  // clock: the pill's elapsed time on screen.
   setInterval(tick, 250);
   draw();
 
