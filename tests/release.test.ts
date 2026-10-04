@@ -17,7 +17,13 @@ import config, {
   UPDATE_FEED,
 } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
-import { hutchEnv, PINS, pairedHutch, releaseName } from "../scripts/build-app.ts";
+import {
+  DESKTOP_PLATFORMS,
+  hutchEnv,
+  PINS,
+  pairedHutch,
+  releaseName,
+} from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
 import { main as bumpCask, dmgName, dmgSum, renderCask } from "../scripts/bump-cask.ts";
 import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
@@ -185,13 +191,21 @@ describe("the toolchain pins", () => {
   });
 
   test("[spike] Hutch cannot fetch behind a proxy: Hutch runs with no proxy variables and signs ad-hoc by default", () => {
-    const env = hutchEnv({
-      HTTPS_PROXY: "http://p:1",
-      http_proxy: "http://p:1",
-      ALL_PROXY: "x",
-      PATH: "/bin",
-    });
+    const env = hutchEnv(
+      {
+        HTTPS_PROXY: "http://p:1",
+        http_proxy: "http://p:1",
+        ALL_PROXY: "x",
+        PATH: "/bin",
+      },
+      "darwin",
+    );
     expect(env).toEqual({ PATH: "/bin", HUTCH_NO_UPDATE_CHECK: "1", ELECTROBUN_DEVELOPER_ID: "-" });
+    // On Windows, Windows' own tar before Git's, whatever the variable's case.
+    expect(hutchEnv({ Path: "C:\\Git\\usr\\bin", SystemRoot: "C:\\Windows" }, "win32").Path).toBe(
+      "C:\\Windows\\System32;C:\\Git\\usr\\bin",
+    );
+    expect(hutchEnv({ PATH: "/bin" }, "linux").PATH).toBe("/bin");
     expect(
       hutchEnv({ ELECTROBUN_DEVELOPER_ID: "Developer ID Application: X (T)" })
         .ELECTROBUN_DEVELOPER_ID,
@@ -291,10 +305,16 @@ describe("what the bundle carries beside the main process", () => {
       "native/akou-diarize/target/release/akou-diarize": `${MAIN_OUT}/akou-diarize`,
     });
     expect(builtCopies(none)).toEqual({});
-    expect(builtCopies(all)).toEqual({
+    expect(builtCopies(all, "darwin")).toEqual({
       "dist/ui": `${MAIN_OUT}/ui`,
       // The command line the akou menu links into PATH (DK-M6).
       "dist/app-cli/akou": `${MAIN_OUT}/akou`,
+      "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
+      "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
+    });
+    expect(builtCopies(all, "win32")).toEqual({
+      "dist/ui": `${MAIN_OUT}/ui`,
+      "dist/app-cli/akou.exe": `${MAIN_OUT}/akou.exe`,
       "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });
@@ -640,9 +660,12 @@ describe("[CI-23] releases publish the update feed the app reads", () => {
   });
 });
 
+/** The cask installs the macOS app, whatever OS runs these tests. */
+const MACOS = DESKTOP_PLATFORMS["darwin-arm64"] as string;
+
 describe("[CI-25] tags bump the Homebrew cask", () => {
   const sha = "a".repeat(64);
-  const sums = `${"b".repeat(64)}  akou-cli-${pkg.version}-darwin-arm64.tar.gz\n${sha}  ${releaseName(pkg.version)}.dmg\n`;
+  const sums = `${"b".repeat(64)}  akou-cli-${pkg.version}-darwin-arm64.tar.gz\n${sha}  ${releaseName(pkg.version, MACOS)}.dmg\n`;
 
   /** A bare git repository standing in for the tap, with one commit on its branch. */
   function fakeTap(): {
@@ -681,7 +704,13 @@ describe("[CI-25] tags bump the Homebrew cask", () => {
   }
 
   test("the cask installs this version's DMG, checked by its SHA-256, on Apple silicon", () => {
-    expect(dmgName(pkg.version)).toBe(`${releaseName(pkg.version)}.dmg`);
+    expect(dmgName(pkg.version)).toBe(`${releaseName(pkg.version, MACOS)}.dmg`);
+    // The release name follows the platform asked for; the cask's DMG stays macOS's on any host,
+    // a Windows runner included, where this machine's own release name is the Windows app's.
+    expect(releaseName(pkg.version, DESKTOP_PLATFORMS["win32-x64"])).toBe(
+      `akou-${pkg.version}-windows-x64`,
+    );
+    expect(dmgName(pkg.version)).not.toContain("windows");
     const cask = renderCask("1.2.3", sha);
     expect(cask).toContain('version "1.2.3"');
     expect(cask).toContain(`sha256 "${sha}"`);
@@ -694,7 +723,7 @@ describe("[CI-25] tags bump the Homebrew cask", () => {
 
   test("the DMG's line is read from SHA256SUMS, and nothing else", () => {
     expect(dmgSum(sums, pkg.version)).toBe(sha);
-    expect(dmgSum(`${sha} *${releaseName(pkg.version)}.dmg`, pkg.version)).toBe(sha);
+    expect(dmgSum(`${sha} *${releaseName(pkg.version, MACOS)}.dmg`, pkg.version)).toBe(sha);
     expect(dmgSum(sums, "9.9.9")).toBeNull();
   });
 

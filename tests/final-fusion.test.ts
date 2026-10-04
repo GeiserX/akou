@@ -85,7 +85,11 @@ function engine(
   return e;
 }
 
-async function run(fusion: FusionPass, parts = twoParts()) {
+async function run(
+  fusion: FusionPass,
+  parts = twoParts(),
+  progress?: (done_s: number, total_s: number, step: string) => void,
+) {
   const out: EventDraft[] = [];
   const result = await runFinalPass(
     {
@@ -93,6 +97,7 @@ async function run(fusion: FusionPass, parts = twoParts()) {
       audio: new MemoryAudio(parts),
       decode: null,
       pid: 1,
+      progress,
     },
     new FakeModels(),
     (d) => out.push(d),
@@ -127,6 +132,24 @@ describe("[ASR-6] a call's final pass on fusion", () => {
     });
     expect(r.result.model).toBe("rover-conf(qa,wb,pc)");
     expect(r.out.filter((d) => d.type === "final.part.done").length).toBe(2);
+  });
+
+  test("the progress counts every engine's pass: it only grows, a third at the first engine's end, whole at the last's", async () => {
+    const [a, b, c] = [engine("qa"), engine("wb"), engine("pc")];
+    const seen: { done: number; total: number; decodes: number[] }[] = [];
+    const r = await run({ engines: [a, b, c], fuser: "rover-conf" }, twoParts(), (d, t, step) => {
+      if (step === "decoding")
+        seen.push({ done: d, total: t, decodes: [a, b, c].map((e) => e.decodes) });
+    });
+    expect(r.result.ok).toBe(true);
+    const total = seen[0]?.total as number;
+    expect(total).toBeGreaterThan(0);
+    const dones = seen.map((x) => x.done);
+    expect(dones).toEqual([...dones].sort((x, y) => x - y));
+    // The first engine has decoded all four pieces and the second none: one pass of three.
+    const first = seen.filter((x) => x.decodes[0] === 4 && x.decodes[1] === 0).at(-1);
+    expect(first?.done).toBeCloseTo(total / 3, 6);
+    expect(dones.at(-1)).toBeCloseTo(total, 6);
   });
 
   test("[positive control] the vote: two engines outvote the first one's wrong word; under first the wrong word stays", async () => {

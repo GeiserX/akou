@@ -116,7 +116,8 @@ export class ScriptedSession implements CaptureSession {
     this.handlers.message({
       type: "capturing",
       mic: { id: "default", name: "Test Mic", rate: 48000 },
-      call: { mode: "system", rate: 48000 },
+      // The real helper echoes the scope it was asked for (`wire()` in source.rs).
+      call: { mode: this.opts.call, rate: 48000 },
       exclude: [],
       capture_ns: this.anchorNs.toString(),
     });

@@ -1309,6 +1309,9 @@ export class AkouApp implements ApiApp {
         ...(this.o.liveReviewEveryMs ? { reviewEveryMs: this.o.liveReviewEveryMs } : {}),
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
+        modelIdleMinutes: () => this.cfg.settings["asr.modelIdleMinutes"],
+        // What a dictation needs to start fast is loaded again; the rest waits for its next use.
+        onRelease: () => this.warmDictationModels(),
       },
       (id) => this.manager.controller(id) as CallAccess | undefined,
     );
@@ -3415,10 +3418,11 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Loads what the next dictation needs on the live Worker (DC-E7): Parakeet, the dictation VAD,
-   * and the streaming model its words come from, so the first press after launch waits for none of
-   * them. Runs when the recognizer starts, ahead of anything else on its Worker, and again whenever
-   * dictation warms (turned on, a model landed, a language changed); a loaded model stays loaded.
+   * Loads what the next dictation needs on the live Worker (DC-E7): the dictation VAD, the
+   * streaming model its words come from, and Parakeet only when the text comes from it (`fast`, or
+   * no streaming model), so the first press after launch waits for none of them. Runs when the
+   * recognizer starts, ahead of anything else on its Worker, again whenever dictation warms (turned
+   * on, a model landed, a language changed), and after the Worker let go of idle models.
    */
   private warmDictationModels(): void {
     const asr = this.asr;
@@ -3426,8 +3430,9 @@ export class AkouApp implements ApiApp {
     if (!asr || this.quitting || !s["dictation.enabled"] || s["dictation.engine"] === "remote")
       return;
     this.dictationWarming++;
+    const choice = this.dictationStreamChoice();
     asr
-      .warmDictation(this.dictationStreamChoice())
+      .warmDictation(choice, choice === null || this.dictationVerdict().engine === "fast")
       .catch((err: Error) => this.log("warn", `dictation: models not loaded ahead: ${err.message}`))
       .finally(() => {
         this.dictationWarming--;

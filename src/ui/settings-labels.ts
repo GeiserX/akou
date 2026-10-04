@@ -30,6 +30,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "export.dir": { label: "Copy finished calls to" },
   "capture.call": {
     label: "Call audio",
+    help: "One app records only the app you pick, and the whole computer if it quits. Whole computer is the default.",
     choices: [
       ["system", "Whole computer"],
       ["app", "One app"],
@@ -138,6 +139,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     ],
   },
   "asr.threads": { label: "Threads per recognizer", unit: "threads" },
+  "asr.modelIdleMinutes": {
+    label: "Unload the speech models after",
+    help: "Frees their memory when no call or dictation used them. Dictation's own model loads back.",
+    unit: "idle minutes",
+  },
   "asr.segmentPause": {
     label: "Pause that ends a live line",
     help: "Must be shorter than the longest live line.",

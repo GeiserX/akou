@@ -501,7 +501,8 @@ body.welcoming #composer #controls {
 }
 /* The live model the next call runs (WINDOW W3.19): "Live: <choice>" and a chevron, opening a
    menu of the setups downloaded here, each with one plain line. Disabled while a call records. */
-#live-pick {
+#live-pick,
+#call-source {
   position: relative;
   flex: 0 1 auto;
   min-width: 6.5rem;
@@ -510,7 +511,8 @@ body.welcoming #composer #controls {
 #live-pick[hidden] {
   display: none;
 }
-#live {
+#live,
+#call-pick {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -527,26 +529,32 @@ body.welcoming #composer #controls {
   font-weight: 500;
   white-space: nowrap;
 }
-#live .live-key {
+#live .live-key,
+#call-pick .call-key {
   flex: none;
   color: var(--dim);
 }
-#live-name {
+#live-name,
+#call-name {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 #live:hover:not(:disabled),
-#live[aria-expanded="true"] {
+#live[aria-expanded="true"],
+#call-pick:hover:not(:disabled),
+#call-pick[aria-expanded="true"] {
   border-color: var(--faint);
 }
-#live:disabled {
+#live:disabled,
+#call-pick:disabled {
   opacity: 0.7;
   cursor: default;
 }
 #live-pick[data-state="none"] #live-name {
   color: var(--dim);
 }
-#composer #live .ico {
+#composer #live .ico,
+#composer #call-pick .ico {
   width: 12px;
   height: 12px;
   color: var(--dim);
@@ -556,10 +564,40 @@ body.welcoming #composer #controls {
   color: var(--dim);
   font-weight: 400;
 }
+/* The Call menu (WINDOW W3.3): what the next call records besides the mic, picked for one call.
+   It shares the live button's and panel's look; a pick that is not the default is drawn in the
+   foreground colour, the default in the dim one. */
+#call-source[data-state="default"] #call-name {
+  color: var(--dim);
+}
+#composer #call-menu {
+  width: 300px;
+}
+#composer #call-menu .call-note {
+  margin-left: 8px;
+}
+#call-menu .call-refresh {
+  height: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+#call-menu .call-refresh:hover,
+#call-menu .call-refresh:focus-visible {
+  color: var(--fg);
+  outline: none;
+}
 /* The live panel (lm-live-menu-slots.html): two slots, Live and Second pass, each radio rows of
    the downloaded models and "+ Add a model", which opens the catalog in place. It scrolls inside
    rather than run past the window. */
-#live-menu {
+#live-menu,
+#call-menu {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -576,14 +614,16 @@ body.welcoming #composer #controls {
   background: var(--raised);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
 }
-#live-menu[hidden] {
+#live-menu[hidden],
+#call-menu[hidden] {
   display: none;
 }
 #live-menu .live-slot {
   display: flex;
   flex-direction: column;
 }
-#live-menu .live-head {
+#live-menu .live-head,
+#call-menu .call-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -594,11 +634,13 @@ body.welcoming #composer #controls {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-#live-menu .live-radios {
+#live-menu .live-radios,
+#call-menu .call-radios {
   display: flex;
   flex-direction: column;
 }
-#live-menu .live-item {
+#live-menu .live-item,
+#call-menu .call-item {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -610,7 +652,9 @@ body.welcoming #composer #controls {
   text-align: left;
 }
 #live-menu .live-item:hover:not(:disabled),
-#live-menu .live-item:focus-visible {
+#live-menu .live-item:focus-visible,
+#call-menu .call-item:hover,
+#call-menu .call-item:focus-visible {
   background: var(--line2);
   outline: none;
 }
@@ -620,7 +664,8 @@ body.welcoming #composer #controls {
 #live-menu .live-item:disabled .live-text {
   opacity: 0.55;
 }
-#live-menu .live-dot {
+#live-menu .live-dot,
+#call-menu .call-dot {
   flex: none;
   width: 14px;
   height: 14px;
@@ -628,22 +673,26 @@ body.welcoming #composer #controls {
   border: 1.5px solid var(--faint);
   border-radius: 50%;
 }
-#live-menu .live-item[aria-checked="true"] .live-dot {
+#live-menu .live-item[aria-checked="true"] .live-dot,
+#call-menu .call-item[aria-checked="true"] .call-dot {
   border-color: var(--accent);
   background: radial-gradient(var(--accent) 38%, transparent 44%);
 }
-#live-menu .live-text {
+#live-menu .live-text,
+#call-menu .call-text {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
-#live-menu .live-title {
+#live-menu .live-title,
+#call-menu .call-title {
   font-size: 12.5px;
   font-weight: 500;
 }
-#live-menu .live-line {
+#live-menu .live-line,
+#call-menu .call-line {
   color: var(--dim);
   font-size: 11.5px;
   font-weight: 400;
@@ -656,13 +705,15 @@ body.welcoming #composer #controls {
   font-size: 11px;
 }
 #live-menu .live-note,
-#live-menu .live-none {
+#live-menu .live-none,
+#call-menu .call-note {
   margin: 4px 8px 6px 30px;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.4;
 }
-#live-menu .live-sep {
+#live-menu .live-sep,
+#call-menu .call-sep {
   height: 1px;
   margin: 4px 8px;
   background: var(--line2);

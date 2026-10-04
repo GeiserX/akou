@@ -387,19 +387,41 @@ describe("DC-E7: the live Worker shares its streaming model", () => {
     p.stop();
   });
 
-  test("the warm-up loads the recognizer and the streaming model, never a call's in its place", async () => {
+  test("the warm-up loads the streaming model, and the recognizer only when the text comes from it", async () => {
     const models = new FakeModels();
     const p = new LivePipeline(models, {}, () => {});
     p.warmDictation({ engine: "nemotron-en-560", lang: "en" }, false);
+    expect(models.loads).toMatchObject({ "nemotron-en-560": 1 });
+    expect(models.loads["fake-parakeet"]).toBeUndefined();
+    // The text comes from Parakeet (`fast`): it loads too. Again: nothing loads twice.
+    p.warmDictation({ engine: "nemotron-en-560", lang: "en" }, false, true);
+    p.warmDictation({ engine: "nemotron-en-560", lang: "en" }, false, true);
     expect(models.loads).toMatchObject({ "fake-parakeet": 1, "nemotron-en-560": 1 });
-    // Again: nothing loads twice.
-    p.warmDictation({ engine: "nemotron-en-560", lang: "en" }, false);
-    expect(models.loads).toMatchObject({ "fake-parakeet": 1, "nemotron-en-560": 1 });
+    // No streaming model: the words come from Parakeet, so it is loaded by default.
+    const none = new FakeModels();
+    new LivePipeline(none, {}, () => {}).warmDictation(null, false);
+    expect(none.loads["fake-parakeet"]).toBe(1);
     // A call on another engine runs: the warm-up leaves it be.
     await p.beginCall({ ...noSpeakers, live: { engine: "nemotron-3.5-560", lang: "auto" } });
     p.warmDictation({ engine: "nemotron-3.5-1120", lang: "es" }, true);
     expect(models.loads["nemotron-3.5-1120"]).toBeUndefined();
     expect(models.loads["nemotron-3.5-560"]).toBe(1);
+    p.stop();
+  });
+
+  test("release lets go of the call's engine and the recognizer; the dictation's warm-up loads only its own again", async () => {
+    const models = new FakeModels();
+    const p = new LivePipeline(models, {}, () => {});
+    await p.beginCall({ ...noSpeakers, live: { engine: "nemotron-3.5-560", lang: "auto" } });
+    p.setDecodeList(null, 1);
+    expect(models.loads).toMatchObject({ "fake-parakeet": 1, "nemotron-3.5-560": 1 });
+    p.release();
+    await models.release();
+    p.warmDictation({ engine: "nemotron-en-560", lang: "en" }, false);
+    expect(models.loads).toMatchObject({ "fake-parakeet": 1, "nemotron-en-560": 1 });
+    // The next use of the recognizer loads it again.
+    p.decodeDictationSpan(concat(speak(["hello"]), silence(0.5)), { from: 0, to: 8000 });
+    expect(models.loads["fake-parakeet"]).toBe(2);
     p.stop();
   });
 

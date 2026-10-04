@@ -21,6 +21,7 @@
 
 import { QWEN_LANGUAGE_CODES } from "../main/asr/llama-catalog.ts";
 import { everyText, liveModelName } from "../main/asr/model-text.ts";
+import type { AudioApp } from "../main/capture/devices.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
@@ -162,7 +163,7 @@ const SUBS: Record<string, SubPage> = {
       },
       { title: "Final transcript", keys: ["asr.final.model"] },
       { title: "Fusion", keys: ["asr.final.engines", "asr.fusion", "asr.memoryBudgetMb"] },
-      { title: "Engines", keys: ["asr.threads", "asr.modelsDir"] },
+      { title: "Engines", keys: ["asr.threads", "asr.modelIdleMinutes", "asr.modelsDir"] },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],
   },
@@ -296,6 +297,36 @@ function callAudio(v: string): { mode: string; apps: string } {
   return { mode: "system", apps: "" };
 }
 
+/**
+ * The apps "One app" offers: the apps with audio `GET /apps` lists, or why this computer cannot
+ * record one app at all (501, Linux or an older Windows); null when akou gave no list (an older
+ * akou, a helper that cannot list), where the app is named by its id, typed.
+ */
+type CallApps = { apps: AudioApp[] } | { unavailable: string } | null;
+
+/** Reads the apps with audio; never throws. */
+async function readApps(t: Transport): Promise<CallApps> {
+  const r = await t.request<{ apps?: unknown }>("GET", "/apps").catch(() => null);
+  if (!r) return null;
+  if (r.status === 501) {
+    // The reason is the helper's, which may end with the command line's way out.
+    const why = message(r.body, "one app cannot be recorded here").replace(/;\s*use --call.*$/, "");
+    return { unavailable: why };
+  }
+  if (r.status >= 400 || !Array.isArray(r.body?.apps)) return null;
+  const seen = new Set<string>();
+  // Windows lists an app once per process: one row per id.
+  const apps = (r.body.apps as AudioApp[]).filter(
+    (a) =>
+      typeof a?.id === "string" &&
+      a.id !== "" &&
+      typeof a.name === "string" &&
+      !seen.has(a.id) &&
+      seen.add(a.id),
+  );
+  return { apps };
+}
+
 type Status = Partial<Pick<AppStatus, "provider" | "asr">> & {
   app?: Partial<AppStatus["app"]>;
   /** Claude Code and Codex as the app found them; null while it has not looked. */
@@ -362,6 +393,7 @@ export class SettingsPage {
   private status: Status = {};
   private live: LiveReply["live"] | null = null;
   private mics: CaptureInput[] | null = null;
+  private apps: CallApps = null;
   /** The presets and engines a job may name, as a select's choices; empty when unread. */
   private models: [value: string, label: string][] = [];
   private recorder: KeyRecorder | null = null;
@@ -446,17 +478,19 @@ export class SettingsPage {
   }
 
   /**
-   * Reads the settings, the status and the models. `mics` reads the microphones too, which runs the
-   * capture helper's device query: a show does, a save keeps the list the show read.
+   * Reads the settings, the status and the models. `mics` reads the microphones and the apps with
+   * audio too, which runs the capture helper's device query: a show does, a save keeps the lists
+   * the show read.
    */
   private async load(mics = false): Promise<void> {
     const read = ++this.reads;
     const app = !this.hooks.server;
-    const [cfg, st, models, inputs, server] = await Promise.all([
+    const [cfg, st, models, inputs, apps, server] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.t.request<LiveReply>("GET", "/models") : null,
       app && mics ? readMics(this.t) : null,
+      app && mics ? readApps(this.t) : null,
       // Both modes: the desktop's Server mode page sets the same job defaults.
       this.t.request<JobModels>("GET", "/server").catch(() => null),
     ]);
@@ -464,6 +498,7 @@ export class SettingsPage {
     this.status = st && st.status < 400 ? (st.body ?? {}) : {};
     this.live = models && models.status < 400 ? (models.body?.live ?? null) : null;
     if (mics) this.mics = inputs && "inputs" in inputs ? inputs.inputs : null;
+    if (mics) this.apps = apps;
     // A job's model is a preset or an engine: offer both.
     this.models = server && server.status < 400 ? jobModelChoices(server.body) : [];
     if (cfg.status >= 400) {
@@ -658,8 +693,11 @@ export class SettingsPage {
       this.shown[key] = assistantUse(this.settings);
       help = this.agentState();
     } else if (key === "provider.apiKey") controls = this.apiKeyControls(id);
-    else if (key === "capture.call") controls = this.callAudioControls(id, String(value ?? ""));
-    else if (key === "capture.mic") controls = [this.micControl(id, String(value ?? ""))];
+    else if (key === "capture.call") {
+      controls = this.callAudioControls(id, String(value ?? ""));
+      // Where one app cannot be recorded, the help says why instead of offering it.
+      if (this.apps && "unavailable" in this.apps) help = `${capital(this.apps.unavailable)}.`;
+    } else if (key === "capture.mic") controls = [this.micControl(id, String(value ?? ""))];
     else if (key === "asr.languages") controls = [this.languagesControl(id, value)];
     else if (key === "app.hotkey") controls = this.hotkeyControls(id, String(value ?? ""));
     else if (key === "share.bind") controls = [this.bindControl(id, String(value ?? ""))];
@@ -1066,47 +1104,84 @@ export class SettingsPage {
     return inWords(text.replace(/\s*\([^()]*:\/\/[^()]*\)/g, ""), Object.keys(this.schema));
   }
 
+  /**
+   * Call audio: the whole computer, one app or none. "One app" picks from the apps with audio
+   * `GET /apps` lists, as the microphone picks from the inputs, keeps a saved app that is not
+   * playing now, and takes an id typed for an app not running; with no list it is the typed id
+   * alone. Where one app cannot be recorded (501) it is not offered, and a saved app shows as
+   * not available rather than as the whole computer.
+   */
   private callAudioControls(id: string, value: string): (Node | null)[] {
     const now = callAudio(value);
     const w = wordsFor("capture.call");
-    // The value saved is the hidden field's; the segments and the app field write it.
+    const listed = this.apps && "apps" in this.apps ? this.apps.apps : null;
+    const unavailable = this.apps !== null && "unavailable" in this.apps;
+    // The value saved is the hidden field's; the segments, the app list and the app field write it.
     const hidden = h("input", { id, type: "hidden", value });
     hidden.dataset.key = "capture.call";
-    const app = field({
+    let choices = w.choices ?? [];
+    if (unavailable)
+      choices =
+        now.mode === "app"
+          ? choices.map(([v, l]) => [v, v === "app" ? `${l} (not available here)` : l] as const)
+          : choices.filter(([v]) => v !== "app");
+    const pick = listed
+      ? this.appSelect(`${id}-pick`, now.mode === "app" ? now.apps : "", listed)
+      : null;
+    const typed = field({
       id: `${id}-app`,
       label: "The app's id",
-      value: now.apps,
+      value: pick ? "" : now.apps,
       placeholder: "The app's id",
     });
-    app.hidden = now.mode !== "app";
-    const seg = segmented({
-      id: `${id}-mode`,
-      label: w.label,
-      options: w.choices ?? [],
-      value: now.mode,
-    });
+    const seg = segmented({ id: `${id}-mode`, label: w.label, options: choices, value: now.mode });
+    const show = () => {
+      const app = seg.input.value === "app" && !unavailable;
+      if (pick) pick.hidden = !app;
+      typed.hidden = !app || (pick !== null && pick.value !== "~");
+    };
+    show();
     const write = () => {
+      show();
       const mode = seg.input.value;
-      app.hidden = mode !== "app";
-      const next = mode === "app" ? (app.value.trim() ? `app:${app.value.trim()}` : "") : mode;
-      if (mode === "app" && !app.value.trim()) {
-        app.focus();
+      const chosen = pick && pick.value !== "~" ? pick.value : typed.value.trim();
+      if (mode === "app" && !chosen) {
+        // Nothing is saved until an app is picked or typed.
+        if (!unavailable) (typed.hidden ? pick : typed)?.focus();
         return;
       }
+      const next = mode === "app" ? `app:${chosen}` : mode;
       if (next === hidden.value) return;
       hidden.value = next;
       hidden.dispatchEvent(new Event("change", { bubbles: true }));
     };
-    // The segments' own hidden value carries no key: only `hidden` is saved.
-    seg.input.addEventListener("change", (e) => {
-      e.stopPropagation();
-      write();
-    });
-    app.addEventListener("change", (e) => {
-      e.stopPropagation();
-      write();
-    });
-    return [app, seg.root, hidden];
+    // The segments', the list's and the field's own values carry no key: only `hidden` is saved.
+    for (const el of [seg.input, typed, pick])
+      el?.addEventListener("change", (e) => {
+        e.stopPropagation();
+        write();
+      });
+    return [typed, pick, seg.root, hidden];
+  }
+
+  /**
+   * The apps with audio as a select, each by its name: first a row asking for one (or saying none
+   * plays), a saved app not playing now marked so, and last "An app by its id…" for the field.
+   */
+  private appSelect(id: string, saved: string, apps: readonly AudioApp[]): HTMLSelectElement {
+    const options: [string, string][] = [
+      ["", apps.length > 0 ? "Choose an app" : "No app is playing sound now"],
+      ...apps.map((a) => [a.id, a.name] as [string, string]),
+    ];
+    if (saved !== "" && !apps.some((a) => a.id === saved)) {
+      // Several ids, or one not running: named where akou knows them.
+      const ids = saved.split(",").map((x) => x.trim());
+      const names = ids.map((x) => apps.find((a) => a.id === x)?.name ?? x).join(", ");
+      const gone = ids.some((x) => !apps.some((a) => a.id === x));
+      options.push([saved, gone ? `${names} (not playing now)` : names]);
+    }
+    options.push(["~", "An app by its id…"]);
+    return selectBox({ id, label: "The app", options, value: saved });
   }
 
   /** The microphone from the inputs akou lists; a device id to type when it lists none. */

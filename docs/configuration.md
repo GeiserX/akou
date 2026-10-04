@@ -99,7 +99,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `capture.helper` (file only) | `[]` | Command that starts the capture helper, before its own arguments. Empty: the akou-capture bundled with the app, else the one on PATH. |
 | `capture.mic` | `"default"` | Microphone: `default`, `none`, or a device id (akou cannot list the ids yet). |
-| `capture.call` | `"system"` | Call audio: `system`, `none`, or `app:<id>[,<id>]`. |
+| `capture.call` | `"system"` | Call audio: `system` (the whole computer), `none`, or `app:<id>[,<id>]` for only those apps. An app id is a bundle id on macOS (`us.zoom.xos`) and an executable name without `.exe`, or a process id, on Windows; Linux records the whole computer only. Any other value is refused when saved, and one already in the file is replaced by `system` at load with a warning. |
 | `capture.warmStartSeconds` | `3` | Wait for the helper to report capturing, after a helper has captured once this run. |
 | `capture.coldStartSeconds` | `10` | Wait for the helper to report capturing on the first start of a run. |
 | `capture.stopSeconds` | `5` | How long a helper may take to stop before it is killed. |
@@ -129,6 +129,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | `asr.live.engine` | `"auto"` | The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. The other chunk sizes (`nemotron-en-80`, `nemotron-en-160`, `nemotron-en-1120`, `nemotron-3.5-80`, `nemotron-3.5-160`, `nemotron-3.5-320`) run only when named: a shorter chunk writes a word sooner, and `auto` never picks one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model. |
 | `asr.segmentPause` | `0.7` | Silence that closes a live segment, seconds. Must be below `asr.segmentWindow`. |
 | `asr.segmentWindow` | `12` | Longest live segment, seconds. |
+| `asr.modelIdleMinutes` | `5` | Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. What a dictation needs to start fast (its streaming model, or Parakeet when its text comes from Parakeet) is loaded again at once; the rest loads at its next use. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare. |
 | `asr.qwenIdleMinutes` | `0` | Stop the Qwen3-ASR server kept warm for dictation after this many idle minutes, to get its memory back; the next dictation starts it again. 0: never. |
 
 ### provider

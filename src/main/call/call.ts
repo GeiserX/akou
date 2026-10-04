@@ -17,6 +17,8 @@
  * - A helper that exits on its own gives `part.ended {reason: helper-exit}` and an automatic
  *   restart; a `dead` call side for 60 s, or no packets at all for 10 s, also restart; five
  *   automatic restarts in ten minutes make the call `interrupted` (DESIGN 2.5, 4.5).
+ * - Per-app capture whose tapped apps all exited never stops the call: the part restarts as
+ *   whole-computer capture, one automatic restart (DESIGN 2.5, "Tapped apps exited").
  * - A failed restart that leaves the call without a working helper is retried against the same
  *   limit, whoever asked for it, so a call never says recording while nothing captures.
  * - A restart during a pause keeps the call paused: the new part starts with a `pause` at 0.
@@ -29,6 +31,7 @@ import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import { type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE, LockError, LogWriter, type WriterOptions } from "../../core/log/writer.ts";
+import { parseCallMode } from "../capture/call-mode.ts";
 import {
   type CaptureEngine,
   type CaptureSession,
@@ -338,7 +341,7 @@ export class CallController {
     this.append({ type: "call.failed", stage: r.stage, error: r.error });
     this.setStatus("failed");
     this.closeWriter();
-    return startFailure(r, this.id);
+    return startFailure(r, this.id, this.capture.call);
   }
 
   private nextPart(): number {
@@ -547,7 +550,13 @@ export class CallController {
       run.session?.send("rebuild_call");
       run.session?.send("rebuild_mic");
     }
-    if (m.state === "tapped-apps-exited") void this.stop();
+    if (m.ch === "call" && m.state === "tapped-apps-exited") {
+      // Per-app capture lost every app it tapped (quit, crashed, relaunched for an update). The
+      // call keeps recording: the next part records the whole computer, make before break, so the
+      // mic never stops. A restart already running picks this up through `needsRestart`.
+      this.capture = { ...this.capture, call: "system" };
+      this.spawnBackground(this.autoRestart("every tapped app exited"));
+    }
   }
 
   private clearDead(run: PartRun): void {
@@ -663,12 +672,18 @@ export class CallController {
   }
 
   /**
-   * The part being recorded has no working helper: it exited, it stalled, or its call side stayed
-   * dead. Only then does a failed restart try again.
+   * The part being recorded has no working helper: it exited, it stalled, its call side stayed
+   * dead, or every app it tapped exited. Only then does a failed restart try again.
    */
   private needsRestart(): boolean {
     const run = this.current;
-    return !run || run.ended || run.stallReported || run.deadFired;
+    return (
+      !run ||
+      run.ended ||
+      run.stallReported ||
+      run.deadFired ||
+      run.health.get("call") === "tapped-apps-exited"
+    );
   }
 
   private async restartLive(): Promise<Outcome<{ part: number }>> {
@@ -699,7 +714,7 @@ export class CallController {
           return fail(409, "cancelled", "the call was stopped during the restart", {
             call: this.id,
           });
-        return startFailure(r, this.id);
+        return startFailure(r, this.id, this.capture.call);
       }
       if (this.status !== "recording" && this.status !== "paused") {
         // Stopped or interrupted while the new helper was starting.
@@ -740,7 +755,7 @@ export class CallController {
     // A restart of a call that already has audio never writes call.failed.
     this.setStatus(before);
     this.closeWriter();
-    return startFailure(r, this.id);
+    return startFailure(r, this.id, this.capture.call);
   }
 
   private async autoRestart(_cause: string): Promise<void> {
@@ -889,8 +904,16 @@ function describeExit(e: ExitInfo, warn: string | null): string {
 function startFailure(
   r: { stage: string; error: string; exitCode: number | null },
   call: string,
+  scope: string,
 ): Extract<Outcome, { ok: false }> {
   if (r.exitCode === EXIT.permission)
     return fail(403, "permission", r.error, { stage: r.stage, call });
-  return fail(503, "capture_failed", r.error, { stage: r.stage, call });
+  // The helper found no process for the picked app: say what to do, not only what failed. On
+  // macOS an app that has not played anything yet has no audio process to find.
+  const m = parseCallMode(scope);
+  const error =
+    r.exitCode === EXIT.noDevice && m.ok && m.mode.kind === "apps"
+      ? `${r.error}. Start the app and let it play sound before recording it, or record the whole computer instead: call "system"`
+      : r.error;
+  return fail(503, "capture_failed", error, { stage: r.stage, call });
 }

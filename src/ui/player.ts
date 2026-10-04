@@ -53,6 +53,8 @@ export class Player {
   private readonly speed = byId<HTMLSelectElement>("speed");
   private mix: { mic: GainNode; call: GainNode } | null = null;
   private marksKey = "";
+  /** A play asked for while a seek was on its way, run when the seek lands. */
+  private queued: (() => void) | null = null;
 
   constructor(private readonly d: PlayerDeps) {
     const p = this.el;
@@ -61,6 +63,8 @@ export class Player {
     for (const ev of ["play", "pause", "ended", "emptied"]) {
       p.addEventListener(ev, () => this.drawPlay());
     }
+    // A seek that never lands must not hold the next Space.
+    for (const ev of ["error", "emptied"]) p.addEventListener(ev, () => this.unqueue());
     for (const ev of ["timeupdate", "seeked", "play", "pause", "durationchange", "emptied"]) {
       p.addEventListener(ev, () => this.tick());
     }
@@ -77,6 +81,7 @@ export class Player {
   /** Plays one part's audio from `a0` seconds, for the line `lineId`. */
   load(url: string, part: number, a0: number, lineId: string): void {
     const p = this.el;
+    this.unqueue();
     // A new source resets the element's rate to its default, which setRate keeps equal to ours.
     if (p.src !== url) p.src = url;
     this.part = part;
@@ -100,6 +105,7 @@ export class Player {
   /** Another call opened: the last one's audio stops and is let go, so nothing can resume it. */
   stop(): void {
     const p = this.el;
+    this.unqueue();
     p.pause();
     p.removeAttribute("src");
     delete p.dataset.line;
@@ -112,9 +118,28 @@ export class Player {
   toggle(): void {
     const p = this.el;
     if (!p.src) return;
-    if (!p.paused) p.pause();
-    else if (this.d.mayPlay()) void p.play().catch(() => {});
+    if (this.queued) this.unqueue();
+    else if (!p.paused) p.pause();
+    else if (this.d.mayPlay()) {
+      // Play once a seek on its way has landed, as load() does: Linux WebKit's media backend
+      // dropped a pause sent while a play waited on a seek, and kept playing.
+      if (p.seeking) {
+        const go = () => {
+          this.queued = null;
+          void p.play().catch(() => {});
+          this.drawPlay();
+        };
+        this.queued = go;
+        p.addEventListener("seeked", go, { once: true });
+      } else void p.play().catch(() => {});
+    }
     this.drawPlay();
+  }
+
+  /** A queued play is called off: a second press before the seek landed, or the audio let go. */
+  private unqueue(): void {
+    if (this.queued) this.el.removeEventListener("seeked", this.queued);
+    this.queued = null;
   }
 
   /** Sets the speed everywhere it lives: the element, its default for the next part, the picker. */
