@@ -137,6 +137,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     ],
   },
   "asr.threads": { label: "Threads per recognizer", unit: "threads" },
+  "asr.modelIdleMinutes": {
+    label: "Unload the speech models after",
+    help: "Frees their memory when no call or dictation used them. Dictation's own model loads back.",
+    unit: "idle minutes",
+  },
   "asr.segmentPause": {
     label: "Pause that ends a live line",
     help: "Must be shorter than the longest live line.",

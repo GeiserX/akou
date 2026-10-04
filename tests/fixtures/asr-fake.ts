@@ -586,6 +586,8 @@ export class FakeModels implements ModelSet {
     await Bun.sleep(this.o.releaseMs ?? 0);
     this.rec = null;
     this.covered.clear();
+    // The streaming engine goes too, as sherpa's set lets go of it.
+    this.liveEngines.length = 0;
     this.releases++;
   }
 
