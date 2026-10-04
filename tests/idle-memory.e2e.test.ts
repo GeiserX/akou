@@ -42,9 +42,11 @@ const READY =
 
 /**
  * How far over its fresh start an idle app may be, MB. Parakeet alone is about 2.2 GB, the
- * streaming model about 1.8 GB; what a call or a dictation leaves behind besides them is tens of MB.
+ * streaming model about 1.8 GB. Two readings of the same idle app on a busy 16 GB Mac differed by
+ * up to about 500 MB (the allocator's freed small regions and swap), so the margin is above that
+ * and far below either model.
  */
-const MARGIN_MB = 300;
+const MARGIN_MB = 600;
 /**
  * Less than Parakeet adds to the footprint when it loads (2.2 GB measured), and more than a call
  * adds when Parakeet is loaded already (up to 850 MB measured on a busy Mac).
@@ -67,7 +69,7 @@ function footprintMb(pid: number): number {
 
 describe("an idle app gives back what a call loaded", () => {
   test.skipIf(!READY)(
-    "a fresh start holds no Parakeet, a call loads it, and an idle minute after the call and a few dictations the app is back within 300 MB of its fresh start (skipped off macOS, or without AKOU_LIVE_MODELS holding Parakeet, the VAD and nemotron-3.5-560)",
+    "a fresh start holds no Parakeet, a call loads it, and an idle minute after the call and a few dictations the app is back within 600 MB of its fresh start (skipped off macOS, or without AKOU_LIVE_MODELS holding Parakeet, the VAD and nemotron-3.5-560)",
     async () => {
       const home = tempDir("akou-idle-");
       // The call plays two-voices.wav on both sides, the call side 12 s behind, for its whole length.
