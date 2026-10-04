@@ -1258,7 +1258,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `title` | `string` | no |  |
 | `template` | `string` | no |  |
 | `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
-| `mic` | `string` | no | The microphone: an input id from akou_devices |
+| `mic` | `string` | no | The microphone: an input id from akou_devices, or "none" |
 | `vocab` | `string[]` | no |  |
 | `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
@@ -1283,7 +1283,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "type": "string"
     },
     "mic": {
-      "description": "The microphone: an input id from akou_devices",
+      "description": "The microphone: an input id from akou_devices, or \"none\"",
       "type": "string"
     },
     "vocab": {
