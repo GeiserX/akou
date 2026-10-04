@@ -259,7 +259,8 @@ function operation(
     });
   }
   for (const [name, p] of Object.entries(d.query ?? {})) parameters.push(queryParameter(name, p));
-  const [media, schema] = MEDIA[d.type ?? "json"];
+  const [media, plain] = MEDIA[d.type ?? "json"];
+  const schema = (d.reply as Json | undefined) ?? plain;
   const op: OpenApiOperation = {
     operationId: d.id,
     // A route whose id is not `<tag>.<verb>` gets no tag here, and the rules below fail it.

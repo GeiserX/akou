@@ -2,6 +2,8 @@
 
 akou also runs as a self-hosted transcription server: one Docker image on linux/amd64 and linux/arm64, running the same core as the desktop app. A program uploads an audio file, gets a job id back at once, and reads one result with text, language, words, segments and the engine that made it, by long-poll, by an event feed, or by a signed webhook. The server also speaks the OpenAI transcription endpoint, the Wyoming protocol and Bazarr's `/asr`, so Nextcloud, Home Assistant and Bazarr work with no code on their side. There is no akou cloud and no relay: the server is your own box, reached by your own programs.
 
+You do not need server mode to transcribe a file on your own Mac: the desktop app takes `akou transcribe FILE` with its own token ([Usage](usage.md#transcribing-a-file)). Server mode is for other programs and other machines, with keys.
+
 The steps below cover the image, the models, the first start and the keys. [GPUs and presets](server-hardware.md) covers the GPU images, the `best` preset and a large backlog.
 
 ## Running the image
@@ -44,7 +46,9 @@ Every program that sends jobs needs its own key. Create one in the running conta
 docker exec akou akou keys create --name archive --scope jobs --callback-host telegram-viewer
 ```
 
-It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way.
+It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way. To change the hosts of a key a program already uses, run `akou keys update ID --callback-host HOST ...`: the key, its secret and its jobs stay, and the server uses the new hosts from the next request. Each key edit, and each job, is a line in the server's log (`key.created`, `key.updated`, `key.revoked`, `job.created`, `job.done`, `job.failed`), never with the audio or the text.
+
+akou keeps a job, its result and its events for `server.retain_days` (default 7), counted from the job's creation; `GET /v1/server` answers the number as `retain_days`. Once that time passes, or a client deletes the job, its id answers `410 Gone` with `retain_days` in the body, so a program can tell a job it must submit again from an id it got wrong, which answers `404`. The [OpenAPI file](https://github.com/GeiserX/akou/blob/main/docs/api/openapi.json) describes every job route.
 
 To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), use the compose file in [examples/compose/telegram-archive](https://github.com/GeiserX/akou/tree/main/examples/compose/telegram-archive/) and the one-time setup in [ux/SERVER.md section 12.5](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md#125-one-compose-file-for-both).
 
@@ -176,7 +180,10 @@ The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key com
 ```sh
 export AKOU_URL=https://akou.example
 export AKOU_API_KEY_FILE=~/.config/akou/remote.key
+akou transcribe note.ogg --preset best
 akou jobs list
 ```
+
+`akou transcribe` uploads the file, waits for the job and prints the transcript; on a server the job is deleted once the text is printed, so it does not stay in `akou jobs list` there. Without `AKOU_URL` the same commands go to the desktop app on this machine, which runs the job itself.
 
 With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that refuses the connection, or answers nothing within the request's time, exits 69 and names `AKOU_URL`; a wrong key exits 77. `akou quit` refuses to run, since it stops only the app on this machine, and `akou doctor` reports the server it reaches. `AKOU_API_KEY_FILE` may start with `~/`, as `docker -e` and a systemd unit pass it unexpanded.

@@ -82,6 +82,8 @@ export interface AskAnswer {
   model?: string;
   cites: string[];
   reason?: string;
+  /** Why no model answered, by kind: `missing`, `auth`, `exhausted`, `cancelled` or `other`. */
+  errorKind?: string;
   context?: string;
 }
 

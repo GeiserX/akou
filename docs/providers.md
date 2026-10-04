@@ -94,7 +94,7 @@ What we know:
 
 What we have not verified:
 
-- Whether the consumer terms of Anthropic ([Consumer Terms](https://www.anthropic.com/legal/consumer-terms), [Usage Policy](https://www.anthropic.com/legal/aup)) and of OpenAI ([Terms of Use](https://openai.com/policies/terms-of-use/)) cover a separate application starting their command-line tool for its user, with that user's subscription.
+- Whether the consumer terms of Anthropic ([Consumer Terms](https://www.anthropic.com/legal/consumer-terms), [Usage Policy](https://www.anthropic.com/legal/aup)) and of OpenAI ([Terms of Use](https://openai.com/policies/row-terms-of-use/)) cover a separate application starting their command-line tool for its user, with that user's subscription.
 - Whether that changes when the application is distributed to other people, as akou is.
 - Whether either vendor limits how often, or how unattended, such runs may be.
 
@@ -102,4 +102,20 @@ Before each release we read the current terms and the tools' own documentation, 
 
 | Date checked | Anthropic | OpenAI | Change made |
 |---|---|---|---|
-| not yet checked | | | |
+| 2026-10-03 | Allowed as akou runs it, on our reading; Anthropic has not confirmed it. Third-party apps may not offer Claude.ai login, handle its credentials, or "route requests through Free, Pro, or Max plan credentials on behalf of their users"; a user signing in to the unmodified Claude Code with their own subscription is allowed. Pro and Max limits assume "ordinary, individual usage" | Allowed as akou runs it, on our reading. The Terms of Use forbid extracting Output "automatically or programmatically" and sharing an account, while Codex's own documentation offers `codex exec --json` for scripts and says it reuses the saved login by default. No rule names an app that starts Codex for its user | None. The harness stays the default, and the rolling memo stays off for it. One question stays open (below) |
+
+### The reading of 2026-10-03
+
+**Anthropic.** Sources: [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), the [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) (effective 8 October 2025) and the [Usage Policy](https://www.anthropic.com/legal/aup) (effective 15 September 2025).
+
+- A separate app starting Claude Code for its user. The Claude Code page says OAuth sign-in "is designed to support ordinary use of Claude Code and other native Anthropic applications", and that Anthropic "does not permit third-party developers to offer Claude.ai login into their own applications, or to route requests through Free, Pro, or Max plan credentials on behalf of their users", nor to "collect, store, or intermediate Claude.ai credentials or session tokens". It also says these rules do not "prevent an end user from signing in to the unmodified Claude Code binary with their own Claude subscription". akou offers no login and never reads the credentials. It starts the user's own `claude`, unmodified and signed in by the user, for a request the user made. We read that as the allowed case, but the "on behalf of their users" sentence is the one a stricter reading would hold against akou. The Consumer Terms forbid access "through automated or non-human means" except "where we otherwise explicitly permit it", and `claude -p` is Claude Code's own documented non-interactive mode.
+- Distributing akou to other people. The same page says that "preinstalling or running Claude Code in your products or services (e.g. in hosted sandboxes or other agent infrastructure)" needs Anthropic's Commercial Terms, an unmodified binary, and each user signing in with their own credentials, with no paying for, reselling or intermediating anyone's usage. akou neither ships nor installs Claude Code; it starts the copy the user installed. If Anthropic counts that as running Claude Code in a product, akou meets the binary and sign-in conditions, but nobody behind akou has agreed to the Commercial Terms. This is the open question. Only Anthropic can settle it, through the contact the page names.
+- How often, and unattended. The page says the "advertised usage limits for Pro and Max plans assume ordinary, individual usage of Claude Code and the Agent SDK". akou runs Claude Code only when the user asks; the rolling memo, which runs on its own, stays off for the harness unless the user turns it on.
+
+**OpenAI.** Sources: the [Terms of Use](https://openai.com/policies/row-terms-of-use/) (effective 1 January 2026; the [Europe Terms of Use](https://openai.com/policies/eu-terms-of-use/), updated 16 January 2026, say the same on these points), the [Usage Policies](https://openai.com/policies/usage-policies/) (effective 29 October 2025), and Codex's pages on [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode) and [authentication](https://learn.chatgpt.com/docs/auth).
+
+- A separate app starting Codex for its user. The Terms forbid "automatically or programmatically extract[ing] data or Output" and sharing "your account credentials". Codex's documentation describes `codex exec` for scripts, says "codex exec reuses saved CLI authentication by default", and describes `--json` as the way "to consume Codex output in scripts". It recommends an API key "for programmatic Codex CLI workflows, such as CI/CD jobs", as advice rather than a rule. We read the Terms' ban as aimed at scraping the service, not at the machine-readable mode Codex publishes.
+- Distributing akou to other people. Nothing in the Terms or the Codex pages addresses an app that starts the user's own Codex.
+- How often, and unattended. The Terms forbid circumventing "any rate limits or restrictions". akou never retries a run that hit a limit; it says why and shows the excerpts.
+
+If either vendor says no, the harness becomes opt-in and the default moves to `none`, as written above.

@@ -6,8 +6,8 @@
  *
  * - **Which model** (SV-S1): the request's `model`, then its `preset` when it is not `auto`, then
  *   `server.default_model`, then what `auto` runs here (SV-R2, `autoChoice`). `auto` anywhere means
- *   "no opinion". Only a recognizer of the catalog or a built preset can be named; a client can never
- *   name a URL.
+ *   "no opinion". Only a recognizer of the catalog, a built preset or a fused list of recognizers
+ *   (`rover-conf(a,b,c)`, the `fusion` preset's model) can be named; a client can never name a URL.
  * - **Downloads** (SV-M1 to SV-M3): one download per model id however many jobs wait on it, every
  *   file checked against its pinned SHA-256 (`downloadModels`), retried after 1, 5 and 15 minutes,
  *   then given up. Before one starts, the models folder must stay under `server.models_max_gb` and
@@ -36,6 +36,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  enginesRefusal,
+  FUSION_DEFAULT,
+  fuserRefusal,
+  fusionModelId,
+  fusionParts,
+} from "../asr/fusion.ts";
 import { QWEN_MIN_MEMORY_GB } from "../asr/live-setups.ts";
 import { QWEN_ASR } from "../asr/llama-catalog.ts";
 import { FORMULAS, type Measure, type NotMeasured, score, scoresOf } from "../asr/model-scores.ts";
@@ -80,6 +87,15 @@ export function isRecognizer(m: ModelSpecEntry): boolean {
   return serves ? serves.includes("final") : !HELPER_MODELS.has(m.id);
 }
 
+/**
+ * A recognizer a file job can run alone. transcribe-cpp's engines (Whisper, Canary) run only as
+ * engines of a fused list (the `fusion` preset, ASR-6), so a job that names one alone is refused
+ * before anything downloads, instead of fetching gigabytes and then failing.
+ */
+export function runsJobs(m: ModelSpecEntry): boolean {
+  return isRecognizer(m) && (m as Partial<CatalogEntry>).runtime !== "transcribe-cpp";
+}
+
 // ---------------------------------------------------------------------------
 // Which model a job runs (SV-S1)
 
@@ -110,6 +126,11 @@ export interface ResolveOptions {
   catalog: readonly ModelSpecEntry[];
   /** `server.default_model`. */
   defaultModel: string;
+  /**
+   * The `fusion` preset as the settings make it (`fusionChoice`): `asr.fusion` and the engines of
+   * `asr.final.engines`, else the preset's. Absent: the preset's own.
+   */
+  fusion?: { fuser: string; engines: readonly string[] };
   /** The OpenAI door: a name akou does not know (`whisper-1`) is no opinion, not an error. */
   unknownIsAuto?: boolean;
   /** What `auto` runs here (`autoChoice`); absent, `fast`. */
@@ -120,6 +141,12 @@ export interface ResolveOptions {
 export function hardwareChoice(): { model: string; preset: string } {
   const fast = PRESETS.find((p) => p.name === "fast");
   return { model: fast?.engines[0] as string, preset: "fast" };
+}
+
+/** The model id the `fusion` preset runs under these options: `rover-conf(<ids>)`. */
+export function fusionPreset(o: Pick<ResolveOptions, "fusion">): string {
+  const f = o.fusion ?? { fuser: "rover-conf", engines: FUSION_DEFAULT };
+  return fusionModelId(f.fuser, f.engines);
 }
 
 /** What `auto` runs on this server, and why, in a sentence a person reads (SV-R2, SV-U5). */
@@ -167,9 +194,10 @@ export function autoChoice(c: AutoContext): AutoChoice {
 }
 
 /**
- * What one value names: a preset, a recognizer, or nothing (`auto`, or a name the OpenAI door
- * ignores). Refused: an unbuilt preset or an engine only an unbuilt preset lists (409), any other
- * name (422, or 409 when it is the server's own setting).
+ * What one value names: a preset, a recognizer, a fused list of recognizers (`rover-conf(a,b,c)`,
+ * engines of the catalog the N-engine pass runs, ASR-6), or nothing (`auto`, or a name the OpenAI door
+ * ignores). Refused: an unbuilt preset, an engine only an unbuilt preset lists, or a recognizer
+ * no job runs (409), any other name (422, or 409 when it is the server's own setting).
  */
 function pick(
   value: string | undefined,
@@ -179,6 +207,7 @@ function pick(
 ): ModelChoice | null {
   const v = (value ?? "").trim();
   if (v === "" || v === "auto") return null;
+  const preset = fusionPreset(o);
   if ((PRESET_NAMES as readonly string[]).includes(v)) {
     const p = PRESETS.find((x) => x.name === v);
     if (!p?.built) {
@@ -189,13 +218,32 @@ function pick(
         { preset: v },
       );
     }
+    if (v === "fusion") return { model: preset, preset: v, source };
     return { model: p.engines[0] as string, preset: v, source };
   }
-  if (o.catalog.some((m) => m.id === v && isRecognizer(m))) {
+  const fused = fusionParts(v);
+  if (fused) {
+    const why = fuserRefusal(fused.fuser);
+    if (why) throw new ModelRefused(409, "preset_unavailable", `${field}: ${why}`, { model: v });
+    const bad =
+      fused.engines.length === 0
+        ? "names no engine"
+        : (enginesRefusal(fused.engines) ??
+          (fused.engines.find((id) => !o.catalog.some((m) => m.id === id))
+            ? "names an engine this platform's catalog does not have"
+            : null));
+    if (bad) {
+      throw new ModelRefused(422, "unknown_model", `${field} ${v} ${bad}`, { field, model: v });
+    }
+    const model = fusionModelId(fused.fuser, fused.engines);
+    return { model, preset: model === preset ? "fusion" : "custom", source };
+  }
+  const entry = o.catalog.find((m) => m.id === v);
+  if (entry && runsJobs(entry)) {
     const p = PRESETS.find((x) => x.built && x.engines[0] === v);
     return { model: v, preset: p?.name ?? "custom", source };
   }
-  const helper = o.catalog.some((m) => m.id === v);
+  const helper = entry !== undefined && !isRecognizer(entry);
   const unbuilt = PRESETS.find((p) => !p.built && p.engines.includes(v));
   if (unbuilt && !helper) {
     throw new ModelRefused(
@@ -203,6 +251,14 @@ function pick(
       "preset_unavailable",
       `${v} belongs to the ${unbuilt.name} preset, whose engines are not built in this version; use fast or auto`,
       { preset: unbuilt.name, model: v },
+    );
+  }
+  if (entry && !helper) {
+    throw new ModelRefused(
+      409,
+      "preset_unavailable",
+      `${v} runs only as one engine of the fusion preset in this version; name fusion, or a fused list such as ${fusionModelId("rover-conf", [...new Set([v, ...FUSION_DEFAULT])])}`,
+      { model: v, preset: "fusion" },
     );
   }
   if (source === "server_default") {
@@ -361,6 +417,7 @@ function writeJson(dir: string, name: string, value: unknown): void {
  * Marks models used at `at`: a job on them starts or ends, or `akou models pull` or an on-demand
  * download finishes them (SV-M4).
  */
+// clock: the default of an injected time; tests pass their own.
 export function touchUsage(dir: string, ids: readonly string[], at = Date.now()): void {
   if (ids.length === 0) return;
   const l = readUsage(dir);
@@ -562,6 +619,7 @@ export class ModelStore {
    */
   private clearStaleCopies(): void {
     const dir = this.o.dir();
+    // clock: a copy left by a crash is judged by its file's real age.
     const before = Date.now() - STALE_COPY_MS;
     try {
       for (const id of readdirSync(dir)) {
@@ -601,6 +659,9 @@ export class ModelStore {
   needs(recognizer: string): string[] {
     const machine = this.o.machine();
     if (machine === null) return [];
+    // A fused list needs each of its engines and what each runs on, the helpers once.
+    const fused = fusionParts(recognizer);
+    if (fused) return [...new Set(fused.engines.flatMap((id) => this.needs(id)))];
     const out = machine.filter((m) => m.id === recognizer || !isRecognizer(m)).map((m) => m.id);
     if (!out.includes(recognizer) && this.entry(recognizer)) out.unshift(recognizer);
     for (const id of this.o.requires?.(recognizer) ?? []) {

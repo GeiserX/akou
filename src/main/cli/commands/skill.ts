@@ -45,6 +45,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -379,8 +380,12 @@ interface Target {
   harness?: Harness;
 }
 
-/** Removes the shipped skills from a folder: only folders whose `SKILL.md` names that skill. */
-function removeSkills(skillsDir: string): string[] {
+/**
+ * Removes the shipped skills from a folder: only folders whose `SKILL.md` names that skill. A
+ * harness's skills folder goes too when that leaves it empty, so a harness whose skills folder
+ * install created is left as it was before (CLI-33); a `--dir` folder the user named stays.
+ */
+function removeSkills(skillsDir: string, dropEmpty: boolean): string[] {
   const removed: string[] = [];
   for (const name of SKILL_NAMES) {
     const dest = join(skillsDir, name);
@@ -389,6 +394,7 @@ function removeSkills(skillsDir: string): string[] {
     rmSync(dest, { recursive: true, force: true });
     removed.push(dest);
   }
+  if (dropEmpty && removed.length > 0 && readdirSync(skillsDir).length === 0) rmdirSync(skillsDir);
   return removed;
 }
 
@@ -447,7 +453,7 @@ export const skillCommand: Command = {
     const server = [...(ctx.self ?? akouCommand()), "mcp"];
 
     if (sub === "uninstall") {
-      const removed = targets.flatMap((t) => removeSkills(t.dir));
+      const removed = targets.flatMap((t) => removeSkills(t.dir, t.harness !== undefined));
       const mcp = harnesses.map((h) => unregisterMcp(h, env));
       return report(ctx, { ok: true, removed, mcp }, [
         ...removed.map((r) => `${r}: removed`),

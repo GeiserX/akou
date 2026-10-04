@@ -444,7 +444,11 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
     try {
       const doc = (await app.get("/openapi.json")).body;
       expect(doc.paths["/v1/calls"]).toBeDefined();
-      expect(doc.paths["/v1/events"]).toBeUndefined();
+      // File jobs in both modes (SV-J1); keys and the OpenAI-compatible route in server mode only.
+      expect(doc.paths["/v1/jobs"]?.post?.operationId).toBe("jobs.create");
+      expect(doc.paths["/v1/events"]).toBeDefined();
+      expect(doc.paths["/v1/keys"]).toBeUndefined();
+      expect(doc.paths["/v1/audio/transcriptions"]).toBeUndefined();
     } finally {
       await app.server.stop();
     }
@@ -661,6 +665,13 @@ describe("[SI-2] an operation takes the verb the other doors already use (PRINCI
     ["akou_add_note", "POST /v1/calls/{id}/notes"],
     ["akou_name_speaker", "POST /v1/calls/{id}/speakers"],
     ["akou_merge_speakers", "POST /v1/calls/{id}/speakers/merge"],
+    ["akou_edit_note", "PATCH /v1/calls/{id}/notes/{nid}"],
+    ["akou_delete_note", "DELETE /v1/calls/{id}/notes/{nid}"],
+    ["akou_finalize", "POST /v1/calls/{id}/finalize"],
+    ["akou_template_list", "GET /v1/templates"],
+    ["akou_template_get", "GET /v1/templates/{name}"],
+    ["akou_open_window", "POST /v1/window"],
+    ["akou_config_get", "GET /v1/config"],
   ];
   const verbMismatches = (doc: OpenApiDoc) => {
     const byRoute = new Map(

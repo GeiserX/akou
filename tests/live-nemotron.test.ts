@@ -44,6 +44,28 @@ const LONG = 30 * 60_000;
  */
 const TOLERANCE = 0.5;
 
+/**
+ * A call is one stream, and one stream over many utterances loses words that a fresh stream per
+ * clip keeps: the first 40 English clips joined with 0.9 s of silence read 12.84 as one call,
+ * against 8.05 run one call each (docs/research/asr-architecture.md section 3.1, the reference
+ * Mac mini, this scorer). The joined case is gated at that figure plus the tolerance.
+ */
+const JOINED = { clips: 40, gapSeconds: 0.9, measured: 12.84 };
+
+/** Clips joined into one clip, `gapSeconds` of silence between them, their references joined. */
+function joined(set: readonly Clip[], gapSeconds: number): Clip {
+  const gap = Math.round(gapSeconds * ASR_RATE);
+  const samples = new Float32Array(
+    set.reduce((n, c) => n + c.samples.length, 0) + gap * Math.max(0, set.length - 1),
+  );
+  let at = 0;
+  for (const c of set) {
+    samples.set(c.samples, at);
+    at += c.samples.length + gap;
+  }
+  return { id: "joined", ref: set.map((c) => c.ref).join(" "), samples };
+}
+
 interface Clip {
   id: string;
   ref: string;
@@ -213,6 +235,26 @@ if (!MODELS || !DATA) {
         LONG,
       );
     }
+
+    test(
+      `en: ${JOINED.clips} clips joined into one call, one stream, within ${JOINED.measured} + ${TOLERANCE}; a lossy stream fails that`,
+      async () => {
+        const choice = chooseLiveEngine("auto", ["en"], () => true).choice as LiveChoice;
+        const call = joined(clips("en", JOINED.clips), JOINED.gapSeconds);
+        const got = wer([{ ref: call.ref, hyp: await transcribe(rig(), choice, call) }]);
+        // Positive control: the same call through a stream that loses a fifth of its tokens.
+        const bad = rig();
+        const real = bad.models.liveEngine.bind(bad.models);
+        bad.models.liveEngine = (id: string) => lossy(real(id));
+        const lost = wer([{ ref: call.ref, hyp: await transcribe(bad, choice, call) }]);
+        console.log(
+          `live ${choice.engine} en, ${JOINED.clips} clips as one call (${(call.samples.length / ASR_RATE / 60).toFixed(1)} min): WER ${got.toFixed(2)}, lossy control ${lost.toFixed(2)}, bound ${JOINED.measured + TOLERANCE}`,
+        );
+        expect(got).toBeLessThanOrEqual(JOINED.measured + TOLERANCE);
+        expect(lost).toBeGreaterThan(JOINED.measured + TOLERANCE);
+      },
+      LONG,
+    );
 
     test(
       "a word shows within 1 s at real time, and a feed held back 1.5 s fails that bound",

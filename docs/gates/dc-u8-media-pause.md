@@ -24,4 +24,3 @@ Result: partial
 
 - **Windows with a real player.** The backend is built and wired but has not run against a player on a desktop. The check needs a media session on the CI runner, such as the Media Player or a browser playing to the virtual cable of the `capture-windows` job.
 - **macOS**, as above.
-- **The app side.** Sending `pause_media` after `ready` and on a change of `dictation.muteMedia`, and the page saying the setting does nothing on macOS.
