@@ -1560,7 +1560,7 @@ export interface LiveAsrOptions {
    * `asr.modelIdleMinutes`, read at each check: the Worker lets go of its models once no call and
    * no dictation has used them for this long (0: as soon as none does). Absent: they stay loaded.
    */
-  idleMinutes?(): number;
+  modelIdleMinutes?(): number;
   /** The Worker let go of its models: the host loads again what a dictation needs to start fast. */
   onRelease?(): void;
 }
@@ -2136,14 +2136,14 @@ export class LiveAsr {
   }
 
   /**
-   * Lets the Worker go of its models once nothing has used them for `idleMinutes`: no call on it,
-   * no dictation open or decoding. What a dictation needs to start fast is loaded again at once
-   * (`onRelease`); everything else waits for its next use. The idle timer calls it; a test with its
-   * own clock calls it too. Answers whether the models were let go.
+   * Lets the Worker go of its models once nothing has used them for `modelIdleMinutes`: no call
+   * on it, no dictation open or decoding, no warm-up loading. What a dictation needs to start fast
+   * is loaded again at once (`onRelease`); everything else waits for its next use. The idle timer
+   * calls it; a test with its own clock calls it too. Answers whether the models were let go.
    */
   releaseIdle(): boolean {
     this.disarmIdle();
-    const minutes = this.o.idleMinutes?.();
+    const minutes = this.o.modelIdleMinutes?.();
     if (minutes === undefined || !this.used || this.closed || this.failed) return false;
     const idleMs = Math.max(0, minutes) * 60_000;
     const busy =
@@ -2169,7 +2169,7 @@ export class LiveAsr {
   private touch(): void {
     this.used = true;
     this.lastUse = this.clock.now();
-    const minutes = this.o.idleMinutes?.();
+    const minutes = this.o.modelIdleMinutes?.();
     if (this.idleTimer !== null || minutes === undefined) return;
     this.idleTimer = this.clock.setTimeout(
       () => this.releaseIdle(),

@@ -372,7 +372,7 @@ function rig(
       clock,
       vocab: o.vocab ? () => o.vocab as VocabSource : undefined,
       onLog: (level, msg) => logs.push({ level, msg }),
-      ...(o.idleMinutes !== undefined ? { idleMinutes: () => o.idleMinutes as number } : {}),
+      ...(o.idleMinutes !== undefined ? { modelIdleMinutes: () => o.idleMinutes as number } : {}),
       ...(o.onRelease ? { onRelease: o.onRelease } : {}),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
@@ -762,6 +762,51 @@ describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
     await r.clock.advance(1 * MIN + 1000);
     expect(told).toBe(1);
   });
+
+  // On the real Worker, a slow model load holds its thread while the host's clock runs on: the
+  // request is in flight when the idle time is up, and only it keeps the models.
+  const CLIP = concat(silence(0.3), speak(["hello"]), silence(0.5));
+  const HOLD = { inThread: false, idleMinutes: 5 } as const;
+
+  test("a dictation decode in flight when the time is up keeps them", async () => {
+    let told = 0;
+    const r = rig({ ...HOLD, fake: { loadMs: 3000 }, onRelease: () => told++ });
+    await r.asr.ready;
+    const decoded = r.asr.decode(CLIP);
+    await r.clock.advance(6 * MIN);
+    expect(told).toBe(0);
+    await decoded;
+    await r.clock.advance(5 * MIN + 1000);
+    expect(told).toBe(1);
+  }, 20_000);
+
+  test("a speech check in flight when the time is up keeps them", async () => {
+    let told = 0;
+    const r = rig({ ...HOLD, fake: { liveLoadMs: 3000 }, onRelease: () => told++ });
+    await r.asr.ready;
+    // A stream that loads its model holds the Worker; dropped at once, it keeps nothing itself.
+    r.asr.openDictation({ engine: "nemotron-en-560", lang: "en" }, ["en"], () => {}).cancel();
+    const heard = r.asr.speech(CLIP);
+    await r.clock.advance(6 * MIN);
+    expect(told).toBe(0);
+    await heard;
+    await r.clock.advance(5 * MIN + 1000);
+    expect(told).toBe(1);
+  }, 20_000);
+
+  test("a dictation warm-up in flight when the time is up keeps them, so the release never undoes it", async () => {
+    let told = 0;
+    const r = rig({ ...HOLD, fake: { liveLoadMs: 3000 }, onRelease: () => told++ });
+    await r.asr.ready;
+    // A use starts the idle time; the warm-up itself is not one.
+    await r.asr.decode(CLIP);
+    const warmed = r.asr.warmDictation({ engine: "nemotron-en-560", lang: "en" });
+    await r.clock.advance(6 * MIN);
+    expect(told).toBe(0);
+    await warmed;
+    await r.clock.advance(5 * MIN + 1000);
+    expect(told).toBe(1);
+  }, 20_000);
 
   test("positive control: without the setting nothing is let go", async () => {
     const r = rig();

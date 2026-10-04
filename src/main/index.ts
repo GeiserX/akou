@@ -1307,7 +1307,7 @@ export class AkouApp implements ApiApp {
         ...(this.o.liveReviewEveryMs ? { reviewEveryMs: this.o.liveReviewEveryMs } : {}),
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
-        idleMinutes: () => this.cfg.settings["asr.modelIdleMinutes"],
+        modelIdleMinutes: () => this.cfg.settings["asr.modelIdleMinutes"],
         // What a dictation needs to start fast is loaded again; the rest waits for its next use.
         onRelease: () => this.warmDictationModels(),
       },
