@@ -19,12 +19,14 @@
 # - silent (the positive control): nothing plays. The call channel must stay under -90 dBFS, so a
 #   measure that reads every file as loud fails here.
 #
-# The gate passes when both hold. A tone run that reads silent with a `warn open` line in its log
+# The gate passes when both hold. It fails without recording when the guest is not macOS 14.3.x,
+# and fails when the helper exits non-zero in either recording, even if it left a file. A tone run that reads silent with a `warn open` line in its log
 # usually means the system-audio prompt is waiting in the VM: run with VNC=1, connect to the
 # address printed, allow the prompt once, and run again (TRAPS: one pending prompt blocks every tap).
 #
-# Writes <out>/verdict.json, both recordings and both helper logs. Leaves the VM in place for a
-# re-run; `tart delete akou-g4-macos14` removes it.
+# Writes <out>/verdict.json (with the reason), then whichever recordings and helper logs exist.
+# Leaves the VM in place for a re-run; `tart delete akou-g4-macos14` removes it.
+# tests/g4-macos14-vm.test.ts runs this script against stand-ins for tart, the guest and ffmpeg.
 set -euo pipefail
 
 helper="${1:?usage: g4-macos14-vm.sh <akou-capture> [out folder]}"
@@ -38,6 +40,8 @@ done
 [ -x "$helper" ] || { echo "g4-macos14-vm: $helper is not an executable" >&2; exit 64; }
 
 share="$out/share"
+# Where tart mounts that folder inside the guest; a test of this script points it at the share.
+share_in_vm="${SHARE_IN_VM:-/Volumes/My Shared Files/akou}"
 mkdir -p "$share"
 cp "$helper" "$share/akou-capture"
 ffmpeg -loglevel error -y -f lavfi -i "sine=frequency=900:sample_rate=48000:duration=6" \
@@ -60,16 +64,47 @@ macos="$(ssh_vm sw_vers -productVersion)"
 echo "g4-macos14-vm: the VM runs macOS $macos"
 [ "${VNC:-0}" = 1 ] && echo "g4-macos14-vm: VNC at vnc://$ip (admin, admin)"
 
-# One recording in the VM: the helper for 12 s, stopped on stdin as the app stops it; the tone, if
-# any, plays from second 3.
+# verdict.json, printed; exits 0 only on a pass. Recordings and logs are copied after it, so a
+# helper that wrote nothing still leaves a verdict.
+finish() {
+  local verdict="$1" reason="$2" tone_rms="${3:-}" silent_rms="${4:-}"
+  cat > "$out/verdict.json" <<EOF
+{
+  "gate": "G4, macOS 14.2 or 14.3",
+  "image": "$image",
+  "macos": "$macos",
+  "tone_call_rms_dbfs": "$tone_rms",
+  "silent_call_rms_dbfs": "$silent_rms",
+  "verdict": "$verdict",
+  "reason": "$reason"
+}
+EOF
+  for f in "$share"/*.opus "$share"/*.err; do if [ -e "$f" ]; then cp "$f" "$out/"; fi; done
+  cat "$out/verdict.json"
+  [ "$verdict" = pass ]
+  exit
+}
+
+# The question is about 14.3: any other guest answers nothing, whatever the image tag says.
+case "$macos" in
+  14.3 | 14.3.*) ;;
+  *) finish fail "the VM runs macOS ${macos:-(unknown)}, not 14.3" ;;
+esac
+
+# One recording in the VM: the helper for 12 s (RECORD_SECONDS, which the test shortens), stopped
+# on stdin as the app stops it; the tone, if any, plays from a quarter of the way in. The helper's own exit status is the recording's: one that exits
+# non-zero fails it, even when it left a file.
+seconds="${RECORD_SECONDS:-12}"
 record() {
   local name="$1" play="$2"
-  ssh_vm "cd '/Volumes/My Shared Files/akou' && rm -f $name.opus $name.err &&
-    { (sleep 12; echo stop) | ./akou-capture run --out $name.opus --mic none --call system 2> $name.err & } &&
-    sleep 3 && { [ $play = yes ] && afplay tone.wav || true; } && wait"
+  ssh_vm "cd '$share_in_vm' && rm -f $name.opus $name.err &&
+    { (sleep $seconds; echo stop) | ./akou-capture run --out $name.opus --mic none --call system 2> $name.err & capture=\$!; } &&
+    sleep $((seconds / 4)) && { [ $play = yes ] && afplay tone.wav || true; } && wait \$capture"
 }
-record tone yes
-record silent no
+failed=""
+record tone yes || failed="$failed tone"
+record silent no || failed="$failed silent"
+[ -z "$failed" ] || finish fail "the helper exited non-zero in:$failed (see the .err logs)"
 
 # The call channel (right) RMS over the whole file, in dBFS; -inf for digital silence.
 rms() {
@@ -83,17 +118,4 @@ verdict="$(awk -v t="$tone_rms" -v s="$silent_rms" 'BEGIN {
   quiet = (s == "-inf") ? -999 : (s == "" ? 0 : s + 0)
   print (tone > -60 && quiet < -90) ? "pass" : "fail"
 }')"
-cat > "$out/verdict.json" <<EOF
-{
-  "gate": "G4, macOS 14.2 or 14.3",
-  "image": "$image",
-  "macos": "$macos",
-  "tone_call_rms_dbfs": "$tone_rms",
-  "silent_call_rms_dbfs": "$silent_rms",
-  "verdict": "$verdict"
-}
-EOF
-# After the verdict, so a helper that wrote nothing still leaves one.
-for f in "$share"/*.opus "$share"/*.err; do if [ -e "$f" ]; then cp "$f" "$out/"; fi; done
-cat "$out/verdict.json"
-[ "$verdict" = pass ]
+finish "$verdict" "tone above -60 dBFS and silence under -90 dBFS on the call channel" "$tone_rms" "$silent_rms"
