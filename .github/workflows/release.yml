@@ -5,7 +5,8 @@ name: release
 # signed, not notarized) and the CLI binaries, checks each built artifact without opening anything,
 # and publishes a GitHub Release (a prerelease while the version is 0.x) with SHA256SUMS, a build
 # attestation for every asset, and notes that start with the version's CHANGELOG.md section.
-# It then replaces the update feed the app's updater reads (docs/CI-CD.md CI-23).
+# It then replaces the update feed the app's updater reads (docs/CI-CD.md CI-23). It also builds and
+# checks the desktop app on Windows and Linux, which it does not publish yet.
 #
 # A tag runs no tests: it releases only a commit whose ci-ok is green (docs/CI-CD.md CI-19).
 #
@@ -34,6 +35,9 @@ on:
       - scripts/build-app.ts
       - scripts/build-cli.ts
       - scripts/smoke-app.ts
+      - scripts/gates/g2-worker.ts
+      - scripts/gates/g2-probe.ts
+      - scripts/clip.ts
       - scripts/check-feed.ts
       - scripts/locate-helper-probe.ts
       - scripts/smoke-cli.ts
@@ -183,6 +187,25 @@ jobs:
         run: bun scripts/smoke-app.ts ${HELPER_FLAG:+"$HELPER_FLAG"}
       - name: the update feed is for this app and this version (docs/CI-CD.md CI-23)
         run: bun scripts/check-feed.ts --dir dist/release
+      - name: the recognizer, cached by its pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: eval-models
+          key: recognizer-${{ runner.os }}-${{ hashFiles('src/main/asr/models.ts') }}
+      # Prereleases never wait on a gate (ROADMAP M0), so here the result is recorded, not enforced.
+      # continue-on-error absorbs a failure but not a stall: a slow model download must not push
+      # this release job into its own limit.
+      - name: G2, recognition in a Worker of the packaged app (ROADMAP; recorded, not enforced)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bun scripts/gates/g2-worker.ts --models eval-models --out gate-g2-macOS.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gate-g2-macOS
+          path: gate-g2-macOS.json
+          if-no-files-found: warn
+          retention-days: 90
       - name: build the CLI (bun build --compile, ad-hoc codesign, --verify --strict)
         run: bun scripts/build-cli.ts
       - name: check the CLI binary headless
@@ -190,6 +213,64 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-arm64
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # The desktop app on Windows x64 and Linux x64 (ROADMAP G1, G2), each built on its own runner
+  # because ElectroBun cannot cross-compile, then checked without opening a window. Not published:
+  # the artifacts stay on the run until the Windows and Linux milestones ship an installer, so the
+  # release does not wait for this job.
+  app-desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          cargo --version
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+      - name: Hutch and the ElectroBun runtime, cached by their pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.hutch
+          key: hutch-${{ runner.os }}-x64-electrobun-2.0.1-hutch-0.24.3
+      - name: build the app (helpers, pages, Workers, ElectroBun through Hutch)
+        run: bun scripts/build-app.ts
+      - name: check the built app without opening it
+        run: bun scripts/smoke-app.ts
+      # The recognizer's files are checked against their pins in src/main/asr/models.ts on every
+      # use, so a stale cache costs a download, never a wrong model. The nightly shares this cache.
+      - name: the recognizer, cached by its pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: eval-models
+          key: recognizer-${{ runner.os }}-${{ hashFiles('src/main/asr/models.ts') }}
+      - name: G2, recognition in a Worker of the packaged app (ROADMAP)
+        run: bun scripts/gates/g2-worker.ts --models eval-models --out "gate-g2-${{ runner.os }}.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gate-g2-${{ runner.os }}
+          path: gate-g2-*.json
+          if-no-files-found: warn
+          retention-days: 90
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-${{ runner.os }}-x64
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14

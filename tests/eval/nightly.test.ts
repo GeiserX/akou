@@ -9,7 +9,18 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { memoryMb, pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
+import type { EngineLatency } from "../../scripts/eval/dictation-latency.ts";
+import {
+  exitCode,
+  failureVerdicts,
+  memoryMb,
+  nightVerdicts,
+  pinned,
+  readWav,
+  SILENCE,
+  timeEngines,
+} from "../../scripts/eval/nightly.ts";
+import type { Measure } from "../../scripts/eval/score.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -156,5 +167,96 @@ describe("Qwen's silent clips (ASR-5)", () => {
           expect(start).toBeGreaterThan((m.stretches[i - 1] as readonly number[])[1] as number);
       });
     }
+  });
+});
+
+describe("the dictation stage when an engine fails", () => {
+  const closed: string[] = [];
+  const engine = (model: string) => async () => ({
+    model,
+    close: async () => {
+      closed.push(model);
+    },
+  });
+  const row = (model: string): EngineLatency => ({
+    model,
+    seconds: { "3": { p50: 100, p95: 120, n: 10 } },
+  });
+
+  test("one that will not start is left out with why, and the others are still timed", async () => {
+    closed.length = 0;
+    const r = await timeEngines(
+      [
+        ["live", engine("live-model")],
+        [
+          "qwen",
+          async () => {
+            throw new Error("llama-server did not start");
+          },
+        ],
+        ["remote", engine("remote-model")],
+      ],
+      async (_, e) => row(e.model),
+    );
+    // The engines after the failure ran: their numbers reach the measures and the latency table.
+    expect(Object.keys(r.out)).toEqual(["live", "remote"]);
+    expect(r.out.remote?.model).toBe("remote-model");
+    expect(r.failed).toEqual([{ engine: "qwen", why: "llama-server did not start" }]);
+    expect(closed).toEqual(["live-model", "remote-model"]);
+    // The night is red for it: a row that is never ok.
+    expect(failureVerdicts("dictation", r.failed)).toEqual([
+      {
+        key: "dictation.qwen",
+        value: 0,
+        unit: "",
+        baseline: null,
+        ok: false,
+        why: "failed: llama-server did not start",
+      },
+    ]);
+  });
+
+  test("one that fails while it is timed is closed, and the next one runs", async () => {
+    closed.length = 0;
+    const r = await timeEngines(
+      [
+        ["live", engine("live-model")],
+        ["remote", engine("remote-model")],
+      ],
+      async (name, e) => {
+        if (name === "live") throw new Error("the stream stopped answering");
+        return row(e.model);
+      },
+    );
+    expect(Object.keys(r.out)).toEqual(["remote"]);
+    expect(r.failed).toEqual([{ engine: "live", why: "the stream stopped answering" }]);
+    expect(closed).toEqual(["live-model", "remote-model"]);
+  });
+
+  test("a failed stage makes the night red: the verdicts carry it and the exit code is 1", () => {
+    const measures: Measure[] = [
+      {
+        key: "dictation.release_to_text.3s.live.p50",
+        value: 120,
+        unit: "ms",
+        better: "lower",
+        gate: "record",
+      },
+    ];
+    const failed = failureVerdicts("dictation", [{ engine: "qwen", why: "llama-server is down" }]);
+    const v = nightVerdicts(measures, {}, failed);
+    expect(v.map((x) => [x.key, x.ok])).toEqual([
+      ["dictation.release_to_text.3s.live.p50", true],
+      ["dictation.qwen", false],
+    ]);
+    expect(exitCode(v)).toBe(1);
+    // Positive control: the same night with no failed stage passes.
+    expect(exitCode(nightVerdicts(measures, {}, []))).toBe(0);
+  });
+
+  test("positive control: with every engine timed, nothing fails and no row is red", async () => {
+    const r = await timeEngines([["live", engine("live-model")]], async (_, e) => row(e.model));
+    expect(r.failed).toEqual([]);
+    expect(failureVerdicts("dictation", r.failed)).toEqual([]);
   });
 });

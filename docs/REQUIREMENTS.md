@@ -11,7 +11,7 @@ Status words:
 
 ## Capture sources and channels
 
-- F0.0, I0.0 five sources (mic, chosen device, all system audio, named apps, everything except named apps): **changed (M1)**. `--call system | app:<id> | none` and `--mic <id> | none`. "Exclude named apps" becomes automatic exclusion of akou's own audio; a user exclusion list comes with per-app capture on each OS.
+- F0.0, I0.0 five sources (mic, chosen device, all system audio, named apps, everything except named apps): **changed (M1)**. `--call system | app:<id> | none` and `--mic <id> | none`. Every door checks the call scope with the helper's own rule (`capture.call`, `POST /calls` `call`), so a malformed one is refused when given, never at the next start, and one already saved loads as `system` with a warning. "Exclude named apps" becomes automatic exclusion of akou's own audio; a user exclusion list comes with per-app capture on each OS.
 - F0.1, I0.1 two backends, ScreenCaptureKit and Core Audio, with `auto`: **dropped**. Core Audio process tap only on macOS. SCKit needs a screen-recording grant, stops on lock, and its automatic selection once failed with no fallback.
 - F0.2 private, unmuted, global-or-per-app process tap: **carried (M1)**, ported to Rust in the capture helper; hark's design is the reference.
 - F0.3 tap read through a private aggregate; mic as clock master: **changed (M1)**. Tap-only aggregate. The mic is an independent stream; alignment is by host timestamp. hark's aggregate is the M0 fallback if the drift test fails.
@@ -21,7 +21,7 @@ Status words:
 - F0.7 mic from default or chosen device, survives route changes and sleep: **carried (M1)** with a device watch and fallback to the default when a pinned device vanishes.
 - F0.8 ScreenCaptureKit capture: **dropped** (see F0.1).
 - F0.9, I0.2 requested rate, bits and channels: **changed (M1)**. Devices open at their native rate; the file is always 48 kHz stereo Opus. No user-selectable rate, bits or channel count.
-- F0.11 stop when every tapped app exits: **carried (M1 on macOS, M3 on Windows)** for per-app capture, as a `health {state: tapped-apps-exited}` event plus an automatic stop with a toast.
+- F0.11 stop when every tapped app exits: **changed (M1 on macOS, M3 on Windows)** for per-app capture. The helper reports a `health {state: tapped-apps-exited}` event; the app never stops the call for it, but restarts the part as whole-computer capture and says so in a banner and a notification, so an app that quits or relaunches never drops the call.
 - F0.12 exact `--duration`: **dropped**. A UI recorder has Stop; the CLI can `sleep N && akou stop`.
 - F0.17 keep-awake: **changed (M1)**. Always on while recording, on every OS.
 - F0.18 SIGINT/SIGTERM graceful, SIGPIPE tolerated: **changed (M1)**. The helper handles signals; the app finalizes from its before-quit path because ElectroBun swallows signals. `akou quit` is the public stop.
