@@ -32,8 +32,8 @@ afterEach(async () => {
 
 /**
  * An app with dictation on (unless `off`), English only, and the streaming model on disk when
- * `stream`; `models` are the fake models' options (`loadMs`: a slow recognizer load), on the
- * recognizer's own Worker when `worker`.
+ * `stream`; `models` are the fake models' options (`liveLoadMs`: a slow streaming model load), on
+ * the recognizer's own Worker when `worker`.
  */
 async function rig(o: {
   stream: boolean;
@@ -144,14 +144,24 @@ describe("DC-E7: the streaming model through the app", () => {
 });
 
 describe("DC-E7: dictation's models load first at launch", () => {
-  test("with dictation on, Parakeet and the streaming model are loaded before any press", async () => {
+  test("with dictation on, the streaming model is loaded before any press, and Parakeet only when the text comes from it", async () => {
     const r = await rig({ stream: true });
     await until(
       async () => (await r.api("GET", "/dictation")).body.loading === false,
       10_000,
       "the models loaded",
     );
-    expect(await loads(r)).toMatchObject({ "fake-parakeet": 1, [STREAM]: 1 });
+    const got = await loads(r);
+    expect(got[STREAM]).toBe(1);
+    // `live` inserts the stream's words: Parakeet would sit in memory unused.
+    expect(got["fake-parakeet"]).toBeUndefined();
+    const fast = await rig({ stream: true, final: "parakeet" });
+    await until(
+      async () => (await fast.api("GET", "/dictation")).body.loading === false,
+      10_000,
+      "the models loaded",
+    );
+    expect(await loads(fast)).toMatchObject({ "fake-parakeet": 1, [STREAM]: 1 });
   });
 
   test("positive control: with dictation off, neither loads until something needs it", async () => {
@@ -168,7 +178,7 @@ describe("DC-E7: dictation's models load first at launch", () => {
 
   test("a press while they load is kept: the status says loading, and the words go in", async () => {
     // On its own Worker, as in the app: the slow load holds that thread, not the app's.
-    const r = await rig({ stream: true, models: { loadMs: 4000 }, worker: true });
+    const r = await rig({ stream: true, models: { liveLoadMs: 4000 }, worker: true });
     // What the pill reads at the release, for its `loading model` line.
     expect((await r.api("GET", "/dictation")).body.loading).toBe(true);
     await dictate(r);

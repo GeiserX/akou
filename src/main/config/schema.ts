@@ -780,6 +780,13 @@ export const SETTINGS = {
     default: 6,
     doc: "How long the remote may take before any audio, plus 0.25 s per second of audio, before the fallback runs.",
   },
+  "asr.modelIdleMinutes": {
+    type: "integer",
+    min: 0,
+    max: 10080,
+    default: 5,
+    doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. What a dictation needs to start fast (its streaming model, or Parakeet when its text comes from Parakeet) is loaded again at once; the rest loads at its next use. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare.",
+  },
   "asr.qwenIdleMinutes": {
     type: "integer",
     min: 0,
