@@ -654,6 +654,17 @@ export class JobStore {
   }
 
   /**
+   * The key a job the store no longer holds belonged to, read from the events it left, which a
+   * delete or the retention sweep keeps (marked deleted). Null for an id it never held.
+   */
+  formerKey(id: string): string | null {
+    const r = this.db.query("SELECT key_id FROM events WHERE job_id = ? LIMIT 1").get(id) as {
+      key_id: string;
+    } | null;
+    return r?.key_id ?? null;
+  }
+
+  /**
    * Cancelled events from before `t` lose their metadata, keeping the job id and the state, marked
    * deleted: retention holds no client data past `server.retain_days` (SV-J6). Returns how many.
    */

@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
+import { boundUrl, compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
 import { notWritableMessage } from "../src/main/server/writable.ts";
 import { until } from "./capture-helpers.ts";
 import { CLI } from "./cli-helpers.ts";
@@ -116,6 +116,41 @@ describe("[SV-P8] akou serve", () => {
     // The one quit path ran: runtime.json and the lock are gone.
     expect(existsSync(join(h.configDir, "runtime.json"))).toBe(false);
     expect(existsSync(join(h.configDir, "akou.lock"))).toBe(false);
+  }, 30_000);
+
+  test("[SV-P5] boundUrl names the bound address, brackets an IPv6 one, and keeps the port and path", () => {
+    expect(boundUrl("0.0.0.0", "http://127.0.0.1:8476/v1")).toBe("http://0.0.0.0:8476/v1");
+    expect(boundUrl("::", "http://127.0.0.1:8476/v1")).toBe("http://[::]:8476/v1");
+    expect(boundUrl("127.0.0.1", "http://127.0.0.1:8476/v1")).toBe("http://127.0.0.1:8476/v1");
+  });
+
+  test("[SV-P5] bound to every address, the startup line names 0.0.0.0, not the loopback", async () => {
+    const h = home();
+    writeFileSync(
+      join(h.configDir, "config.json"),
+      JSON.stringify({ "api.port": 0, "api.bind": "0.0.0.0", "server.behind_proxy": true }),
+    );
+    const proc = serve(h.env);
+    await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+    const rt = runtime(h.configDir) as { port: number };
+    // It does answer on loopback, which the old line named; the line now says what was bound.
+    const health = await fetch(`http://127.0.0.1:${rt.port}/healthz`);
+    expect(health.status).toBeLessThan(600);
+    await health.body?.cancel();
+    if (process.platform === "win32") {
+      const token = readFileSync(join(h.configDir, "token"), "utf8").trim();
+      await fetch(`http://127.0.0.1:${rt.port}/v1/quit`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: "{}",
+      });
+    } else {
+      proc.kill("SIGTERM");
+    }
+    await proc.exited;
+    const err = await new Response(proc.stderr).text();
+    expect(err).toContain(`serving on http://0.0.0.0:${rt.port}/v1`);
+    expect(err).not.toContain("serving on http://127.0.0.1");
   }, 30_000);
 
   test("a second akou serve on the same home is refused with 69 and names the running one", async () => {

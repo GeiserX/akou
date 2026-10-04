@@ -1,7 +1,7 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
  * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls` and
- * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
+ * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `templates`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
 import { processAlive } from "../../../core/log/writer.ts";
@@ -402,6 +402,33 @@ const enhance: Command = {
   },
 };
 
+const templates: Command = {
+  name: "templates",
+  summary: "List the note templates, or print one as the enhanced notes would use it",
+  usage: "akou templates list | akou templates show NAME   [--json]",
+  examples: ["akou templates list", "akou templates show standup"],
+  run: async (ctx, p) => {
+    const [sub, name, ...rest] = p.positional;
+    if (sub === "list" && name === undefined) {
+      const r = await api(ctx, "GET", "/templates");
+      return finish(ctx, r, (b) =>
+        [
+          ...(b.details as Body[]).map(
+            (t) =>
+              `${t.name}${t.bundled ? "" : "  (yours)"}${t.match.length > 0 ? `  match: ${t.match.join(", ")}` : ""}`,
+          ),
+          `Your own go in ${b.dir}; a file named like a shipped one replaces it.`,
+        ].join("\n"),
+      );
+    }
+    if (sub === "show") {
+      if (!name || rest.length > 0) return usage(ctx, "templates show needs one name");
+      const r = await api(ctx, "GET", `/templates/${enc(name)}`);
+      return finish(ctx, r, (b) => String(b.text).replace(/\n$/, ""));
+    }
+    return usage(ctx, "templates needs list, or show NAME");
+  },
+};
 /** How long `akou quit` waits for the app to finish quitting before it stops it. */
 const QUIT_WAIT_MS = 20_000;
 
@@ -451,6 +478,7 @@ const quit: Command = {
     const deadline = performance.now() + QUIT_WAIT_MS;
     const appAlive = () => ctx.client.runtime() !== null || (!!rt && processAlive(rt.pid));
     while (appAlive() && performance.now() < deadline) {
+      // clock: polling a real app while it quits, bounded by the deadline.
       await new Promise((res) => setTimeout(res, 50));
     }
     if (appAlive() && rt) {
@@ -486,6 +514,7 @@ const quit: Command = {
       // The launcher and the helpers end with the app; any still there a moment later are stopped.
       const settle = performance.now() + 2000;
       while (others.some(processAlive) && performance.now() < settle) {
+        // clock: polling the launcher and helpers, bounded by `settle`.
         await new Promise((res) => setTimeout(res, 50));
       }
       gone = (await stopAll(others.filter(processAlive))).length === 0;
@@ -519,5 +548,6 @@ export const callCommands: Command[] = [
   show,
   finalize,
   enhance,
+  templates,
   quit,
 ];

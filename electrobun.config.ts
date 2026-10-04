@@ -15,10 +15,11 @@
  *   - sherpa-onnx-node and its platform package under `bun/node_modules`, where the app's
  *     `createRequire` finds them; the `.node` file links its two libraries through `@rpath` with an
  *     `@loader_path` rpath, so they sit beside it in the platform package;
+ *   - transcribe-cpp, koffi and their two platform packages beside them, the same way;
  *   - the two recognition Workers, the browser pages and the `akou` command line (a
  *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
  *     first;
- *   - the shipped note templates;
+ *   - the shipped note templates and ask presets;
  *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
  *     `native/akou-diarize` (Nemotron on a statically linked ONNX Runtime; no library beside it).
@@ -63,6 +64,15 @@ export const BUILT = {
   /** The `akou` command the app carries, for "Install Command-Line Tool…" (DK-M6). */
   cli: "dist/app-cli/akou",
 } as const;
+
+/**
+ * Where the app's updater reads `stable-macos-arm64-update.json` and the bundle it names
+ * (docs/CI-CD.md CI-23): the assets of one fixed release, `update-feed`, which every tagged release
+ * replaces. Not `releases/latest/download`: GitHub's latest release skips prereleases, and every
+ * 0.x release is one.
+ */
+export const FEED_TAG = "update-feed";
+export const UPDATE_FEED = `https://github.com/GeiserX/akou/releases/download/${FEED_TAG}`;
 
 type Exists = (path: string) => boolean;
 
@@ -122,6 +132,32 @@ export function sherpaCopies(platform: string, arch: string): Record<string, str
   return out;
 }
 
+/** transcribe-cpp's native package per platform (its loader's `<platform>-<arch>` tuple). */
+export const TRANSCRIBE_CPP_PACKAGES: Readonly<Record<string, string>> = {
+  "darwin-arm64": "darwin-arm64-metal",
+};
+
+/**
+ * transcribe-cpp (Whisper and Canary, src/main/asr/transcribe-cpp.ts) and what it loads at run
+ * time, whole, under `bun/node_modules`: the binding, koffi and koffi's platform package (the
+ * `.node` file), and the platform package whose library and ggml backends sit side by side, where
+ * the binding's `artifactDir()` finds them.
+ */
+export function transcribeCppCopies(platform: string, arch: string): Record<string, string> {
+  const pkg = TRANSCRIBE_CPP_PACKAGES[`${platform}-${arch}`];
+  if (!pkg) return {};
+  const out: Record<string, string> = {};
+  for (const dir of [
+    "transcribe-cpp",
+    "koffi",
+    `@koromix/koffi-${platform}-${arch}`,
+    `@transcribe-cpp/${pkg}`,
+  ]) {
+    out[`node_modules/${dir}`] = `${MAIN_OUT}/node_modules/${dir}`;
+  }
+  return out;
+}
+
 /**
  * Signing needs an identity (`-` is ad-hoc); notarization needs a real Developer ID and Apple
  * credentials.
@@ -166,6 +202,7 @@ export default {
       "src/ui/draft.html": "views/draft/index.html",
       "src/ui/draft.css": "views/draft/draft.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
+      "src/main/notes/presets": `${MAIN_OUT}/presets`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       "src/main/window/tray": `${MAIN_OUT}/tray`,
       // The licence and the third-party credits, which the bundled word lists' CC BY-SA 4.0 and
@@ -173,6 +210,7 @@ export default {
       NOTICE: `${MAIN_OUT}/NOTICE`,
       LICENSE: `${MAIN_OUT}/LICENSE`,
       ...sherpaCopies(process.platform, process.arch),
+      ...transcribeCppCopies(process.platform, process.arch),
       ...builtCopies(),
       ...helperCopies(),
     },
@@ -188,6 +226,9 @@ export default {
     win: { bundleCEF: false, defaultRenderer: "native" },
     linux: { bundleCEF: false, defaultRenderer: "native" },
   },
+  // No delta patches: the updater falls back to the full bundle, and a patch would make every
+  // packaging dry run download the previous bundle to diff against.
+  release: { baseUrl: UPDATE_FEED, generatePatch: false },
   // A tray app: closing the window never quits it.
   runtime: { exitOnLastWindowClosed: false },
   scripts: { postBuild: "./scripts/post-build.ts", postWrap: "./scripts/post-wrap.ts" },
