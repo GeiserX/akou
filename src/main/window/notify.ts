@@ -129,6 +129,14 @@ export function notifyFor(e: NotifyEvent, ctx: NotifyContext): Notice | null {
         key: `shared:${e.call}`,
       };
     case "capture": {
+      if (e.ch === "call" && e.state === "tapped-apps-exited") {
+        if (ctx.windowFocused) return null;
+        return {
+          title: "Recording the whole computer now",
+          body: "The app you picked quit or restarted. akou now records the whole computer so nothing is lost. Stop it if the meeting is over.",
+          key: `capture:${e.call}:${e.ch}:${e.state}`,
+        };
+      }
       const body = SILENT[e.state];
       if (!body || ctx.windowFocused) return null;
       return {

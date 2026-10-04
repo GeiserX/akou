@@ -34,6 +34,7 @@ import {
   groupCalls,
   HueBook,
   hasRecording,
+  healthDot,
   languages,
   recordKey,
   speakerTotals,
@@ -849,7 +850,7 @@ class App {
    */
   private drawHealth(v: CallView | null): void {
     for (const ch of ["mic", "call"] as const) {
-      const hState = v?.channelHealth(ch)?.state ?? (this.levelAt !== null ? "ok" : "none");
+      const hState = healthDot(v, ch, this.levelAt !== null);
       const dot = byId(`health-${ch}`);
       dot.dataset.state = hState;
       dot.title = `${ch}: ${hState}`;
