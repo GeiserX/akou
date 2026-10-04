@@ -50,6 +50,7 @@ function fakeWindow() {
       w.calls.push(d.focus ? "show" : "showInactive");
     },
     chip: (c) => w.chips.push(c),
+    append: () => {},
     showInactive: () => w.calls.push("showInactive"),
     hide: () => w.calls.push("hide"),
   };

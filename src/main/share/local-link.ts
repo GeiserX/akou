@@ -249,6 +249,7 @@ export class LocalLink implements ShareTransport {
       if (share.timer) clearTimeout(share.timer);
       const at = share.handle.expiresAt;
       if (at === null) return;
+      // clock: the share link expires at its real expiry time.
       share.timer = setTimeout(
         () => void this.stop(share.handle).catch((err) => this.o.onError?.(err)),
         Math.max(0, at - this.o.app.now()),
@@ -422,6 +423,7 @@ export class LocalLink implements ShareTransport {
         };
         const unsubscribe = app.subscribe(c.id, onEvent);
         let lastPartial = "";
+        // clock: the share viewer's push tick to a browser.
         const tick = setInterval(() => {
           const p = v.provisional.current(app.now()).map((x) => {
             const spk = x.ch === "mic" ? "you" : (x.spk ?? "c?");
@@ -439,6 +441,7 @@ export class LocalLink implements ShareTransport {
             send("partial", p);
           }
         }, TICK_MS);
+        // clock: a keep-alive comment, so the viewer can tell a quiet stream from a dead connection.
         const keepalive = setInterval(() => {
           if (closed) return;
           try {

@@ -144,6 +144,23 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "asr.segmentWindow": { label: "Longest live line", unit: "seconds" },
   "asr.modelsDir": { label: "Models folder" },
+  "asr.final.engines": {
+    label: "Fusion engines",
+    help: "The fusion preset's engines, in the order ties are broken. Empty: the preset's own three.",
+  },
+  "asr.fusion": {
+    label: "How fusion picks each word",
+    choices: [
+      ["rover-conf", "Confidence vote"],
+      ["rover-freq", "Majority vote"],
+      ["first", "First engine, gaps filled from the others"],
+    ],
+  },
+  "asr.memoryBudgetMb": {
+    label: "Memory an engine may need",
+    unit: "MB",
+    help: "0: 60% of this machine's memory. An engine over it is left out of the fusion pass.",
+  },
   "asr.diarizer": {
     label: "Who spoke",
     help: "Takes effect at the next start.",
@@ -306,6 +323,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Each loads its own copy of the model.",
     unit: "jobs",
   },
+  "server.model_idle_minutes": {
+    label: "Keep the model loaded between jobs for",
+    help: "0: let it go after each run of jobs.",
+    unit: "minutes",
+  },
   "server.queue_max": { label: "Jobs waiting, at most", help: "0: no limit.", unit: "jobs" },
   "server.queue_max_per_key": {
     label: "Jobs waiting per key, at most",
@@ -440,7 +462,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "dictation.spokenSend": { label: "Say “send it” to send" },
   "dictation.format": {
     label: "Tidy the text with AI",
-    help: "Fixes punctuation and capitals before the text goes in. History keeps what you said.",
+    help: "Fixes punctuation and capitals. History keeps what you said. A local model is the quickest.",
     choices: [
       ["off", "Off"],
       ["provider", "With your assistant"],

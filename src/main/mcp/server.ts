@@ -28,13 +28,14 @@
 
 import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
 import { type LearnedItem, learnedNote } from "../../core/vocab/learned.ts";
 import { APP_VERSION } from "../app-info.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
+import { listPresets, usesSpeaker } from "../notes/presets.ts";
 import { estimateTokens, type PackState, packState, quoteCallText } from "../query/render.ts";
 import { capAnswer, type ToolResult } from "./bound.ts";
 
@@ -102,6 +103,40 @@ function errorText(t: string): ToolResult {
 function withNotes(r: ToolResult, notes: readonly string[]): ToolResult {
   if (notes.length === 0) return r;
   return { ...r, content: [{ type: "text", text: notes.join("\n") }, ...r.content] };
+}
+
+/**
+ * While a long request runs, a progress message now and every 2 s to a client that sent a
+ * progress token (PG-M6), so it can show the tool is working. Returns the function that stops them.
+ */
+function progressBeat(
+  ctx: {
+    mcpReq?: { _meta?: { progressToken?: string | number }; notify(n: object): Promise<void> };
+  },
+  message: string,
+): () => void {
+  const token = ctx?.mcpReq?._meta?.progressToken;
+  const req = ctx?.mcpReq;
+  if (token === undefined || !req) return () => {};
+  // clock: the beat counts real seconds for the MCP client.
+  const t0 = Date.now();
+  let last = -1;
+  const send = () => {
+    // Progress only ever grows: whole seconds since the start, never the same twice.
+    // clock: seconds since `t0`.
+    const progress = Math.max(last + 1, Math.floor((Date.now() - t0) / 1000));
+    last = progress;
+    void req
+      .notify({
+        method: "notifications/progress",
+        params: { progressToken: token, progress, message: `${message} (${progress} s)` },
+      })
+      .catch(() => {});
+  };
+  send();
+  // clock: a beat every 2 s while the tool runs.
+  const timer = setInterval(send, 2000);
+  return () => clearInterval(timer);
 }
 
 function result(a: Answer): ToolResult {
@@ -230,6 +265,13 @@ const OUT = {
   merge: z.object({ from: z.string(), into: z.string() }),
   unmerge: z.object({ spk: z.string() }),
   id: z.object({ id: z.string() }),
+  note: z.object({ id: z.string(), rev: INT }),
+  template: z.object({
+    name: z.string(),
+    bundled: z.boolean(),
+    sections: z.array(z.string()),
+    text: z.string(),
+  }),
   notes: z.object({
     call: z.string().nullable(),
     notes: INT.min(0),
@@ -287,6 +329,13 @@ const OUT = {
     callText: CALL_TEXT,
   }),
   dictation: z.object({ id: z.string(), state: z.string(), callText: CALL_TEXT }),
+  devices: z.looseObject({
+    inputs: z.array(z.looseObject({ id: z.string(), name: z.string() })),
+    apps: z
+      .array(z.looseObject({ id: z.string(), name: z.string() }))
+      .nullable()
+      .describe("Null where one app cannot be captured; `appsUnavailable` says why."),
+  }),
   getCall: z.object({
     call: z.string(),
     state: PACK_STATE,
@@ -322,6 +371,10 @@ const DESTRUCTIVE: Hints = { ...WRITE, destructiveHint: true };
 const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
 /** Runs akou's configured provider, which may be a remote API. */
 const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
+/** Takes away what the user wrote (a note): the harness should confirm. */
+const REMOVES = DESTRUCTIVE;
+/** Lets people outside this machine read the call: the harness should confirm. */
+const SHARES: Hints = { ...WRITE, openWorldHint: true };
 
 /**
  * Every tool's title and annotations (PG-M2): one row per tool, and registering a tool without a
@@ -344,6 +397,8 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
   akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
   akou_add_note: { title: "Add a note", hints: WRITE },
+  akou_edit_note: { title: "Edit a note", hints: IDEMPOTENT },
+  akou_delete_note: { title: "Delete a note", hints: REMOVES },
   akou_get_notes: { title: "Read the notepad", hints: READ, less: "page with `offset`" },
   akou_remember: { title: "Remember a fact", hints: WRITE },
   akou_forget: { title: "Forget a fact", hints: WRITE },
@@ -367,15 +422,24 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   },
   akou_enhanced_put: { title: "Save enhanced notes", hints: WRITE },
   akou_enhance: { title: "Enhance notes with akou's provider", hints: PROVIDER },
+  akou_template_list: { title: "List note templates", hints: READ },
+  akou_template_get: { title: "Read a note template", hints: READ },
+  akou_finalize: { title: "Run the final pass", hints: WRITE },
   akou_rename_call: { title: "Rename a call", hints: IDEMPOTENT },
   akou_list_calls: { title: "List past calls", hints: READ },
   akou_get_call: { title: "Read a named call", hints: READ },
   akou_export: { title: "Export a call", hints: WRITE },
+  akou_share_status: { title: "Live links that are on", hints: READ },
+  akou_share_on: { title: "Share a live link", hints: SHARES },
+  akou_share_off: { title: "Stop sharing", hints: IDEMPOTENT },
+  akou_open_window: { title: "Show the window", hints: WRITE },
+  akou_config_get: { title: "Read the settings", hints: READ },
   akou_dictation_list: { title: "List past dictations", hints: READ, less: "a smaller `limit`" },
   akou_dictation_get: { title: "Read a dictation", hints: READ },
   akou_transcribe: { title: "Transcribe a file on a server", hints: WRITE },
   akou_job_get: { title: "Read a transcription job", hints: READ },
   akou_jobs_list: { title: "List transcription jobs", hints: READ },
+  akou_devices: { title: "List microphones and apps", hints: READ },
 };
 
 /** The tools of a server's file jobs (SI-7); every other tool works on calls in the app. */
@@ -521,7 +585,14 @@ export function createMcpServer(o: McpOptions): McpServer {
           .string()
           .optional()
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
+        mic: z.string().optional().describe("The microphone: an input id from akou_devices"),
         vocab: z.array(z.string()).optional(),
+        withoutModels: z
+          .boolean()
+          .optional()
+          .describe(
+            "Record audio now and transcribe it later, when the speech models are not downloaded yet.",
+          ),
       }),
       outputSchema: OUT.start,
     },
@@ -531,9 +602,10 @@ export function createMcpServer(o: McpOptions): McpServer {
       void refreshAsk();
       return asResult(r, (b) => ({
         text: b.attached
-          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder} url: ${b.url}`
-          : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder} url: ${b.url}`,
-        data: b,
+          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder}`
+          : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder}`,
+        // An older app still answers a dead `akou://` link here (PG-U1): never pass it on.
+        data: { ...b, url: null },
       }));
     },
   );
@@ -629,6 +701,7 @@ export function createMcpServer(o: McpOptions): McpServer {
         query: {
           format: "json",
           since: a.since,
+          // clock: `lastSeconds` counts back from the moment the tool is called.
           from: a.lastSeconds !== undefined ? Date.now() - a.lastSeconds * 1000 : undefined,
           // From a cursor, the earliest new lines that fit and a cursor after them (`more` counts
           // the rest); without one, the newest that fit (`omitted` counts the rest). PG-M5.
@@ -822,6 +895,39 @@ export function createMcpServer(o: McpOptions): McpServer {
           ...(next < all.length ? { nextOffset: next } : {}),
         }))({ ...b, notes: page });
       });
+    },
+  );
+
+  tool(
+    "akou_edit_note",
+    {
+      description:
+        "Replace the text of one notepad line, by its id from akou_get_notes (`n0003`). The old text stays in the call's log.",
+      inputSchema: z.object({ id: z.string(), text: z.string().min(1), call: CALL }),
+      outputSchema: OUT.note,
+    },
+    async (a) => {
+      const r = await req("PATCH", `/calls/${id(a.call)}/notes/${id(a.id)}`, {
+        body: { text: a.text },
+      });
+      return asResult(r, (b) => ({
+        text: `Edited ${b.note.id} (rev ${b.note.rev})`,
+        data: { id: String(b.note.id), rev: b.note.rev },
+      }));
+    },
+  );
+
+  tool(
+    "akou_delete_note",
+    {
+      description:
+        "Delete one notepad line, by its id from akou_get_notes. Only when the user asks: the line may be theirs.",
+      inputSchema: z.object({ id: z.string(), call: CALL }),
+      outputSchema: OUT.id,
+    },
+    async (a) => {
+      const r = await req("DELETE", `/calls/${id(a.call)}/notes/${id(a.id)}`);
+      return asResult(r, () => ({ text: `Deleted ${a.id}`, data: { id: a.id } }));
     },
   );
 
@@ -1123,8 +1229,14 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ template: z.string().optional() }),
       outputSchema: OUT.enhance,
     },
-    async (a) => {
-      const r = await req("POST", "/calls/last/enhance", { body: a, timeoutMs: 60 * 60_000 });
+    async (a, ctx) => {
+      const stop = progressBeat(ctx, "Writing the enhanced notes");
+      let r: ApiResponse;
+      try {
+        r = await req("POST", "/calls/last/enhance", { body: a, timeoutMs: 60 * 60_000 });
+      } finally {
+        stop();
+      }
       return asResult(r, (b) => {
         const block = quoteCallText(b.markdown);
         return {
@@ -1138,6 +1250,62 @@ export function createMcpServer(o: McpOptions): McpServer {
           },
         };
       });
+    },
+  );
+
+  tool(
+    "akou_template_list",
+    {
+      description:
+        "The note templates enhanced notes can follow: the shipped ones and the user's own, with each one's sections and title keywords. Read one with akou_template_get.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.body,
+    },
+    async () => {
+      const r = await req("GET", "/templates");
+      return asResult(r, (b) => compact({ dir: b.dir, templates: b.details }));
+    },
+  );
+
+  tool(
+    "akou_template_get",
+    {
+      description:
+        "One note template as akou would use it (the user's own file when it replaces the shipped one): read it before writing enhanced notes with akou_enhanced_put.",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      outputSchema: OUT.template,
+    },
+    async (a) => {
+      const r = await req("GET", `/templates/${id(a.name)}`);
+      return asResult(r, (b) => ({
+        text: String(b.text),
+        data: {
+          name: String(b.name),
+          bundled: b.bundled === true,
+          sections: b.sections ?? [],
+          text: String(b.text),
+        },
+      }));
+    },
+  );
+
+  tool(
+    "akou_finalize",
+    {
+      description:
+        "Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen or parakeet for this run only.",
+      inputSchema: z.object({
+        call: z.string().default("last"),
+        force: z.boolean().optional(),
+        model: z.enum(["qwen", "parakeet"]).optional(),
+      }),
+      outputSchema: OUT.body,
+    },
+    async (a) => {
+      const r = await req("POST", `/calls/${id(a.call)}/finalize`, {
+        body: { force: a.force, model: a.model },
+      });
+      return asResult(r, compact);
     },
   );
 
@@ -1297,6 +1465,80 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
+  // --- sharing, the window, the settings --------------------------------------------------------
+  // The settings are read-only here (PROGRAMMABILITY.md section 1): a tool can be auto-approved, so
+  // an agent never switches the provider, the share bind or the webhook. For the same reason
+  // akou_share_on takes no `bind`: the link listens where `share.bind` says.
+
+  tool(
+    "akou_share_status",
+    {
+      description: "The read-only live links that are on, one per shared call, with their address.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.body,
+    },
+    async () => asResult(await req("GET", "/share"), compact),
+  );
+
+  tool(
+    "akou_share_on",
+    {
+      description:
+        "Start a read-only live link to a call (default the live one), only when the user asks to share it. `notes` shares the notepad too; `expires` turns it off after a while (`2h`). Answers the address to hand over.",
+      inputSchema: z.object({
+        call: z.string().optional(),
+        notes: z.boolean().optional(),
+        expires: z.string().optional(),
+      }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("POST", "/share", { body: a }), compact),
+  );
+
+  tool(
+    "akou_share_off",
+    {
+      description: "Stop sharing a call's live link, or every link when no `call` is named.",
+      inputSchema: z.object({ call: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("DELETE", "/share", a.call ? { body: a } : {}), compact),
+  );
+
+  tool(
+    "akou_open_window",
+    {
+      description:
+        "Show akou's window to the user, on a call if one is named (`live`, `last` or an id). With no window (headless), answers a browser address that works once, within a minute.",
+      inputSchema: z.object({ call: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => asResult(await req("POST", "/window", { body: a.call ? a : {} }), compact),
+  );
+
+  tool(
+    "akou_config_get",
+    {
+      description:
+        "akou's settings as they are in force, secrets redacted, or one with `key` (`asr.live`). Read-only: changing one is the user's, in the window or with `akou config set`.",
+      inputSchema: z.object({ key: z.string().optional() }),
+      outputSchema: OUT.body,
+    },
+    async (a) => {
+      const r = await req("GET", "/config");
+      if (r.status === 200 && a.key !== undefined && !Object.hasOwn(r.body.settings, a.key)) {
+        return errorText(`unknown_key: no setting "${a.key}"; leave out \`key\` to list them`);
+      }
+      return asResult(r, (b) =>
+        compact(
+          a.key !== undefined
+            ? { key: a.key, value: b.settings[a.key] ?? null }
+            : { file: b.file, settings: b.settings, issues: b.issues ?? [] },
+        ),
+      );
+    },
+  );
+
   // --- dictation history, read-only (DICTATION.md DC-G5) ------------------------------------------
   // No tool starts a dictation, inserts text or changes a dictation setting: a dictation is typed
   // into whatever app the user is looking at, which an auto-approved tool must never do. The text
@@ -1363,6 +1605,87 @@ export function createMcpServer(o: McpOptions): McpServer {
           words: undefined,
         }),
       );
+    },
+  );
+
+  // --- the ask presets as prompts (PG-M7) ------------------------------------------------------
+  // One prompt per preset file, read from the folder on every list, so a new file shows at once;
+  // Claude Code offers each as a slash command. Getting one fills it in for one call through the
+  // app, and the message names that call: no prompt spans more than one.
+
+  server.server.registerCapabilities({ prompts: {} });
+  server.server.setRequestHandler("prompts/list", async () => ({
+    prompts: listPresets(o.client.configDir).map((p) => ({
+      name: p.name,
+      title: p.label.replaceAll("{speaker}", "a speaker"),
+      description: `Ask about one call: ${p.question}`,
+      arguments: [
+        ...(usesSpeaker(p)
+          ? [
+              {
+                name: "speaker",
+                description: "The speaker to ask about, as the transcript names them.",
+                required: true,
+              },
+            ]
+          : []),
+        {
+          name: "call",
+          description: 'Which call: "live" (the default), "last" or a call id.',
+          required: false,
+        },
+      ],
+    })),
+  }));
+  server.server.setRequestHandler("prompts/get", async (request) => {
+    const name = request.params.name;
+    const args: Record<string, string> = request.params.arguments ?? {};
+    const ref = args.call?.trim() || "live";
+    const speaker = args.speaker?.trim() || undefined;
+    const r = await req("GET", "/presets", { query: { call: ref, speaker } });
+    if (r.status !== 200) {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, describeError(r));
+    }
+    const mine = (r.body.presets as Body[]).filter((x) => x.name === name);
+    const p = mine.length === 1 ? mine[0] : undefined;
+    if (!p) {
+      throw new ProtocolError(
+        ProtocolErrorCode.InvalidParams,
+        mine.length > 1 || listPresets(o.client.configDir).some((x) => x.name === name)
+          ? `the preset ${name} asks about one speaker: pass \`speaker\``
+          : `no preset ${name}`,
+      );
+    }
+    return {
+      description: String(p.label),
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: `${p.question}\n\nAnswer from call ${r.body.call ?? ref} only: call akou_context with call "${ref}" and this question. ${RULES}`,
+          },
+        },
+      ],
+    };
+  });
+  tool(
+    "akou_devices",
+    {
+      description:
+        "The microphones, outputs and apps with audio akou can record: an input's `id` is what akou_start takes as `mic`, an app's `id` what it takes as `call: \"app:ID\"`. Read-only; opens no device.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.devices,
+    },
+    async () => {
+      const r = await req("GET", "/devices");
+      if (r.status !== 200) return asResult(r, compact);
+      // The apps are a second read; where one app cannot be captured the answer says why.
+      const a = await req("GET", "/apps");
+      const apps = a.status === 200 ? a.body.apps : null;
+      const why =
+        a.status === 200 ? undefined : `${a.body?.error ?? a.status}: ${describeError(a)}`;
+      return result(compact({ ...r.body, apps, ...(why ? { appsUnavailable: why } : {}) }));
     },
   );
 

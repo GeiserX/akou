@@ -192,6 +192,7 @@ export async function recordingBelow(
     const out = recordingOut(args);
     if (out === null) continue;
     const before = sizeOf(out);
+    // clock: watching a real recording grow for `watchMs`.
     await new Promise((r) => setTimeout(r, watchMs));
     const after = sizeOf(out);
     return { pid, growing: before === null || after === null ? null : after > before };
@@ -214,6 +215,7 @@ export async function sampleHung(
   } catch {
     return null;
   }
+  // clock: the default of an injected time: the file is named when it is written.
   const stamp = (o.now ?? new Date()).toISOString().replace(/[:.]/g, "-");
   const file = join(dir, `hang-${stamp}.txt`);
   const ok = await new Promise<boolean>((resolve) => {
@@ -224,6 +226,7 @@ export async function sampleHung(
         stdio: "ignore",
       },
     );
+    // clock: a deadline on a real process that may hang.
     const timer = setTimeout(() => {
       p.kill("SIGKILL");
       resolve(false);
@@ -266,11 +269,13 @@ export async function stopAll(pids: readonly number[], graceMs = TERM_GRACE_MS):
   for (const p of pids) signal(p, "SIGTERM");
   const deadline = performance.now() + graceMs;
   while (performance.now() < deadline && pids.some(processAlive)) {
+    // clock: polling real processes we signalled, bounded by the grace.
     await new Promise((r) => setTimeout(r, 50));
   }
   for (const p of pids.filter(processAlive)) signal(p, "SIGKILL");
   const end = performance.now() + 1000;
   while (performance.now() < end && pids.some(processAlive)) {
+    // clock: polling real processes we signalled, bounded by the second.
     await new Promise((r) => setTimeout(r, 20));
   }
   return pids.filter(processAlive);

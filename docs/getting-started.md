@@ -19,7 +19,7 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 ## The app
 
-1. Open the DMG and drag akou into Applications.
+1. Open the DMG and drag akou into Applications. Or install it with Homebrew: `brew install --cask geiserx/akou/akou`, then go on from step 2.
 2. Open akou once. macOS will refuse, because this build is not signed by Apple (see below).
 3. Let it open:
    - On macOS 14, Control-click akou in Applications, choose Open, then Open again.

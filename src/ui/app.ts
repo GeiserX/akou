@@ -348,6 +348,7 @@ class App {
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
+    // clock: the page repaints its ages and timers once a second.
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -434,6 +435,7 @@ class App {
           // A line arriving now counts from now (the page's clock); the backlog from when it was
           // written.
           if (e.type === "seg" && e.rev === 1) {
+            // clock: a line arriving now is timed by the page's clock, as the comment above says.
             this.lastLineAt = animate ? Date.now() : Math.max(this.lastLineAt ?? 0, e.t);
           }
           if (e.type === "note" || e.type === "note.del") notes = true;
@@ -444,7 +446,7 @@ class App {
           this.notepad.render();
           this.player.marks();
         }
-        if (speakers) this.askPane.renderPresets();
+        if (speakers) this.askPane.speakersChanged();
         if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
         const lines = c.events.some((e) => e.type === "seg" || e.type.startsWith("final."));
@@ -464,7 +466,9 @@ class App {
         if (f !== this.follower) return;
         if (state === "open") {
           this.disconnectedSince = null;
+          // clock: when the page started following, by its own clock.
           this.followedAt ??= Date.now();
+          // clock: when the page lost the stream, by its own clock.
         } else this.disconnectedSince ??= Date.now();
         document.body.dataset.connection = state;
         this.paint();
@@ -481,6 +485,7 @@ class App {
 
   private paint(): void {
     const v = this.view();
+    // clock: the page paints ages against its own clock.
     const now = Date.now();
     const s = this.status;
     const st = stateLabel({
@@ -752,6 +757,7 @@ class App {
     const first = mine ? v?.parts()[0]?.wallStart : undefined;
     elapsed.hidden = first === undefined;
     if (first !== undefined) {
+      // clock: a running call's elapsed time on screen.
       byId("elapsed-text").textContent = formatDuration((Date.now() - first) / 1000);
     }
     // Quiet icon buttons: the label is their name for a screen reader and their tooltip.
@@ -813,6 +819,7 @@ class App {
   }
 
   private meters(l: Levels | null): void {
+    // clock: the meters fade by the page's own clock.
     const now = Date.now();
     if (l) {
       this.levelAt = now;
@@ -879,6 +886,7 @@ class App {
   private drawCalls(): void {
     const query = byId<HTMLInputElement>("calls-search").value;
     const live = this.status?.live?.call ?? null;
+    // clock: the call list shows ages against the page's own clock.
     const now = Date.now();
     const key = JSON.stringify([
       this.calls,
