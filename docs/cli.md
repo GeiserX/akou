@@ -907,6 +907,8 @@ example: akou serve
 | Run the hooks again | `hooks` | `POST /calls/:id/hooks` | none: no tool yet, and no design item names one | none: no control yet, and no design item names one |
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | `src/ui/app.ts` |
 | Rename a call | `calls` | `PATCH /calls/:id` | `akou_rename_call` | `src/ui/app.ts` |
+| Trash and restore a call | none: missing: CLI-26 adds calls delete and calls restore | `DELETE /calls/:id`, `POST /calls/:id/restore` | none: missing: PG-M4 names move, delete and restore (CLI.md doors table) | none: missing: W13.3 adds Delete and the Trash |
+| Change who spoke one line | none: missing: CLI-29 adds edit SEG --speaker | `PATCH /calls/:id/segments/:sid` | none: no tool yet, and no design item names one | none: missing: W4.10 adds the speaker picker on a line |
 | List and add workspaces | `workspaces`, `workspace` | `GET /workspaces`, `POST /workspaces` | none: not one call's: akou_start names the workspace and makes its folder, and akou_list_calls shows each call's | `src/ui/workspaces.ts` |
 | Share a live link | `share` | `GET /share`, `POST /share`, `DELETE /share` | `akou_share_on`, `akou_share_off`, `akou_share_status` | `src/ui/app.ts` |
 | Templates | `templates` | `GET /templates`, `GET /templates/:name` | `akou_template_list`, `akou_template_get` | none: the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template |

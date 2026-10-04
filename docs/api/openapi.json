@@ -45,6 +45,9 @@
       "name": "calls"
     },
     {
+      "name": "segments"
+    },
+    {
       "name": "devices"
     },
     {
@@ -1186,7 +1189,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content.",
+        "description": "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content. `updatedAt` is when the call's transcript, notes, names, title, workspace or vocabulary corrections last changed. With `updatedAfter` or `cursor`, the list is for an indexer instead: only the calls changed after that point, oldest change first, with the `cursor` to keep for the next request and `more` when a page was left out.",
         "parameters": [
           {
             "name": "limit",
@@ -1216,6 +1219,24 @@
             "description": "List only the calls whose start failed.",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "updatedAfter",
+            "in": "query",
+            "required": false,
+            "description": "Only the calls changed after this time: milliseconds since 1970 or an ISO 8601 date.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of an earlier answer: only the calls changed since it. Wins over `updatedAfter`.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -1313,7 +1334,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Rename a call, live or saved: `title` becomes the name every list, search, header and share shows from now on. The rename is a new `call.renamed` event; the folder keeps the name it was created with. Also takes `last`. An empty title answers 422 and the old name stays.",
+        "description": "Rename a call, live or saved, or move a finished one to another workspace. `title` becomes the name every list, search, header and share shows from now on: a new `call.renamed` event, and an export already written takes the new name. `workspace` moves the call's folder into that workspace's folder and writes `call.moved`; a call that is recording answers 409 `live_call`. Also takes `last`. An empty title answers 422 and the old name stays.",
         "parameters": [
           {
             "name": "id",
@@ -1326,7 +1347,7 @@
           }
         ],
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -1334,10 +1355,162 @@
                 "properties": {
                   "title": {
                     "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "calls.delete",
+        "tags": [
+          "calls"
+        ],
+        "description": "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good after 30 days. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/segments/{sid}": {
+      "patch": {
+        "operationId": "segments.edit",
+        "tags": [
+          "segments"
+        ],
+        "description": "Say who spoke one transcript line: `spk` is a speaker id from the call (`c2`), or a new `c<N>` for a voice the call missed. A new revision of the line, `by` the caller; the text and its raw form stay, and every earlier revision stays in the log. A line from your microphone is always you (422). The words of a line are fixed with `POST /calls/{id}/fix`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "description": "The line's segment id (`l000031`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spk": {
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "title"
+                  "spk"
                 ],
                 "additionalProperties": false
               }
@@ -1377,7 +1550,82 @@
             "$ref": "#/components/responses/415.json_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field"
+            "$ref": "#/components/responses/422.bad_field.mic_line"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/restore": {
+      "post": {
+        "operationId": "calls.restore",
+        "tags": [
+          "calls"
+        ],
+        "description": "Bring a trashed call back to the workspace it was in, exactly as it was. The id is the call's own; `live` and `last` name no trashed call.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.folder_taken.not_trashed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
@@ -7791,6 +8039,33 @@
           }
         }
       },
+      "400.bad_field.bad_json.bad_workspace.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_workspace",
+                        "refused",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "400.bad_field.bad_json.last_refused.missing_field.refused.unknown_field": {
         "description": "Bad request",
         "content": {
@@ -8515,6 +8790,58 @@
           }
         }
       },
+      "409.busy.folder_taken.live_call": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.busy.folder_taken.live_call.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call",
+                        "locked",
+                        "log_closed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.call_word.locked.log_closed.vocab_file_invalid": {
         "description": "Conflict",
         "content": {
@@ -8655,6 +8982,30 @@
                         "locked",
                         "log_closed",
                         "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.folder_taken.not_trashed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "folder_taken",
+                        "not_trashed"
                       ]
                     }
                   }
@@ -9367,6 +9718,30 @@
           }
         }
       },
+      "422.bad_field.mic_line": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "mic_line"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "422.bad_field.unknown_model": {
         "description": "Unprocessable",
         "content": {
@@ -9901,6 +10276,10 @@
             "description": "A request from a browser, refused by the desktop app."
           },
           {
+            "const": "busy",
+            "description": "The call's files are being written or cannot move now; retry in a moment."
+          },
+          {
             "const": "call_word",
             "description": "The term is the call's own word, not a vocabulary file's."
           },
@@ -9965,6 +10344,10 @@
             "description": "The final pass cannot run on this machine."
           },
           {
+            "const": "folder_taken",
+            "description": "The folder the call would move to exists already."
+          },
+          {
             "const": "forbidden",
             "description": "The key's scope does not reach this route."
           },
@@ -10009,6 +10392,10 @@
             "description": "The line changed while it was being fixed."
           },
           {
+            "const": "live_call",
+            "description": "The call is recording; stop it first."
+          },
+          {
             "const": "locked",
             "description": "Another writer holds the call's log."
           },
@@ -10019,6 +10406,10 @@
           {
             "const": "method_not_allowed",
             "description": "The path exists, with other methods."
+          },
+          {
+            "const": "mic_line",
+            "description": "A line from your microphone is always you; its speaker does not change."
           },
           {
             "const": "missing_field",
@@ -10123,6 +10514,10 @@
           {
             "const": "not_restartable",
             "description": "The call cannot get a new part in its state."
+          },
+          {
+            "const": "not_trashed",
+            "description": "The call is not in the trash."
           },
           {
             "const": "pass_running",

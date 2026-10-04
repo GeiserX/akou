@@ -369,6 +369,8 @@ export class CallView {
   private _call: CallCreated | null = null;
   /** The `rev` of the `call.renamed` that set the title; 0 while it is the one it was created with. */
   private _titleRev = 0;
+  /** The `rev` of the `call.moved` that set the workspace; 0 while it is the one it started in. */
+  private _workspaceRev = 0;
   /** Every title the call has had, with the seq that set it, oldest first. */
   private readonly _titles: { seq: number; title: string }[] = [];
   private _state: CallState = "empty";
@@ -474,6 +476,11 @@ export class CallView {
         this._titleRev = e.rev;
         this._call = { ...this._call, title: e.title };
         this._titles.push({ seq: e.seq, title: e.title });
+        break;
+      case "call.moved":
+        if (!this._call || e.rev <= this._workspaceRev) break;
+        this._workspaceRev = e.rev;
+        this._call = { ...this._call, workspace: e.workspace };
         break;
       case "call.ended":
         this._endedReason = e.reason;
@@ -905,7 +912,10 @@ export class CallView {
     return this._lastSeq;
   }
 
-  /** `call.created` with the current title: the latest `call.renamed` applied over the first. */
+  /**
+   * `call.created` with the current title and workspace: the latest `call.renamed` and
+   * `call.moved` applied over the first.
+   */
   get call(): CallCreated | null {
     return this._call;
   }
@@ -913,6 +923,11 @@ export class CallView {
   /** The `rev` of the title's latest rename, 0 when it was never renamed. The next rename is +1. */
   get titleRev(): number {
     return this._titleRev;
+  }
+
+  /** The `rev` of the latest move to another workspace, 0 when it never moved. */
+  get workspaceRev(): number {
+    return this._workspaceRev;
   }
 
   /** The title the call had just before event `seq`, such as the one an export was written with. */

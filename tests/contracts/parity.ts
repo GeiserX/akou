@@ -334,6 +334,21 @@ export const PARITY: readonly Row[] = [
     window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
   },
   {
+    action: "Trash and restore a call",
+    cli: { none: "missing: CLI-26 adds calls delete and calls restore" },
+    api: ["DELETE /calls/:id", "POST /calls/:id/restore"],
+    mcp: { none: "missing: PG-M4 names move, delete and restore (CLI.md doors table)" },
+    window: { none: "missing: W13.3 adds Delete and the Trash" },
+    note: "Moving a call to another workspace is `PATCH /calls/:id {workspace}`, the rename row's route.",
+  },
+  {
+    action: "Change who spoke one line",
+    cli: { none: "missing: CLI-29 adds edit SEG --speaker" },
+    api: ["PATCH /calls/:id/segments/:sid"],
+    mcp: { none: "no tool yet, and no design item names one" },
+    window: { none: "missing: W4.10 adds the speaker picker on a line" },
+  },
+  {
     action: "List and add workspaces",
     cli: ["workspaces", "workspace"],
     api: ["GET /workspaces", "POST /workspaces"],

@@ -6,7 +6,9 @@
  * {stage}` otherwise. With `attach`, a call already recording answers `200 {attached: true}` with
  * that call, so an agent's start is idempotent and it follows the call instead of stopping.
  * The live controls refuse `last` with 400; `restart` and a rename accept it. `PATCH /calls/{id}`
- * renames a call at any time, live or saved, with a `call.renamed` event.
+ * renames a call at any time, live or saved, with a `call.renamed` event, and moves a finished one
+ * to another workspace with `call.moved`. `DELETE /calls/{id}` moves a finished call to the trash
+ * and `POST /calls/{id}/restore` brings it back (PROGRAMMABILITY PG-A4).
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
@@ -32,6 +34,28 @@ import {
   resolveRef,
   WRITE_ERRORS,
 } from "./common.ts";
+
+/**
+ * Where an indexer's page starts (PG-A6): after a `cursor` (`<updatedAt>.<id>`), else after
+ * `updatedAfter` (milliseconds or an ISO date), else null for the plain list.
+ */
+function changedSince(
+  cursor: string | null,
+  updatedAfter: string | null,
+): { t: number; id: string } | null {
+  if (cursor !== null) {
+    const m = /^(\d{1,16})\.(\S{1,64})$/.exec(cursor);
+    if (!m) throw new HttpError(400, "bad_param", "cursor is not one akou gave");
+    return { t: Number(m[1]), id: m[2] as string };
+  }
+  if (updatedAfter === null) return null;
+  const t = /^\d{1,16}$/.test(updatedAfter) ? Number(updatedAfter) : Date.parse(updatedAfter);
+  if (!Number.isFinite(t)) {
+    throw new HttpError(400, "bad_param", "updatedAfter is milliseconds or an ISO 8601 date");
+  }
+  // From this time on: every call id (a ULID, digits and capitals) sorts after "0".
+  return { t, id: "0" };
+}
 
 /** Header, parts, roster, health and final state of one call. */
 export function callDetail(c: CallController, app: ApiApp, now: number) {
@@ -268,7 +292,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.list",
-      doc: "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content.",
+      doc: "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content. `updatedAt` is when the call's transcript, notes, names, title, workspace or vocabulary corrections last changed. With `updatedAfter` or `cursor`, the list is for an indexer instead: only the calls changed after that point, oldest change first, with the `cursor` to keep for the next request and `more` when a page was left out.",
       access: "admin",
       modes: ["app"],
       query: {
@@ -277,6 +301,14 @@ export function callRoutes(r: Router<ApiApp>): void {
         failed: {
           type: "boolean",
           doc: "List only the calls whose start failed.",
+        },
+        updatedAfter: {
+          type: "string",
+          doc: "Only the calls changed after this time: milliseconds since 1970 or an ISO 8601 date.",
+        },
+        cursor: {
+          type: "string",
+          doc: "The `cursor` of an earlier answer: only the calls changed since it. Wins over `updatedAfter`.",
         },
       },
       ok: 200,
@@ -288,12 +320,23 @@ export function callRoutes(r: Router<ApiApp>): void {
       if (failed !== null && failed !== "" && failed !== "true" && failed !== "false") {
         throw new HttpError(400, "bad_param", "failed must be true or false");
       }
-      const all = c.app.manager.calls({ failed: failed === "true" || failed === "" });
-      const calls = all
-        .filter((s) => workspace === null || s.workspace === workspace)
-        .slice(0, limit)
-        .map(({ dir, ...s }) => ({ ...s, folder: dir }));
-      return json(200, { calls });
+      const all = c.app.manager
+        .calls({ failed: failed === "true" || failed === "" })
+        .filter((s) => workspace === null || s.workspace === workspace);
+      const out = (list: typeof all) => list.map(({ dir, ...s }) => ({ ...s, folder: dir }));
+      const after = changedSince(c.query.raw("cursor"), c.query.raw("updatedAfter"));
+      if (after === null) return json(200, { calls: out(all.slice(0, limit)) });
+      // Oldest change first, and the id breaks a tie, so a cursor names one place in the order.
+      const newer = all
+        .filter((s) => s.updatedAt > after.t || (s.updatedAt === after.t && s.id > after.id))
+        .sort((a, b) => a.updatedAt - b.updatedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const page = newer.slice(0, limit);
+      const last = page.at(-1);
+      return json(200, {
+        calls: out(page),
+        cursor: last ? `${last.updatedAt}.${last.id}` : `${after.t}.${after.id}`,
+        more: newer.length > page.length,
+      });
     },
   );
 
@@ -320,25 +363,137 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls/:id",
     {
       id: "calls.rename",
-      doc: "Rename a call, live or saved: `title` becomes the name every list, search, header and share shows from now on. The rename is a new `call.renamed` event; the folder keeps the name it was created with. Also takes `last`. An empty title answers 422 and the old name stays.",
+      doc: "Rename a call, live or saved, or move a finished one to another workspace. `title` becomes the name every list, search, header and share shows from now on: a new `call.renamed` event, and an export already written takes the new name. `workspace` moves the call's folder into that workspace's folder and writes `call.moved`; a call that is recording answers 409 `live_call`. Also takes `last`. An empty title answers 422 and the old name stays.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
-      body: { title: "string" },
+      body: { "title?": "string", "workspace?": "string" },
       ok: 200,
-      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field"] }),
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, {
+        400: ["bad_workspace"],
+        409: ["busy", "folder_taken", "live_call"],
+        422: ["bad_field"],
+      }),
     },
     async (c) => {
-      const b = await c.body<{ title: string }>();
+      const b = await c.body<{ title?: string; workspace?: string }>();
+      if (b.title === undefined && b.workspace === undefined) {
+        throw new HttpError(422, "bad_field", "name a new `title`, a `workspace`, or both");
+      }
       const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
-      const title = checkTitle(b.title);
-      const e = await c.app.write(id, (call) => ({
-        type: "call.renamed",
-        rev: call.view.titleRev + 1,
-        title,
-        by: c.by,
-      }));
-      return json(200, { ok: true, call: id, title, seq: e.seq });
+      const title = b.title === undefined ? undefined : checkTitle(b.title);
+      let moved: { workspace: string; seq: number | null } | null = null;
+      if (b.workspace !== undefined) {
+        const r = await c.app.moveCall(id, b.workspace, c.by);
+        if (!r.ok) return outcome(r);
+        moved = { workspace: r.workspace, seq: r.seq };
+      }
+      let seq = moved?.seq ?? null;
+      if (title !== undefined) {
+        const e = await c.app.write(id, (call) => ({
+          type: "call.renamed",
+          rev: call.view.titleRev + 1,
+          title,
+          by: c.by,
+        }));
+        seq = e.seq;
+      }
+      const v = (await c.app.call(id)).view;
+      return json(200, {
+        ok: true,
+        call: id,
+        title: v.call?.title ?? title ?? "",
+        workspace: v.call?.workspace ?? moved?.workspace ?? "",
+        seq,
+      });
+    },
+  );
+
+  r.add(
+    "PATCH",
+    "/calls/:id/segments/:sid",
+    {
+      id: "segments.edit",
+      doc: "Say who spoke one transcript line: `spk` is a speaker id from the call (`c2`), or a new `c<N>` for a voice the call missed. A new revision of the line, `by` the caller; the text and its raw form stay, and every earlier revision stays in the log. A line from your microphone is always you (422). The words of a line are fixed with `POST /calls/{id}/fix`.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID, sid: "The line's segment id (`l000031`)." },
+      body: { spk: "string" },
+      ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, WRITE_ERRORS, { 422: ["bad_field", "mic_line"] }),
+    },
+    async (c) => {
+      const b = await c.body<{ spk: string }>();
+      const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
+      const sid = c.params.sid as string;
+      const spk = b.spk.trim();
+      const e = await c.app.write(id, (call) => {
+        const v = call.view;
+        const l = v.visibleIn(sid, "best") ? v.resolve(sid) : null;
+        if (!l || l.retracted) throw new HttpError(404, "not_found", `no line ${sid}`);
+        if (l.ch === "mic") {
+          throw new HttpError(422, "mic_line", "a line from your microphone is always you", {
+            line: sid,
+          });
+        }
+        const known = v.roster().some((r) => r.spk === spk && spk !== "you");
+        if (!known && !/^c\d{1,4}$/.test(spk)) {
+          throw new HttpError(422, "bad_field", `spk "${spk}" is no speaker of this call`, {
+            field: "spk",
+          });
+        }
+        return { type: "seg", id: l.id, rev: l.rev + 1, spk, by: c.by };
+      });
+      const line = (await c.app.call(id)).view.resolve(sid);
+      return json(200, {
+        ok: true,
+        call: id,
+        line: sid,
+        rev: line?.rev ?? null,
+        spk: line?.spk ?? spk,
+        speaker: line?.speaker ?? null,
+        seq: e.seq,
+      });
+    },
+  );
+
+  r.add(
+    "DELETE",
+    "/calls/:id",
+    {
+      id: "calls.delete",
+      doc: "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good after 30 days. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      ok: 200,
+      errors: errorsOf(CALL_REF_ERRORS, { 409: ["busy", "folder_taken", "live_call"] }),
+    },
+    async (c) => {
+      const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
+      const r = await c.app.trashCall(id);
+      return r.ok ? json(200, { ok: true, call: id, trashed: true }) : outcome(r);
+    },
+  );
+
+  r.add(
+    "POST",
+    "/calls/:id/restore",
+    {
+      id: "calls.restore",
+      doc: "Bring a trashed call back to the workspace it was in, exactly as it was. The id is the call's own; `live` and `last` name no trashed call.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      body: {},
+      ok: 200,
+      errors: { 404: ["not_found"], 409: ["folder_taken", "not_trashed"] },
+    },
+    async (c) => {
+      await c.body();
+      const id = c.params.id as string;
+      const r = await c.app.restoreCall(id);
+      return r.ok ? json(200, { ok: true, call: id, workspace: r.workspace }) : outcome(r);
     },
   );
 

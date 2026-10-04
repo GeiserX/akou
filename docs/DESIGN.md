@@ -359,6 +359,7 @@ Folder names are unique by construction. akou never writes into an existing call
 |---|---|---|
 | `call.created` | `id`, `schema`, `workspace`, `title`, `tz`, `user`, `akou`, `template?` | Always `seq` 1 |
 | `call.renamed` | `rev`, `title`, `by` | The call's title from now on; the highest `rev` wins over `call.created`'s. The folder keeps its first name |
+| `call.moved` | `rev`, `workspace`, `by` | The call's workspace from now on, written after its folder moved into that workspace's folder; the highest `rev` wins over `call.created`'s |
 | `call.ended` | `reason: stop \| interrupted \| abandoned` | `abandoned`: an `interrupted` call with no resume for 24 h, closed at the next app start |
 | `call.failed` | `stage`, `error` | A start that never captured; this is the only event for that outcome. The folder and any audio are kept and listed as failed |
 | `part.started` | `part`, `file`, `wallStart`, `monoStart`, `mic`, `call`, `capture` | The (wall, monotonic) anchor pair |
@@ -611,9 +612,11 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `GET /status` | As `akou status`. Always 200 |
 | `POST /calls` `{workspace, title, template, call, mic, withoutModels, attach}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call, already_recording}` · with `attach`, `200 {call, attached: true, title, workspace, startedAt, state, part, folder}` for the call already recording · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
 | `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
-| `GET /calls?workspace&limit&failed` | Metadata list |
+| `GET /calls?workspace&limit&failed&updatedAfter&cursor` | Metadata list, each row with `updatedAt` (the last change to its transcript, notes, names, title, workspace or vocabulary corrections). With `updatedAfter` (milliseconds or ISO 8601) or `cursor`, only the calls changed after it, oldest change first, with the `cursor` to keep and `more` |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
-| `PATCH /calls/{id\|live\|last}` `{title}` | Renames the call at any time with a `call.renamed` event; 422 on an empty title, and the old name stays |
+| `PATCH /calls/{id\|live\|last}` `{title?, workspace?}` | Renames the call at any time with a `call.renamed` event, and an export akou wrote takes the new name; 422 on an empty title, and the old name stays. `workspace` moves a finished call's folder into that workspace and writes `call.moved`; 409 `live_call` while it records |
+| `DELETE /calls/{id}` · `POST /calls/{id}/restore` | Moves a finished call to `.trash/<workspace>/` under the recordings folder, out of every list, deleted for good at the first start after 30 days; 409 `live_call` while it records. Restore brings it back to its workspace unchanged |
+| `PATCH /calls/{id}/segments/{sid}` `{spk}` | Who spoke one line: `seg rev+1` with the new `spk` and `by`; the text, its raw form and every earlier revision stay. 422 for a microphone line. The words of a line are fixed with `POST /calls/{id}/fix` |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
