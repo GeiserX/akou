@@ -1026,6 +1026,42 @@ describe("the player bar (W5.3 to W5.6)", () => {
   );
 
   test(
+    "[W5.5] Space twice while a seek is still landing leaves the player paused",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await pauseNow(page);
+          // Seeks that replace one another, as the arrows make them, then Space twice, each press a
+          // task of its own, before they land. Without the queued play, Linux WebKit played on
+          // after the second press in about one run in four.
+          const after = await page.evaluate(async () => {
+            const p = document.getElementById("player") as HTMLAudioElement;
+            const scrub = document.getElementById("scrub") as HTMLElement;
+            const space = () =>
+              scrub.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+            const landed = new Promise((r) => p.addEventListener("seeked", r, { once: true }));
+            for (const t of [6, 11, 6, 1]) p.currentTime = t;
+            const seeking = p.seeking;
+            space();
+            await new Promise((r) => setTimeout(r, 0));
+            space();
+            await landed;
+            return { seeking, paused: p.paused };
+          });
+          expect(after).toEqual({ seeking: true, paused: true });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[W5.5] the keys the player bar promises work with focus on the scrubber and the speed picker",
     async () => {
       let id = "";
