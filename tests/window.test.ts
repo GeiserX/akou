@@ -72,10 +72,11 @@ describe("one accent per screen (the design's rules)", () => {
   test("theme.css reads --accent only in the welcome's primary action (Download, or the setup's Continue), the focus ring, and the live panel's chosen radio and Add a model", () => {
     const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
     // The live panel as drawn (design-explorations/lm-live-menu-slots.html): the chosen model's
-    // radio and "+ Add a model" are the panel's one accent.
+    // radio and "+ Add a model" are the panel's one accent. The Call menu (W3.3) is drawn the same
+    // way and shares the radio's rule; the two menus never show at once.
     expect(rulesUsing(css, "--accent").sort()).toEqual([
       "#live-menu .live-add",
-      '#live-menu .live-item[aria-checked="true"] .live-dot',
+      '#live-menu .live-item[aria-checked="true"] .live-dot, #call-menu .call-item[aria-checked="true"] .call-dot',
       "#welcome button.go",
       ":focus-visible",
     ]);
