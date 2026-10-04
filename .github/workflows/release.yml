@@ -421,3 +421,28 @@ jobs:
           gh release upload update-feed --repo "$GITHUB_REPOSITORY" --clobber -- stable-*-update.json
       - name: the published feed offers this version, as the app fetches it
         run: bun scripts/check-feed.ts --url
+
+  # The Homebrew cask (docs/CI-CD.md CI-25): the tap is another repository, which this workflow's
+  # token cannot push to, so the bump pushes with TAP_PUSH_TOKEN, a token limited to the tap, and
+  # stops with an error naming the secret when it is missing. It runs once the release is out, so
+  # the cask never points at a DMG that is not published.
+  cask:
+    needs: release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: push the cask bump to the tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          TAP_PUSH_TOKEN: ${{ github.event_name == 'push' && secrets.TAP_PUSH_TOKEN || '' }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          bun scripts/bump-cask.ts --sums SHA256SUMS

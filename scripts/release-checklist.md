@@ -5,8 +5,9 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
 ## Before the tag
 
 1. `main` is green on `ci-ok`. The tag runs no tests of its own: it waits for `ci-ok` on the tagged commit and stops unless it passed ([CI-CD](../docs/CI-CD.md) CI-19). If a known flake turned it red, rerun the failed legs of that CI run, then rerun the release's failed jobs.
-2. `native/akou-capture` is on `main`. Without it the workflow stops: an app without its helper cannot record.
-3. Set the version everywhere, from one place:
+2. The `TAP_PUSH_TOKEN` secret exists (`gh secret list --repo GeiserX/akou`). The tag's `cask` job pushes the Homebrew cask bump with it and fails without it, because the workflow's own token cannot push to `GeiserX/homebrew-akou` ([CI-CD](../docs/CI-CD.md) CI-25). Make it a fine-grained token with Contents read and write on that repository only. A failed `cask` job leaves the release published: add the secret, then rerun the failed job.
+3. `native/akou-capture` is on `main`. Without it the workflow stops: an app without its helper cannot record.
+4. Set the version everywhere, from one place:
 
    ```sh
    bun scripts/stamp-version.ts --set 0.1.0
@@ -18,7 +19,7 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
    For a stable version (1.0.0 or later, no prerelease part), `--check` also fails until the evidence is on record ([CI-CD](../docs/CI-CD.md) CI-28). Prereleases skip both lines:
    - The terms check in [docs/providers.md](../docs/providers.md): read the current Anthropic and OpenAI terms and add a row dated after the previous stable release.
    - The gates in [docs/gates/M0-results.md](../docs/gates/M0-results.md): every gate G1 to G8 has a Pass verdict in the summary table.
-4. Dry run the workflow on `main` and read every check line:
+5. Dry run the workflow on `main` and read every check line:
 
    ```sh
    gh workflow run release.yml --ref main
@@ -49,6 +50,7 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
 ## After the workflow
 
 1. The release page lists the DMG, the zip, four CLI archives, the update manifest and bundle (`stable-macos-arm64-*`) and `SHA256SUMS`, and its notes start with the version's changelog section, then the unsigned first-open step. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
+   `Casks/akou.rb` in https://github.com/GeiserX/homebrew-akou says this version (CI-25).
    The `update-feed` release holds the same manifest and bundle: the release job replaced them and fetched the manifest back as the app does (CI-23).
 2. On a test Mac (never the build machine), from the downloaded DMG:
    - `shasum -a 256 -c SHA256SUMS --ignore-missing` passes.
