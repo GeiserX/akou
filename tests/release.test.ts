@@ -185,13 +185,21 @@ describe("the toolchain pins", () => {
   });
 
   test("[spike] Hutch cannot fetch behind a proxy: Hutch runs with no proxy variables and signs ad-hoc by default", () => {
-    const env = hutchEnv({
-      HTTPS_PROXY: "http://p:1",
-      http_proxy: "http://p:1",
-      ALL_PROXY: "x",
-      PATH: "/bin",
-    });
+    const env = hutchEnv(
+      {
+        HTTPS_PROXY: "http://p:1",
+        http_proxy: "http://p:1",
+        ALL_PROXY: "x",
+        PATH: "/bin",
+      },
+      "darwin",
+    );
     expect(env).toEqual({ PATH: "/bin", HUTCH_NO_UPDATE_CHECK: "1", ELECTROBUN_DEVELOPER_ID: "-" });
+    // On Windows, Windows' own tar before Git's, whatever the variable's case.
+    expect(hutchEnv({ Path: "C:\\Git\\usr\\bin", SystemRoot: "C:\\Windows" }, "win32").Path).toBe(
+      "C:\\Windows\\System32;C:\\Git\\usr\\bin",
+    );
+    expect(hutchEnv({ PATH: "/bin" }, "linux").PATH).toBe("/bin");
     expect(
       hutchEnv({ ELECTROBUN_DEVELOPER_ID: "Developer ID Application: X (T)" })
         .ELECTROBUN_DEVELOPER_ID,
@@ -291,10 +299,16 @@ describe("what the bundle carries beside the main process", () => {
       "native/akou-diarize/target/release/akou-diarize": `${MAIN_OUT}/akou-diarize`,
     });
     expect(builtCopies(none)).toEqual({});
-    expect(builtCopies(all)).toEqual({
+    expect(builtCopies(all, "darwin")).toEqual({
       "dist/ui": `${MAIN_OUT}/ui`,
       // The command line the akou menu links into PATH (DK-M6).
       "dist/app-cli/akou": `${MAIN_OUT}/akou`,
+      "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
+      "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
+    });
+    expect(builtCopies(all, "win32")).toEqual({
+      "dist/ui": `${MAIN_OUT}/ui`,
+      "dist/app-cli/akou.exe": `${MAIN_OUT}/akou.exe`,
       "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });

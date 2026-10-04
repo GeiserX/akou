@@ -242,7 +242,9 @@ describe("following a call", () => {
       // A paused call is handed back as paused, never announced as recording.
       expect((await rig.api("POST", "/calls/live/pause")).status).toBe(200);
       const paused = await c.call("akou_start", {});
-      expect(paused.text).toContain(", paused now; nothing new was started");
+      expect(paused.text).toContain(
+        ", paused now; it records the whole computer; nothing new was started",
+      );
       expect((await rig.api("POST", "/calls/live/resume")).status).toBe(200);
 
       await waitForCallLine(id);
@@ -410,6 +412,43 @@ describe("following a call", () => {
       expect(got.text).toContain("hello world");
       expect((await c.call("akou_export", { call: "last" })).isError).toBe(true);
       await c.close();
+    },
+    LONG,
+  );
+});
+
+describe("an attach names what the live call records", () => {
+  test(
+    "system, app:<id> and none: the text and callMode say which, whatever the attach asked for",
+    async () => {
+      const c = await connect("claude-code");
+      try {
+        for (const [mode, words] of [
+          ["system", "it records the whole computer"],
+          ["app:com.example.call", "it records only app:com.example.call"],
+          ["none", "it records no call audio, only the microphone"],
+        ] as const) {
+          await stopAll();
+          const started = await rig.api("POST", "/calls", {
+            workspace: "work",
+            title: `Scope ${mode}`,
+            call: mode,
+          });
+          expect(started.status).toBe(201);
+          const asked = mode === "system" ? "app:com.example.other" : "system";
+          const again = await c.call("akou_start", { call: asked });
+          expect(again.isError).toBe(false);
+          expect(again.text).toContain(`; ${words}; nothing new was started`);
+          expect(again.structured).toMatchObject({
+            call: started.body.call,
+            attached: true,
+            callMode: mode,
+          });
+        }
+      } finally {
+        await stopAll();
+        await c.close();
+      }
     },
     LONG,
   );
