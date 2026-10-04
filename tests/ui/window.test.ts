@@ -14,8 +14,8 @@ import { formatWall } from "../../src/core/log/clock.ts";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import { NEMOTRON, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
-import { stereoWav } from "../fixtures/audio.ts";
 import { modelRegistry } from "../fixtures/model-registry.ts";
+import { silentOpus } from "../fixtures/opus.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
@@ -903,10 +903,7 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
         },
         async (rig) => {
           const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
-          writeFileSync(
-            join(folder, "audio", "part-001.opus"),
-            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
-          );
+          writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(12));
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
           // The answer cites the line the way the pack teaches a model to: [HH:MM Name].
@@ -1773,10 +1770,7 @@ describe("playback and Fix this line", () => {
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
-          writeFileSync(
-            join(folder, "audio", "part-001.opus"),
-            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
-          );
+          writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(12));
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
           await page.hover('#lines .row[data-id="l000003"]');
@@ -1812,10 +1806,7 @@ describe("playback and Fix this line", () => {
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
-          writeFileSync(
-            join(folder, "audio", "part-001.opus"),
-            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
-          );
+          writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(12));
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
           const player = () =>
@@ -1878,10 +1869,7 @@ describe("playback and Fix this line", () => {
         },
         async (rig) => {
           const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
-          writeFileSync(
-            join(folder, "audio", "part-001.opus"),
-            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
-          );
+          writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(12));
           const page = await rig.open(a);
           await page.waitForSelector("#lines .row >> nth=3");
           const player = () =>
@@ -1924,10 +1912,7 @@ describe("playback and Fix this line", () => {
         },
         async (rig) => {
           const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
-          writeFileSync(
-            join(folder, "audio", "part-001.opus"),
-            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
-          );
+          writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(12));
           const page = await rig.open(a);
           await page.waitForSelector("#lines .row >> nth=3");
           // Hold the first call's audio until the other call is open.
