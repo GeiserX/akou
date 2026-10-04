@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "akou",
-    "version": "0.5.5",
+    "version": "0.6.0",
     "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
     "license": {
       "name": "GPL-3.0-or-later",
@@ -30,6 +30,9 @@
       "name": "templates"
     },
     {
+      "name": "presets"
+    },
+    {
       "name": "share"
     },
     {
@@ -40,6 +43,12 @@
     },
     {
       "name": "calls"
+    },
+    {
+      "name": "segments"
+    },
+    {
+      "name": "devices"
     },
     {
       "name": "workspaces"
@@ -258,6 +267,120 @@
           },
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/presets": {
+      "get": {
+        "operationId": "presets.list",
+        "tags": [
+          "presets"
+        ],
+        "description": "The ask presets: the shipped ones and the user's own files, in menu order, read from the folder on every request. Without `call`, each `question` is the file's body with `{speaker}`, `{user}` and `{title}` unfilled, and `usesSpeaker` says which ask about one speaker. With `call`, they are filled in for that call: `{user}` from `user.name`, `{title}` from its title, and a preset that names `{speaker}` once per named speaker, or for `speaker` alone. A preset is a question for one call: ask it with `POST /calls/{id}/ask`.",
+        "parameters": [
+          {
+            "name": "call",
+            "in": "query",
+            "required": false,
+            "description": "Fill the presets in for this call: `live`, `last` or an id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "speaker",
+            "in": "query",
+            "required": false,
+            "description": "With `call`: fill `{speaker}` with this name instead of each named speaker.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/templates/{name}": {
+      "get": {
+        "operationId": "templates.get",
+        "tags": [
+          "templates"
+        ],
+        "description": "One note template as the enhanced notes would use it: the user's own file when one of that name replaces the shipped one. `text` is the whole file, frontmatter included; `path` is where it was read from.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "The template's name (`standup`), as `GET /templates` lists it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -962,7 +1085,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }
@@ -972,7 +1119,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "call": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "part": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Always null: kept because `/v1` never removes a field. `POST /window {call}` shows the window on the call."
+                    }
+                  },
+                  "required": [
+                    "call",
+                    "folder",
+                    "part",
+                    "url"
+                  ]
                 }
               }
             }
@@ -1018,7 +1189,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content.",
+        "description": "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content. `updatedAt` is when the call's transcript, notes, names, title, workspace or vocabulary corrections last changed. With `updatedAfter` or `cursor`, the list is for an indexer instead: only the calls changed after that point, oldest change first, with the `cursor` to keep for the next request and `more` when a page was left out.",
         "parameters": [
           {
             "name": "limit",
@@ -1048,6 +1219,24 @@
             "description": "List only the calls whose start failed.",
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "updatedAfter",
+            "in": "query",
+            "required": false,
+            "description": "Only the calls changed after this time: milliseconds since 1970 or an ISO 8601 date.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of an earlier answer: only the calls changed since it. Wins over `updatedAfter`.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -1145,7 +1334,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Rename a call, live or saved: `title` becomes the name every list, search, header and share shows from now on. The rename is a new `call.renamed` event; the folder keeps the name it was created with. Also takes `last`. An empty title answers 422 and the old name stays.",
+        "description": "Rename a call, live or saved, or move a finished one to another workspace. `title` becomes the name every list, search, header and share shows from now on: a new `call.renamed` event, and an export already written takes the new name. `workspace` moves the call's folder into that workspace's folder and writes `call.moved`; a call that is recording answers 409 `live_call`. Also takes `last`. An empty title answers 422 and the old name stays.",
         "parameters": [
           {
             "name": "id",
@@ -1158,7 +1347,7 @@
           }
         ],
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -1166,10 +1355,162 @@
                 "properties": {
                   "title": {
                     "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_workspace.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "calls.delete",
+        "tags": [
+          "calls"
+        ],
+        "description": "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good after 30 days. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.busy.folder_taken.live_call"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/segments/{sid}": {
+      "patch": {
+        "operationId": "segments.edit",
+        "tags": [
+          "segments"
+        ],
+        "description": "Say who spoke one transcript line: `spk` is a speaker id from the call (`c2`), or a new `c<N>` for a voice the call missed. A new revision of the line, `by` the caller; the text and its raw form stay, and every earlier revision stays in the log. A line from your microphone is always you (422). The words of a line are fixed with `POST /calls/{id}/fix`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "description": "The line's segment id (`l000031`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spk": {
+                    "type": "string"
                   }
                 },
                 "required": [
-                  "title"
+                  "spk"
                 ],
                 "additionalProperties": false
               }
@@ -1209,7 +1550,82 @@
             "$ref": "#/components/responses/415.json_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field"
+            "$ref": "#/components/responses/422.bad_field.mic_line"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/restore": {
+      "post": {
+        "operationId": "calls.restore",
+        "tags": [
+          "calls"
+        ],
+        "description": "Bring a trashed call back to the workspace it was in, exactly as it was. The id is the call's own; `live` and `last` name no trashed call.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.folder_taken.not_trashed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
@@ -1681,6 +2097,101 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/devices": {
+      "get": {
+        "operationId": "devices.list",
+        "tags": [
+          "devices"
+        ],
+        "description": "The microphones and outputs the capture helper sees, each with `id`, `name` and `default`. An input's `id` is what calls.start takes as `mic`. Opens no stream and asks for no permission. 503 `devices_unavailable` when the helper cannot list them (file-only mode, no audio service), never an empty list.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/apps": {
+      "get": {
+        "operationId": "devices.apps",
+        "tags": [
+          "devices"
+        ],
+        "description": "The apps with audio the capture helper sees, each with `id`, `name` and `pid`; on macOS `name` is the bundle id, the same as `id`. An app's `id` is what calls.start takes as `call: \"app:<id>\"` to record that app alone. 501 `apps_unavailable` where one app cannot be captured (Linux, an older Windows), with the reason; 503 `devices_unavailable` when the helper cannot list at all.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "501": {
+            "$ref": "#/components/responses/501.apps_unavailable"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.devices_unavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/workspaces": {
       "get": {
         "operationId": "workspaces.list",
@@ -1793,7 +2304,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll.",
+        "description": "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll. With `types`, only those events, and the wait lasts until one of them arrives; `cursor` still moves past the others.",
         "parameters": [
           {
             "name": "id",
@@ -1826,6 +2337,15 @@
               "minimum": 0,
               "maximum": 30,
               "default": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Only these log event types, comma-separated (`health,seg,answer,share.started`). The cursor still moves past the others, so a reconnect does not replay them. Default: every type.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -1874,7 +2394,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it.",
+        "description": "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it. `types` keeps only those events: one left out comes as its `id` alone, which moves `Last-Event-ID` and delivers nothing. `ephemeral=none` drops the spoken line, the levels and `read`.",
         "parameters": [
           {
             "name": "id",
@@ -1895,6 +2415,29 @@
               "minimum": 0,
               "maximum": 9007199254740991,
               "default": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "description": "Only these log event types, comma-separated (`health,seg,answer,share.started`). The cursor still moves past the others, so a reconnect does not replay them. Default: every type.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ephemeral",
+            "in": "query",
+            "required": false,
+            "description": "`none`: no `partial`, `level` or `read` messages, the log events alone.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "none"
+              ],
+              "default": "all"
             }
           }
         ],
@@ -3963,7 +4506,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word over the file's limits (50 heard forms, each at most 100 characters; a note of 1000) is imported within them and listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. A `(ctx)` or `(refused)` variant and `=== ... ===` banners are left out, and a word over the file's limits (50 heard forms, each at most 100 characters; a note of 1000) is imported within them and listed in `skipped`. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one. A word the file already holds gains the new heard forms and keeps the rest: who added it and when, its note, its scope.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4770,7 +5313,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+        "description": "A spoken dictation's audio as mono Ogg Opus (a 16 kHz WAV, `audio/wav`, for one kept before akou kept Opus), kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
         "parameters": [
           {
             "name": "id",
@@ -4786,7 +5329,7 @@
           "200": {
             "description": "OK",
             "content": {
-              "audio/wav": {
+              "audio/ogg": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -4995,7 +5538,7 @@
         "tags": [
           "dictation"
         ],
-        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), what a dictation inserts now as `final` (`dictation.final` as it resolves here: parakeet, live or qwen; remote; null with no model) and the streaming model the words while you speak come from as `live` (null: Parakeet, refreshed twice a second), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
+        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), what a dictation inserts now as `final` (`dictation.final` as it resolves here: parakeet, live or qwen; remote; null with no model) and the streaming model the words while you speak come from as `live` (null: Parakeet, refreshed twice a second), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, whether it can hold Escape and Enter during a session (`swallow_keys`), the `engines` a retry can use on this machine now (of fast, best, live and remote: an engine whose model is not downloaded, or remote with no address, is not listed), and `latency`: for live, parakeet, qwen and remote, how long the text takes after the key is let go for 10 s of speech (`ms`), `measured` on this kind of machine or an estimate (DC-T3).",
         "responses": {
           "200": {
             "description": "OK",
@@ -6021,7 +6564,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null in the desktop app), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
@@ -6222,6 +6765,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6325,6 +6869,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6336,7 +6881,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (seconds of the file transcribed so far) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
         "parameters": [
           {
             "name": "id",
@@ -6383,6 +6928,9 @@
           "404": {
             "$ref": "#/components/responses/404.not_found"
           },
+          "410": {
+            "$ref": "#/components/responses/410.gone"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -6394,6 +6942,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6457,6 +7006,9 @@
           "404": {
             "$ref": "#/components/responses/404.not_found"
           },
+          "410": {
+            "$ref": "#/components/responses/410.gone"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -6474,6 +7026,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6483,7 +7036,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed.",
+        "description": "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed. From then on its id answers 410 `gone`.",
         "parameters": [
           {
             "name": "id",
@@ -6515,6 +7068,9 @@
           "404": {
             "$ref": "#/components/responses/404.not_found"
           },
+          "410": {
+            "$ref": "#/components/responses/410.gone"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -6529,6 +7085,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6540,7 +7097,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. A word's `s` and `e` are null from an engine that gives no word times (`best`), its `c` null from one that gives no confidence; `confidence` is the mean of the words' `c`. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` says whether labels were asked for, made, and why they failed; `warnings` says it in words; `skipped` lists spans the engine refused, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
+        "description": "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done; 410 `gone` once the job was deleted or passed `server.retain_days`.",
         "parameters": [
           {
             "name": "id",
@@ -6595,6 +7152,9 @@
           "409": {
             "$ref": "#/components/responses/409.not_done"
           },
+          "410": {
+            "$ref": "#/components/responses/410.gone"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -6606,6 +7166,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6690,6 +7251,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "jobs"
@@ -6823,6 +7385,92 @@
       }
     },
     "/v1/keys/{id}": {
+      "patch": {
+        "operationId": "keys.update",
+        "tags": [
+          "keys"
+        ],
+        "description": "Replace a key's callback hosts. The key, its webhook secret, its jobs and its event feed stay; the next request with the key uses the new hosts. An empty list allows no callback.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id, `key_…`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "callback_hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "callback_hosts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.key_exists.keys_busy"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
       "delete": {
         "operationId": "keys.revoke",
         "tags": [
@@ -6891,7 +7539,7 @@
         "tags": [
           "openai"
         ],
-        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `words` is an empty list even when `timestamp_granularities[]` asks for `word`, since this door does not carry the engine's words yet (akou-5an.84). `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6991,7 +7639,7 @@
             "$ref": "#/components/responses/499.cancelled"
           },
           "500": {
-            "$ref": "#/components/responses/500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+            "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -7381,6 +8029,33 @@
                         "bad_json",
                         "bad_workspace",
                         "missing_field",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_field.bad_json.bad_workspace.refused.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "bad_json",
+                        "bad_workspace",
+                        "refused",
                         "unknown_field"
                       ]
                     }
@@ -8115,6 +8790,58 @@
           }
         }
       },
+      "409.busy.folder_taken.live_call": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.busy.folder_taken.live_call.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "busy",
+                        "folder_taken",
+                        "live_call",
+                        "locked",
+                        "log_closed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.call_word.locked.log_closed.vocab_file_invalid": {
         "description": "Conflict",
         "content": {
@@ -8255,6 +8982,30 @@
                         "locked",
                         "log_closed",
                         "not_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.folder_taken.not_trashed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "folder_taken",
+                        "not_trashed"
                       ]
                     }
                   }
@@ -8748,6 +9499,29 @@
           }
         }
       },
+      "410.gone": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "gone"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "413.body_too_large": {
         "description": "Body too large",
         "content": {
@@ -8944,6 +9718,30 @@
           }
         }
       },
+      "422.bad_field.mic_line": {
+        "description": "Unprocessable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_field",
+                        "mic_line"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "422.bad_field.unknown_model": {
         "description": "Unprocessable",
         "content": {
@@ -9037,7 +9835,7 @@
           }
         }
       },
-      "500.diarize_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
+      "500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed": {
         "description": "Internal error",
         "content": {
           "application/json": {
@@ -9051,6 +9849,7 @@
                     "error": {
                       "enum": [
                         "diarize_unavailable",
+                        "engine_unavailable",
                         "internal",
                         "interrupted",
                         "model_download_failed",
@@ -9128,6 +9927,29 @@
                       "enum": [
                         "internal",
                         "transcription_failed"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "501.apps_unavailable": {
+        "description": "Not implemented",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "apps_unavailable"
                       ]
                     }
                   }
@@ -9222,6 +10044,29 @@
                         "capture_failed",
                         "models_missing",
                         "quitting"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.devices_unavailable": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "devices_unavailable"
                       ]
                     }
                   }
@@ -9355,6 +10200,10 @@
             "description": "A call is already recording; `already_recording` names it."
           },
           {
+            "const": "apps_unavailable",
+            "description": "One app cannot be captured on this system; the message says why."
+          },
+          {
             "const": "bad_bind",
             "description": "The share's `bind` is not `tailnet`, `lan` or an IPv4 address."
           },
@@ -9427,6 +10276,10 @@
             "description": "A request from a browser, refused by the desktop app."
           },
           {
+            "const": "busy",
+            "description": "The call's files are being written or cannot move now; retry in a moment."
+          },
+          {
             "const": "call_word",
             "description": "The term is the call's own word, not a vocabulary file's."
           },
@@ -9451,6 +10304,10 @@
             "description": "The audio could not be decoded."
           },
           {
+            "const": "devices_unavailable",
+            "description": "The capture helper cannot list the devices; `helper` says why."
+          },
+          {
             "const": "diarize_unavailable",
             "description": "The job asked for speaker labels and no `akou-diarize` helper is here; the message names the settings that fix it."
           },
@@ -9465,6 +10322,10 @@
           {
             "const": "dictation_starting",
             "description": "The dictation helper is still starting."
+          },
+          {
+            "const": "engine_unavailable",
+            "description": "A speech engine of the job's preset is down or could not load, so the job failed rather than come back with its text missing."
           },
           {
             "const": "enhance_running",
@@ -9483,8 +10344,16 @@
             "description": "The final pass cannot run on this machine."
           },
           {
+            "const": "folder_taken",
+            "description": "The folder the call would move to exists already."
+          },
+          {
             "const": "forbidden",
             "description": "The key's scope does not reach this route."
+          },
+          {
+            "const": "gone",
+            "description": "The job was deleted, or passed the `retain_days` akou keeps one from its creation."
           },
           {
             "const": "idempotency_conflict",
@@ -9523,6 +10392,10 @@
             "description": "The line changed while it was being fixed."
           },
           {
+            "const": "live_call",
+            "description": "The call is recording; stop it first."
+          },
+          {
             "const": "locked",
             "description": "Another writer holds the call's log."
           },
@@ -9533,6 +10406,10 @@
           {
             "const": "method_not_allowed",
             "description": "The path exists, with other methods."
+          },
+          {
+            "const": "mic_line",
+            "description": "A line from your microphone is always you; its speaker does not change."
           },
           {
             "const": "missing_field",
@@ -9637,6 +10514,10 @@
           {
             "const": "not_restartable",
             "description": "The call cannot get a new part in its state."
+          },
+          {
+            "const": "not_trashed",
+            "description": "The call is not in the trash."
           },
           {
             "const": "pass_running",

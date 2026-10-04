@@ -451,6 +451,7 @@ export class PageServer {
           } catch {}
         };
         const unwatch = bridge.watchLifecycle(() => void push());
+        // clock: a keep-alive comment, so the page can tell a quiet stream from a dead connection.
         const keepalive = setInterval(() => send(": keep-alive\n\n"), STATUS_KEEPALIVE_MS);
         stop = () => {
           if (closed) return;

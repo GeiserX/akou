@@ -207,6 +207,23 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
     expect(check(OK["application/json"].schema, { ...b, segments: [seg] })).not.toEqual([]);
   });
 
+  test("[SV-C1] verbose_json with no language anywhere says und, never unknown; words stay empty", async () => {
+    // The fake engine, as Parakeet, names no language: only the request's hint could.
+    const r = await post([
+      ["response_format", "verbose_json"],
+      ["timestamp_granularities[]", "word"],
+    ]);
+    const b = JSON.parse(r.text);
+    expect([b.language, b.words]).toEqual(["und", []]);
+    expect(check(OK["application/json"].schema, b)).toEqual([]);
+    // Positive control: a hint is the language when the engine names none.
+    const es = await post([
+      ["language", "es"],
+      ["response_format", "verbose_json"],
+    ]);
+    expect(JSON.parse(es.text).language).toBe("es");
+  });
+
   test("text, srt and vtt answer plain text", async () => {
     const text = await post([["response_format", "text"]]);
     expect(text.type).toContain("text/plain");
@@ -266,7 +283,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
       preset: "fast",
       source: "request",
     });
-    // Qwen is best's engine; Canary belongs to fusion, which is not built.
+    // Qwen is best's engine; Canary runs only inside the fusion preset.
     expect(resolveModel({ model: "qwen3-asr-1.7b" }, o)).toMatchObject({
       model: "qwen3-asr-1.7b",
       preset: "best",
@@ -278,7 +295,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
   });
 
   test("a preset that is not built is refused with 409 preset_unavailable", async () => {
-    const r = await post([["model", "fusion"]]);
+    const r = await post([["model", "lite"]]);
     expect(r.status).toBe(409);
     expect(JSON.parse(r.text).error).toBe("preset_unavailable");
   });
@@ -345,7 +362,7 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const dir = join(rig.app.configDir, "jobs", "audio");
     const uploads = () => readdirSync(dir).filter((f) => f.endsWith(".upload"));
     const before = uploads();
-    expect((await post([["model", "fusion"]])).status).toBe(409);
+    expect((await post([["model", "lite"]])).status).toBe(409);
     expect((await post([["response_format", "nope"]])).status).toBe(422);
     expect(uploads()).toEqual(before);
     expect((await post([["response_format", "json"]])).status).toBe(200);

@@ -312,8 +312,12 @@ async function answer(
   if (typeof body.text !== "string") {
     throw new RemoteDictationError("status", `${target.base} answered with no text`, res.status);
   }
+  // `und` is what a server answers when its engine names no language; `unknown` is what older
+  // servers answered. Neither is a language.
   const lang =
-    typeof body.language === "string" && body.language !== "unknown" ? body.language : null;
+    typeof body.language === "string" && body.language !== "und" && body.language !== "unknown"
+      ? body.language
+      : null;
   return {
     text: body.text.trim(),
     language: lang,
@@ -504,6 +508,7 @@ export class RemoteUpload {
       this.o.timeoutSeconds ?? REMOTE_TIMEOUT_SECONDS,
       samples.length / ASR_RATE,
     );
+    // clock: a deadline on a request to another machine.
     const timer = setTimeout(() => this.abort.abort(), this.timeoutMs);
     try {
       const r = await this.outcome;
@@ -851,6 +856,7 @@ export class RemoteEngine {
     this.failures++;
     if (this.failures >= REMOTE_DOWN_AFTER && this.probe === null) {
       this.o.onLog?.("warn", `dictation: the remote is down (${e.message}); probing it`);
+      // clock: probing a remote that went down, real time between machines.
       this.probe = setInterval(() => void this.probeOnce(), this.o.probeMs ?? REMOTE_PROBE_MS);
       this.probe.unref?.();
     }

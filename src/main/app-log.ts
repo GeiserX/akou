@@ -21,6 +21,7 @@ export const HANGS_DIR = "hangs";
 export const APP_LOG_MAX_BYTES = 4 * 1024 * 1024;
 
 /** `2026-10-01 16:40:13.562 +02:00`: local wall-clock time with its offset. */
+// clock: the default of an injected time: a log line is stamped when it is written.
 export function logStamp(d: Date = new Date()): string {
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   const off = -d.getTimezoneOffset();
@@ -35,6 +36,7 @@ export class AppLog {
   constructor(
     readonly file: string,
     private readonly maxBytes: number = APP_LOG_MAX_BYTES,
+    // clock: the default of an injected clock; tests pass their own.
     private readonly now: () => Date = () => new Date(),
   ) {}
 

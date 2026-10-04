@@ -5,8 +5,14 @@
  * for `scripts/drift-test.ts`. `--without-models` passes the same flag to `akou start`, so the app
  * records audio only, with no recognizer loaded, and starts on a machine without the models.
  *
- *   AKOU_HOME=… bun scripts/gates/record-call.ts --cli <cli.ts> --seconds N [--tag T]
+ *   AKOU_HOME=… bun scripts/gates/record-call.ts --cli <cli.ts | akou> --seconds N [--tag T]
  *     [--without-models] [--memory memory.csv] [--out result.json]
+ *
+ * `--cli` is either `src/main/cli/cli.ts`, run with Bun, which starts the app from source, or a
+ * compiled `akou` (the one inside `akou.app`, or the release CLI), run as it is, which starts the
+ * installed `akou.app` through LaunchServices. `open` hands the app the CLI's environment,
+ * `AKOU_HOME` included (measured on macOS 26.6.1). Only the second records with the grants macOS
+ * gave akou rather than the terminal's (ROADMAP G3, G4).
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,12 +30,13 @@ if (!cliPath || !home || !Number.isFinite(seconds)) {
   throw new Error("AKOU_HOME, --cli and --seconds are required");
 }
 const configDir = join(home, ".config", "akou");
+const cliCommand = cliPath.endsWith(".ts") ? [process.execPath, cliPath] : [cliPath];
 const memory = opt("--memory");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function cli(...args: string[]) {
   const t = performance.now();
-  const p = Bun.spawn(["bun", cliPath as string, ...args, "--json"], {
+  const p = Bun.spawn([...cliCommand, ...args, "--json"], {
     stdout: "pipe",
     stderr: "pipe",
   });

@@ -349,7 +349,7 @@ describe("re-export", () => {
     }
   });
 
-  test("a call renamed after its export keeps one attachments folder, and the file links into it", () => {
+  test("a call renamed after its export moves the file to the new name, keeps one attachments folder, and the file links into it", () => {
     const r = rig();
     try {
       const first = r.run({ audio: "copy" });
@@ -358,9 +358,11 @@ describe("re-export", () => {
       const second = r.run({ audio: "copy" });
       expect(second).toMatchObject({
         written: true,
-        path: first.path,
+        path: first.path.replace("Weekly sync", "Q3 planning"),
         attachments: first.attachments,
       });
+      expect(second.path).not.toBe(first.path);
+      expect(existsSync(first.path)).toBe(false);
       expect(readdirSync(join(r.root, "work", "attachments"))).toEqual([BASE]);
       const md = readFileSync(second.path, "utf8");
       expect(md).toContain("title: Q3 planning");

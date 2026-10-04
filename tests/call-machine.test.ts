@@ -22,7 +22,7 @@ import {
 } from "../src/main/call/state.ts";
 import { EXIT } from "../src/main/capture/protocol.ts";
 import { flush, logOf, ManualClock, ofType, ScriptedEngine, types } from "./capture-helpers.ts";
-import { jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
+import { CLOCK_SHIFTED, jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
 
 /** A per-app scope, as `--call` and `POST /calls {call}` take it. */
 const APP = "app:com.example.call";
@@ -979,14 +979,18 @@ describe("crash recovery at the next start", () => {
     expect((await logOf(dir)).at(-1)).toMatchObject({ type: "call.ended", reason: "abandoned" });
   });
 
-  test("positive control: a folder another live writer holds is left alone", async () => {
-    const s = setup();
-    const b = new LogBuilder();
-    b.created({ id: "01J8Z6Q4M2VX0K7B3D4E5F6G7F" });
-    b.partStarted(1, T0);
-    const dir = callDir(s.root, "held", b.events);
-    writeFileSync(join(dir, LOCK_FILE), `${process.pid}\n`);
-    expect(await s.mgr.init()).toEqual([]);
-    expect((await logOf(dir)).length).toBe(2);
-  });
+  // Compares a file it writes with `Date.now()`: skipped a year ahead (CLOCK_SHIFTED).
+  test.skipIf(CLOCK_SHIFTED)(
+    "positive control: a folder another live writer holds is left alone",
+    async () => {
+      const s = setup();
+      const b = new LogBuilder();
+      b.created({ id: "01J8Z6Q4M2VX0K7B3D4E5F6G7F" });
+      b.partStarted(1, T0);
+      const dir = callDir(s.root, "held", b.events);
+      writeFileSync(join(dir, LOCK_FILE), `${process.pid}\n`);
+      expect(await s.mgr.init()).toEqual([]);
+      expect((await logOf(dir)).length).toBe(2);
+    },
+  );
 });

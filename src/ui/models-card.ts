@@ -71,6 +71,7 @@ export class ModelsCard {
 
   /** The models from the status push (`pushed`), a pull's reply or a poll. */
   update(m: ModelsInfo | undefined, pushed = false): void {
+    // clock: when the last status push arrived, by the page's own clock.
     if (pushed && m) this.pushedAt = Date.now();
     this.last = m;
     const view = modelsCardText(
@@ -175,7 +176,9 @@ export class ModelsCard {
    */
   private startPolling(): void {
     let inFlight = false;
+    // clock: polls model downloads when no status push arrives.
     this.polling ??= setInterval(async () => {
+      // clock: polls model downloads when no status push arrives.
       if (inFlight || Date.now() - this.pushedAt < QUIET_MS) return;
       inFlight = true;
       try {

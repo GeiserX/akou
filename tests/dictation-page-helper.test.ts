@@ -109,6 +109,59 @@ describe("DC-U3: the recorder gets the helper's keys", () => {
     expect(sent(r, "record_keys")[1]).toEqual({ type: "record_keys", on: false });
   });
 
+  test("a helper started again for a grant while the recorder is open keeps reporting to it", async () => {
+    let argv: string[] = [];
+    const r = rig(
+      ["--recorder-keys", "Fn", "--grants", "mic", "--probe-grants", "mic,accessibility"],
+      { probe: () => [...argv, "--probe"] },
+    );
+    argv = r.argv;
+    await started(r);
+    const first = r.svc.session();
+    const w = window(r.svc);
+    await w.rpc.handlers.recordDictationKeys({ on: true });
+    await until(() => w.keys.length === 1, 5000, "the first helper's key");
+    // Accessibility arrives: the helper is started again with the page's recorder still open.
+    await r.svc.grants();
+    await until(
+      () => r.svc.session() !== first && r.svc.status().state === "idle",
+      10_000,
+      "the helper started again",
+    );
+    await until(() => sent(r, "record_keys").length === 2, 5000, "record_keys to the new helper");
+    expect(sent(r, "record_keys")).toEqual([
+      { type: "record_keys", on: true },
+      { type: "record_keys", on: true },
+    ]);
+    await until(() => w.keys.length === 2, 5000, "the new helper's key reaching the page");
+    w.rpc.close();
+    await until(() => sent(r, "record_keys").length === 3, 5000, "record_keys off");
+  });
+
+  test("a recorder closed while the helper restarts for a grant is not opened by the new one", async () => {
+    let argv: string[] = [];
+    const r = rig(
+      ["--recorder-keys", "Fn", "--grants", "mic", "--probe-grants", "mic,accessibility"],
+      { probe: () => [...argv, "--probe"] },
+    );
+    argv = r.argv;
+    await started(r);
+    const first = r.svc.session();
+    const w = window(r.svc);
+    await w.rpc.handlers.recordDictationKeys({ on: true });
+    // The restart begins: the old helper is stopping and no helper is up when the page closes.
+    await r.svc.grants();
+    w.rpc.close();
+    await until(
+      () => r.svc.session() !== first && r.svc.status().state === "idle",
+      10_000,
+      "the helper started again",
+    );
+    await until(() => sent(r, "rebind").length === 2, 5000, "the second rebind");
+    await Bun.sleep(200);
+    expect(sent(r, "record_keys")).toEqual([{ type: "record_keys", on: true }]);
+  });
+
   test("with dictation off the recorder is told no, and takes what the page sees", async () => {
     const w = window(null);
     expect(await w.rpc.handlers.recordDictationKeys({ on: true })).toBe(false);
@@ -147,6 +200,28 @@ describe("DC-U4: the microphone goes to the helper", () => {
     await until(() => sent(r, "rebind").length === 1, 5000, "the rebind");
     await Bun.sleep(200);
     expect(sent(r, "rebuild_mic")).toEqual([]);
+  });
+});
+
+describe("DC-U8: dictation.muteMedia goes to the helper", () => {
+  test("after ready, the setting as it is; a change sends it again", async () => {
+    const media = { on: false };
+    const r = rig([], { pauseMedia: () => media.on });
+    await started(r);
+    await until(() => sent(r, "pause_media").length === 1, 5000, "pause_media after ready");
+    expect(sent(r, "pause_media")[0]).toEqual({ type: "pause_media", on: false });
+    media.on = true;
+    r.svc.pauseMedia();
+    await until(() => sent(r, "pause_media").length === 2, 5000, "pause_media on a change");
+    expect(sent(r, "pause_media")[1]).toEqual({ type: "pause_media", on: true });
+  });
+
+  test("negative control: with no media setting, none is sent", async () => {
+    const r = rig([]);
+    await started(r);
+    await until(() => sent(r, "rebind").length === 1, 5000, "the rebind");
+    await Bun.sleep(200);
+    expect(sent(r, "pause_media")).toEqual([]);
   });
 });
 

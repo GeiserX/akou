@@ -216,6 +216,7 @@ export class DiarizeHelper {
     try {
       void Promise.resolve(this.stdin.end()).catch(() => {});
     } catch {}
+    // clock: a grace for a real helper process to exit before it is killed.
     const t = setTimeout(() => this.proc.kill(), EXIT_GRACE_MS);
     void this.proc.exited.then(() => clearTimeout(t));
   }
@@ -265,6 +266,7 @@ export class NemotronDiarizer implements Diarizer {
         (why) => settle(new Error(why)),
       );
       const ms = this.deadlineMs ?? diarizeDeadlineMs(samples.length);
+      // clock: a deadline on a real helper process's answer.
       const timer = setTimeout(() => h.kill(`akou-diarize gave no answer within ${ms} ms`), ms);
       this.onLoad();
       void (async () => {

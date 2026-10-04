@@ -20,6 +20,7 @@ import {
   QWEN_MODEL_FILE,
 } from "../src/main/asr/llama-catalog.ts";
 import {
+  createLlamaServer,
   extractBuild,
   LlamaServer,
   llamaArgs,
@@ -46,7 +47,7 @@ import {
   wavBytes,
 } from "../src/main/asr/qwen.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { tempDir } from "./helpers.ts";
+import { jsonLines, tempDir } from "./helpers.ts";
 
 setDefaultTimeout(30_000);
 
@@ -77,13 +78,7 @@ function fakeServer(
     ...o,
   });
   cleanups.push(() => server.stop());
-  const log = () =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((l) => JSON.parse(l) as Record<string, unknown>)
-      : [];
+  const log = () => jsonLines(logFile);
   return { server, log, dir };
 }
 
@@ -280,6 +275,90 @@ describe("where Qwen's llama-server comes from (akou-5an.94)", () => {
   });
 });
 
+/**
+ * A pinned build as the best preset downloads it: one archive whose llama-server runs the fake,
+ * whose `--list-devices` prints `devices`. A shell script, so POSIX only.
+ */
+function fakeBuild(devices: string): {
+  build: { dir: string; archives: string[]; platform: string };
+  log: string;
+} {
+  const dir = scratch();
+  const log = join(dir, "fake.log");
+  const src = join(dir, "src", "llama-b1");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(
+    join(src, "llama-server"),
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} --fake-log ${JSON.stringify(log)} --fake-devices ${JSON.stringify(devices)} "$@"\n`,
+  );
+  chmodSync(join(src, "llama-server"), 0o755);
+  expect(
+    Bun.spawnSync(["tar", "-czf", "build.tar.gz", "-C", "src", "llama-b1"], { cwd: dir }).exitCode,
+  ).toBe(0);
+  mkdirSync(join(dir, "build"));
+  return {
+    build: {
+      dir: join(dir, "build"),
+      archives: [join(dir, "build.tar.gz")],
+      platform: "linux-x64",
+    },
+    log,
+  };
+}
+
+describe.skipIf(process.platform === "win32")(
+  "[akou-5an.94.1] a pinned GPU build is asked what it opens once unpacked, before its first start (POSIX shell; skipped on Windows)",
+  () => {
+    const started = (log: string) =>
+      readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => (JSON.parse(l) as { argv: string[] }).argv);
+    const ngl = (argv: string[]) => argv[argv.indexOf("-ngl") + 1];
+
+    test("a build that lists no Vulkan device runs its first start on the CPU, and says why", async () => {
+      const { build, log } = fakeBuild("");
+      const said: string[] = [];
+      const server = createLlamaServer(
+        {
+          kind: "llama-server",
+          engine: QWEN_ASR,
+          model: "m",
+          mmproj: "p",
+          accelerator: "vulkan",
+          build,
+        },
+        { log: (_l, m) => said.push(m) },
+      );
+      cleanups.push(() => server.stop());
+      await server.url();
+      const [argv] = started(log);
+      expect(ngl(argv as string[])).toBe("0");
+      expect(argv).toContain("--device");
+      expect(said.some((m) => m.includes("lists no vulkan device"))).toBe(true);
+    });
+
+    test("positive control: a build that lists the GPU runs every layer on it", async () => {
+      const { build, log } = fakeBuild(
+        "  Vulkan0: Intel(R) UHD Graphics 770 (RPL-S) (16384 MiB, 16000 MiB free)",
+      );
+      const server = createLlamaServer({
+        kind: "llama-server",
+        engine: QWEN_ASR,
+        model: "m",
+        mmproj: "p",
+        accelerator: "vulkan",
+        build,
+      });
+      cleanups.push(() => server.stop());
+      await server.url();
+      const [argv] = started(log);
+      expect(ngl(argv as string[])).toBe("999");
+      expect(argv).not.toContain("--device");
+    });
+  },
+);
+
 describe("the pinned build is unpacked once", () => {
   test("the archive's llama-server is found and made executable; a second call unpacks nothing", async () => {
     const dir = scratch();
@@ -395,6 +474,10 @@ describe("the supervisor", () => {
     const gpu = llamaArgs({ ...base, accelerator: "vulkan" }, 1);
     expect(gpu.slice(gpu.indexOf("-ngl"), gpu.indexOf("-ngl") + 2)).toEqual(["-ngl", "999"]);
     expect(gpu).not.toContain("--device");
+    // An own build on asr.accelerator cpu gets --device none too, as asr.llamaServer's doc says.
+    const own = llamaPlan({ setting: "cpu", own: ["mine"], platform: "linux-x64" });
+    expect(own.gpuLayers).toBeUndefined();
+    expect(llamaArgs({ ...base, ...own, command: own.command ?? [] }, 1)).toContain("--device");
     // An own build given its own layer count picks its own devices.
     expect(llamaArgs({ ...base, accelerator: "cpu", gpuLayers: 999 }, 1)).not.toContain("--device");
   });

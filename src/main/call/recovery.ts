@@ -96,7 +96,33 @@ export interface CallSummary {
   /** `t` of the last event that ended the call or its newest part; null while live. */
   endedAt: number | null;
   parts: number;
+  /**
+   * `t` of the newest event that changed what the call says (`CHANGES`): its transcript, notes,
+   * names, title, workspace or vocabulary corrections. `GET /calls?updatedAfter=` pages by it.
+   */
+  updatedAt: number;
 }
+
+/**
+ * The events that change what an indexer has of a call (PROGRAMMABILITY PG-A6). Hand-off
+ * bookkeeping (exports, hooks, the webhook), health and questions are not among them.
+ */
+export const CHANGES: ReadonlySet<string> = new Set([
+  "call.created",
+  "call.renamed",
+  "call.moved",
+  "call.ended",
+  "seg",
+  "note",
+  "note.del",
+  "speaker.name",
+  "speaker.merge",
+  "speaker.unmerge",
+  "speaker.map",
+  "vocab.add",
+  "vocab.learned",
+  "enhanced",
+]);
 
 export function summarize(
   dir: string,
@@ -127,6 +153,7 @@ export function summarize(
     state: view.state,
     endedAt,
     parts: view.parts().length,
+    updatedAt: events.reduce((t, e) => (CHANGES.has(e.type) && e.t > t ? e.t : t), first.t),
   };
 }
 

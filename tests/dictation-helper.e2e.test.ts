@@ -311,6 +311,7 @@ if (!BIN) {
         r.svc.draft.attach({
           open: (d) => opened.push(d),
           chip: () => {},
+          append: () => {},
           showInactive: () => {},
           hide: () => {},
         });

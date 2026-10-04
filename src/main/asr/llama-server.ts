@@ -37,6 +37,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { basename, dirname, join, relative, sep } from "node:path";
+import { confirmAccelerator, listDevices } from "./accelerator.ts";
 import type { LlamaEngineSpec } from "./engine.ts";
 import { llamaBuildId } from "./llama-catalog.ts";
 import { type Accelerator, type CatalogEntry, MODELS } from "./models.ts";
@@ -194,6 +195,7 @@ export function extractBuild(dir: string, archives: readonly string[], platform:
     const found = findFile(bin, name);
     if (found) return found;
   }
+  // clock: a unique name for a temporary folder, not a time.
   const tmp = join(dir, `bin.${process.pid}.${Date.now()}.tmp`);
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
@@ -263,6 +265,12 @@ export interface LlamaServerOptions {
    * sets it, to show that cache still grows with every request (scripts/eval/nightly.ts).
    */
   promptCache?: boolean;
+  /**
+   * Asked once, before the first start, which accelerator the command really runs. A pinned build
+   * unpacked on that first start was never asked by the host, which asks only what is on disk, so
+   * a GPU it cannot open runs on the CPU from the first job, not with every layer on that GPU.
+   */
+  verify?(command: readonly string[]): Promise<Accelerator>;
   /** Told of every process started (`true`) and ended (`false`), so a host can kill orphans. */
   onChild?(pid: number, alive: boolean): void;
   log?(level: "info" | "warn" | "error", msg: string): void;
@@ -326,7 +334,9 @@ function alive(pid: number): boolean {
 }
 
 async function waitGone(pid: number, ms: number): Promise<boolean> {
+  // clock: waiting on a process we signalled, bounded by `ms`.
   const end = Date.now() + ms;
+  // clock: waiting on a process we signalled, bounded by `ms`.
   while (Date.now() < end) {
     if (!alive(pid)) return true;
     // clock: polling a process we signalled, bounded by `ms`.
@@ -393,6 +403,8 @@ export class LlamaServer {
   private stderr: string[] = [];
   /** Processes started so far, restarts included. */
   starts = 0;
+  /** What `verify` answered, once. */
+  private checked: Accelerator | null = null;
 
   constructor(private readonly o: LlamaServerOptions) {}
 
@@ -426,8 +438,10 @@ export class LlamaServer {
   private async start(): Promise<string> {
     if (this.o.accelerator === "metal") await this.takeMetal();
     const command = typeof this.o.command === "function" ? this.o.command() : this.o.command;
+    if (this.o.verify && this.checked === null) this.checked = await this.o.verify(command);
+    const accelerator = this.checked ?? this.o.accelerator;
     this.port = await freePort();
-    const args = llamaArgs({ ...this.o, command }, this.port);
+    const args = llamaArgs({ ...this.o, accelerator, command }, this.port);
     this.stderr = [];
     const proc = Bun.spawn(args, { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
     this.proc = proc;
@@ -451,6 +465,7 @@ export class LlamaServer {
         );
       }
     }
+    // clock: a deadline on a real server loading its model.
     const deadline = Date.now() + (this.o.healthTimeoutMs ?? 300_000);
     for (;;) {
       if (proc.exitCode !== null || proc.signalCode !== null) {
@@ -465,6 +480,7 @@ export class LlamaServer {
       } catch {
         // Not listening yet.
       }
+      // clock: a deadline on a real server loading its model.
       if (Date.now() > deadline) {
         await this.stop();
         throw new Error(
@@ -474,7 +490,7 @@ export class LlamaServer {
       // clock: the health check's poll while the model loads, bounded by the deadline.
       await Bun.sleep(100);
     }
-    this.o.log?.("info", `llama-server ${pid} ready on port ${this.port} (${this.o.accelerator})`);
+    this.o.log?.("info", `llama-server ${pid} ready on port ${this.port} (${accelerator})`);
     return this.base();
   }
 
@@ -564,6 +580,36 @@ export function createLlamaServer(
     threads: spec.threads,
     gpuLayers: spec.gpuLayers,
     lockDir: build?.dir,
+    // The pinned build on a GPU is asked after it is unpacked; an own or an image's runs as set.
+    ...(!spec.command && spec.accelerator !== "cpu"
+      ? { verify: (command: readonly string[]) => buildRuns(command, spec.accelerator, hooks.log) }
+      : {}),
     ...hooks,
   });
+}
+
+/**
+ * The accelerator an unpacked build runs: the planned GPU when its `--list-devices` lists one, the
+ * CPU when it lists none (or only a software renderer), the plan when it cannot answer.
+ */
+async function buildRuns(
+  command: readonly string[],
+  planned: Accelerator,
+  log?: LlamaServerOptions["log"],
+): Promise<Accelerator> {
+  const gpu = planned === "cpu" ? null : planned;
+  const st = confirmAccelerator(
+    {
+      setting: planned,
+      active: planned,
+      gpu,
+      device: null,
+      verified: false,
+      available: [planned],
+      reason: `the ${planned} build`,
+    },
+    await listDevices(command),
+  );
+  if (st.verified && st.active !== planned) log?.("warn", st.reason);
+  return st.verified ? st.active : planned;
 }
