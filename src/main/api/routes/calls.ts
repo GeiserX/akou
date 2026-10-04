@@ -22,6 +22,7 @@ import {
 } from "../../asr/live-setups.ts";
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
+import { parseCallMode } from "../../capture/call-mode.ts";
 import { validateTerm } from "../../vocab/files.ts";
 import { type ErrorCode, errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
@@ -164,7 +165,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -227,6 +228,10 @@ export function callRoutes(r: Router<ApiApp>): void {
         throw new HttpError(422, "bad_field", `review is one of ${REVIEW_MODELS.join(", ")}`, {
           field: "review",
         });
+      }
+      const scope = b.call === undefined ? null : parseCallMode(b.call);
+      if (scope && !scope.ok) {
+        throw new HttpError(422, "bad_field", `call ${scope.why}`, { field: "call" });
       }
       const every = b.reviewEvery;
       if (

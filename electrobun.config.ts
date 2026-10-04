@@ -52,9 +52,12 @@ import { BUNDLE_ID } from "./src/main/app-info.ts";
 /** Where Hutch puts the bundled main process, and so everything it loads by path. */
 export const MAIN_OUT = "bun";
 
-/** The two libraries sherpa-onnx's addon links, per platform package (`otool -L`). */
+/** The libraries sherpa-onnx's addon loads, per platform package (`otool -L`, `ldd`, the DLLs beside it). */
 export const SHERPA_LIBS: Readonly<Record<string, readonly string[]>> = {
   darwin: ["libsherpa-onnx-c-api.dylib", "libonnxruntime.dylib"],
+  linux: ["libsherpa-onnx-c-api.so", "libonnxruntime.so"],
+  // ONNX Runtime loads its shared provider library from beside itself on Windows.
+  win32: ["sherpa-onnx-c-api.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll"],
 };
 
 /** Where the build steps before Hutch leave their output (`scripts/build-app.ts`). */
@@ -107,11 +110,20 @@ export function helperCopies(
   return out;
 }
 
+/** Where `build-app.ts` compiles the command line the app carries: `akou.exe` on Windows. */
+export function cliBuildPath(platform: string = process.platform): string {
+  return `${BUILT.cli}${platform === "win32" ? ".exe" : ""}`;
+}
+
 /** The Workers, the browser pages and the command line beside the main process, once built. */
-export function builtCopies(exists: Exists = projectFileExists): Record<string, string> {
+export function builtCopies(
+  exists: Exists = projectFileExists,
+  platform: string = process.platform,
+): Record<string, string> {
   const out: Record<string, string> = {};
   if (exists(`${BUILT.ui}/index.js`)) out[BUILT.ui] = `${MAIN_OUT}/ui`;
-  if (exists(BUILT.cli)) out[BUILT.cli] = `${MAIN_OUT}/akou`;
+  const cli = cliBuildPath(platform);
+  if (exists(cli)) out[cli] = `${MAIN_OUT}/${cli.split("/").pop()}`;
   for (const w of BUILT.workers) {
     if (exists(w)) out[w] = `${MAIN_OUT}/${w.split("/").pop()}`;
   }

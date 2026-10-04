@@ -93,6 +93,26 @@ describe("[PG-A8] GET /devices and GET /apps", () => {
     expect((await rig.api("GET", "/devices")).status).toBe(200);
   });
 
+  test("a capture helper that is not there is a 503 devices_unavailable naming no-helper", async () => {
+    const r = await appRig({ settings: { "capture.helper": ["/nonexistent/akou-capture"] } });
+    try {
+      for (const path of ["/devices", "/apps"]) {
+        const res = await r.api("GET", path);
+        expect([path, res.status, res.body.error, res.body.helper]).toEqual([
+          path,
+          503,
+          "devices_unavailable",
+          "no-helper",
+        ]);
+        expect(res.body.inputs).toBeUndefined();
+      }
+    } finally {
+      await r.close();
+    }
+    // Positive control: the rig's own helper answers the same route with its devices.
+    expect((await rig.api("GET", "/devices")).status).toBe(200);
+  });
+
   test("akou devices and akou apps print the ids, --json is the route's body, a refusal exits 69", async () => {
     const run = rigCli(rig);
     const devices = await run(["devices"]);

@@ -14,6 +14,7 @@ import { formatZone } from "../core/log/clock.ts";
 import type { CallView, LearnedTerm } from "../core/log/fold.ts";
 import { tokenize } from "../core/vocab/correct.ts";
 import { AskPane } from "./ask.ts";
+import { CallPicker } from "./call-picker.ts";
 import { DictationDictionary } from "./dictation-dictionary.ts";
 import { DictationHistory } from "./dictation-history.ts";
 import { DictationPage, HISTORY, WORDS } from "./dictation-page.ts";
@@ -33,6 +34,7 @@ import {
   groupCalls,
   HueBook,
   hasRecording,
+  healthDot,
   languages,
   recordKey,
   speakerTotals,
@@ -213,6 +215,8 @@ class App {
   private readonly workspace: WorkspacePicker;
   /** The live model the next call runs: the Record row's "Live:" menu. */
   private readonly livePicker: LivePicker;
+  /** What the next call records besides the mic: the Record row's "Call:" menu, one call at a time. */
+  private readonly callPicker: CallPicker;
   private readonly levels = new SmoothMeters((ch, db) => {
     byId<HTMLMeterElement>(`meter-${ch}`).value = db;
   });
@@ -296,7 +300,11 @@ class App {
     this.pages = new Pages(byId("pages"), { settings, models, dictation }, () => {
       this.drawCalls();
       // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
-      if (!this.pages?.open) void this.livePicker?.load();
+      if (!this.pages?.open) {
+        void this.livePicker?.load();
+        // Settings may have changed capture.call, the Call menu's default row.
+        void this.callPicker?.load();
+      }
     });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
     const openDictation = () => void this.pages.show("dictation");
@@ -327,6 +335,7 @@ class App {
       },
     });
     this.livePicker = new LivePicker({ t, openModels: () => openModels() });
+    this.callPicker = new CallPicker(t);
     // The call's words to review, opened from its pill.
     new ReviewPane({ t, call, cite });
   }
@@ -738,6 +747,8 @@ class App {
     const live = this.status?.live ?? null;
     const mine = !!v?.live;
     const other = !!live && live.call !== this.callId;
+    // The Call menu is for the next call: it waits while a start is on its way.
+    this.callPicker.follow(this.starting || mine || other);
     const body = document.body;
     body.classList.toggle("busy", mine || other);
     byId("jump").textContent = jumpText(mine);
@@ -839,7 +850,7 @@ class App {
    */
   private drawHealth(v: CallView | null): void {
     for (const ch of ["mic", "call"] as const) {
-      const hState = v?.channelHealth(ch)?.state ?? (this.levelAt !== null ? "ok" : "none");
+      const hState = healthDot(v, ch, this.levelAt !== null);
       const dot = byId(`health-${ch}`);
       dot.dataset.state = hState;
       dot.title = `${ch}: ${hState}`;
@@ -1083,14 +1094,20 @@ class App {
     // Notes pick their template automatically (the API still takes one, for scripts).
     const workspace = this.workspace.value();
     const live = await this.livePicker.value();
+    // Only a pick that differs from capture.call is sent: an untouched menu sends what Record
+    // always sent, and the app resolves the setting itself.
+    const source = this.callPicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
         workspace,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
         ...(live ?? {}),
+        ...(source ? { call: source } : {}),
       });
     } finally {
+      // The pick was for this one call, started or not.
+      this.callPicker.used();
       this.starting = false;
       this.paint();
     }

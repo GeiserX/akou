@@ -254,6 +254,82 @@ describe("SV-J1: POST /v1/jobs, multipart", () => {
 });
 
 describe("akou-5an.119: the desktop app takes file jobs with its one token", () => {
+  test("akou transcribe --preset best --diarize on the desktop app runs Qwen and labels the speakers", async () => {
+    const t = tempDir("akou-desk-best-");
+    const rig = await appRig({
+      settings: {
+        "asr.llamaServer": [
+          process.execPath,
+          join(import.meta.dir, "fixtures", "fake-llama-server.ts"),
+          "--fake-log",
+          join(t.dir, "llama.log"),
+        ],
+      },
+    });
+    try {
+      expect(rig.app.mode()).toBe("app");
+      const path = join(t.dir, "two.wav");
+      writeFileSync(
+        path,
+        monoWav(
+          concat(
+            silence(0.4),
+            speak(["hello", "world"], { voice: 1 }),
+            silence(1.2),
+            speak(["ok", "great"], { voice: 4 }),
+            silence(0.6),
+          ),
+        ),
+      );
+      const r = await cli({ ...process.env, ...rig.env }, [
+        "transcribe",
+        path,
+        "--preset",
+        "best",
+        "--language",
+        "en",
+        "--diarize",
+        "--json",
+      ]);
+      expect(r.code).toBe(0);
+      const out = r.json as {
+        text: string;
+        engine: { models: string[] };
+        segments: { speaker: string }[];
+      };
+      expect(out.text).toBe("hello world ok great");
+      expect(out.engine.models[0]).toBe("qwen3-asr-1.7b");
+      // Two voices, two labels: a job with no speakers would answer null for both.
+      expect(out.segments.map((x) => x.speaker)).toEqual(["s0", "s1"]);
+    } finally {
+      await rig.close();
+      t.cleanup();
+    }
+  });
+
+  test("a 15-minute file on the desktop app is cut at its pauses and transcribed whole", async () => {
+    const minutes = 15;
+    const x = concat(
+      silence(1),
+      speak(["hello", "world"]),
+      silence(7 * 60),
+      speak(["ok", "great"]),
+      silence(7 * 60),
+      speak(["yes"], { wordSeconds: 0.4 }),
+    );
+    const file = monoWav(concat(x, silence(minutes * 60 - x.length / RATE)));
+    const s = await submit(app, app.token, file);
+    expect(s.status).toBe(202);
+    const done = await call(app, app.token, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    const r = (await call(app, app.token, "GET", `/jobs/${s.body.id}/result`)).body;
+    expect(r.duration_s).toBe(minutes * 60);
+    expect(r.text).toBe("hello world ok great yes");
+    // Three runs of speech, three pieces, each under 30 s: no piece is the whole file.
+    expect(r.segments.length).toBe(3);
+    for (const seg of r.segments) expect(seg.e - seg.s).toBeLessThan(30);
+  });
+
   test("a job posted with the local token runs, is listed, and its result reads back", async () => {
     const s = await submit(app, app.token, NOTE, { preset: "fast", metadata: '{"a": 1}' });
     expect(s.status).toBe(202);

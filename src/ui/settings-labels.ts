@@ -30,6 +30,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "export.dir": { label: "Copy finished calls to" },
   "capture.call": {
     label: "Call audio",
+    help: "One app records only the app you pick, and the whole computer if it quits. Whole computer is the default.",
     choices: [
       ["system", "Whole computer"],
       ["app", "One app"],

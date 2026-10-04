@@ -98,6 +98,12 @@ export interface LiveBrief {
   /** Epoch ms of its first audio, or of its creation while it is still starting. */
   startedAt: number;
   state: string;
+  /**
+   * What it records as its call side, as its newest part started (`system`, `none`,
+   * `app:<id>[,<id>]`), or what it is starting with: an attach that asked for another scope
+   * learns it got this one.
+   */
+  callMode: string;
 }
 
 /** An answer the API layer maps one to one onto HTTP (DESIGN 6.2). */
