@@ -17,7 +17,13 @@ import config, {
   UPDATE_FEED,
 } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
-import { hutchEnv, PINS, pairedHutch, releaseName } from "../scripts/build-app.ts";
+import {
+  DESKTOP_PLATFORMS,
+  hutchEnv,
+  PINS,
+  pairedHutch,
+  releaseName,
+} from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
 import { main as bumpCask, dmgName, dmgSum, renderCask } from "../scripts/bump-cask.ts";
 import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
@@ -654,9 +660,12 @@ describe("[CI-23] releases publish the update feed the app reads", () => {
   });
 });
 
+/** The cask installs the macOS app, whatever OS runs these tests. */
+const MACOS = DESKTOP_PLATFORMS["darwin-arm64"] as string;
+
 describe("[CI-25] tags bump the Homebrew cask", () => {
   const sha = "a".repeat(64);
-  const sums = `${"b".repeat(64)}  akou-cli-${pkg.version}-darwin-arm64.tar.gz\n${sha}  ${releaseName(pkg.version)}.dmg\n`;
+  const sums = `${"b".repeat(64)}  akou-cli-${pkg.version}-darwin-arm64.tar.gz\n${sha}  ${releaseName(pkg.version, MACOS)}.dmg\n`;
 
   /** A bare git repository standing in for the tap, with one commit on its branch. */
   function fakeTap(): {
@@ -695,7 +704,13 @@ describe("[CI-25] tags bump the Homebrew cask", () => {
   }
 
   test("the cask installs this version's DMG, checked by its SHA-256, on Apple silicon", () => {
-    expect(dmgName(pkg.version)).toBe(`${releaseName(pkg.version)}.dmg`);
+    expect(dmgName(pkg.version)).toBe(`${releaseName(pkg.version, MACOS)}.dmg`);
+    // The release name follows the platform asked for; the cask's DMG stays macOS's on any host,
+    // a Windows runner included, where this machine's own release name is the Windows app's.
+    expect(releaseName(pkg.version, DESKTOP_PLATFORMS["win32-x64"])).toBe(
+      `akou-${pkg.version}-windows-x64`,
+    );
+    expect(dmgName(pkg.version)).not.toContain("windows");
     const cask = renderCask("1.2.3", sha);
     expect(cask).toContain('version "1.2.3"');
     expect(cask).toContain(`sha256 "${sha}"`);
@@ -708,7 +723,7 @@ describe("[CI-25] tags bump the Homebrew cask", () => {
 
   test("the DMG's line is read from SHA256SUMS, and nothing else", () => {
     expect(dmgSum(sums, pkg.version)).toBe(sha);
-    expect(dmgSum(`${sha} *${releaseName(pkg.version)}.dmg`, pkg.version)).toBe(sha);
+    expect(dmgSum(`${sha} *${releaseName(pkg.version, MACOS)}.dmg`, pkg.version)).toBe(sha);
     expect(dmgSum(sums, "9.9.9")).toBeNull();
   });
 
