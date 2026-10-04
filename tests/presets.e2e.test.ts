@@ -159,7 +159,11 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
         bundled: false,
       });
       const filled = await rig.api("GET", `/presets?call=${A}`);
-      expect(filled.body.call).toBe(A);
+      // The whole answer, so a refusal shows its status and message.
+      expect({ status: filled.status, body: filled.body }).toMatchObject({
+        status: 200,
+        body: { call: A },
+      });
       expect(
         filled.body.presets.map((p: { label: string; question: string }) => [p.label, p.question]),
       ).toEqual([
