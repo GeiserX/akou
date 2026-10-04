@@ -463,7 +463,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 **Run the final pass**
 
-Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen or parakeet for this run only.
+Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen, parakeet, or fusion (several engines, their words combined; slower) for this run only.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
 
@@ -471,7 +471,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 |---|---|---|---|
 | `call` | `string` | no |  |
 | `force` | `boolean` | no |  |
-| `model` | `"qwen" or "parakeet"` | no |  |
+| `model` | `"qwen" or "parakeet" or "fusion"` | no |  |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -491,7 +491,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "type": "string",
       "enum": [
         "qwen",
-        "parakeet"
+        "parakeet",
+        "fusion"
       ]
     }
   },

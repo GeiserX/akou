@@ -40,9 +40,9 @@
  * A file job's pass runs any number of engines (`runEngines`, ASR-6): every engine decodes every
  * piece, one engine loaded at a time, and confidence ROVER fuses them (the `fusion` preset). A
  * call's pass runs one engine (Parakeet or Qwen, `asr.final.model`) unless the call asks for
- * `fusion`: then the pass cuts every part and channel into its pieces first, keeping a copy of each
- * piece's audio, runs the preset's engines over all of them through the same `runEngines`, and
- * writes the lines from the fused words. `final.done` names the engines that decoded and the ones
+ * `fusion`: then the pass cuts every part and channel into its pieces first, keeping a 16-bit copy
+ * of each piece's audio (about 0.25 GB per hour of a two-channel call), runs the preset's engines
+ * over all of them through the same `runEngines`, and writes the lines from the fused words. `final.done` names the engines that decoded and the ones
  * left out, and why.
  */
 
@@ -322,6 +322,21 @@ export async function openFinalAudio(spec: FinalAudioSpec): Promise<FinalAudio> 
 
 // ---------------------------------------------------------------------------
 // The pass
+
+/** Samples in -1..1 as 16-bit, clamped: how a fusion pass keeps its pieces between engines. */
+export function toPcm16(x: Float32Array): Int16Array {
+  const out = new Int16Array(x.length);
+  for (let i = 0; i < x.length; i++)
+    out[i] = Math.round(Math.max(-1, Math.min(1, x[i] as number)) * 32767);
+  return out;
+}
+
+/** 16-bit samples back to -1..1. */
+export function fromPcm16(x: Int16Array): Float32Array {
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = (x[i] as number) / 32767;
+  return out;
+}
 
 function readAll(audio: FinalAudio, part: number, ch: Channel, chunk: number): Float32Array {
   const n = audio.length(part);
@@ -699,7 +714,8 @@ export async function runFinalPass(
         p: number;
         ch: Channel;
         piece: Piece;
-        samples: Float32Array;
+        /** The piece's audio as 16-bit samples, half the memory, widened again for each decode. */
+        pcm: Int16Array;
         spans: readonly DiarizedSpan[];
       }[] = [];
       for (const p of parts) {
@@ -711,18 +727,31 @@ export async function runFinalPass(
           const { flags, window } = speechFlags(samples, models);
           const spans = spansByPart.get(p) ?? [];
           for (const piece of timelinePieces(samples, flags, window, o, ch === "call" ? spans : []))
-            units.push({ p, ch, piece, samples: samples.slice(piece.from, piece.to), spans });
+            units.push({
+              p,
+              ch,
+              piece,
+              pcm: toPcm16(samples.subarray(piece.from, piece.to)),
+              spans,
+            });
         }
       }
-      const total = units.reduce((n, u) => n + u.samples.length, 0);
+      const total = units.reduce((n, u) => n + u.pcm.length, 0);
       const ends: number[] = [];
-      for (const u of units) ends.push((ends.at(-1) ?? 0) + u.samples.length);
+      for (const u of units) ends.push((ends.at(-1) ?? 0) + u.pcm.length);
       let shown = 0;
       const pass =
         units.length > 0
           ? await runEngines(
               fusion.engines,
-              units.map((u) => ({ samples: u.samples, from: 0, to: u.samples.length })),
+              units.map((u) => ({
+                // A fresh array per engine's decode: nothing holds the widened copy after it.
+                get samples() {
+                  return fromPcm16(u.pcm);
+                },
+                from: 0,
+                to: u.pcm.length,
+              })),
               {
                 fuser: fusion.fuser,
                 lang: unit.lang,

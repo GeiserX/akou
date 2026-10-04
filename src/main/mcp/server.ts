@@ -1299,11 +1299,11 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_finalize",
     {
       description:
-        "Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen or parakeet for this run only.",
+        "Start the accurate final pass on an ended call (default the latest). It runs on its own; akou_get_call with layer `final` reads it once done. `force` runs it again on a call that has one; `model` picks qwen, parakeet, or fusion (several engines, their words combined; slower) for this run only.",
       inputSchema: z.object({
         call: z.string().default("last"),
         force: z.boolean().optional(),
-        model: z.enum(["qwen", "parakeet"]).optional(),
+        model: z.enum(["qwen", "parakeet", "fusion"]).optional(),
       }),
       outputSchema: OUT.body,
     },

@@ -715,10 +715,14 @@ export class ModelsPage {
         ? this.rowsOf(this.live?.slots.review.find((e) => e.id === QWEN_ID)?.models ?? [QWEN_ID])
         : [r];
     const next = this.final?.next;
+    // On fusion, `next` is the engines together, not a model that is still to download.
+    const fused = next ? /^(?:rover-conf|rover-freq|first)\(/.test(next) : false;
     const until =
-      next && next !== r.id
-        ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
-        : "";
+      next && fused
+        ? `Fusion is on: ${modelName({ id: next, job: "" })}.`
+        : next && next !== r.id
+          ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
+          : "";
     const s = section(
       "After the call",
       this.modelRow(

@@ -8,7 +8,12 @@
 import { describe, expect, test } from "bun:test";
 import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
 import type { FinalEngine, Hypothesis } from "../src/main/asr/engine.ts";
-import { type FusionPass, runFinalPass } from "../src/main/asr/finalize-worker.ts";
+import {
+  type FusionPass,
+  fromPcm16,
+  runFinalPass,
+  toPcm16,
+} from "../src/main/asr/finalize-worker.ts";
 import {
   concat,
   createEngine,
@@ -180,6 +185,14 @@ describe("[ASR-6] a call's final pass on fusion", () => {
       engines: ["qa", "pc"],
       dropped: [away],
     });
+  });
+
+  test("a piece kept between engines as 16-bit comes back within one step, clamped to -1..1", () => {
+    const x = Float32Array.from([0, 0.5, -0.25, 0.123456, 1.5, -2]);
+    const back = fromPcm16(toPcm16(x));
+    for (const [i, v] of [0, 0.5, -0.25, 0.123456, 1, -1].entries())
+      expect(Math.abs((back[i] as number) - v)).toBeLessThanOrEqual(1 / 32767);
+    expect(toPcm16(x).byteLength).toBe(x.byteLength / 2);
   });
 
   test("the last engine going down fails the pass, as one engine always did", async () => {
