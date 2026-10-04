@@ -335,7 +335,7 @@ describe("DC-U9: the draft box a rule opened", () => {
       ) => {
         inserts.push({ text, sendKey, ...(insert ? { insert } : {}) });
         log.append({ type: "dictation.inserted", id, method: "paste", receipt_ms: 5 });
-        return { ok: true, method: "paste" };
+        return { ok: true, method: "paste", receipt_ms: 5 };
       },
     };
     const b = new DraftBox({
@@ -352,6 +352,7 @@ describe("DC-U9: the draft box a rule opened", () => {
     b.attach({
       open: (d) => opens.push(d),
       chip: () => {},
+      append: () => {},
       showInactive: () => {},
       hide: () => {},
     });

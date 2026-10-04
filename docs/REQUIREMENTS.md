@@ -21,7 +21,7 @@ Status words:
 - F0.7 mic from default or chosen device, survives route changes and sleep: **carried (M1)** with a device watch and fallback to the default when a pinned device vanishes.
 - F0.8 ScreenCaptureKit capture: **dropped** (see F0.1).
 - F0.9, I0.2 requested rate, bits and channels: **changed (M1)**. Devices open at their native rate; the file is always 48 kHz stereo Opus. No user-selectable rate, bits or channel count.
-- F0.11 stop when every tapped app exits: **carried (M1 on macOS, M3 on Windows)** for per-app capture, as a `health {state: tapped-apps-exited}` event plus an automatic stop with a toast.
+- F0.11 stop when every tapped app exits: **changed (M1 on macOS, M3 on Windows)** for per-app capture. The helper reports a `health {state: tapped-apps-exited}` event; the app never stops the call for it, but restarts the part as whole-computer capture and says so in a banner and a notification, so an app that quits or relaunches never drops the call.
 - F0.12 exact `--duration`: **dropped**. A UI recorder has Stop; the CLI can `sleep N && akou stop`.
 - F0.17 keep-awake: **changed (M1)**. Always on while recording, on every OS.
 - F0.18 SIGINT/SIGTERM graceful, SIGPIPE tolerated: **changed (M1)**. The helper handles signals; the app finalizes from its before-quit path because ElectroBun swallows signals. `akou quit` is the public stop.
@@ -77,7 +77,7 @@ Status words:
 
 ## Batch and file transcription
 
-- F1.8 transcribe a file: **carried, as a job** ([SERVER.md SV-D1](ux/SERVER.md#2-decisions-this-reverses)). A file is a job, `POST /v1/jobs` in server mode, and `akou transcribe FILE` is the same job from the command line. F1.9, F1.10 read audio from stdin, Unix piping: **changed (M1)**. `akou finalize CALL` re-runs the accurate pass on a call; `akou import hark-viewer` covers old folders.
+- F1.8 transcribe a file: **carried, as a job** ([SERVER.md SV-D1](ux/SERVER.md#2-decisions-this-reverses)). A file is a job, `POST /v1/jobs` on the desktop app (with its own token) and in server mode, and `akou transcribe FILE` is the same job from the command line. F1.9, F1.10 read audio from stdin, Unix piping: **changed (M1)**. `akou finalize CALL` re-runs the accurate pass on a call; `akou import hark-viewer` covers old folders.
 - F1.11, F1.12, I1.12, I1.13 txt, srt, json transcript formats: **changed (M1)**. The log is the format; `akou show` and the export render `md | json | txt`. SRT is dropped.
 - F1.29 offline diarization during live capture: **changed (M1)**. The final pass runs after every call automatically.
 - F1.30 batch diarization with threshold and max speakers: **changed (M1)**. The final pass runs Nemotron 3 Diarization over the whole call, which finds up to 8 speakers itself with no threshold to tune; `asr.diarizer` `embeddings` keeps pyannote with its clustering threshold.

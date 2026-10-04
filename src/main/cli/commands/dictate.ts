@@ -178,6 +178,7 @@ export const dictationsCommand: Command = {
         query: {
           q: str(p, "search"),
           limit: int(p, "limit", 1, 500),
+          // clock: `--since` counts back from the moment the command runs.
           since: since === undefined ? undefined : Math.floor(Date.now() - since * 1000),
         },
       });

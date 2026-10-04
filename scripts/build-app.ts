@@ -1,5 +1,6 @@
 /**
- * Builds the macOS app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md):
+ * Builds the desktop app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md),
+ * on macOS arm64, Windows x64 or Linux x64, each on its own machine (ElectroBun cannot cross-compile):
  *
  *   bun scripts/build-app.ts [--allow-missing-helper]
  *
@@ -17,20 +18,31 @@
  *    Hutch then signs both bundles with `ELECTROBUN_DEVELOPER_ID`, which is `-` (ad-hoc) unless a
  *    Developer ID is given, and notarizes only with a real one and Apple credentials.
  * 5. The DMG Hutch makes (the app and an Applications link) and a zip of the same app are copied
- *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, and the diarization helper alone to
- *    `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`, for a source checkout.
+ *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, the update feed Hutch makes
+ *    (`stable-macos-arm64-update.json` and the bundle it names) beside them, under its own names,
+ *    and the diarization helper alone to `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`,
+ *    for a source checkout.
  *
  * Nothing here opens the app. `scripts/smoke-app.ts` checks what was built.
  */
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { BUILT } from "../electrobun.config.ts";
+import { BUILT, cliBuildPath } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
-import { compileCli } from "./build-cli.ts";
+import { compileCli, hostTarget } from "./build-cli.ts";
+import { bundleName, checkDir, MANIFEST } from "./check-feed.ts";
 import { drift, sourceVersion } from "./stamp-version.ts";
 
 /** The toolchain the release is built with (DESIGN 9, ROADMAP M0). */
@@ -51,13 +63,43 @@ export const PINS = {
 export const MIN_MACOS = "14.4";
 
 export const ROOT = join(import.meta.dir, "..");
-export const PLATFORM = "macos-arm64";
-export const WRAPPER_APP = join(ROOT, "build", `stable-${PLATFORM}`, "akou.app");
+
+/** Hutch's name for each machine the desktop app is built on. */
+export const DESKTOP_PLATFORMS: Readonly<Record<string, string>> = {
+  "darwin-arm64": "macos-arm64",
+  "win32-x64": "windows-x64",
+  "linux-x64": "linux-x64",
+};
+
+/** Hutch's name for this machine, or null where no desktop app is built. */
+export function desktopPlatform(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string | null {
+  return DESKTOP_PLATFORMS[`${platform}-${arch}`] ?? null;
+}
+
+export const PLATFORM = desktopPlatform() ?? "macos-arm64";
+/** Hutch's output for this machine, the app (on macOS the wrapper bundle); Windows is `win-x64` there. */
+export const BUILD_DIR = join(
+  ROOT,
+  "build",
+  `stable-${PLATFORM === "windows-x64" ? "win-x64" : PLATFORM}`,
+);
+/** The app folder Hutch builds on Windows and Linux: a launcher and the packed app. */
+export const APP_DIR = join(BUILD_DIR, "akou");
+export const ARTIFACTS_DIR = join(ROOT, "artifacts");
+export const WRAPPER_APP = join(BUILD_DIR, "akou.app");
 export const HUTCH_DMG = join(ROOT, "artifacts", `${PLATFORM}-akou.dmg`);
 export const RELEASE_DIR = join(ROOT, "dist", "release");
 
 export function releaseName(version: string): string {
   return `akou-${version}-${PLATFORM}`;
+}
+
+/** The release name of a Windows or Linux installer Hutch named `<platform>-akou-Setup.<ext>`. */
+export function setupName(version: string, hutchName: string): string {
+  return `${releaseName(version)}-setup${hutchName.slice(hutchName.indexOf("-Setup.") + 6)}`;
 }
 
 /** The release file holding the diarization helper alone. */
@@ -86,9 +128,14 @@ export function cachedHutch(env: Record<string, string | undefined> = process.en
 
 /**
  * The environment Hutch runs in: no proxy variables, no update check, and an ad-hoc signing
- * identity unless a Developer ID is given.
+ * identity unless a Developer ID is given. On Windows, Windows' own `tar` comes first on `PATH`:
+ * Hutch unpacks its toolchains with `tar`, and Git's GNU tar, first on a runner's `PATH`, reads a
+ * drive letter such as `D:` as a remote host.
  */
-export function hutchEnv(env: Record<string, string | undefined>): Record<string, string> {
+export function hutchEnv(
+  env: Record<string, string | undefined>,
+  platform: string = process.platform,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined || /^(https?|all)_proxy$/i.test(k)) continue;
@@ -96,6 +143,11 @@ export function hutchEnv(env: Record<string, string | undefined>): Record<string
   }
   out.HUTCH_NO_UPDATE_CHECK = "1";
   if (!out.ELECTROBUN_DEVELOPER_ID) out.ELECTROBUN_DEVELOPER_ID = "-";
+  if (platform === "win32") {
+    const key = Object.keys(out).find((k) => k.toUpperCase() === "PATH") ?? "Path";
+    const system32 = `${out.SystemRoot ?? "C:\\Windows"}\\System32`;
+    out[key] = out[key] ? `${system32};${out[key]}` : system32;
+  }
   return out;
 }
 
@@ -114,10 +166,22 @@ function run(cmd: string[], env: Record<string, string | undefined> = process.en
   if (r.status !== 0) fail(`${cmd[0]} exited ${r.status ?? r.signal}`);
 }
 
+/** Every file under `dir`, with its size, for the build log. */
+function listTree(dir: string): void {
+  if (!existsSync(dir)) {
+    console.log(`build-app: ${dir} does not exist`);
+    return;
+  }
+  for (const f of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    const p = join(f.parentPath, f.name);
+    console.log(`build-app: ${f.isDirectory() ? "dir " : statSync(p).size} ${p}`);
+  }
+}
+
 async function main(argv: string[]): Promise<void> {
-  if (process.platform !== "darwin" || process.arch !== "arm64") {
+  if (desktopPlatform() === null) {
     fail(
-      `the app is built on macOS arm64 only (ElectroBun cannot cross-compile); this is ${process.platform}-${process.arch}`,
+      `the app is built on ${Object.keys(DESKTOP_PLATFORMS).join(", ")} only (ElectroBun cannot cross-compile); this is ${process.platform}-${process.arch}`,
     );
   }
   const allowMissingHelper = argv.includes("--allow-missing-helper");
@@ -172,7 +236,7 @@ async function main(argv: string[]): Promise<void> {
       target: "bun",
       format: "esm",
       // Loaded at run time from the bundle's own node_modules, beside the Workers.
-      external: ["sherpa-onnx-node"],
+      external: ["sherpa-onnx-node", "transcribe-cpp"],
     });
     if (!r.success || !r.outputs[0]) fail(`the ${name} bundle failed: ${r.logs.join("; ")}`);
     await Bun.write(join(ROOT, out), r.outputs[0]);
@@ -180,7 +244,7 @@ async function main(argv: string[]): Promise<void> {
 
   rmSync(join(ROOT, "dist", "app-cli"), { recursive: true, force: true });
   mkdirSync(join(ROOT, "dist", "app-cli"), { recursive: true });
-  compileCli(join(ROOT, BUILT.cli), "darwin-arm64", version);
+  compileCli(join(ROOT, cliBuildPath()), hostTarget() as string, version);
 
   // 4. ElectroBun, through the paired Hutch.
   rmSync(join(ROOT, "build"), { recursive: true, force: true });
@@ -197,6 +261,22 @@ async function main(argv: string[]): Promise<void> {
   const ran = cachedHutch();
   if (ran !== PINS.hutch)
     fail(`the build ran Hutch ${ran ?? "(unknown)"}, the release pins ${PINS.hutch}`);
+  if (process.platform !== "darwin") {
+    for (const dir of [BUILD_DIR, ARTIFACTS_DIR]) listTree(dir);
+    // The installer Hutch makes, under the release's name. Not published yet (release.yml).
+    const setup = existsSync(ARTIFACTS_DIR)
+      ? readdirSync(ARTIFACTS_DIR).filter((f) => f.includes("-Setup."))
+      : [];
+    if (setup.length !== 1) {
+      fail(`expected one installer in ${ARTIFACTS_DIR}, found ${setup.join(", ") || "none"}`);
+    }
+    const from = setup[0] as string;
+    const to = setupName(version, from);
+    mkdirSync(RELEASE_DIR, { recursive: true });
+    copyFileSync(join(ARTIFACTS_DIR, from), join(RELEASE_DIR, to));
+    console.log(`build-app: ${to} is in ${RELEASE_DIR} (Hutch ${ran}, unsigned)`);
+    return;
+  }
   if (!existsSync(WRAPPER_APP)) fail(`no app at ${WRAPPER_APP}`);
   if (!existsSync(HUTCH_DMG)) fail(`no DMG at ${HUTCH_DMG}`);
 
@@ -214,6 +294,14 @@ async function main(argv: string[]): Promise<void> {
     WRAPPER_APP,
     join(RELEASE_DIR, `${name}.zip`),
   ]);
+  // The update feed (docs/CI-CD.md CI-23): the manifest the updater reads and the bundle it names,
+  // under Hutch's own names, since the manifest and the updater use them.
+  const feed = checkDir(join(ROOT, "artifacts"), version);
+  if (feed.length > 0) fail(`the update feed: ${feed.join("; ")}`);
+  const feedManifest = join(ROOT, "artifacts", MANIFEST);
+  const bundle = bundleName(JSON.parse(readFileSync(feedManifest, "utf8"))) as string;
+  copyFileSync(feedManifest, join(RELEASE_DIR, MANIFEST));
+  copyFileSync(join(ROOT, "artifacts", bundle), join(RELEASE_DIR, bundle));
   // The diarization helper on its own, the binary at the archive's top: a server run from a source
   // checkout has no app to carry it (akou-5an.110). No AppleDouble files beside it.
   const helper = join(ROOT, "native", "akou-diarize", "target", "release", "akou-diarize");

@@ -148,7 +148,7 @@ describe("[CLI-17] Honest text", () => {
       'there is no setting "asr.segmentPuase"',
     );
     // A command that exits 69 "not built" is not a command a message may send anyone to.
-    expect(checkMention("akou devices")).toContain('"devices" is not built');
+    expect(checkMention("akou self-update")).toContain('"self-update" is not built');
     // In a template literal, the escaped form with a value is read too.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the source text of a template literal.
     const tpl = 'err(`akou: no answer; \\`akou context "${q}"\\` prints it`)';

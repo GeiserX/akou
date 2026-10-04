@@ -327,6 +327,7 @@ describe("[PG-A7] each route declares the refusals its handler builds", () => {
       "403",
       "404",
       "409",
+      "410",
       "413",
       "500",
       "default",
@@ -334,6 +335,8 @@ describe("[PG-A7] each route declares the refusals its handler builds", () => {
     const codes = (s: string) =>
       codesOf(resolveResponse(doc, result[s] as Record<string, unknown>));
     expect(codes("409")).toEqual(["not_done"]);
+    // A job deleted or past `server.retain_days` is gone, not missing (SV-J6).
+    expect(codes("410")).toEqual(["gone"]);
     // `format` takes one of its values (SV-J5), so another is the query's 400.
     expect(codes("400")).toEqual(["bad_param"]);
     expect(codes("401")).toEqual(["unauthorized"]);

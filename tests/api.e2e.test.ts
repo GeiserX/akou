@@ -108,7 +108,7 @@ describe("starting a call", () => {
       const ms = performance.now() - t0;
       steps.push({ step: "started", ok: r.status === 201, status: r.status });
       expect(r.status).toBe(201);
-      expect(r.body).toMatchObject({ part: 1, url: `akou://call/${r.body.call}` });
+      expect(r.body).toMatchObject({ part: 1, url: null });
       expect(existsSync(join(r.body.folder, "events.jsonl"))).toBe(true);
       // "Fast", from the steps: the app's first start arms the cold budget (10 s here) at the
       // spawn and answers on the helper's `capturing`, the budget never firing. The seconds
@@ -161,7 +161,7 @@ describe("starting a call", () => {
       callMode: "system",
       part: 1,
       folder: detail.folder,
-      url: `akou://call/${id}`,
+      url: null,
     });
     expect((await rig.api("GET", "/calls")).body.calls.length).toBe(before);
     // An attach started nothing and refused nothing: no "started" or "refused" banner for it.
@@ -561,6 +561,45 @@ describe("the vocabulary files", () => {
       workspace: "work",
     });
     expect(imp.body.imported).toBe(1);
+    // A word the file holds keeps its forms, note, origin and date; the import adds its new form.
+    await rig.api("POST", "/vocab", {
+      term: "Kubernetes",
+      heard: ["kubernetis"],
+      note: "the cluster",
+      workspace: "work",
+    });
+    const before = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Kubernetes",
+    );
+    await rig.api("POST", "/vocab/import", {
+      text: "Kubernetes <= cooper netties\n",
+      workspace: "work",
+    });
+    const after = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Kubernetes",
+    );
+    expect(after).toMatchObject({
+      heard: ["kubernetis", "cooper netties"],
+      note: "the cluster",
+      source: before.source,
+      added_at: before.added_at,
+    });
+    // The control: the import's own source is not the one kept.
+    expect(after.source).not.toBe("import:api");
+    // A word held with no note takes the import line's note; a held note is never replaced.
+    await rig.api("POST", "/vocab/import", { text: "Vercel # the host\n", workspace: "work" });
+    await rig.api("POST", "/vocab/import", {
+      text: "Kubernetes # another note\n",
+      workspace: "work",
+    });
+    const notes = (await rig.api("GET", "/vocab?workspace=work")).body.entries as {
+      term: string;
+      note?: string;
+    }[];
+    expect(notes.filter((e) => e.term !== "Anika").map((e) => [e.term, e.note])).toEqual([
+      ["Kubernetes", "the cluster"],
+      ["Vercel", "the host"],
+    ]);
     // A term over the file's limits (60 heard forms, one of 101 characters, a note of 1001) is
     // imported within them, with a `skipped` line for each; the import is never refused whole.
     const forms = Array.from({ length: 60 }, (_, n) => `form${n}`).join(" | ");

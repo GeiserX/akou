@@ -1186,11 +1186,13 @@ button.icon.on {
    the right; between them the composer row, the notices, the call's header, the transcript and
    the player bar stack, each in its own row so a hidden one leaves none. #layout lends its
    children to this grid. The side columns are sized in rem, which + and - never move (they set
-   --size, not the root font), so a larger transcript font never squeezes the transcript itself. */
+   --size, not the root font), so a larger transcript font never squeezes the transcript itself.
+   The player bar's row is min-content, not auto: WebKit kept an auto row at the bar's old height
+   when a resize changed how many rows the bar wraps to (a blank strip, or a clipped second row). */
 body.shell:not(.server) {
   display: grid;
-  grid-template-columns: 13.75rem minmax(0, 1fr) 24rem;
-  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-columns: 13.75rem minmax(0, 1fr) 21.25rem;
+  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) min-content;
 }
 body.shell:not(.server) > * {
   grid-column: 2;
@@ -1268,15 +1270,21 @@ body.shell:not(.server) > #pages {
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24rem;
+  grid-template-columns: minmax(0, 1fr) 21.25rem;
   min-height: 0;
 }
-/* Below 1248 px the full side columns would leave the transcript less than half the window. */
+/* Below 1248 px the full side columns would leave the transcript less than half the window. A
+   page has no side pane, so its sidebar keeps its full width down to 900 px; under that the page
+   itself needs the room. A page opened over the welcome is still a page. */
 @media (max-width: 1247px) {
   body.shell:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr) 18rem;
   }
-  body.shell.welcoming:not(.server),
+  body.shell.welcoming:not(.paged):not(.server) {
+    grid-template-columns: 10rem minmax(0, 1fr);
+  }
+}
+@media (max-width: 899px) {
   body.shell.paged:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
@@ -2147,8 +2155,13 @@ main {
 .a-card .lbl::before {
   content: "✦";
 }
+/* "asked by agent X · answered by Y" stays on one line, cut short with an ellipsis. */
 .a-card .ask-status {
   margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-weight: 400;
   color: var(--faint);
 }
@@ -2267,9 +2280,19 @@ button.cite:hover {
 .note:focus-within {
   background: var(--raised);
 }
-.note .note-text {
+.note .note-body {
   flex: 1;
   min-width: 0;
+}
+.note .note-text {
+  display: block;
+}
+/* "Action" or "Open question" under the note (b2). */
+.note .tag {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--faint);
 }
 .note .gutter {
   flex: none;
@@ -2768,7 +2791,7 @@ dialog {
   font-size: 12px;
 }
 /* The Jobs page's search, drawn as the desktop sidebar's (WINDOW section 13), and the name cell:
-   the title first, the id dim beside it (SV-J10). */
+   the title first, cut short when long, and the id dim under it (SV-J10). */
 #page-jobs .search {
   display: flex;
   align-items: center;
@@ -2806,10 +2829,20 @@ dialog {
 #jobs-search::placeholder {
   color: var(--faint);
 }
+/* The sidebar's search draws no clear button; Escape empties it. */
+#jobs-search::-webkit-search-cancel-button {
+  display: none;
+}
 #jobs-table .job-title {
+  display: block;
+  max-width: 24em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--fg);
 }
 #jobs-table .job-id {
+  display: block;
   color: var(--dim);
   font-size: 11px;
 }

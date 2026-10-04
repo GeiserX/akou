@@ -8,24 +8,29 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { formatWall } from "../src/core/log/clock.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { AnthropicProvider } from "../src/main/llm/anthropic.ts";
+import { pickHarness } from "../src/main/llm/harness.ts";
+import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
 import {
+  askUnavailable,
   banner,
   type CallSummary,
   callHeadMeta,
   callMeta,
   dayLabel,
   defaultWorkspace,
+  FELL_BACK_FOR_MS,
   finalNote,
   formatDuration,
   groupCalls,
   HUES,
   HueBook,
   hasRecording,
+  healthDot,
   languages,
   noteMarks,
   playingLine,
   positionText,
-  presets,
   QUIET_AFTER_MS,
   RATES,
   REOPEN_AFTER_MS,
@@ -373,6 +378,89 @@ describe("the banner: red proven, amber guess or lag, grey quiet, green recovere
       }),
     ).toBeNull();
   });
+
+  /** Part 1 records one app, every app it tapped exits, part 2 records the whole computer. */
+  const fellBackCall = (o: { exited?: boolean; firstMode?: string } = {}) => {
+    const b = new LogBuilder();
+    b.created();
+    b.add({
+      type: "part.started",
+      part: 1,
+      file: "audio/part-001.opus",
+      wallStart: T0,
+      monoStart: 1_000_000,
+      mic: "Built-in Microphone",
+      call: { mode: o.firstMode ?? "app:com.example.call" },
+      capture: "akou-capture 0.1.0",
+    });
+    if (o.exited ?? true) b.add(health("tapped-apps-exited", { silentFor: 0, rebuilds: 0 }));
+    b.add({
+      type: "part.started",
+      part: 2,
+      file: "audio/part-002.opus",
+      wallStart: FELL_AT,
+      monoStart: 1_060_000,
+      mic: "Built-in Microphone",
+      call: { mode: "system" },
+      capture: "akou-capture 0.1.0",
+    });
+    b.partEnded(1, "restart");
+    return b;
+  };
+  const FELL_AT = T0 + 60_000;
+  const after = { ...input, now: FELL_AT + 10_000, lastLineAt: FELL_AT + 9_000 };
+
+  test("a per-app call that fell back to the whole computer names the app and the time, amber", () => {
+    const v = fold(fellBackCall().events);
+    expect(banner({ ...after, view: v })).toEqual({
+      kind: "guess",
+      text: `com.example.call quit, so akou records the whole computer since ${formatWall(FELL_AT, TZ, { seconds: false })}. Stop if the meeting is over.`,
+    });
+    // Two apps asked for are both named.
+    const two = fold(fellBackCall({ firstMode: "app:com.example.call,org.example.chat" }).events);
+    expect(banner({ ...after, view: two })?.text).toStartWith(
+      "com.example.call, org.example.chat quit,",
+    );
+  });
+
+  test("the fallback banner sits after the red rows and before the guesses, and goes after five minutes", () => {
+    const b = fellBackCall();
+    // A 90 s gap with no lines would be the quiet guess; the fallback says more and wins.
+    const quiet = { ...after, view: fold(b.events), now: FELL_AT + QUIET_AFTER_MS + 5_000 };
+    expect(banner({ ...quiet, lastLineAt: FELL_AT })?.text).toContain("records the whole computer");
+    // A dead whole-computer part is still the red row.
+    b.add(health("dead", { part: 2 }));
+    expect(banner({ ...after, view: fold(b.events) })?.kind).toBe("dead");
+    // Bounded: once FELL_BACK_FOR_MS has passed, the banner chain carries on as before.
+    const late = FELL_AT + FELL_BACK_FOR_MS + 1;
+    const v = fold(fellBackCall().events);
+    expect(
+      banner({ ...after, view: v, now: late, lastLineAt: late - 1000, callHeardAt: late - 1000 }),
+    ).toBeNull();
+  });
+
+  test("positive control: no fallback banner without the exit, or when part 1 was not per-app", () => {
+    expect(banner({ ...after, view: fold(fellBackCall({ exited: false }).events) })).toBeNull();
+    expect(banner({ ...after, view: fold(fellBackCall({ firstMode: "none" }).events) })).toBeNull();
+  });
+
+  test("the health dot ignores a state from an older part's helper", () => {
+    const b = fellBackCall();
+    expect(fold(b.events).channelHealth("call")?.state).toBe("tapped-apps-exited");
+    expect(healthDot(fold(b.events), "call", true)).toBe("ok");
+    expect(healthDot(fold(b.events), "call", false)).toBe("none");
+    // The newest part's own state still shows.
+    b.add(health("dead", { part: 2 }));
+    expect(healthDot(fold(b.events), "call", true)).toBe("dead");
+    expect(
+      healthDot(
+        live((x) => x.add(health("stalled"))),
+        "call",
+        true,
+      ),
+    ).toBe("stalled");
+    expect(healthDot(null, "mic", false)).toBe("none");
+  });
 });
 
 describe("the final pass note and the languages chip", () => {
@@ -482,16 +570,48 @@ describe("citations", () => {
     // The answer's own ids win even when the speaker was renamed since.
     expect(resolveTimeCitation(v, minute, "Old name", ["l000001"])).toBe("l000001");
   });
+});
 
-  test("the presets, with one per named speaker", () => {
-    const p = presets(["Ben"]).map((x) => x.label);
-    expect(p).toEqual([
-      "Catch me up",
-      "Was my name mentioned?",
-      "Decisions so far",
-      "Action items",
-      "What did Ben say?",
+describe("[akou-dzm.19] the Ask card says why no assistant answered without a setting's key", () => {
+  // The reasons are the providers' own, so a provider that changes its words keeps this honest.
+  const reason = async (p: { available(): Promise<{ ok: boolean }> }) => {
+    const a = (await p.available()) as { ok: false; reason: string; kind: string };
+    return [a.reason, a.kind] as const;
+  };
+
+  test("a missing or signed-out assistant reads as one plain line pointing at Settings", async () => {
+    const none = pickHarness("auto", "", { claude: null, codex: null });
+    expect("none" in none).toBe(true);
+    const harness = (none as { none: string }).none;
+    expect(harness).toContain("provider.harnessPath");
+    const cases: (readonly [string, string])[] = [
+      [harness, "missing"],
+      await reason(new AnthropicProvider({ apiKey: "" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "", model: "m" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "http://127.0.0.1:1/v1", model: "" })),
+      ["Claude Code is not logged in (please run /login)", "auth"],
+      ["the server answered 401", "auth"],
+    ];
+    const said = cases.map(([r, k]) => askUnavailable(r, k));
+    expect(said).toEqual([
+      "Claude Code or Codex was not found. Install one, or choose another assistant in Settings.",
+      "The assistant has no API key. Add one in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "Claude Code is not signed in. Sign in to it, or choose another assistant in Settings.",
+      "The assistant did not accept its key. Check it in Settings, or choose another assistant.",
     ]);
+    for (const s of said) expect(s).not.toMatch(/provider\.|https?:|\//);
+  });
+
+  test("any other reason is already plain and is said as it came", () => {
+    expect(
+      askUnavailable("Claude Code reported its usage limit is reached until 18:00", "exhausted"),
+    ).toBe("Claude Code reported its usage limit is reached until 18:00.");
+    expect(askUnavailable("still looking for Claude Code and Codex", "missing")).toBe(
+      "still looking for Claude Code and Codex.",
+    );
+    expect(askUnavailable(undefined, undefined)).toBe("");
   });
 });
 

@@ -543,10 +543,17 @@ describe("SV-K1: GET /v1/server", () => {
       const b = JSON.parse(r.body);
       expect(b).toMatchObject({ name: "akou", version: rig.app.version, mode, gpu: null });
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
-      // `fast` (Parakeet) and `best` (Qwen on llama-server) are built; each is available once the
-      // default models are there, and best fetches Qwen on demand.
+      // `fast` (Parakeet), `best` (Qwen on llama-server) and `fusion` (both and Whisper) are built;
+      // each is available once the default models are there; best and fusion fetch theirs on demand.
+      // `auto` runs fast here, so it is available too, and says so.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual([
+        "fast",
+        "best",
+        "fusion",
+        "auto",
+      ]);
+      expect(b.presets.at(-1)).toMatchObject({ name: "auto", resolves_to: "fast" });
       expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
         "parakeet-tdt-0.6b-v3-fp32",
         "qwen3-asr-1.7b",
@@ -563,11 +570,15 @@ describe("SV-K1: GET /v1/server", () => {
           "wyoming",
         ].sort(),
       );
-      // server.dictation_slots reserves one Worker by default (DC-R2); the app runs no jobs.
+      // server.dictation_slots reserves one Worker by default (DC-R2); the app dictates through
+      // its own engine, with no lane in its job queue.
       expect(b.capabilities.interactive).toBe(mode === "server");
-      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
-      for (const c of ["jobs", "events", "webhooks", "languages_bound"])
-        expect(b.capabilities[c]).toBe(mode === "server");
+      expect(b.dictation === null).toBe(mode === "app");
+      // Jobs, their feed and a job's languages[] exist in both modes (SV-J1, SV-E1, SV-J11): the
+      // app takes file jobs with its one token. Signed deliveries need a key's secret, so server
+      // mode only (SV-E2).
+      for (const c of ["jobs", "events", "languages_bound"]) expect(b.capabilities[c]).toBe(true);
+      expect(b.capabilities.webhooks).toBe(mode === "server");
     }
   });
 
@@ -631,20 +642,27 @@ describe("SV-K1: GET /v1/server", () => {
     expect(doc).not.toContain("finished job");
   });
 
-  test("capabilities.jobs turns true with the route itself", async () => {
-    const s = startApiServer({
-      app: fakeApp(),
-      port: 0,
-      token: () => "t".repeat(64),
-      router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, () => json(202, {})),
-    });
-    try {
-      const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);
-      const b = (await r.json()) as { capabilities: { jobs: boolean } };
-      expect(b.capabilities.jobs).toBe(true);
-    } finally {
-      await s.stop();
-    }
+  test("capabilities.jobs follows the route itself: false without it, true with it", async () => {
+    const jobsFlag = async (router: Router<ApiApp>) => {
+      const s = startApiServer({ app: fakeApp(), port: 0, token: () => "t".repeat(64), router });
+      try {
+        const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);
+        return ((await r.json()) as { capabilities: { jobs: boolean } }).capabilities.jobs;
+      } finally {
+        await s.stop();
+      }
+    };
+    const bare = () => {
+      const r = new Router<ApiApp>();
+      serverRoutes(r);
+      return r;
+    };
+    expect(await jobsFlag(bare())).toBe(false);
+    expect(await jobsFlag(bare().add("POST", "/jobs", JOBS_CREATE, () => json(202, {})))).toBe(
+      true,
+    );
+    // The desktop app's own table has it (SV-J1 in app mode).
+    expect(await jobsFlag(buildRouter("app"))).toBe(true);
   });
 });
 
@@ -660,8 +678,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
-        // The job queue's numbers (SV-Q4): the app has no queue.
-        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
+        // The job queue's numbers (SV-Q4), in both modes: the app has a queue for its file jobs.
+        queue: expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });
@@ -845,6 +863,17 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     expect(empty.status).toBe(422);
     expect(empty.body).toMatchObject({ error: "bad_field", field: "title" });
     expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    // [akou-dzm.12] A control character (ESC, NUL) is refused too: the CLI prints titles raw on a
+    // terminal, where `a\x1b[2Jb` would clear the screen. A tab is only whitespace and folds.
+    for (const bad of ["a\x1b[2Jb", "a\u0000b"]) {
+      const r = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: bad });
+      expect(r.status).toBe(422);
+      expect(r.body).toMatchObject({ error: "bad_field", field: "title" });
+    }
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+    const tab = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro\tTwo" });
+    expect(tab.body.title).toBe("Retro Two");
+    await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro" });
 
     // Another key cannot see the job, so it cannot name it; an unknown id is 404 too.
     const other = await writeKey(named, "other");
@@ -883,6 +912,27 @@ describe("SV-J10: a job carries a name, and the lists find it by that name", () 
     open();
     expect((await answer).status).toBe(200);
   }, 30_000);
+
+  test("[akou-dzm.12] the OpenAI door refuses a bad metadata.title as the metadata field, which that request has", async () => {
+    const k = await writeKey(named, "openai-long");
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([new Uint8Array(clip(["hello"], 2))], { type: "audio/wav" }),
+      "note.wav",
+    );
+    form.append("metadata", JSON.stringify({ title: "x".repeat(201) }));
+    const r = await fetch(`http://127.0.0.1:${named.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    expect(r.status).toBe(422);
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(JSON.stringify(body)).toContain("metadata.title");
+    expect(JSON.stringify(body)).toContain('"metadata"');
+    expect(JSON.stringify(body)).not.toContain('"title"');
+  });
 });
 
 describe("SV-J10: the jobs store's search", () => {

@@ -241,6 +241,44 @@ export interface BannerInput {
 export const QUIET_AFTER_MS = 90_000;
 export const LAG_AMBER_S = 10;
 export const RECOVERED_FOR_MS = 30_000;
+/** How long the banner says that a per-app call now records the whole computer. */
+export const FELL_BACK_FOR_MS = 5 * 60_000;
+
+/**
+ * The newest part records the whole computer because every app the part before it tapped exited
+ * (DESIGN 2.5, "Tapped apps exited"): the app ids that part asked for, and when the whole-computer
+ * part began. Read from `part.started` and `health` events alone, so a reopened window says it too.
+ */
+export function fellBack(v: CallView): { apps: string; since: number } | null {
+  const parts = v.parts();
+  const now = parts.at(-1);
+  const before = parts.at(-2);
+  if (!now || !before || now.call.mode !== "system" || !before.call.mode.startsWith("app:"))
+    return null;
+  const exited = v
+    .healthHistory()
+    .some((h) => h.part === before.part && h.ch === "call" && h.state === "tapped-apps-exited");
+  if (!exited) return null;
+  const apps = before.call.mode
+    .slice("app:".length)
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .join(", ");
+  return { apps, since: now.wallStart };
+}
+
+/**
+ * What a channel's health dot shows: the newest part's own health state. A state from an older
+ * part is that part's helper, which is gone (a fallback part has no health event of its own until
+ * something changes), so the dot then reads the level like a part with no events yet.
+ */
+export function healthDot(v: CallView | null, ch: "mic" | "call", hasLevel: boolean): string {
+  const h = v?.channelHealth(ch);
+  const newest = v?.parts().at(-1)?.part;
+  if (h && (newest === undefined || h.part >= newest)) return h.state;
+  return hasLevel ? "ok" : "none";
+}
 
 export function banner(i: BannerInput): Banner | null {
   const v = i.view;
@@ -285,6 +323,13 @@ export function banner(i: BannerInput): Banner | null {
     };
   }
   if (v.state === "paused") return null;
+  const fb = fellBack(v);
+  if (fb && i.now - fb.since < FELL_BACK_FOR_MS) {
+    return {
+      kind: "guess",
+      text: `${fb.apps} quit, so akou records the whole computer since ${formatWall(fb.since, v.call.tz, { seconds: false })}. Stop if the meeting is over.`,
+    };
+  }
   const lag = v.asrLag?.seconds ?? 0;
   if (lag > LAG_AMBER_S) {
     return {
@@ -443,20 +488,35 @@ export function resolveTimeCitation(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// The ask box presets (DESIGN 7)
-
-export function presets(speakers: readonly string[]): { label: string; question: string }[] {
-  const out = [
-    { label: "Catch me up", question: "Catch me up: what has been said so far?" },
-    { label: "Was my name mentioned?", question: "Was my name mentioned? By whom and when?" },
-    { label: "Decisions so far", question: "What decisions have been made so far?" },
-    { label: "Action items", question: "What are the action items so far, with owners?" },
-  ];
-  for (const s of speakers) {
-    out.push({ label: `What did ${s} say?`, question: `What did ${s} say so far?` });
+/**
+ * Why no assistant answered, as the Ask card says it: a provider names its settings by key
+ * (`provider.apiKey is not set`), which is right in the CLI and over MCP but not in the window
+ * (PRINCIPLES 13). A missing or signed-out assistant reads as one plain line that points at
+ * Settings; any other reason is already plain and stays as it was said.
+ */
+export function askUnavailable(reason: string | undefined, kind: string | undefined): string {
+  const said = reason ? `${reason}.` : "";
+  if (kind === "missing") {
+    const none = /^no harness found \(([^)]+)\)/.exec(reason ?? "");
+    if (none) {
+      // The reason names the harnesses by id (`claude-code or codex`).
+      const names = (none[1] as string)
+        .replace("claude-code", "Claude Code")
+        .replace("codex", "Codex");
+      return `${names} was not found. Install one, or choose another assistant in Settings.`;
+    }
+    if (/\bprovider\.\w/.test(reason ?? ""))
+      return "The assistant is not set up yet. Finish it in Settings, or choose another assistant.";
   }
-  return out;
+  if (kind === "auth") {
+    const out = /^(.+?) is not logged in/.exec(reason ?? "");
+    if (out)
+      return `${out[1]} is not signed in. Sign in to it, or choose another assistant in Settings.`;
+    if (/\bprovider\.apiKey\b/.test(reason ?? ""))
+      return "The assistant has no API key. Add one in Settings, or choose another assistant.";
+    return "The assistant did not accept its key. Check it in Settings, or choose another assistant.";
+  }
+  return said;
 }
 
 /** The markers the notepad knows: `- `, `[] ` (action), `? ` (open question), `# ` (section). */

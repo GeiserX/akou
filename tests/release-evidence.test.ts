@@ -37,6 +37,13 @@ function repoCopy(): { dir: string; cleanup(): void } {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
   }
+  // `--check` also wants a changelog section for the version (CI-20); these tests set these ones.
+  const versions = [JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version];
+  versions.push("1.0.0-rc.1", "1.0.0", "1.2.0");
+  writeFileSync(
+    join(t.dir, "CHANGELOG.md"),
+    `# Changelog\n\n${versions.map((v) => `## ${v}\n\n- a change\n`).join("\n")}`,
+  );
   return t;
 }
 
@@ -152,14 +159,19 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
   });
 
   test(
-    "positive control: a v1.0.0 dry run fails today on both counts",
+    "positive control: a v1.0.0 dry run fails today on the gates, and on the terms once undated",
     () => {
       const t = repoCopy();
       try {
         expect(check(["--set", "1.0.0", "--root", t.dir]).code).toBe(0);
         const r = check(["--check", "--tag", "v1.0.0", "--root", t.dir]);
         expect(r.code).toBe(1);
-        expect(r.out).toContain("docs/providers.md: the terms table has no dated row");
+        // The terms table has a dated row since 2026-10-03; with it undated the same run says so.
+        expect(r.out).not.toContain("docs/providers.md");
+        writeFileSync(join(t.dir, PROVIDERS), terms("not yet checked"));
+        expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
+          "docs/providers.md: the terms table has no dated row",
+        );
         for (const g of ["G1", "G2", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} has no row in the summary table`);
         expect(r.out).toContain("docs/gates/M0-results.md: G3 is Partial, not Pass");

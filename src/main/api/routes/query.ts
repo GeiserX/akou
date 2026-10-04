@@ -181,6 +181,7 @@ function sseAnswer(
           open = false;
         }
       };
+      // clock: a keep-alive comment while an answer streams, so the reader keeps the connection.
       keepAlive = setInterval(() => {
         if (!open) return;
         try {

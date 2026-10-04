@@ -81,7 +81,21 @@ type DictationReply = {
   live?: string | null;
   /** What a dictation inserts now, as the engines resolve here (DC-E7). */
   final?: string | null;
+  /** Each choice's time after the key is let go for 10 s of speech, measured or estimated (DC-T3). */
+  latency?: Record<string, { ms: number; measured: boolean } | undefined>;
+  /** The engines a retry can use on this machine now: History offers only these. */
+  engines?: string[];
 };
+
+/** A choice's time after the key is let go, in words: "0.4 s after you let go, measured". */
+export function latencyWords(l: { ms: number; measured: boolean } | undefined): string {
+  if (!l) return "";
+  const s = Math.max(0.1, Math.round(l.ms / 100) / 10);
+  return `About ${s} s after you let go of 10 s of speech, ${l.measured ? "measured on this kind of computer" : "estimated"}.`;
+}
+
+/** Pausing other media while dictating (DC-U8), which macOS cannot do. */
+const MEDIA_KEY = "dictation.muteMedia";
 
 /** The master switch, the first row. */
 export const ENABLE_KEY = "dictation.enabled";
@@ -145,12 +159,7 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
   },
   {
     title: "Voice",
-    keys: [
-      "dictation.languages",
-      MIC_KEY,
-      "dictation.preferBuiltInOverBluetooth",
-      "dictation.muteMedia",
-    ],
+    keys: ["dictation.languages", MIC_KEY, "dictation.preferBuiltInOverBluetooth", MEDIA_KEY],
   },
   { title: "Words and history", keys: [WORDS, HISTORY] },
   { title: "Rules per app", keys: ["dictation.apps"] },
@@ -369,9 +378,12 @@ export class DictationPage {
   ) {
     this.root.append(this.col);
     this.root.addEventListener("change", (e) => this.changed(e.target as HTMLElement));
-    // History retries on another computer only when one has an address.
-    if (hooks.history)
+    // History retries on the engines this machine runs, and on another computer only when one
+    // has an address.
+    if (hooks.history) {
       hooks.history.remote = () => String(this.settings[REMOTE_URL_KEY] ?? "").trim() !== "";
+      hooks.history.engines = () => this.dictation?.engines ?? null;
+    }
   }
 
   /** Reads everything and draws the page; on `key`, goes to that setting. */
@@ -662,6 +674,11 @@ export class DictationPage {
     if (key === ENABLE_KEY) help = this.offReason() ?? help;
     if (key === REMOTE_URL_KEY && !inWindow)
       help = "Set in the akou app, since it decides where your voice goes.";
+    // macOS lets no app see another's player (docs/gates/dc-u8-media-pause.md): the switch would
+    // do nothing there, so it says so and cannot be turned on.
+    const noMedia = key === MEDIA_KEY && this.mac;
+    if (noMedia)
+      help = "macOS does not let akou see what is playing, so this does nothing on a Mac yet.";
     const els = controls.filter((c): c is HTMLElement => c instanceof HTMLElement);
     const all = (sel: string) =>
       els.flatMap((el) => [
@@ -672,7 +689,7 @@ export class DictationPage {
       const input = all("input, select, textarea")[0];
       if (input) input.dataset.key = key;
     }
-    if (fileOnly)
+    if (fileOnly || noMedia)
       for (const x of all("input, select, textarea, button"))
         (x as HTMLInputElement).disabled = true;
     const r = row(
@@ -1155,11 +1172,12 @@ export class DictationPage {
     };
     const choices = (wordsFor(FINAL_KEY).choices ?? []).filter(([v]) => spec.values?.includes(v));
     const rows = choices.map(([value, label]) => {
+      const time = latencyWords(this.dictation?.latency?.[value]);
       const r = choiceRow({
         name: "dictation-final",
         value,
         label,
-        help: lines[value],
+        help: time ? `${lines[value]} ${time}` : lines[value],
         checked: value === now,
         isDefault: value === "live",
         disabled: remote,
@@ -1708,6 +1726,7 @@ export class DictationPage {
     if (flash) {
       r.scrollIntoView({ block: "center" });
       r.classList.add("pg-flash");
+      // clock: how long a row's highlight shows.
       setTimeout(() => r.classList.remove("pg-flash"), 1200);
     }
     r.querySelector<HTMLElement>(

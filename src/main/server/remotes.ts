@@ -416,7 +416,10 @@ export class Remotes {
     if (res.status === 401 || res.status === 403) {
       return new RemoteError("refused", message, res.status, code);
     }
-    if (res.status === 404) return new RemoteError("lost", message, res.status, code);
+    // 410: the remote once had the job and has deleted it or let it expire.
+    if (res.status === 404 || res.status === 410) {
+      return new RemoteError("lost", message, res.status, code);
+    }
     if (res.status === 408 || res.status === 429 || res.status >= 500) {
       return new RemoteError("down", message, res.status, code);
     }

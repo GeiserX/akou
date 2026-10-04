@@ -180,6 +180,7 @@ Native notifications carry information only. Any action goes through the tray, t
 |---|---|---|---|
 | A call started, not from the focused window | Recording started | "Started by an agent" / "from the command line" / "from the hotkey", from the call's `by` | Always, even with notifications at `errors` |
 | Capture dead or permission-suspect | Call side silent / Microphone silent | What akou is doing about it ("rebuilding", "check the permission") | Window not focused |
+| Per-app capture lost every app it tapped | Recording the whole computer now | The app quit or restarted, akou records the whole computer, stop if the meeting is over; never the app's name | Window not focused |
 | A start refused (hotkey, tray, agent) | Could not start recording | The reason, naming a window card or a setting that exists | Always |
 | Recording stopping or stopped by a rule (low disk, maximum length) | Recording stopping / Recording stopped | The rule, in words | Always |
 | Recovered after a crash | akou recovered a call | "The recording up to the crash is saved" | At the next launch |
@@ -253,7 +254,7 @@ This is the one first-run flow; [WINDOW.md](WINDOW.md) section 10 draws it. One 
 
 ## 12. Updates
 
-Builds are unsigned for now, and every 0.x release is a prerelease. The ElectroBun updater exists but akou does not wire it. On an ad-hoc signed Mac an in-place update may cost the permission grants, which makes silent auto-apply a bad default today.
+Builds are unsigned for now, and every 0.x release is a prerelease. Each release publishes the feed ElectroBun's updater reads ([CI-CD.md](../CI-CD.md) CI-23), but the app does not call the updater yet. On an ad-hoc signed Mac an in-place update may cost the permission grants, which makes silent auto-apply a bad default today.
 
 The design has two steps and one mechanism, ElectroBun's `Updater`, fed by the release feed [CI-CD.md](../CI-CD.md) CI-23 publishes. First a notice. With `app.updateCheck` on, akou calls `Updater.checkForUpdate()` once a day and says that a newer version exists, in the tray (a badge and a menu item), in Settings, and in `akou status`. Clicking opens the release page. "Check for updates…" in the tray and the menu runs the same call whenever someone clicks it, because a click is the user asking. Second, once it is proven on hardware, apply in place through the same `Updater`. Never while a call records or a final pass runs. It applies on "Restart to update" or at the next quit, and DK-O4's post-update check follows.
 
