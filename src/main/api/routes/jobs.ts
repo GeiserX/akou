@@ -581,7 +581,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id",
     {
       id: "jobs.get",
-      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (seconds of the file transcribed so far) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
+      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (how much of the work is done, in seconds of `total_s`; with several engines, every engine's pass over the file counts) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       query: { wait: WAIT },
