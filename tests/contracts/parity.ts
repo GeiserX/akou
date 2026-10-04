@@ -457,8 +457,8 @@ export const PARITY: readonly Row[] = [
     cli: ["devices", "apps"],
     api: ["GET /devices", "GET /apps"],
     mcp: ["akou_devices"],
-    // The Dictation page's microphone picker; the call source picker is W3.3.
-    window: [ui("dictation-mic.ts", '"GET", "/devices"')],
+    // The Dictation page's microphone picker, and the Record row's Call menu (W3.3).
+    window: [ui("dictation-mic.ts", '"GET", "/devices"'), ui("call-picker.ts", '"/apps"')],
   },
   {
     action: "Update the CLI",
