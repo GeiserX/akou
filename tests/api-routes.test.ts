@@ -262,9 +262,10 @@ describe("[PG-S2] the event stream filtered by type on the server", () => {
 });
 
 describe("a request during recovery", () => {
-  test("approving a call's proposals waits for the calls to be indexed", async () => {
+  /** An app whose calls are indexed 50 ms after it starts; a call it finds ends the request. */
+  function recovering(): ApiApp {
     let indexed = false;
-    const app = {
+    return {
       manager: {
         init: () =>
           new Promise<void>((r) =>
@@ -278,18 +279,36 @@ describe("a request during recovery", () => {
             ? { ok: true, id: ref }
             : { ok: false, status: 404, code: "not_found", error: `no call ${ref}` },
       },
+      configDir: "/nowhere",
+      presets: () => [],
       // Reached only once the id resolved.
       call: async () => {
         throw new Error("resolved");
       },
     } as unknown as ApiApp;
-    const server = startApiServer({ app, port: 0, token: () => "t".repeat(64) });
+  }
+  const auth = { authorization: `Bearer ${"t".repeat(64)}` };
+
+  test("approving a call's proposals waits for the calls to be indexed", async () => {
+    const server = startApiServer({ app: recovering(), port: 0, token: () => "t".repeat(64) });
     try {
       const res = await fetch(`${server.url}/vocab/approve`, {
         method: "POST",
-        headers: { authorization: `Bearer ${"t".repeat(64)}`, "content-type": "application/json" },
+        headers: { ...auth, "content-type": "application/json" },
         body: JSON.stringify({ terms: ["Hetzner"], call: "01JCALL" }),
       });
+      const body = (await res.json()) as { message: string };
+      // Not 404: the call was found, and the fake stops the request there with a 500.
+      expect([res.status, body.message]).toEqual([500, "resolved"]);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("[PG-F2] the presets filled in for a call wait for the calls to be indexed", async () => {
+    const server = startApiServer({ app: recovering(), port: 0, token: () => "t".repeat(64) });
+    try {
+      const res = await fetch(`${server.url}/presets?call=01JCALL`, { headers: auth });
       const body = (await res.json()) as { message: string };
       // Not 404: the call was found, and the fake stops the request there with a 500.
       expect([res.status, body.message]).toEqual([500, "resolved"]);
