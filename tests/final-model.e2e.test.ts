@@ -4,7 +4,9 @@
  * with no GPU; `--model parakeet` and `--model qwen` override one run each, and Qwen's name reaches
  * `final.done`, `GET /calls/{id}` and `akou status`; while it runs, `GET /status` has how far it is.
  * A model that is not a final model is refused, and so is Qwen when it is not downloaded. On Qwen
- * the pass runs with Parakeet's files gone.
+ * the pass runs with Parakeet's files gone. On `fusion` (the setting, `akou finalize --model` or the
+ * call's own `--final`) the pass fuses the `fusion` preset's engines that are downloaded and names
+ * the rest in `final.done`.
  * Qwen is the fake llama-server (`asr.llamaServer`), the recognizer the fake of asr-fake.ts.
  */
 
@@ -13,7 +15,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FinalDone, LogEvent, Seg } from "../src/core/log/events.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
-import { type ModelSpecEntry, modelFile, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import {
+  type ModelSpecEntry,
+  modelFile,
+  NEMOTRON,
+  RECOGNIZER,
+  WHISPER_LARGE_V3,
+} from "../src/main/asr/models.ts";
 import { type AppRig, appRig, speechWav } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
@@ -37,6 +45,8 @@ beforeAll(async () => {
     reg.entry("silero-vad", ["vad.onnx"]),
     reg.entry(NEMOTRON, ["diar.onnx"]),
     { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
+    // A fusion engine, the test module's fake Whisper; nothing else runs it.
+    { ...reg.entry(WHISPER_LARGE_V3, ["w.gguf"]), onDemand: true } as ModelSpecEntry,
   ];
   models = join(home.dir, "models");
   mkdirSync(models, { recursive: true });
@@ -247,5 +257,117 @@ describe("the final pass's model", () => {
       ?.t as number;
     expect(secondWork).toBeGreaterThanOrEqual(firstEnd);
     expect((await dones(second)).at(-1)?.model).toBe(QWEN_ASR);
+  });
+});
+
+describe("[ASR-6] a call's final pass on fusion (asr.final.model, akou start --final)", () => {
+  const ALL = `rover-conf(${QWEN_ASR},${WHISPER_LARGE_V3},${RECOGNIZER})`;
+  const finalSegs = async (id: string) => {
+    const finals = new Map<string, Seg>();
+    for (const e of await rig.app.events(id, 0))
+      if (e.type === "seg" && e.id.startsWith("f")) finals.set(e.id, e as Seg);
+    return [...finals.values()].filter((x) => x.text !== null);
+  };
+
+  test("the setting runs the fusion preset's engines over the call and names them; GET /models and akou status say so", async () => {
+    const id = (await rig.api("GET", "/calls/last")).body.id as string;
+    expect((await rig.api("PATCH", "/config", { "asr.final.model": "fusion" })).status).toBe(200);
+    try {
+      expect((await rig.api("GET", "/models")).body.final).toMatchObject({
+        setting: "fusion",
+        next: ALL,
+      });
+      const before = (await dones(id)).length;
+      const r = await rig.api("POST", `/calls/${id}/finalize`, { force: true });
+      expect([r.status, r.body.model]).toEqual([202, ALL]);
+      await until(async () => (await dones(id)).length === before + 1, 30_000, "the fused pass");
+      expect((await dones(id)).at(-1)).toMatchObject({
+        model: ALL,
+        engines: [QWEN_ASR, WHISPER_LARGE_V3, RECOGNIZER],
+        dropped: [],
+      });
+      const current = await finalSegs(id);
+      expect(current.length).toBeGreaterThan(0);
+      expect(current.every((x) => x.model === ALL)).toBe(true);
+      expect((await rigCli(rig)(["status"])).out).toContain("Final: ready (Qwen + Whisper + ");
+    } finally {
+      await rig.api("PATCH", "/config", { "asr.final.model": "auto" });
+    }
+  });
+
+  test("an engine of the list that is not downloaded is left out and named; with none downloaded fusion is refused", async () => {
+    const id = (await rig.api("GET", "/calls/last")).body.id as string;
+    const w = dirname(modelFile(models, WHISPER_LARGE_V3, "w.gguf"));
+    renameSync(w, `${w}.away`);
+    try {
+      const before = (await dones(id)).length;
+      const r = await rig.api("POST", `/calls/${id}/finalize`, { force: true, model: "fusion" });
+      expect(r.status).toBe(202);
+      await until(async () => (await dones(id)).length === before + 1, 30_000, "the pass");
+      const done = (await dones(id)).at(-1) as FinalDone;
+      expect(done).toMatchObject({
+        model: `rover-conf(${QWEN_ASR},${RECOGNIZER})`,
+        engines: [QWEN_ASR, RECOGNIZER],
+      });
+      expect(done.dropped).toEqual([
+        {
+          engine: WHISPER_LARGE_V3,
+          reason: expect.stringContaining("not downloaded"),
+          units: null,
+        },
+      ]);
+      // With Qwen and Parakeet gone too, nothing of the list can run: refused, never replaced.
+      const q = dirname(modelFile(models, QWEN_ASR, "q.gguf"));
+      const p = dirname(modelFile(models, RECOGNIZER, "a.onnx"));
+      renameSync(q, `${q}.away`);
+      renameSync(p, `${p}.away`);
+      try {
+        const none = await rig.api("POST", `/calls/${id}/finalize`, {
+          force: true,
+          model: "fusion",
+        });
+        expect(none.status).toBe(501);
+        expect(none.body.message).toContain("fusion cannot run this pass");
+      } finally {
+        renameSync(`${q}.away`, q);
+        renameSync(`${p}.away`, p);
+      }
+    } finally {
+      renameSync(`${w}.away`, w);
+    }
+  });
+
+  test("a call's own final (POST /calls final, akou start --final) beats the setting and stays in its log", async () => {
+    const bad = await rig.api("POST", "/calls", { final: "whisper" });
+    expect([bad.status, bad.body.field]).toEqual([422, "final"]);
+    const id = await rig.startCall({ final: "fusion" });
+    expect((await rig.app.events(id, 0))[0]).toMatchObject({
+      type: "call.created",
+      final: "fusion",
+    });
+    await until(
+      async () => (await rig.app.events(id, 0)).some((e) => e.type === "seg"),
+      15_000,
+      "a line",
+    );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await dones(id)).length === 1, 30_000, "its pass");
+    // The setting is `auto` (Qwen alone); the call asked for fusion.
+    expect((await dones(id))[0]).toMatchObject({
+      model: ALL,
+      engines: [QWEN_ASR, WHISPER_LARGE_V3, RECOGNIZER],
+    });
+    // A short name is saved as the model's id.
+    const two = await rig.startCall({ final: "parakeet" });
+    expect((await rig.app.events(two, 0))[0]).toMatchObject({ final: RECOGNIZER });
+    await until(
+      async () => (await rig.app.events(two, 0)).some((e) => e.type === "seg"),
+      15_000,
+      "a line",
+    );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await dones(two)).length === 1, 30_000, "the second call's pass");
+    expect((await dones(two))[0]?.model).toBe("fake-parakeet");
+    expect((await dones(two))[0]).not.toHaveProperty("engines");
   });
 });

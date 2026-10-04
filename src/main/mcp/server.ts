@@ -587,6 +587,12 @@ export function createMcpServer(o: McpOptions): McpServer {
           .describe('What to capture as the call side: "system", "app:ID" or "none"'),
         mic: z.string().optional().describe("The microphone: an input id from akou_devices"),
         vocab: z.array(z.string()).optional(),
+        final: z
+          .string()
+          .optional()
+          .describe(
+            'The final pass for this call: "fusion" runs several speech engines after the call and combines their words, slower and more accurate; "qwen" or "parakeet" one model. Omit for the setting',
+          ),
         withoutModels: z
           .boolean()
           .optional()

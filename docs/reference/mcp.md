@@ -1260,6 +1260,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
 | `mic` | `string` | no | The microphone: an input id from akou_devices |
 | `vocab` | `string[]` | no |  |
+| `final` | `string` | no | The final pass for this call: "fusion" runs several speech engines after the call and combines their words, slower and more accurate; "qwen" or "parakeet" one model. Omit for the setting |
 | `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
 <details markdown>
@@ -1291,6 +1292,10 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "items": {
         "type": "string"
       }
+    },
+    "final": {
+      "description": "The final pass for this call: \"fusion\" runs several speech engines after the call and combines their words, slower and more accurate; \"qwen\" or \"parakeet\" one model. Omit for the setting",
+      "type": "string"
     },
     "withoutModels": {
       "description": "Record audio now and transcribe it later, when the speech models are not downloaded yet.",

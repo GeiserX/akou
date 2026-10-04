@@ -13,7 +13,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
-import { finalModelOf } from "../../asr/final-model.ts";
+import { FINAL_FUSION, finalModelOf } from "../../asr/final-model.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import {
   buildEnhanceInput,
@@ -113,7 +113,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     "/calls/:id/finalize",
     doc({
       id: "calls.finalize",
-      doc: "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced.",
+      doc: "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, a model's id, or `fusion` for the `fusion` preset's engines fused) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced, and `fusion` is refused when none of its engines is downloaded.",
       body: { "force?": "boolean", "model?": "string" },
       ok: 202,
       errors: errorsOf(CALL_REF_ERRORS, {
@@ -124,8 +124,11 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     }),
     async (c) => {
       const b = await c.body<{ force?: boolean; model?: unknown }>();
-      if (b.model !== undefined && (typeof b.model !== "string" || !finalModelOf(b.model))) {
-        throw new HttpError(422, "bad_field", "model must be qwen or parakeet", {
+      if (
+        b.model !== undefined &&
+        (typeof b.model !== "string" || !(finalModelOf(b.model) || b.model === FINAL_FUSION))
+      ) {
+        throw new HttpError(422, "bad_field", "model must be qwen, parakeet or fusion", {
           field: "model",
         });
       }
