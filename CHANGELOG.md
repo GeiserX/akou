@@ -2,10 +2,67 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
-## Unreleased
+## 0.6.1 — akou idles in about 2 GB, a call records the app you pick, and a call's final pass can fuse engines
+
+On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, because the models a call or a dictation loaded were never let go. Recording one app instead of the whole computer meant typing an app id into Settings, and the call stopped the moment that app quit. In 0.6.1 an idle app drops back to about 2 GB, a menu beside Record picks the app for one call from the apps playing now, and a call whose app quits goes on recording the whole computer. A call's final pass can also run the fusion preset's engines, as a fusion file job does.
 
 ### Calls
-- **A call's final pass can fuse several engines.** `asr.final.model` takes `fusion`, and so do `akou start --final`, `POST /calls {final}`, `akou_start {final}` and `akou finalize --model`: the pass runs the `fusion` preset's engines (`asr.final.engines`, joined by `asr.fusion`) over the whole call, as a fusion file job does, and its lines read `rover-conf(<ids>)`. Engines of the list that are not downloaded are left out; `final.done` names the engines that decoded and the ones left out, with why. Slower by about one pass per engine, and it holds about 0.25 GB per hour of call while it runs. The default stays one engine.
+- **A call's final pass can fuse several engines.** `asr.final.model` takes `fusion`, and so do `akou start --final`, `POST /calls {final}`, `akou_start {final}` and `akou finalize --model`. The pass runs the `fusion` preset's engines over the whole call and joins their words, and its lines read `rover-conf(<ids>)`. An engine that is not downloaded is left out, and `final.done` names the engines that decoded and the ones left out, with why. It is slower by about one pass per engine and holds about 0.25 GB per hour of call while it runs. The default stays one engine (#325).
+- **Pick the app to record for one call from the apps playing now.** A Call menu beside the Live menu lists Whole computer, None (microphone only) and the apps playing sound, by name. A pick holds for that call and is never saved. Whole computer stays the default (#326).
+- **Settings' One app mode picks from the running apps** by name, instead of an empty box for an id few people know. It is hidden on Linux, where akou cannot record one app (#324).
+- **A per-app call whose app quits keeps recording**, now as the whole computer, with the microphone carried straight across. Before, the call ended as if you had pressed Stop, with no word of why (#317).
+- **akou checks a per-app scope when it comes in.** A typo such as `zoom` is refused when you save it or start a call, a start whose app is not running says what to do, and an agent that attaches to a call recording another scope is told so (#318).
+- **`akou devices` and `akou apps` list microphones and the apps playing sound**, with the ids `--mic` and `--call app:<id>` take. Before, both exited "not built". The API has `GET /devices` and `GET /apps`, and agents have `akou_devices` (#265).
+
+### Memory and models
+- **An idle akou lets go of models nothing uses**, from about 3.9 GB down to about 2 GB on the reference Mac. A live dictation no longer loads Parakeet unless its text comes from Parakeet, and `asr.modelIdleMinutes`, 5 by default, drops every model once no call or dictation has used it for that long (#322).
+- **A server keeps its loaded model between jobs** for `server.model_idle_minutes`, 60 by default, so a stream of short voice notes no longer pays the load on almost every file. A switch of preset no longer evicts Qwen, and two `best` jobs on Metal no longer stop each other's llama-server (#270).
+- **A freshly unpacked GPU build is asked which devices it can open** before the first job runs on it, so the first job on a new box no longer finds out the hard way (#260).
+- **The GPU docs pass one render node to the Vulkan image**, not the whole `/dev/dri`. On an Intel GPU with virtual functions, llama-server could open the wrong one and hang. The server now says when that can happen (#266).
+
+### Dictation
+- **A quiet dictation keeps its sentence ends.** On a quiet microphone, Parakeet lost the ends of sentences and some dictations came back empty. The cut at pauses now works on a gained copy of the audio (#263).
+- **A dictation's audio is kept as Opus**, about 180 KB a minute instead of 1.9 MB as WAV (#264).
+- **An Enter pressed just after the text went in now sends**, and the dictation key while the draft box has the keyboard adds to the draft (#276).
+- **Each choice of what inserts the text says how long it makes you wait** after you let go of the key, measured on this kind of machine where a measurement exists (#295).
+- **Three settings stopped doing nothing or saying what is not true.** Pause music while you dictate now reaches the helper on Windows and Linux, and on a Mac it is shown off with the reason. History's Retry offers only the engines on this machine, and the draft box shows what was heard under a tidied text (#293).
+- **"at sign" can become @**, and the Words page no longer loses words on an odd workspace name or a re-import (#301).
+- Dictated words stay out of the log when the formatting hook fails, a cue that cannot play falls back to another player, and the key recorder survives a helper restart (#275).
+- **Learned words stay off for Qwen dictation.** A measured run found that a longer list also made Qwen write listed words nobody said, so `dictation.glossary` stays `off` (#302).
+
+### Agents and the API
+- **Agents can do every per-call action the CLI does.** They can run the final pass, share a call, read a template, edit or delete a note, open the window and read a setting. Start answers no longer carry an `akou://` link that opened nothing (#262).
+- **Ask presets are files.** The five questions in the ask box ship as Markdown files, and a file in the config folder's `presets/` adds or replaces one without a restart. `akou presets list` and `akou ask --preset NAME` use them, and agents get one MCP prompt per preset (#273).
+- **The event stream can be filtered by type**, and `akou events` prints a call's log as one JSON object per line, so a monitor reads only what it needs (#287).
+- **Agents can move a call to another workspace, trash it and restore it**, change who spoke one line, and ask `GET /calls` for only the calls changed since a cursor. akou deletes a trashed call after 30 days (#297).
+- The [MCP tool reference](docs/reference/mcp.md) and the [CLI reference](docs/cli.md) are generated from the code, and CI fails when either drifts (#233, #283).
+
+### Server and jobs
+- **A running job shows how far it is**, by stage and seconds of audio, and a job the server already let go answers 410 instead of 404 (#267). A fused job's progress counts every engine (#323).
+- **A job result names the spoken language** when Qwen ran, and the OpenAI route answers `und` rather than `unknown` when nothing names one (#255).
+- **The server says what it really does.** It reports what `auto` runs and the diarize default, prints the address it is really bound to, and logs each failed callback as it fails (#253).
+- **A key's callback hosts can change without losing its jobs**, with `PATCH /v1/keys/{id}` or `akou keys update`, and key and job changes are written to the server's log (#237).
+- **`akou transcribe` takes `--keyword`, `--keywords-file` and `--priority`**, so an agent's job need not wait behind a backlog (#284).
+- The server refuses a job title with a control character, and an open job's panel follows a rename (#286).
+
+### The window
+- The sidebar keeps its full width on Settings, Models and Dictation in a narrow window (#241).
+- Ask says plainly why it has no answer, without naming a setting key, and the side column matches the design (#257).
+- `akou ask --preset` right after the app starts no longer answers "not found" for a call on disk (#327).
+
+### Install and releases
+- **Homebrew installs akou** with `brew install --cask geiserx/akou/akou`, and every release bumps the cask (#298).
+- **Each release publishes an update feed**, so an installed app can learn that a newer version exists (#291).
+- **A tag releases only a commit whose CI passed.** The release notes are its CHANGELOG section, and every asset carries a build attestation (#281).
+- The desktop app is now built and checked on Windows x64 and Linux x64. Those builds are not published yet (#315).
+- Importing a call folder whose post-processing file ends in an empty step no longer crashes (#279).
+- More checks behind the scenes: a coverage floor, a running test for every trap, no new wall-clock reads in the code, a nightly a year ahead, fuzzing, an 8-hour soak, the window suite in WebKit on every pull request, and fixes for the flakiest tests (#256, #269, #272, #274, #279, #292, #299, #327). The release gates gained their runners, including a speech run on Windows (#294, #296, #307, #312, #313, #314, #316).
+
+### Known limitations
+- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility, as [docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing) shows.
+- **One app cannot be recorded on Linux**, so the mode is hidden there.
+- **Pause music while you dictate cannot work on a Mac**, because macOS does not let one app see what another is playing.
+- Every item under 0.5.5's Known limitations still applies.
 
 ## 0.6.0 — a file transcribes on the desktop app, and the fusion preset joins three engines
 
