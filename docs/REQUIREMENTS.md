@@ -200,7 +200,7 @@ Status words:
 - F2.54, F4.9, F4.17 test suites with fakes, minimum test counts, CI on pull requests: **carried (M1)**; every job asserts a minimum executed-test count and the report lists gated tests as skipped ([TESTING](TESTING.md) TS-2).
 - F0.28, F4.16 validation scripts (60-minute drift test, per-app isolation, live pipeline checks): **carried (M0)** as `scripts/drift-test.ts` and the hardware release checklist, run on real devices, never through speakers.
 - F4.7, I4.3 Homebrew one-repo tap and `brew services`: **changed (M1)**. The app registers its own login item; no `brew services`. The cask in a formula-only tap is **designed** ([CI-CD](CI-CD.md) CI-25).
-- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **designed**. The release pipeline exists, with the `Info.plist` patch and nested signing; builds are unsigned for now (ad-hoc signed on macOS), and Developer ID signing and notarization belong to a later milestone ([ROADMAP](ROADMAP.md#later-on-demand)).
+- F4.8, I4.4 release pipeline with Developer ID signing and notarization: **designed**. The release pipeline exists, with the `Info.plist` patch and nested signing; macOS releases are signed with the Developer ID and notarized since 0.6.2; that the grants survive an update is still to be checked on hardware ([ROADMAP](ROADMAP.md#later-on-demand)).
 - F4.10, I4.5 Makefile targets and demo: **dropped**; `bun` and `cargo` are the interface. A demo recording in the README is **designed**, and nothing owns it yet.
 - F4.11 export-control self-classification: **designed**, in a `docs/legal.md` updated for the new dependencies. The doc does not exist, and nothing owns it yet.
 - F4.12 third-party notices: **carried (M1)** in `NOTICE`.

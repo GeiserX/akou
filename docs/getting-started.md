@@ -20,19 +20,16 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 ## The app
 
 1. Open the DMG and drag akou into Applications. Or install it with Homebrew: `brew install --cask geiserx/akou/akou`, then go on from step 2.
-2. Open akou once. macOS will refuse, because this build is not signed by Apple (see below).
-3. Let it open:
-   - On macOS 14, Control-click akou in Applications, choose Open, then Open again.
-   - On macOS 15 and later, open System Settings after the refusal, then Privacy & Security. Near the bottom it says akou was blocked. Click Open Anyway and confirm with your password.
-4. The first open takes a few seconds while the app unpacks itself in place.
+2. Open akou. The first open takes a few seconds while the app unpacks itself in place.
 
-You do this once per install. After that akou opens like any other app.
+### Signed and notarized
 
-### Why macOS refuses it
+Since 0.6.2 the app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them like any other app. The `SHA256SUMS` check above confirms the file is the one this repository built.
 
-Apple lets an app open without a warning only when it is signed with a paid Developer ID and checked by Apple (notarized). akou 0.x is neither. It carries an ad-hoc signature instead. That proves the files were not changed after the build, but it does not say who built them. That is why the first open needs your explicit OK. The `SHA256SUMS` check above is how you confirm the file is the one this repository built.
+0.6.1 and older carry an ad-hoc signature only, and macOS refuses their first open:
 
-Signing and notarization will come later. The [release workflow](https://github.com/GeiserX/akou/blob/main/.github/workflows/release.yml) is ready for them. Once the owner adds a Developer ID and Apple credentials as secrets, the same build signs and notarizes, and this step goes away.
+- On macOS 14, Control-click akou in Applications, choose Open, then Open again.
+- On macOS 15 and later, open System Settings after the refusal, then Privacy & Security. Near the bottom it says akou was blocked. Click Open Anyway and confirm with your password.
 
 ## The speech models
 
@@ -52,9 +49,7 @@ Until the models are there, akou does not start a recording: `akou start` answer
 
 The first time you record, macOS asks two questions: may akou use the **microphone**, and may it record **system audio** (the other side of the call). Answer Allow to both. Both grants belong to the akou app, whichever way you started the recording.
 
-**After an update, macOS may ask again.** macOS remembers a grant for an app by its signature. An ad-hoc signed app gets a new signature with every build, so macOS may treat the new version as a different app. If it asks, allow again. If a recording after an update is silent on one side, open System Settings, then Privacy & Security, then Microphone or Screen & System Audio Recording, remove akou with the minus button, and record again so macOS asks.
-
-With a Developer ID signature, which comes later, the grants will survive updates.
+**After an update, macOS keeps the grants.** macOS remembers a grant for an app by its signature, and every release since 0.6.2 carries the same Developer ID. Coming from 0.6.1 or older, which were ad-hoc signed, macOS treats the update as a different app and asks once more. If a recording after an update is silent on one side, open System Settings, then Privacy & Security, then Microphone or Screen & System Audio Recording, remove akou with the minus button, and record again so macOS asks.
 
 ## The command line
 
@@ -73,7 +68,7 @@ akou --version
 
 On Linux it is the same with `linux-x64` in place of `darwin-arm64`. On Windows, unzip `akou-cli-<version>-windows-x64.zip` and move `akou.exe` into a folder on your `PATH`.
 
-`~/.local/bin` must be on your `PATH`. If you downloaded the file with a browser, macOS marks it as downloaded and refuses to run it. Clear the mark once:
+`~/.local/bin` must be on your `PATH`. The macOS binary is signed and notarized, so it runs even when a browser downloaded it. For 0.6.1 and older, which macOS refuses to run after a browser download, clear the download mark once:
 
 ```sh
 xattr -d com.apple.quarantine ~/.local/bin/akou

@@ -37,12 +37,6 @@ cask "akou" do
   depends_on macos: :sonoma
 
   app "akou.app"
-
-  caveats <<~EOS
-    akou is not signed by Apple yet, so macOS refuses its first open.
-    The step that lets it open is in
-      https://github.com/GeiserX/akou/blob/main/docs/getting-started.md
-  EOS
 end
 `;
 }

@@ -4,7 +4,7 @@ Each section is one thing that goes wrong: what you see, why, and what to do. If
 
 ## macOS says akou cannot be opened
 
-**Why.** The 0.x builds carry an ad-hoc signature, not an Apple Developer ID, so macOS refuses the first open. See [Why macOS refuses it](getting-started.md#why-macos-refuses-it).
+**Why.** akou 0.6.1 and older carry an ad-hoc signature, not an Apple Developer ID, so macOS refuses the first open. Releases since 0.6.2 are signed and notarized and open without this step. See [Signed and notarized](getting-started.md#signed-and-notarized).
 
 **Fix.** On macOS 14, Control-click akou in Applications, choose Open, then Open again. On macOS 15 and later, open System Settings, then Privacy & Security, and click Open Anyway near the bottom. Or clear the download mark once from a terminal:
 
@@ -14,7 +14,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 ## One side of a recording is silent after an update
 
-**Why.** macOS remembers the microphone and system audio grants by the app's signature, and an ad-hoc signed app gets a new one with every build. After an update macOS may treat akou as a different app.
+**Why.** macOS remembers the microphone and system audio grants by the app's signature. Builds up to 0.6.1 were ad-hoc signed and got a new one with every build, so an update from one of them may make macOS treat akou as a different app.
 
 **Fix.** Open System Settings, then Privacy & Security, then Microphone (for your side) or Screen & System Audio Recording (for the other side). Remove akou with the minus button, then record again so macOS asks.
 

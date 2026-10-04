@@ -24,7 +24,14 @@ import {
   pairedHutch,
   releaseName,
 } from "../scripts/build-app.ts";
-import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
+import {
+  atLeast,
+  CLI_ENTITLEMENTS,
+  cliSignArgs,
+  developerId,
+  hostTarget,
+  MIN_BUN,
+} from "../scripts/build-cli.ts";
 import { main as bumpCask, dmgName, dmgSum, renderCask } from "../scripts/bump-cask.ts";
 import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
 import { verdict } from "../scripts/ci/tested-commit.ts";
@@ -260,18 +267,25 @@ describe("signing is a seam, not a code change", () => {
   });
 });
 
-describe("signing secrets reach tag builds only", () => {
-  /** Every line of the workflow that reads a secret, and whether that read is gated on a tag push. */
+describe("signing secrets never reach a pull request", () => {
+  /**
+   * Every line of the workflow that reads a secret and is not gated on a tag push or on any event
+   * but a pull request (a dispatch by hand: only someone with write access can start one).
+   */
   function ungatedSecretReads(workflow: string): string[] {
     return workflow
       .split("\n")
       .map((line, i) => ({ line: line.trim(), n: i + 1 }))
       .filter(({ line }) => line.includes("secrets.") && !line.startsWith("#"))
-      .filter(({ line }) => !line.includes("github.event_name == 'push' &&"))
+      .filter(
+        ({ line }) =>
+          !line.includes("github.event_name == 'push' &&") &&
+          !line.includes("github.event_name != 'pull_request' &&"),
+      )
       .map(({ line, n }) => `${n}: ${line}`);
   }
 
-  test("a pull request or a dry run never loads a signing secret; only a pushed tag does", () => {
+  test("a pull request's dry run never loads a signing secret; a pushed tag or a dispatch does", () => {
     // The dry run on a pull request runs the branch's own build scripts, so a secret in its
     // environment is a secret those scripts can read. GitHub withholds secrets from forks, not from
     // branches of this repository.
@@ -284,6 +298,60 @@ describe("signing secrets reach tag builds only", () => {
     expect(
       ungatedSecretReads(ungated.replace("secrets.", "github.event_name == 'push' && secrets.")),
     ).toEqual([]);
+    expect(
+      ungatedSecretReads(
+        ungated.replace("secrets.", "github.event_name != 'pull_request' && secrets."),
+      ),
+    ).toEqual([]);
+    // The wrong way round lets a pull request in.
+    expect(
+      ungatedSecretReads(
+        ungated.replace("secrets.", "github.event_name == 'pull_request' && secrets."),
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("a tag or a dispatch fails without a signing secret and checks what it signed", () => {
+    const app = releaseWorkflow().jobs.app;
+    const setup = app?.steps?.find((s) => s.run?.includes("security create-keychain"));
+    expect(setup?.if).toBe("env.SIGN == 'true'");
+    for (const name of [
+      "MACOS_CERTIFICATE_P12",
+      "MACOS_CERTIFICATE_PASSWORD",
+      "ELECTROBUN_DEVELOPER_ID",
+      "ELECTROBUN_TEAMID",
+      "ELECTROBUN_APPLEID",
+      "ELECTROBUN_APPLEIDPASS",
+    ]) {
+      expect(setup?.run).toContain(name);
+    }
+    expect(setup?.run).toContain("exit 1");
+    const check = app?.steps?.find((s) => s.run?.includes("spctl --assess"));
+    expect(check?.if).toBe("env.SIGN == 'true'");
+    expect(check?.run).toContain("source=Notarized Developer ID");
+    expect(check?.run).toContain("--check-notarization -R=notarized");
+  });
+});
+
+describe("the CLI's signature", () => {
+  test("ad-hoc without a Developer ID; with one, the hardened runtime, a timestamp and Bun's JIT entitlements", () => {
+    expect(developerId({})).toBeNull();
+    expect(developerId({ ELECTROBUN_DEVELOPER_ID: "-" })).toBeNull();
+    expect(cliSignArgs({})).toEqual(["-s", "-", "-f"]);
+    expect(cliSignArgs({ ELECTROBUN_DEVELOPER_ID: "-" })).toEqual(["-s", "-", "-f"]);
+    expect(cliSignArgs({ ELECTROBUN_DEVELOPER_ID: "ABC123" })).toEqual([
+      "-s",
+      "ABC123",
+      "-f",
+      "--options",
+      "runtime",
+      "--timestamp",
+      "--entitlements",
+      CLI_ENTITLEMENTS,
+    ]);
+    const plist = readFileSync(CLI_ENTITLEMENTS, "utf8");
+    expect(plist).toContain("<key>com.apple.security.cs.allow-jit</key>");
+    expect(plist).toContain("<key>com.apple.security.cs.allow-unsigned-executable-memory</key>");
   });
 });
 
@@ -412,15 +480,15 @@ describe("the compiled CLI starts the installed app, never itself", () => {
   });
 });
 
-describe("the unsigned first open", () => {
-  test("the release notes give the first-open step per macOS version, as getting-started.md does", () => {
+describe("the first open", () => {
+  test("the release notes say the build is signed and notarized; getting-started.md keeps the step for older builds", () => {
     const notes = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
     const install = readFileSync(join(ROOT, "docs", "getting-started.md"), "utf8");
+    expect(notes).toContain("**Signed and notarized.**");
+    expect(notes).not.toContain("not signed by Apple");
     // Control-click Open no longer gets past Gatekeeper from macOS 15: only Open Anyway does.
-    for (const doc of [notes, install]) {
-      expect(doc).toMatch(/On macOS 14, Control-click akou in Applications, choose Open/);
-      expect(doc).toMatch(/On macOS 15 and later,[^\n]*Privacy & Security[^\n]*Open Anyway/);
-    }
+    expect(install).toMatch(/On macOS 14, Control-click akou in Applications, choose Open/);
+    expect(install).toMatch(/On macOS 15 and later,[^\n]*Privacy & Security[^\n]*Open Anyway/);
   });
 });
 
