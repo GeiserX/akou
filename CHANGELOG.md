@@ -2,6 +2,11 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## Unreleased
+
+### Calls
+- **A call's final pass can fuse several engines.** `asr.final.model` takes `fusion`, and so do `akou start --final`, `POST /calls {final}`, `akou_start {final}` and `akou finalize --model`: the pass runs the `fusion` preset's engines (`asr.final.engines`, joined by `asr.fusion`) over the whole call, as a fusion file job does, and its lines read `rover-conf(<ids>)`. Engines of the list that are not downloaded are left out; `final.done` names the engines that decoded and the ones left out, with why. Slower by about one pass per engine, and it holds about 0.25 GB per hour of call while it runs. The default stays one engine.
+
 ## 0.6.0 — a file transcribes on the desktop app, and the fusion preset joins three engines
 
 Up to 0.5.5 a recording on your own Mac had to be copied to a server before `akou transcribe` would take it, and on a server one engine decided every word. In 0.6.0 the desktop app runs file jobs itself, with its own token and the same queue and presets as a server. A server gains the `fusion` preset: Qwen3-ASR, Whisper large-v3 and Parakeet decode the same pieces and the result keeps, per word, the one the confidence vote prefers. On the benchmark the trio scores 7.97 pooled WER against 8.63 for Qwen alone.

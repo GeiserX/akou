@@ -12,6 +12,7 @@
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
+import { FINAL_MODELS, finalChoiceValue, isFinalChoice } from "../../asr/final-model.ts";
 import {
   isLiveCallSetting,
   isReviewModel,
@@ -165,7 +166,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`; `final` the model of its final pass (`auto`, a model id, `qwen`, `parakeet`, or `fusion` for the `fusion` preset's engines fused) instead of `asr.final.model`, kept in the call's log so a pass after a restart runs it too. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -179,6 +180,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         "live?": "string",
         "review?": "string",
         "reviewEvery?": "number",
+        "final?": "string",
         "attach?": "boolean",
       },
       ok: 201,
@@ -217,6 +219,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         live?: unknown;
         review?: unknown;
         reviewEvery?: unknown;
+        final?: unknown;
         attach?: boolean;
       }>();
       if (b.live !== undefined && (typeof b.live !== "string" || !isLiveCallSetting(b.live))) {
@@ -248,6 +251,14 @@ export function callRoutes(r: Router<ApiApp>): void {
           { field: "reviewEvery" },
         );
       }
+      if (b.final !== undefined && (typeof b.final !== "string" || !isFinalChoice(b.final))) {
+        throw new HttpError(
+          422,
+          "bad_field",
+          `final is one of ${FINAL_MODELS.join(", ")}, qwen or parakeet`,
+          { field: "final" },
+        );
+      }
       const vocab = [];
       for (const term of b.vocab ?? []) {
         const bad = validateTerm(term);
@@ -266,6 +277,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         live: b.live as string | undefined,
         review: b.review as string | undefined,
         reviewEvery: every as number | undefined,
+        ...(b.final === undefined ? {} : { final: finalChoiceValue(b.final as string) }),
         attach: b.attach === true,
       });
       if (!res.ok) return outcome(res);

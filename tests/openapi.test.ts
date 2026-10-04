@@ -176,6 +176,7 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
       "live",
       "review",
       "reviewEvery",
+      "final",
       "attach",
     ]);
     expect(schema?.additionalProperties).toBe(false);
