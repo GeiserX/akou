@@ -63,6 +63,8 @@ export class Player {
     for (const ev of ["play", "pause", "ended", "emptied"]) {
       p.addEventListener(ev, () => this.drawPlay());
     }
+    // A seek that never lands must not hold the next Space.
+    for (const ev of ["error", "emptied"]) p.addEventListener(ev, () => this.unqueue());
     for (const ev of ["timeupdate", "seeked", "play", "pause", "durationchange", "emptied"]) {
       p.addEventListener(ev, () => this.tick());
     }

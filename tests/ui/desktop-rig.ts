@@ -203,7 +203,9 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
       const p = open("indicator", handlers);
       // The page is as big as the window, as a webview fills its window.
       const size = (f: Rect) => {
-        sizing = p.ready.then((page) => page.setViewportSize({ width: f.width, height: f.height }));
+        sizing = p.ready
+          .then((page) => page.setViewportSize({ width: f.width, height: f.height }))
+          .catch(() => {});
       };
       indicatorFrame = w.frame;
       size(w.frame);

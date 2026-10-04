@@ -62,7 +62,7 @@ const player = (page: Page) =>
  * Plays a row from its own Play button and waits until its audio plays: past the line's start,
  * not only unpaused. The player starts only once the seek to the line has landed, a moment after
  * the metadata, so a pause sent before that finds nothing playing and the audio then starts
- * behind the test's back; and Linux WebKit dropped a pause sent while play() was still pending.
+ * behind the test's back; and Linux WebKit may drop a pause sent while play() is still pending.
  */
 async function playRow(page: Page, lid: string): Promise<void> {
   await page.hover(`#lines .row[data-id="${lid}"]`);
@@ -1104,8 +1104,17 @@ describe("the player bar (W5.3 to W5.6)", () => {
           const from = await at();
           await press("Shift+ArrowRight", Math.min(12, from + 5));
           expect(await page.inputValue("#speed")).toBe("1.5");
-          // Space stays the picker's own key (it opens the list): the player does not start. play()
-          // clears paused at once, inside the key's own dispatch, so no wait is needed to see it.
+          // Space stays the picker's own key (it opens the list): the player does not start. The
+          // seek lands first, or a Space wrongly taken by the player would only queue its play and
+          // leave paused true; once it lands, play() clears paused inside the key's own dispatch.
+          await page.evaluate(
+            () =>
+              new Promise<void>((r) => {
+                const p = document.getElementById("player") as HTMLAudioElement;
+                if (!p.seeking) r();
+                else p.addEventListener("seeked", () => r(), { once: true });
+              }),
+          );
           expect((await player(page)).paused).toBe(true);
           await page.keyboard.press(" ");
           expect((await player(page)).paused).toBe(true);
