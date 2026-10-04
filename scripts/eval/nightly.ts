@@ -120,6 +120,7 @@ import {
   percentile,
   summary,
   type Turn,
+  type Verdict,
   wer,
 } from "./score.ts";
 
@@ -818,7 +819,7 @@ async function dictationStage(
   o: { modelsDir: string; qwenModelsDir: string; dataDir: string; platform: string },
   measures: Measure[],
   notes: string[],
-): Promise<Partial<Record<LatencyEngine, EngineLatency>>> {
+): Promise<{ out: Partial<Record<LatencyEngine, EngineLatency>>; failed: StageFailure[] }> {
   // Most FLEURS clips are recorded quietly (a peak of a few thousandths), where the streaming model
   // hears nothing and answers at once, which says nothing about the time. Each clip is brought to
   // the same peak, as a microphone's gain would.
@@ -842,33 +843,72 @@ async function dictationStage(
   if (!o.platform.startsWith("win32"))
     engines.push(["qwen", () => qwenDictate(o.qwenModelsDir, o.platform)]);
   engines.push(["remote", () => remoteDictate(o.modelsDir, o.dataDir)]);
-  const out: Partial<Record<LatencyEngine, EngineLatency>> = {};
-  for (const [name, make] of engines) {
-    const e = await make();
-    try {
-      const times = await measure(e.dictate, byLength, (line) => console.error(`${name} ${line}`));
-      const row = engineLatency(e.model, times);
-      out[name] = row;
-      for (const [s, t] of Object.entries(row.seconds)) {
-        for (const p of ["p50", "p95"] as const) {
-          measures.push({
-            key: `dictation.release_to_text.${s}s.${name}.${p}`,
-            value: t[p],
-            unit: "ms",
-            better: "lower",
-            gate: "record",
-          });
-        }
+  const r = await timeEngines(engines, async (name, e) => {
+    const times = await measure(e.dictate, byLength, (line) => console.error(`${name} ${line}`));
+    return engineLatency(e.model, times);
+  });
+  for (const [name, row] of Object.entries(r.out) as [LatencyEngine, EngineLatency][]) {
+    for (const [s, t] of Object.entries(row.seconds)) {
+      for (const p of ["p50", "p95"] as const) {
+        measures.push({
+          key: `dictation.release_to_text.${s}s.${name}.${p}`,
+          value: t[p],
+          unit: "ms",
+          better: "lower",
+          gate: "record",
+        });
       }
-      notes.push(`Dictation ${name}: ${e.model}`);
-    } finally {
-      await e.close();
     }
+    notes.push(`Dictation ${name}: ${row.model}`);
   }
+  for (const f of r.failed) notes.push(`Dictation ${f.engine}: failed, ${f.why}`);
   notes.push(
     `Dictation release-to-text: ${DICTATIONS_PER_LENGTH} dictations each of ${DICTATION_LENGTHS.join(", ")} s of FLEURS en_us speech, held at real-time pace, after one warm-up`,
   );
-  return out;
+  return r;
+}
+
+/** What a stage could not do: one row each, so the night is red and says why. */
+export interface StageFailure {
+  engine: string;
+  why: string;
+}
+
+/**
+ * Times each dictation engine in turn. One that fails to start or to finish is left out with why,
+ * and the ones after it still run, so the night keeps the other engines' numbers and the latency
+ * table still gets them; the failure is returned, for the run to fail on.
+ */
+export async function timeEngines<E extends { model: string; close(): Promise<void> }>(
+  engines: readonly (readonly [LatencyEngine, () => Promise<E>])[],
+  time: (name: LatencyEngine, e: E) => Promise<EngineLatency>,
+): Promise<{ out: Partial<Record<LatencyEngine, EngineLatency>>; failed: StageFailure[] }> {
+  const out: Partial<Record<LatencyEngine, EngineLatency>> = {};
+  const failed: StageFailure[] = [];
+  for (const [name, make] of engines) {
+    let e: E | null = null;
+    try {
+      e = await make();
+      out[name] = await time(name, e);
+    } catch (err) {
+      failed.push({ engine: name, why: (err as Error).message });
+    } finally {
+      await e?.close().catch(() => {});
+    }
+  }
+  return { out, failed };
+}
+
+/** A failed stage as a verdict row: never ok, so `main` exits 1 and the summary lists it first. */
+export function failureVerdicts(stage: string, failed: readonly StageFailure[]): Verdict[] {
+  return failed.map((f) => ({
+    key: `${stage}.${f.engine}`,
+    value: 0,
+    unit: "",
+    baseline: null,
+    ok: false,
+    why: `failed: ${f.why}`,
+  }));
 }
 
 // --- dictation biasing (DC-L7) ------------------------------------------------------------------
@@ -1018,6 +1058,8 @@ async function main(argv: string[]): Promise<number> {
   const platform = platformKey();
   const measures: Measure[] = [];
   const notes: string[] = [];
+  /** Stages that failed outright, as rows that are never ok. */
+  const stageFailures: Verdict[] = [];
 
   if (only.has("fleurs")) {
     // The download guard is off only here: `env` replaces the process environment, which has CI set.
@@ -1145,7 +1187,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   if (only.has("dictation")) {
-    const engines = await dictationStage(
+    const { out: engines, failed } = await dictationStage(
       {
         modelsDir,
         qwenModelsDir: flag("--qwen-models") ?? modelsDir,
@@ -1164,6 +1206,8 @@ async function main(argv: string[]): Promise<number> {
       const entry = { measured: `${day}, ${flag("--machine") ?? platform}`, engines };
       writeFileSync(tableFile, `${JSON.stringify(withPlatform(old, platform, entry), null, 2)}\n`);
     }
+    // An engine that failed leaves the others' numbers above; the night is red for it.
+    stageFailures.push(...failureVerdicts("dictation", failed));
   }
 
   if (only.has("biasing")) {
@@ -1200,7 +1244,7 @@ async function main(argv: string[]): Promise<number> {
         platforms: Record<string, Record<string, number>>;
       }
     ).platforms[platform] ?? {};
-  const verdicts = compare(measures, baselines);
+  const verdicts = [...compare(measures, baselines), ...stageFailures];
   const text = summary(`models-nightly on ${platform}`, verdicts, notes);
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY)
