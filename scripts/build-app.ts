@@ -93,8 +93,12 @@ export const WRAPPER_APP = join(BUILD_DIR, "akou.app");
 export const HUTCH_DMG = join(ROOT, "artifacts", `${PLATFORM}-akou.dmg`);
 export const RELEASE_DIR = join(ROOT, "dist", "release");
 
-export function releaseName(version: string): string {
-  return `akou-${version}-${PLATFORM}`;
+/**
+ * The release name of `platform`'s app: this machine's by default, since the app is built where it
+ * runs. The cask's DMG is always macOS's, whatever builds or tests it (`bump-cask.ts dmgName`).
+ */
+export function releaseName(version: string, platform: string = PLATFORM): string {
+  return `akou-${version}-${platform}`;
 }
 
 /** The release name of a Windows or Linux installer Hutch named `<platform>-akou-Setup.<ext>`. */
