@@ -21,7 +21,7 @@ Status words:
 - F0.7 mic from default or chosen device, survives route changes and sleep: **carried (M1)** with a device watch and fallback to the default when a pinned device vanishes.
 - F0.8 ScreenCaptureKit capture: **dropped** (see F0.1).
 - F0.9, I0.2 requested rate, bits and channels: **changed (M1)**. Devices open at their native rate; the file is always 48 kHz stereo Opus. No user-selectable rate, bits or channel count.
-- F0.11 stop when every tapped app exits: **carried (M1 on macOS, M3 on Windows)** for per-app capture, as a `health {state: tapped-apps-exited}` event plus an automatic stop with a toast.
+- F0.11 stop when every tapped app exits: **changed (M1 on macOS, M3 on Windows)** for per-app capture. The helper reports a `health {state: tapped-apps-exited}` event; the app never stops the call for it, but restarts the part as whole-computer capture and says so in a banner and a notification, so an app that quits or relaunches never drops the call.
 - F0.12 exact `--duration`: **dropped**. A UI recorder has Stop; the CLI can `sleep N && akou stop`.
 - F0.17 keep-awake: **changed (M1)**. Always on while recording, on every OS.
 - F0.18 SIGINT/SIGTERM graceful, SIGPIPE tolerated: **changed (M1)**. The helper handles signals; the app finalizes from its before-quit path because ElectroBun swallows signals. `akou quit` is the public stop.
