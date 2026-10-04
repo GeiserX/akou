@@ -165,6 +165,11 @@ export type AppToHelper =
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }
+  /**
+   * Enter came after insert `id` went out with no send key, before its receipt (DC-A4): the helper
+   * presses `send_key` after the receipt. Nothing for an insert no longer waiting.
+   */
+  | { type: "send"; id: string; send_key: Exclude<SendKey, "none"> }
   | { type: "focus"; target: Target }
   /** The tray's and the CLI's door (DC-G1, DC-G3): a latched session, as if the key were tapped. */
   | { type: "session.start" }
@@ -177,6 +182,11 @@ export type AppToHelper =
   | { type: "rebuild_mic"; device: string; prefer_built_in?: boolean }
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
+  /**
+   * `dictation.muteMedia` (DC-U8): while on, a session pauses the media players that are playing
+   * and its end plays again only those. Off until it arrives.
+   */
+  | { type: "pause_media"; on: boolean }
   /**
    * The Dictation page's meter (DC-U4, DC-N3): while on, the helper keeps the mic open and sends
    * `level` 20 times a second with no session.

@@ -283,7 +283,10 @@ describe("SV-E4: the retry schedule", () => {
     await Bun.sleep(300);
     expect(r.hits.length).toBe(5);
     expect(s.delivery(e.id)).toMatchObject({ attempts: 5, next_at: null, last_status: 410 });
-    expect(audit.map((a) => a.what)).toEqual(["webhook.disabled"]);
+    expect(audit.map((a) => a.what)).toEqual([
+      ...Array(4).fill("webhook.retry"),
+      "webhook.disabled",
+    ]);
   });
 
   test("410 stops every delivery then pending to that URL for that key, and no other key's", async () => {
@@ -368,6 +371,52 @@ describe("SV-E4: the retry schedule", () => {
     await until(() => s.delivery(e.id)?.state === "delivered", 3000, "the retry");
     // The first try answered 300 ms after it arrived; the retry waits its 200 ms after that.
     expect((at[1] as number) - (at[0] as number)).toBeGreaterThanOrEqual(490);
+  });
+
+  test("each failed try is logged with the event id, the try number, the status or error class and the next try's time, never the URL", async () => {
+    const r = receiver([503, 503, 204]);
+    const s = store();
+    const e = deliveredJob(s, `${r.url}?token=sekrit`);
+    const lines: { what: string; id: string; detail: string }[] = [];
+    const { d } = deliverer(s, {
+      audit: (what, x, detail) => lines.push({ what, id: x.event_id, detail }),
+    });
+    d.kick();
+    await until(() => s.delivery(e.id)?.state === "delivered", 3000, "the third try");
+    expect(lines.map((l) => `${l.what} ${l.id}`)).toEqual([
+      `webhook.retry ${e.id}`,
+      `webhook.retry ${e.id}`,
+      `webhook.done ${e.id}`,
+    ]);
+    const iso = "\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z";
+    expect(lines[0]?.detail).toMatch(
+      new RegExp(`^try 1 failed \\(status 503\\), next try at ${iso}$`),
+    );
+    expect(lines[1]?.detail).toMatch(
+      new RegExp(`^try 2 failed \\(status 503\\), next try at ${iso}$`),
+    );
+    // A transport error names its class: nothing listens on a stopped receiver's port.
+    const gone = receiver([204]);
+    await cleanups.pop()?.();
+    const s2 = store();
+    const e2 = deliveredJob(s2, `${gone.url}?token=sekrit`);
+    const lines2: string[] = [];
+    deliverer(s2, {
+      schedule: [0, 60_000],
+      audit: (_w, _x, detail) => lines2.push(detail),
+    }).d.kick();
+    await until(
+      () => (s2.delivery(e2.id)?.attempts ?? 0) === 1 && lines2.length === 1,
+      5000,
+      "the refused try",
+    );
+    expect(lines2[0]).toMatch(
+      new RegExp(`^try 1 failed \\((?!status )\\w+\\), next try at ${iso}$`),
+    );
+    for (const l of [...lines.map((x) => x.detail), ...lines2]) {
+      expect(l).not.toContain("sekrit");
+      expect(l).not.toContain("127.0.0.1");
+    }
   });
 
   test("after the last try the delivery is failed and audited", async () => {

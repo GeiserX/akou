@@ -159,7 +159,8 @@ describe("SV-U7: the server-mode page", () => {
       await page.click(`#jobs-table tr[data-id="${id}"] button.cancel`);
       expect((await waiting).body.status).toBe("cancelled");
       await until(
-        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 404,
+        // A cancel from the dashboard deletes the job: its id answers 410 gone from then on.
+        async () => (await asKey(rig, archive.key, "GET", `/jobs/${id}`)).status === 410,
         3000,
         "the job to be gone",
       );
@@ -191,19 +192,39 @@ describe("SV-U7: the server-mode page", () => {
       const idA = a.body.id as string;
       const idB = b.body.id as string;
       await until(async () => (await nameCell(idA))?.title === "Budget review", 3000, "the title");
-      // The title first, the id dim beside it.
+      // The title first, cut short when long, and the id dim under it (akou-dzm.12).
       expect(await nameCell(idA)).toMatchObject({ first: "job-title", id: idA });
+      expect(
+        await page.evaluate((id) => {
+          const td = document.querySelector(`#jobs-table tr[data-id="${id}"] td`) as HTMLElement;
+          const t = getComputedStyle(td.querySelector(".job-title") as HTMLElement);
+          const i = getComputedStyle(td.querySelector(".job-id") as HTMLElement);
+          return `${t.display} ${t.whiteSpace} ${t.textOverflow} ${i.display}`;
+        }, idA),
+      ).toBe("block nowrap ellipsis block");
       // An untitled job shows its id alone.
       await until(async () => (await nameCell(idB))?.text === idB, 3000, "the untitled row");
       expect((await nameCell(idB))?.title).toBeNull();
 
-      // Named over the API: the row follows on the next read, with no reload.
+      // Named over the API: the row follows on the next read, with no reload, and so does the
+      // job's open panel, though its state did not change (akou-dzm.12).
+      await page.click(`#jobs-table tr[data-id="${idB}"] button.open`);
+      await until(
+        async () => (await page.textContent("#job-detail h3")) === `Job ${idB}`,
+        3000,
+        "the open job",
+      );
       await page.evaluate(() => {
         (window as unknown as { stay: number }).stay = 1;
       });
       const r = await asKey(rig, archive.key, "PATCH", `/jobs/${idB}`, { title: "Standup notes" });
       expect(r.status).toBe(200);
       await until(async () => (await nameCell(idB))?.title === "Standup notes", 3000, "the rename");
+      await until(
+        async () => (await page.textContent("#job-detail h3")) === `Standup notes (${idB})`,
+        3000,
+        "the open panel's new title",
+      );
       expect(await page.evaluate(() => (window as unknown as { stay?: number }).stay)).toBe(1);
 
       const both = async () => [
@@ -231,7 +252,7 @@ describe("SV-U7: the server-mode page", () => {
       );
       await search("done", [true, true], "the state search");
       await search("failed", [false, false], "a state neither is in");
-      // Escape clears the search and every row comes back.
+      // Escape clears the search and every row comes back, in Chromium and in WebKit alike.
       await page.press("#jobs-search", "Escape");
       expect(await page.inputValue("#jobs-search")).toBe("");
       await until(async () => JSON.stringify(await both()) === "[true,true]", 3000, "every row");

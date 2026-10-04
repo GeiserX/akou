@@ -188,7 +188,7 @@ u32 frames | f32 samples[frames]
 
 **stdin** takes one command per line: `probe_call`, `rebuild_call`, `rebuild_mic`, `stop`, `pause`, `resume`, `mute`, `unmute`. Closing stdin means stop. Mute and pause are app concerns: the app zeroes mic packets (mute) or tells the helper to drop (pause) and records the anchors. The helper drops audio while paused, so the file does not grow; `mute` also zeroes the mic in the file.
 
-**Device list.** `akou-capture devices` prints one JSON line on stdout, `{"type":"devices","backend","inputs":[{"id","name","default"}],"outputs":[…]}`, read without opening a stream or asking for a permission; the ids are what `--mic <id>` takes. `AKOU_CAPTURE_FILE_ONLY=1` refuses it too.
+**Device list.** `akou-capture devices` prints one JSON line on stdout, `{"type":"devices","backend","inputs":[{"id","name","default"}],"outputs":[…],"apps":[{"id","name","pid"}]}`, read without opening a stream or asking for a permission; the input ids are what `--mic <id>` takes, and the app ids (the processes with audio: a bundle id on macOS, an executable name without `.exe` on Windows) what `--call app:<id>` takes. Where one app cannot be captured (Linux, a Windows build before process loopback), `apps` is replaced by `"apps_unavailable": "<why>"`. `AKOU_CAPTURE_FILE_ONLY=1` refuses it too. The API serves it as `GET /devices` and `GET /apps`.
 
 **File mode.** `--from-wav <stereo.wav>` replaces both devices with a WAV (left mic, right call) on any OS and runs the same aligner, Opus writer and protocol; `--speed` paces it and `--loop` repeats it. `AKOU_CAPTURE_FILE_ONLY=1` refuses device capture, so a test environment can never open a device or ask for a permission. A build with the `simulate` feature also takes `--simulate <fault>`, the fault list of the fake helper, which the trap tests run against the real helper.
 
@@ -359,6 +359,7 @@ Folder names are unique by construction. akou never writes into an existing call
 |---|---|---|
 | `call.created` | `id`, `schema`, `workspace`, `title`, `tz`, `user`, `akou`, `template?` | Always `seq` 1 |
 | `call.renamed` | `rev`, `title`, `by` | The call's title from now on; the highest `rev` wins over `call.created`'s. The folder keeps its first name |
+| `call.moved` | `rev`, `workspace`, `by` | The call's workspace from now on, written after its folder moved into that workspace's folder; the highest `rev` wins over `call.created`'s |
 | `call.ended` | `reason: stop \| interrupted \| abandoned` | `abandoned`: an `interrupted` call with no resume for 24 h, closed at the next app start |
 | `call.failed` | `stage`, `error` | A start that never captured; this is the only event for that outcome. The folder and any audio are kept and listed as failed |
 | `part.started` | `part`, `file`, `wallStart`, `monoStart`, `mic`, `call`, `capture` | The (wall, monotonic) anchor pair |
@@ -567,6 +568,8 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 `akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
+The table below is the design sketch and may lag behind the code. For what the binary accepts today, trust the generated [cli.md](cli.md) (CLI-31): every command's help page, which CI keeps in step with the command registry.
+
 | Command | Does |
 |---|---|
 | `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). `--live` sets this call's live model (`auto`, `parakeet`, `nemotron`) instead of `asr.live`, and `--review` and `--review-every` its second pass (`none`, `qwen`, `parakeet`; 30 to 600 s) instead of `asr.review.*` (section 3.1); `--live upgrade`, the old spelling, is `nemotron` with `--review qwen`. Exit 75 if a call is already recording; its `--json` names that call under `already_recording` (`id`, `title`, `workspace`, `startedAt`, `state`). `--attach` answers with that call instead, exit 0 and `attached: true`, and starts one only when none records. Exit 69 (`models_missing`) until the speech models are downloaded; `--without-models` records audio only |
@@ -594,7 +597,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 | `akou import hark-viewer DIR… [-w WORKSPACE]` | Converts predecessor call folders (all parts) into event logs |
 | `akou skill install [--harness claude\|codex] [--dir DIR]` | Installs `SKILL.md` into the harness's skills folder; refuses a skill whose version differs from the app's |
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
-| `akou self-update` | Planned, CLI tarball only (M4): replaces the binary after verifying its cosign signature. Exits 69 until then |
+| `akou self-update` | Planned, CLI tarball only (M4): replaces the binary after verifying the tarball's build attestation (CI-21); how it checks the attestation is designed with self-update. Exits 69 until then |
 
 Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission, 124 `akou wait` timed out.
 
@@ -609,9 +612,11 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `GET /status` | As `akou status`. Always 200 |
 | `POST /calls` `{workspace, title, template, call, mic, withoutModels, attach}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call, already_recording}` · with `attach`, `200 {call, attached: true, title, workspace, startedAt, state, part, folder}` for the call already recording · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
 | `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
-| `GET /calls?workspace&limit&failed` | Metadata list |
+| `GET /calls?workspace&limit&failed&updatedAfter&cursor` | Metadata list, each row with `updatedAt` (the last change to its transcript, notes, names, title, workspace or vocabulary corrections). With `updatedAfter` (milliseconds or ISO 8601) or `cursor`, only the calls changed after it, oldest change first, with the `cursor` to keep and `more` |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
-| `PATCH /calls/{id\|live\|last}` `{title}` | Renames the call at any time with a `call.renamed` event; 422 on an empty title, and the old name stays |
+| `PATCH /calls/{id\|live\|last}` `{title?, workspace?}` | Renames the call at any time with a `call.renamed` event, and an export akou wrote takes the new name; 422 on an empty title, and the old name stays. `workspace` moves a finished call's folder into that workspace and writes `call.moved`; 409 `live_call` while it records |
+| `DELETE /calls/{id}` · `POST /calls/{id}/restore` | Moves a finished call to `.trash/<workspace>/` under the recordings folder, out of every list, deleted for good at the first start after 30 days; 409 `live_call` while it records. Restore brings it back to its workspace unchanged |
+| `PATCH /calls/{id}/segments/{sid}` `{spk}` | Who spoke one line: `seg rev+1` with the new `spk` and `by`; the text, its raw form and every earlier revision stay. 422 for a microphone line. The words of a line are fixed with `POST /calls/{id}/fix` |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
@@ -629,7 +634,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/export` `{to?}` · `POST /calls/{id}/hooks` `{stage?}` · `POST /calls/{id}/finalize` | Hand-off, re-run. `to` is an absolute folder in place of `export.dir`; `409 export_not_configured` when neither is set, `409 not_ended` on a live call. `hooks` waits for the hooks and answers each run |
 | `POST /import/hark-viewer` `{dirs[], workspace?}` | Imports predecessor call folders (absolute paths); `422 not_imported` with the reasons when none could be |
 | `POST /share` · `DELETE /share` · `GET /share` | Sharing |
-| `GET /templates` · `GET /config` · `PATCH /config` | Settings |
+| `GET /templates` · `GET /templates/{name}` · `GET /config` · `PATCH /config` | Settings |
 | `POST /window` `{call?}` | Shows the window on a call (`akou open`). With no window (headless), answers `{url}`: the window in a browser, with a one-time code (section 6.3 rule 8) |
 | `POST /quit` | Clean shutdown |
 
@@ -658,7 +663,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 
 | Tool | Purpose |
 |---|---|
-| `akou_start {workspace?, title?, template?, call?, vocab?}` | Start; returns `{call, url}` once audio is being written. `vocab` is a list of call-scoped words (attendees, title terms). A call already recording is returned instead, with `attached: true`: the agent follows it, never a dead end |
+| `akou_start {workspace?, title?, template?, call?, mic?, vocab?, withoutModels?}` | Start; returns `{call, folder}` once audio is being written (`url` is always null: `akou_open_window` shows the call). `vocab` is a list of call-scoped words (attendees, title terms). A call already recording is returned instead, with `attached: true`: the agent follows it, never a dead end |
 | `akou_stop`, `akou_pause`, `akou_resume`, `akou_mute`, `akou_unmute`, `akou_restart {force?}` | Controls |
 | `akou_status` | Live or not, health, lag, models, provider, share |
 | `akou_context {question, call = "live", budget = 6000}` | The pack. The main tool for answering |
@@ -666,12 +671,16 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_search {query, call = "live", k = 6}` | BM25 hits with wall-time citations |
 | `akou_ask {question, call = "live"}` | Answer with akou's configured provider. Listed only when one is configured, and hidden when the provider is `harness` and the MCP client is that same harness. Its description says: prefer `akou_context`; `akou_ask` spawns another agent run on your subscription |
 | `akou_name_speaker {speaker, name}` · `akou_merge_speakers {a, b}` · `akou_unmerge_speaker {speaker}` | Speakers |
-| `akou_add_note {text}` · `akou_get_notes` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
+| `akou_add_note {text}` · `akou_get_notes` · `akou_edit_note {id, text, call = "live"}` · `akou_delete_note {id, call = "live"}` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
 | `akou_enhance_context {template?}` · `akou_enhanced_put {markdown, coversSeq}` · `akou_enhance {template?}` | The agent writes the enhancement, or asks akou's provider to |
+| `akou_template_list` · `akou_template_get {name}` | The note templates, and one as the notes would use it, the user's own file included |
+| `akou_finalize {call = "last", force?, model?}` | Start the final pass on an ended call |
 | `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best", cursor?}` (a page at a time, with `nextCursor`) · `akou_export {call}` | Past calls by name only |
 | `akou_rename_call {call = "live", title}` | Rename a call when the user names it |
+| `akou_share_status` · `akou_share_on {call?, notes?, expires?}` · `akou_share_off {call?}` | The read-only live link. No `bind`: where it listens is the `share.bind` setting |
+| `akou_open_window {call?}` · `akou_config_get {key?}` | Show the window; read the settings. No tool writes a setting |
 
 Tool descriptions carry the rules: cite wall time, never quote a draft line as fact, answer only from the live call unless a call is named, say when a call has ended.
 
@@ -714,7 +723,7 @@ Everything hark-viewer did is kept:
 | Relabel command | Replaced by whole-call diarization plus click-to-rename |
 | Third-party comparison transcript lane | Dropped; nothing read it |
 
-Built beyond hark-viewer: the notepad pane with time gutter; the ask box at the top of the right column with presets in a menu ("Catch me up", "Was my name mentioned?", "Decisions so far", "Action items", "What did <speaker> say?"), evidence cards within 300 ms, a streamed answer, clickable citations that scroll and play; the Notes pane under the ask box, with no Enhanced tab (Enhance is hidden, section 5.2); playback from any line of a saved call with mic/call balance, from a player bar that exists only when the call has a recording (a call that is recording cannot be played until it is saved); level meters for both channels; Fix on a line (the line's text in one field; the words it changes apply to the whole call, a term is learned into the call's and the workspace's vocabulary, a rewording is noted, with Undo; section 5.4), which a double-click on a word also opens (WINDOW W4.9); a "Words to review" badge for proposals; the decode list in force as the tooltip of the call header's line; a red **Shared live · N viewers** pill with Stop; hand-off status (export path, hook results, webhook); Settings (root folder, export folder, hooks, webhook, the provider, harness path, models, your name, hotkey) with the vocabulary as the Words page (WINDOW W9.2, W11.14); and onboarding with the model download (WINDOW W10.1, W10.2).
+Built beyond hark-viewer: the notepad pane with time gutter; the ask box at the top of the right column with presets in a menu ("Catch me up", "Was my name mentioned?", "Decisions so far", "Action items", "What did <speaker> say?", each a file the user can add to, PROGRAMMABILITY PG-F2), evidence cards within 300 ms, a streamed answer, clickable citations that scroll and play; the Notes pane under the ask box, with no Enhanced tab (Enhance is hidden, section 5.2); playback from any line of a saved call with mic/call balance, from a player bar that exists only when the call has a recording (a call that is recording cannot be played until it is saved); level meters for both channels; Fix on a line (the line's text in one field; the words it changes apply to the whole call, a term is learned into the call's and the workspace's vocabulary, a rewording is noted, with Undo; section 5.4), which a double-click on a word also opens (WINDOW W4.9); a "Words to review" badge for proposals; the decode list in force as the tooltip of the call header's line; a red **Shared live · N viewers** pill with Stop; hand-off status (export path, hook results, webhook); Settings (root folder, export folder, hooks, webhook, the provider, harness path, models, your name, hotkey) with the vocabulary as the Words page (WINDOW W9.2, W11.14); and onboarding with the model download (WINDOW W10.1, W10.2).
 
 Designed, not built yet: inline edit of a line's text that writes `seg rev+1 by:user` (a double-click opens the Fix instead, WINDOW W4.9); the provider per workspace, a default template and share defaults in Settings ([DESKTOP.md](ux/DESKTOP.md) DK-S6; the window has no template picker, WINDOW W3.21); the vocabulary's sources, check verdicts and file paths in that panel (WINDOW W9.2); a 3 s capture test per channel in onboarding (DESKTOP DK-O1, DK-O2); and, on Stop while the meeting app still holds the microphone, an inline "Call audio was active 12 s ago. Stop anyway?" with a 10 s undo (M2, WINDOW W2.4).
 
@@ -795,7 +804,7 @@ Every transport reads the same `follow(afterSeq)` as the window, filtered and re
 - **macOS signing.** Builds are unsigned for now: Hutch signs them ad hoc, and Developer ID signing and notarization move to a later milestone ([ROADMAP](ROADMAP.md#later-on-demand)). The release workflow reads the Developer ID secrets when they exist; with them, Hutch signs, notarizes and staples. It writes `Info.plist` from a fixed table and cannot emit `NSAudioCaptureUsageDescription`, so the `postBuild` and `postWrap` build hooks patch both bundles' plists (the inner app and the stable wrapper) **before** Hutch signs them; there is no re-sign step, because a seal made in a hook is broken when Hutch rewrites `version.json` afterwards. Hutch then signs every nested Mach-O file (the helper, `bun`, the `.node` addon and sherpa's dylibs) with the hardened runtime and the `com.apple.security.device.audio-input` entitlement, then each bundle. Bundle id `io.github.geiserx.akou`, stable across updates, so with a Developer ID signature the grants survive them; while the app is ad-hoc signed, macOS keys a grant on each build's own signature and an update may ask again ([getting-started.md](getting-started.md#permissions)). Hutch 0.24.3 copies neither the `.node` file nor its two dylibs, so `build.copy` lists all three.
 - **Windows signing.** SignPath Foundation (free for open source) or Azure Trusted Signing. Until one is in place, releases are unsigned with the SmartScreen step documented plainly.
 - **Linux.** No code signing; SHA-256 checksums and GitHub build attestations.
-- **Updates.** ElectroBun's updater from GitHub Releases. The updater asks the app first and never installs while a call is recording or a final pass is running. The Windows updater has an open truncation bug (#535), so "check for update" always also links the full installer. The CLI tarball updates with `akou self-update`, verifying a cosign signature.
+- **Updates.** ElectroBun's updater from GitHub Releases. The updater asks the app first and never installs while a call is recording or a final pass is running. The Windows updater has an open truncation bug (#535), so "check for update" always also links the full installer. The CLI tarball updates with `akou self-update`, verifying the tarball's build attestation (CI-21); how it checks the attestation is designed with self-update.
 - **Toolchain pins.** ElectroBun 2.0.1 with its bundled Bun 1.4.0 for the app runtime; Hutch pinned to the version M0 builds with; sherpa-onnx-node 1.13.x; Rust stable. Any `bun build --compile` output (the Linux CLI tarball, any macOS CLI binary) uses Bun 1.4.2 or newer, because 1.4.0 and 1.4.1 write an invalid Mach-O signature that macOS kills at exec ([oven-sh/bun#39764](https://github.com/oven-sh/bun/issues/39764)); the build script then runs `codesign -s - -f` and `codesign --verify --strict` on the binary, which fails the build if the signature is bad. Hutch's own HTTP client fails behind an `HTTPS_PROXY`; CI unsets it.
 - **Homebrew tap push.** The tap is a separate repository, and the default `GITHUB_TOKEN` cannot push to another repository. The release job pushes the cask bump with a fine-scoped token (a GitHub App or a PAT limited to the tap repository) stored as the `TAP_PUSH_TOKEN` secret. The release checklist confirms the secret exists, and a dry-run bump in CI fails without it.
 

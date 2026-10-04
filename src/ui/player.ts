@@ -82,11 +82,16 @@ export class Player {
     this.part = part;
     p.dataset.line = lineId;
     p.dataset.seek = String(a0);
+    // Play once the seek has landed: Linux WebKit's media backend left a seek started just before
+    // play() pending for good in about one run in eight, and the line never played.
+    const start = () => {
+      if (p.dataset.line === lineId) void p.play().catch(() => {});
+      this.drawPlay();
+    };
     const seek = () => {
+      p.addEventListener("seeked", start, { once: true });
       p.currentTime = a0;
       this.balance();
-      void p.play().catch(() => {});
-      this.drawPlay();
     };
     if (p.readyState >= 1) seek();
     else p.addEventListener("loadedmetadata", seek, { once: true });

@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DecodeError, decodeAudio } from "../src/main/asr/decode.ts";
+import { DecodeError, decodeAudio, ffmpegCommand } from "../src/main/asr/decode.ts";
 import { tempDir } from "./helpers.ts";
 
 /** A stand-in ffmpeg: records its arguments, then writes `samples` as f32le or fails. */
@@ -78,6 +78,17 @@ describe("[SV-P6] decoding through ffmpeg to 16 kHz mono float", () => {
     await expect(missing).rejects.toBeInstanceOf(DecodeError);
     await expect(missing).rejects.toThrow("ffmpeg is not installed");
     t.cleanup();
+  });
+
+  test("a Mac app's short PATH still finds Homebrew's ffmpeg; PATH wins when it has one", () => {
+    // A Finder-opened app has PATH=/usr/bin:/bin:/usr/sbin:/sbin: ffmpeg is not on it.
+    const nowhere = () => null;
+    const at = (p: string) => (q: string) => q === p;
+    expect(ffmpegCommand(nowhere, at("/opt/homebrew/bin/ffmpeg"))).toBe("/opt/homebrew/bin/ffmpeg");
+    expect(ffmpegCommand(nowhere, at("/usr/local/bin/ffmpeg"))).toBe("/usr/local/bin/ffmpeg");
+    expect(ffmpegCommand(() => "/usr/bin/ffmpeg", at("/opt/homebrew/bin/ffmpeg"))).toBe("ffmpeg");
+    // Positive control: none anywhere leaves `ffmpeg`, whose absence the decode reports.
+    expect(ffmpegCommand(nowhere, () => false)).toBe("ffmpeg");
   });
 
   test("a stream with no samples is a DecodeError, never an empty transcript", async () => {

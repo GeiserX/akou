@@ -97,6 +97,7 @@ export class DictationLog {
 
   constructor(
     readonly dir: string,
+    // clock: the default of an injected clock; tests pass their own.
     private readonly now: () => number = () => Date.now(),
   ) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });

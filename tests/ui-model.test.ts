@@ -8,7 +8,11 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { formatWall } from "../src/core/log/clock.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { AnthropicProvider } from "../src/main/llm/anthropic.ts";
+import { pickHarness } from "../src/main/llm/harness.ts";
+import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
 import {
+  askUnavailable,
   banner,
   type CallSummary,
   callHeadMeta,
@@ -25,7 +29,6 @@ import {
   noteMarks,
   playingLine,
   positionText,
-  presets,
   QUIET_AFTER_MS,
   RATES,
   REOPEN_AFTER_MS,
@@ -482,16 +485,48 @@ describe("citations", () => {
     // The answer's own ids win even when the speaker was renamed since.
     expect(resolveTimeCitation(v, minute, "Old name", ["l000001"])).toBe("l000001");
   });
+});
 
-  test("the presets, with one per named speaker", () => {
-    const p = presets(["Ben"]).map((x) => x.label);
-    expect(p).toEqual([
-      "Catch me up",
-      "Was my name mentioned?",
-      "Decisions so far",
-      "Action items",
-      "What did Ben say?",
+describe("[akou-dzm.19] the Ask card says why no assistant answered without a setting's key", () => {
+  // The reasons are the providers' own, so a provider that changes its words keeps this honest.
+  const reason = async (p: { available(): Promise<{ ok: boolean }> }) => {
+    const a = (await p.available()) as { ok: false; reason: string; kind: string };
+    return [a.reason, a.kind] as const;
+  };
+
+  test("a missing or signed-out assistant reads as one plain line pointing at Settings", async () => {
+    const none = pickHarness("auto", "", { claude: null, codex: null });
+    expect("none" in none).toBe(true);
+    const harness = (none as { none: string }).none;
+    expect(harness).toContain("provider.harnessPath");
+    const cases: (readonly [string, string])[] = [
+      [harness, "missing"],
+      await reason(new AnthropicProvider({ apiKey: "" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "", model: "m" })),
+      await reason(new OpenAiCompatibleProvider({ baseUrl: "http://127.0.0.1:1/v1", model: "" })),
+      ["Claude Code is not logged in (please run /login)", "auth"],
+      ["the server answered 401", "auth"],
+    ];
+    const said = cases.map(([r, k]) => askUnavailable(r, k));
+    expect(said).toEqual([
+      "Claude Code or Codex was not found. Install one, or choose another assistant in Settings.",
+      "The assistant has no API key. Add one in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "The assistant is not set up yet. Finish it in Settings, or choose another assistant.",
+      "Claude Code is not signed in. Sign in to it, or choose another assistant in Settings.",
+      "The assistant did not accept its key. Check it in Settings, or choose another assistant.",
     ]);
+    for (const s of said) expect(s).not.toMatch(/provider\.|https?:|\//);
+  });
+
+  test("any other reason is already plain and is said as it came", () => {
+    expect(
+      askUnavailable("Claude Code reported its usage limit is reached until 18:00", "exhausted"),
+    ).toBe("Claude Code reported its usage limit is reached until 18:00.");
+    expect(askUnavailable("still looking for Claude Code and Codex", "missing")).toBe(
+      "still looking for Claude Code and Codex.",
+    );
+    expect(askUnavailable(undefined, undefined)).toBe("");
   });
 });
 

@@ -125,17 +125,21 @@ export function emptyVocab(): VocabFile {
   return { version: VOCAB_VERSION, entries: [], rejected: [] };
 }
 
-/** The folded key two entries are the same term under. */
+/**
+ * The folded key two entries are the same term under. A term with no letter or digit (`@`, which
+ * only a dictation entry may be) is its own key, so two such terms are never one entry.
+ */
 export function termKey(term: string): string {
-  return tokenize(term)
-    .map((t) => t.folded)
-    .join(" ");
+  const words = tokenize(term).map((t) => t.folded);
+  return words.length > 0 ? words.join(" ") : term.trim();
 }
 
 /**
  * Why a term cannot be a vocabulary entry, or null when it can. The CLI exits 65 on a refusal.
+ * `scope` is the entry's: a dictation entry may write a symbol alone ("at sign" to `@`, DC-U5),
+ * which a call's transcript never could.
  */
-export function validateTerm(term: unknown): string | null {
+export function validateTerm(term: unknown, scope?: unknown): string | null {
   if (typeof term !== "string") {
     return "a term must be a quoted string (an unquoted `No`, `On` or `true` reads as a boolean)";
   }
@@ -143,7 +147,9 @@ export function validateTerm(term: unknown): string | null {
   if (term !== term.trim()) return "a term cannot start or end with spaces";
   if (/[\r\n\t]/.test(term)) return "a term is one line";
   if ([...term].length > MAX_TERM_LENGTH) return `a term is at most ${MAX_TERM_LENGTH} characters`;
-  if (termKey(term) === "") return "a term needs at least one letter or digit";
+  if (tokenize(term).length === 0 && scope !== "dictation") {
+    return "a term needs at least one letter or digit (a symbol alone, such as @, only as a dictation word)";
+  }
   return null;
 }
 
@@ -163,7 +169,7 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
   }
   const e = raw as Record<string, unknown>;
   for (const k of Object.keys(e)) if (!ENTRY_KEYS.has(k)) return fail(`unknown field "${k}"`);
-  const termError = validateTerm(e.term);
+  const termError = validateTerm(e.term, e.scope);
   if (termError) return fail(termError);
   const term = e.term as string;
   let heard: string[] = [];
@@ -415,6 +421,7 @@ export async function renameReplacing(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code ?? "";
       if (i >= tries - 1 || !RENAME_BUSY.has(code)) throw err;
+      // clock: a short backoff while another process holds the file.
       await new Promise((r) => setTimeout(r, Math.min(100, 5 * 2 ** i)));
     }
   }
@@ -563,11 +570,12 @@ const BANNER = /^===.*===$/;
  * comments and `=== ... ===` banners are skipped. An entry over the file's limits is imported
  * within them and listed in `skipped`: a heard form over `MAX_TERM_LENGTH` is left out, only the
  * first `MAX_HEARD` forms are kept, and a note is cut to `MAX_NOTE_LENGTH`. The user asked for the
- * import, so entries are confirmed.
+ * import, so entries are confirmed. With `scope: "dictation"` a line may be a symbol alone
+ * (`@ <= at sign`), as `validateTerm` allows.
  */
 export function importGlossary(
   text: string,
-  opts: { source: string; date: string; confirmed?: boolean },
+  opts: { source: string; date: string; confirmed?: boolean; scope?: "dictation" },
 ): ImportResult {
   const entries: VocabEntry[] = [];
   const byKey = new Map<string, VocabEntry>();
@@ -583,7 +591,7 @@ export function importGlossary(
     const caution = CAUTION.test(line);
     const [left, right] = body.includes("<=") ? body.split("<=", 2) : [body, undefined];
     const term = (left ?? "").trim();
-    const err = validateTerm(term);
+    const err = validateTerm(term, opts.scope);
     if (err) {
       skipped.push({ line: i + 1, text: rawLine, reason: err });
       return;

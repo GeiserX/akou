@@ -75,6 +75,7 @@ export interface WebhookResult {
 /** Delivers one webhook with its retries. Never throws. */
 export async function sendWebhook(o: WebhookOptions): Promise<WebhookResult> {
   const doFetch = o.fetch ?? fetch;
+  // clock: the default of an injected sleep; tests pass their own.
   const sleep = o.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
   const backoff = o.backoffMs ?? WEBHOOK_BACKOFF_MS;
   const headers = {

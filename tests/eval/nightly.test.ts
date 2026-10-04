@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
+import { memoryMb, pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -97,6 +97,18 @@ describe("a pinned download", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("a process's memory (the Qwen stage's flat-memory bound)", () => {
+  // Windows reads private bytes through PowerShell (the Windows gate, ASR-12); before that it read
+  // Linux's /proc there and threw, so the stage could not run on Windows at all.
+  // A cold Windows PowerShell start on a shared CI runner takes longer than bun test's 5 s default,
+  // which killed the child and left nothing to read; 30 s covers it.
+  test("this test's own process reads a plausible size on the OS it runs on", () => {
+    const mb = memoryMb(process.pid);
+    expect(mb).toBeGreaterThan(10);
+    expect(mb).toBeLessThan(64 * 1024);
+  }, 30_000);
 });
 
 describe("the committed baselines", () => {

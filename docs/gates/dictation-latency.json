@@ -1,0 +1,70 @@
+{
+  "_about": "Dictation's release-to-text time per engine (docs/ux/DICTATION.md DC-T3), p50 and p95 in ms over 10 dictations each of 3, 10 and 30 s of FLEURS speech, by `bun scripts/eval/nightly.ts --only dictation`, per platform as process.platform-process.arch. The Dictation page shows the 10 s p50 of this machine's platform as measured, and an estimate otherwise. The nightly runs the same stage on GitHub's runners and prints their numbers; those runners have no GPU worth the name, so a platform's entry here comes from a real machine, named in `measured`.",
+  "platforms": {
+    "darwin-arm64": {
+      "measured": "2026-10-02, an Apple M4 Mac mini with 16 GB, idle",
+      "engines": {
+        "live": {
+          "model": "nemotron-3.5-560",
+          "seconds": {
+            "3": {
+              "p50": 95,
+              "p95": 105,
+              "n": 10
+            },
+            "10": {
+              "p50": 182,
+              "p95": 186,
+              "n": 10
+            },
+            "30": {
+              "p50": 162,
+              "p95": 183,
+              "n": 10
+            }
+          }
+        },
+        "qwen": {
+          "model": "qwen3-asr-1.7b (metal)",
+          "seconds": {
+            "3": {
+              "p50": 376,
+              "p95": 509,
+              "n": 10
+            },
+            "10": {
+              "p50": 941,
+              "p95": 1983,
+              "n": 10
+            },
+            "30": {
+              "p50": 2571,
+              "p95": 3109,
+              "n": 10
+            }
+          }
+        },
+        "remote": {
+          "model": "akou serve on loopback (fast on metal)",
+          "seconds": {
+            "3": {
+              "p50": 153,
+              "p95": 194,
+              "n": 10
+            },
+            "10": {
+              "p50": 368,
+              "p95": 454,
+              "n": 10
+            },
+            "30": {
+              "p50": 927,
+              "p95": 1109,
+              "n": 10
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -12,7 +12,9 @@ import {
   mergeVocab,
   parseVocab,
   serializeVocab,
+  termKey,
   toFoldEntries,
+  validateTerm,
 } from "../src/main/vocab/files.ts";
 import { LogBuilder, T0 } from "./helpers.ts";
 
@@ -142,6 +144,33 @@ describe("DC-L6: the `scope: dictation` key of a vocabulary entry", () => {
     expect(correctDictation("dot com it is", m, isCommon)).toBe(".com it is");
     // A term that opens with a letter keeps its space (positive control).
     expect(correctDictation("the why fi box", m, isCommon)).toBe("the Wi-Fi box");
+  });
+
+  test("DC-U5: a symbol alone is a term for a dictation entry only, and is its own key", () => {
+    expect(validateTerm("@", "dictation")).toBeNull();
+    // The control: the call rule stands for any other entry.
+    expect(validateTerm("@")).toContain("a term needs at least one letter or digit");
+    expect(termKey("@")).not.toBe(termKey("#"));
+    expect(termKey("Vercel")).toBe("vercel");
+    const parsed = parseVocab(
+      [
+        "version: 1",
+        "entries:",
+        '  - term: "@"',
+        '    heard: ["at sign"]',
+        '    source: "user"',
+        "    confirmed: true",
+        '    added_at: "2026-10-02"',
+        '    scope: "dictation"',
+        '  - term: "#"',
+        '    heard: ["hash sign"]',
+        '    source: "user"',
+        "    confirmed: true",
+        '    added_at: "2026-10-02"',
+        "",
+      ].join("\n"),
+    );
+    expect(parsed.errors.map((e) => e.entry)).toEqual([1]);
   });
 
   test("an unconfirmed dictation entry does nothing", () => {
