@@ -52,7 +52,7 @@ changes ─┬─ lint ───────────────────
 
 ### 2.2 Nightly: `nightly.yml`
 
-Scheduled once a day on `main`, plus dispatch. Today `nightly.yml` holds `models-nightly`, the accelerated `soak` (TS-24) and the WebKit window leg (TS-14), which runs by hand until it passes. `models-nightly` scores the default recognizer, and Qwen3-ASR on macOS and Linux (ASR-5); the five-engine floor, language id, streaming and the vocabulary evaluation are still missing, and wait on their engines and set.
+Scheduled once a day on `main`, plus dispatch. Today `nightly.yml` holds `models-nightly` and the accelerated `soak` (TS-24); the WebKit window leg (TS-14) runs in `ci.yml`'s `ui` job under `ci-ok`. `models-nightly` scores the default recognizer, and Qwen3-ASR on macOS and Linux (ASR-5); the five-engine floor, language id, streaming and the vocabulary evaluation are still missing, and wait on their engines and set.
 
 - `models-nightly` on three OSes: every engine in the registry with the five-engine floor, the evaluation sets, WER, diarization error, language id, streaming numbers, latency percentiles, the replay recall floor, the vocabulary evaluation with its positive control ([TESTING §4.5](TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization)). Speed budgets gate the default engines only.
 - `clock-shift`: the unit and e2e suites a year in the future and in two unusual time zones.

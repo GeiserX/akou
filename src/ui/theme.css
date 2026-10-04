@@ -1186,11 +1186,13 @@ button.icon.on {
    the right; between them the composer row, the notices, the call's header, the transcript and
    the player bar stack, each in its own row so a hidden one leaves none. #layout lends its
    children to this grid. The side columns are sized in rem, which + and - never move (they set
-   --size, not the root font), so a larger transcript font never squeezes the transcript itself. */
+   --size, not the root font), so a larger transcript font never squeezes the transcript itself.
+   The player bar's row is min-content, not auto: WebKit kept an auto row at the bar's old height
+   when a resize changed how many rows the bar wraps to (a blank strip, or a clipped second row). */
 body.shell:not(.server) {
   display: grid;
   grid-template-columns: 13.75rem minmax(0, 1fr) 21.25rem;
-  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) min-content;
 }
 body.shell:not(.server) > * {
   grid-column: 2;

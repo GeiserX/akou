@@ -128,13 +128,27 @@ jobs:
 
   # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake
-  # provider. Only Chromium's headless shell is installed; nothing plays audio or opens a window.
+  # provider, once in Chromium's headless shell and once in Playwright's WebKit, the closest
+  # stand-in for the WKWebView and WebKitGTK the app ships (docs/TESTING.md TS-14), each engine
+  # with its own floor. Nothing plays audio or opens a window.
   ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            install: --only-shell chromium
+            floor: ui
+          - browser: webkit
+            install: webkit
+            floor: ui-webkit
+    name: ui (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
     env:
+      AKOU_UI_BROWSER: ${{ matrix.browser }}
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,18 +156,18 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The browser build pinned by playwright-core, headless shell only, with its system libraries.
-      - run: bunx playwright-core install --with-deps --only-shell chromium
-      # Every parity screen in both themes, for review (TS-15c): saved, never compared. A repeat
-      # dispatch saves none.
+      # The browser build pinned by playwright-core, with its system libraries.
+      - run: bunx playwright-core install --with-deps ${{ matrix.install }}
+      # Every parity screen in both themes, for review (TS-15c), from the Chromium leg: saved, never
+      # compared. A repeat dispatch saves none.
       - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
         env:
-          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && 'ui-shots' || '' }}
-      - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && matrix.browser == 'chromium' && 'ui-shots' || '' }}
+      - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: junit-ui
+          name: junit-ui-${{ matrix.browser }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
           include-hidden-files: true
           path: .junit-ui.xml

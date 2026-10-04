@@ -492,6 +492,20 @@ describe("the notes pane is just Notes (W1.1, TS-15)", () => {
           await force(false);
           expect(await hiddenOffenders(page)).toEqual([]);
           expect(await watchedOffenders(page)).toEqual([]);
+          // A hidden page inside the hidden `#pages` host cannot show, whatever its own display
+          // reads: WebKit leaves a `display: none` subtree's computed style stale, so only the
+          // outermost hidden element is judged.
+          const nested = (on: boolean) =>
+            page.evaluate((show) => {
+              const p = document.getElementById("page-settings") as HTMLElement;
+              if (show) p.style.setProperty("display", "block", "important");
+              else p.style.removeProperty("display");
+            }, on);
+          expect(await page.evaluate(() => document.getElementById("pages")?.hidden)).toBe(true);
+          await nested(true);
+          expect(await hiddenOffenders(page)).toEqual([]);
+          expect(await watchedOffenders(page)).toEqual([]);
+          await nested(false);
         },
       );
     },
@@ -2159,6 +2173,12 @@ describe("copy the transcript so far (W12.2)", () => {
     return md.slice(md.indexOf("## Transcript"));
   };
   const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+  /**
+   * The page's own idea of a Mac, read as the app reads it (platform and user agent): Playwright's
+   * WebKit sends a Mac user agent on Linux too, so the host's ControlOrMeta would press the wrong key.
+   */
+  const pageIsMac = (page: Page) =>
+    page.evaluate(() => /mac/i.test(`${navigator.platform} ${navigator.userAgent}`));
 
   test(
     "[W12.2] during a call, Mod+Shift+C copies the transcript as the export's Transcript section",
@@ -2172,8 +2192,10 @@ describe("copy the transcript so far (W12.2)", () => {
         await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
         await rig.write(id, seg("l000002", "which region", { spk: "c2" }));
         await until(async () => (await rowIds(page)).length === 2, 5000, "two rows");
+        const mac = await pageIsMac(page);
+        const mod = mac ? "Meta" : "Control";
         await page.click("#scroller");
-        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await page.keyboard.press(`${mod}+Shift+C`);
         await until(async () => (await clipboard(page)) !== "before", 5000, "the copy");
         const copied = await clipboard(page);
         expect(copied).toBe(await section(rig, id));
@@ -2182,7 +2204,7 @@ describe("copy the transcript so far (W12.2)", () => {
         // The key's scope is the window: it copies while a note is being typed too.
         await page.evaluate(() => navigator.clipboard.writeText("before"));
         await page.click("#note-input");
-        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await page.keyboard.press(`${mod}+Shift+C`);
         await until(
           async () => (await clipboard(page)) !== "before",
           5000,
@@ -2191,8 +2213,7 @@ describe("copy the transcript so far (W12.2)", () => {
         expect(await clipboard(page)).toBe(copied);
         // On a layout where the key is not "c" (Cyrillic "с" here), the physical C key still copies.
         await page.evaluate(() => navigator.clipboard.writeText("before"));
-        await page.evaluate(() => {
-          const mac = /mac/i.test(navigator.platform);
+        await page.evaluate((mac) => {
           document.getElementById("scroller")?.dispatchEvent(
             new KeyboardEvent("keydown", {
               key: "С",
@@ -2203,13 +2224,11 @@ describe("copy the transcript so far (W12.2)", () => {
               bubbles: true,
             }),
           );
-        });
+        }, mac);
         await until(async () => (await clipboard(page)) !== "before", 5000, "the copy on Cyrillic");
         expect(await clipboard(page)).toBe(copied);
         // The button names the chord with the keys this computer has, never the doc's "Mod".
-        const chord = await page.evaluate(() =>
-          /mac/i.test(navigator.platform) ? "⌘⇧C" : "Ctrl+Shift+C",
-        );
+        const chord = mac ? "⌘⇧C" : "Ctrl+Shift+C";
         expect(await page.getAttribute("#copy-transcript", "title")).toBe(
           `Copy the transcript so far as Markdown (${chord})`,
         );
