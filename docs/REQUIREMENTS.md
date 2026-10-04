@@ -11,7 +11,7 @@ Status words:
 
 ## Capture sources and channels
 
-- F0.0, I0.0 five sources (mic, chosen device, all system audio, named apps, everything except named apps): **changed (M1)**. `--call system | app:<id> | none` and `--mic <id> | none`. "Exclude named apps" becomes automatic exclusion of akou's own audio; a user exclusion list comes with per-app capture on each OS.
+- F0.0, I0.0 five sources (mic, chosen device, all system audio, named apps, everything except named apps): **changed (M1)**. `--call system | app:<id> | none` and `--mic <id> | none`. Every door checks the call scope with the helper's own rule (`capture.call`, `POST /calls` `call`), so a malformed one is refused when given, never at the next start, and one already saved loads as `system` with a warning. "Exclude named apps" becomes automatic exclusion of akou's own audio; a user exclusion list comes with per-app capture on each OS.
 - F0.1, I0.1 two backends, ScreenCaptureKit and Core Audio, with `auto`: **dropped**. Core Audio process tap only on macOS. SCKit needs a screen-recording grant, stops on lock, and its automatic selection once failed with no fallback.
 - F0.2 private, unmuted, global-or-per-app process tap: **carried (M1)**, ported to Rust in the capture helper; hark's design is the reference.
 - F0.3 tap read through a private aggregate; mic as clock master: **changed (M1)**. Tap-only aggregate. The mic is an independent stream; alignment is by host timestamp. hark's aggregate is the M0 fallback if the drift test fails.

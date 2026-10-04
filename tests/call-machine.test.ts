@@ -184,6 +184,28 @@ describe("start", () => {
     expect((await p).ok).toBe(true);
   });
 
+  test("a per-app start the helper finds no app for says what to do; a system one keeps the helper's text", async () => {
+    const s = setup();
+    s.engine.onStart = (x) => x.exit(66);
+    const r = await s.mgr.start({ workspace: "work", call: "app:com.example.nope" });
+    expect(s.engine.last.opts.call).toBe("app:com.example.nope");
+    expect(r).toMatchObject({
+      ok: false,
+      status: 503,
+      code: "capture_failed",
+      error:
+        'the capture helper device not found before capturing (code 66). Start the app and let it play sound before recording it, or record the whole computer instead: call "system"',
+    });
+    // Control: the same exit for a whole-computer call is a missing device, not a missing app.
+    const sys = await s.mgr.start({ workspace: "work", call: "system" });
+    expect(sys).toMatchObject({
+      ok: false,
+      status: 503,
+      code: "capture_failed",
+      error: "the capture helper device not found before capturing (code 66)",
+    });
+  });
+
   test("[T2.49] a helper exiting 77 is 403 permission; the folder is kept, listed as failed, never live", async () => {
     const s = setup();
     const ok = await started(s, "Earlier");
