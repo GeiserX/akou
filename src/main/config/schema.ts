@@ -272,6 +272,13 @@ export const SETTINGS = {
     default: 1,
     doc: "File jobs run at once. Each running job has its own Worker with its models loaded and `asr.threads` threads, so keep this times `asr.threads` under the cores, and the memory for that many copies of the model.",
   },
+  "server.model_idle_minutes": {
+    type: "integer",
+    min: 0,
+    max: 10080,
+    default: 60,
+    doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. The desktop app keeps none: it lets a model go as soon as no queued job needs it. 0: let go as soon as no queued job needs it.",
+  },
   "server.queue_max": {
     type: "integer",
     min: 0,
@@ -884,7 +891,7 @@ export const SETTINGS = {
   "dictation.muteMedia": {
     type: "boolean",
     default: false,
-    doc: "Pause playing media while you dictate, through the system's media controls, and resume only what akou paused.",
+    doc: "Pause playing media while you dictate, through the system's media controls, and resume only what akou paused. Linux, and Windows (not yet checked with a real player); macOS lets no app see what another one is playing, so on a Mac it does nothing yet.",
   },
   "dictation.learn": {
     type: "string",

@@ -497,6 +497,8 @@ async function runDictate(): Promise<void> {
     ax ? (ax.findLast((l) => l.at <= ms)?.target ?? UNKNOWN_TARGET) : target;
   /** The sessions' targets captured at key-down, by session id, for the insert's guards. */
   const captured = new Map<string, Target>();
+  /** The send key of each paste still waiting for its receipt, which a late `send` sets (DC-A4). */
+  const waiting = new Map<string, string>();
   /** What a `focus` brought forward: it has the keyboard until the next session. */
   let focused: Target | null = null;
   const t0 = performance.now();
@@ -710,7 +712,10 @@ async function runDictate(): Promise<void> {
         // The app's target is the one to compare (the draft box names the session's).
         const cap = c.target ?? captured.get(c.id) ?? target;
         const refused = ax ? axRefusal(cap, focused ?? targetAt(clock)) : null;
+        waiting.set(c.id, c.send_key);
         setTimeout(() => {
+          const sendKey = waiting.get(c.id) ?? c.send_key;
+          waiting.delete(c.id);
           machine?.settled();
           const failed = flag("--focus-change") && !focused ? "focus-changed" : refused;
           if (failed && c.method !== "clipboard" && failed !== "secure") {
@@ -723,8 +728,8 @@ async function runDictate(): Promise<void> {
           }
           // The send key only after the target read the text, and before the receipt is
           // reported, as the real inserter (DC-S2): whoever sees `inserted` sees the send too.
-          if (c.method !== "clipboard" && c.send_key !== "none")
-            log(opt("--inserter-log"), { type: "send", key: c.send_key, at: now() });
+          if (c.method !== "clipboard" && sendKey !== "none")
+            log(opt("--inserter-log"), { type: "send", key: sendKey, at: now() });
           say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
           // DC-L2's read-back: one answer per paste that asked for it, never after the clipboard.
           if (c.read_field === true && c.method !== "clipboard") {
@@ -735,6 +740,10 @@ async function runDictate(): Promise<void> {
         }, receiptMs);
         return;
       }
+      case "send":
+        // An Enter after the insert went out (DC-A4): pressed after the receipt, if one waits.
+        if (waiting.has(c.id)) waiting.set(c.id, c.send_key);
+        return;
       case "session.start": {
         // The tray's and the CLI's door: a latched session, as if the key were tapped. Its audio
         // runs on the key clock from here, as long as the session lasts in real time.

@@ -113,6 +113,13 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     expect([fast.status, fast.body.error]).toEqual([503, "models_missing"]);
   });
 
+  test("GET /dictation lists the engines a retry can use: fast is not one without Parakeet", async () => {
+    const engines = ((await rig.api("GET", "/dictation")).body as Body).engines as string[];
+    expect(engines).not.toContain("fast");
+    // Nemotron is here, so the streaming engine is.
+    expect(engines).toContain("live");
+  });
+
   test("Parakeet is a model like any other: Download fetches it, and Remove deletes it", async () => {
     const got = await rig.api("POST", "/models/pull", { model: RECOGNIZER });
     expect(got.status).toBeLessThan(300);
@@ -120,9 +127,10 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     while ((await listed())[RECOGNIZER].state !== "ready" && Date.now() < deadline)
       await Bun.sleep(50);
     expect((await listed())[RECOGNIZER]).toMatchObject({ state: "ready", default: false });
-    // Positive control: with Parakeet here, fast dictates.
+    // Positive control: with Parakeet here, fast dictates, and a retry can use it.
     const fast = await dictate(rig, "fast");
     expect([fast.status, fast.body.engine]).toEqual([200, "fast"]);
+    expect(((await rig.api("GET", "/dictation")).body as Body).engines).toContain("fast");
     const del = await rig.api("DELETE", `/models/${RECOGNIZER}`);
     expect(del.status).toBe(200);
     expect(existsSync(join(models, RECOGNIZER))).toBe(false);

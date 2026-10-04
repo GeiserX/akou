@@ -27,21 +27,25 @@ export function twoStep(
   act: () => void,
 ): HTMLButtonElement {
   const armedAt = o.armed.get(o.id);
+  // clock: a confirm button stays armed for 5 s of real time.
   const live = armedAt !== undefined && Date.now() - armedAt < 5000;
   const b = h("button", { class: o.class, type: "button" }, live ? o.confirm : o.label);
   // `armed` marks the press that acts, so it does not read like the first.
   b.classList.toggle("armed", live);
   b.addEventListener("click", () => {
     const at = o.armed.get(o.id);
+    // clock: a confirm button stays armed for 5 s of real time.
     if (at !== undefined && Date.now() - at < 5000) {
       o.armed.delete(o.id);
       b.classList.remove("armed");
       act();
       return;
     }
+    // clock: a confirm button stays armed for 5 s of real time.
     o.armed.set(o.id, Date.now());
     b.textContent = o.confirm;
     b.classList.add("armed");
+    // clock: a confirm button stays armed for 5 s of real time.
     setTimeout(() => {
       if (o.armed.get(o.id) === undefined || b.textContent !== o.confirm) return;
       o.armed.delete(o.id);

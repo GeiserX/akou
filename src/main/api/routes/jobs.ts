@@ -86,6 +86,24 @@ export function jobsOf(c: RouteContext<ApiApp>): JobService {
   return j;
 }
 
+/**
+ * The answer for a job id the caller cannot read: 410 `gone` naming the retain window when the
+ * caller once had the job and it was deleted or expired, so a driver resubmits on purpose; 404
+ * for an id the server never held for this key, so a typo is never read as an expiry.
+ */
+export function noJob(jobs: JobService, who: Identity, id: string): HttpError {
+  if (jobs.gone(who, id)) {
+    const days = jobs.retainDays();
+    return new HttpError(
+      410,
+      "gone",
+      `job ${id} is gone: it was deleted, or it passed the ${days} days akou keeps a job from its creation (server.retain_days)`,
+      { id, retain_days: days },
+    );
+  }
+  return new HttpError(404, "not_found", `no job ${id}`);
+}
+
 function bad(field: string, message: string): HttpError {
   return new HttpError(422, "bad_field", message, { field });
 }
@@ -563,18 +581,18 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id",
     {
       id: "jobs.get",
-      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (seconds of the file transcribed so far) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       query: { wait: WAIT },
       ok: 200,
-      errors: { 404: ["not_found"] },
+      errors: { 404: ["not_found"], 410: ["gone"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
       const wait = waitParam(c);
       const j = await jobs.wait(caller(c), c.params.id as string, wait * 1000, c.req.signal);
-      if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      if (!j) throw noJob(jobsOf(c), caller(c), c.params.id as string);
       // A job deleted while the request waited answers its final state, once.
       return json(200, "seq" in j ? jobs.view(j) : { id: j.id, status: j.status });
     },
@@ -590,14 +608,14 @@ export function jobRoutes(r: Router<ApiApp>): void {
       params: { id: JOB_ID },
       body: { title: "string" },
       ok: 200,
-      errors: { 404: ["not_found"], 422: ["bad_field"] },
+      errors: { 404: ["not_found"], 410: ["gone"], 422: ["bad_field"] },
     },
     async (c) => {
       const jobs = jobsOf(c);
       const b = await c.body<{ title: string }>();
       const title = checkTitle(b.title);
       const j = jobs.rename(caller(c), c.params.id as string, title);
-      if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      if (!j) throw noJob(jobsOf(c), caller(c), c.params.id as string);
       return json(200, jobs.view(j));
     },
   );
@@ -607,7 +625,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/result",
     {
       id: "jobs.result",
-      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done.",
+      doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done; 410 `gone` once the job was deleted or passed `server.retain_days`.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       query: {
@@ -619,11 +637,11 @@ export function jobRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
-      errors: { 404: ["not_found"], 409: ["not_done"] },
+      errors: { 404: ["not_found"], 409: ["not_done"], 410: ["gone"] },
     },
     (c) => {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
-      if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      if (!j) throw noJob(jobsOf(c), caller(c), c.params.id as string);
       const format = c.query.oneOf<ResultFormat>("format");
       if (j.status !== "done" || !j.result) {
         throw new HttpError(409, "not_done", `the job is ${j.status}`, {
@@ -640,15 +658,15 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id",
     {
       id: "jobs.delete",
-      doc: "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed.",
+      doc: "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed. From then on its id answers 410 `gone`.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,
-      errors: { 404: ["not_found"] },
+      errors: { 404: ["not_found"], 410: ["gone"] },
     },
     (c) => {
       const gone = jobsOf(c).remove(caller(c), c.params.id as string);
-      if (!gone) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      if (!gone) throw noJob(jobsOf(c), caller(c), c.params.id as string);
       return json(200, { ...gone, deleted: true });
     },
   );

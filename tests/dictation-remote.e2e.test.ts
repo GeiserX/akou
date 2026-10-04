@@ -740,9 +740,11 @@ function packets(samples: Float32Array, ms = 100): Float32Array[] {
 /**
  * The network with an uplink of `bytesPerSecond`: every request body, a form or a stream, leaves
  * no faster than that. A link idle for a moment starts again from now, as a real one does.
+ * `sent()` counts the bytes that have left so far, over every request.
  */
-function slowLink(bytesPerSecond: number): typeof fetch {
-  return (async (input: string | URL | Request, init?: RequestInit) => {
+function slowLink(bytesPerSecond: number): typeof fetch & { sent: () => number } {
+  let sent = 0;
+  const link = (async (input: string | URL | Request, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     let body = init?.body as ReadableStream<Uint8Array> | FormData;
     if (body instanceof FormData) {
@@ -767,12 +769,29 @@ function slowLink(bytesPerSecond: number): typeof fetch {
           free += (part.length / bytesPerSecond) * 1000;
           if (free - now > 2) await Bun.sleep(free - now);
           c.enqueue(part);
+          sent += part.length;
         }
       },
       cancel: (why) => src.cancel(why),
     });
     return fetch(input, { ...init, headers, body: throttled, duplex: "half" } as RequestInit);
   }) as typeof fetch;
+  return Object.assign(link, { sent: () => sent });
+}
+
+/**
+ * DC-R6's wall-clock bound runs in the nightly only (`AKOU_TIMING=1`, nightly.yml): on a shared
+ * runner it read 300 to 1800 ms on Windows for code that sends the same bytes. The PR check counts
+ * the bytes that leave after release instead, which no stall changes.
+ */
+const TIMING = process.env.AKOU_TIMING === "1";
+
+/** Waits, with a deadline, until the link has sent at least `bytes`. */
+async function drained(link: { sent: () => number }, bytes: number): Promise<void> {
+  for (const t0 = performance.now(); link.sent() < bytes; await Bun.sleep(5)) {
+    if (performance.now() - t0 > 20_000)
+      throw new Error(`the link sent ${link.sent()} of ${bytes} bytes before release`);
+  }
 }
 
 describe("DC-R6: the audio goes to the remote during the hold", () => {
@@ -847,7 +866,7 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
     }
   });
 
-  test("over a slow link, a 20 s session's release-to-text is within 200 ms of a 3 s session's; sent in one request at release it is not", async () => {
+  test("over a slow link, a 20 s session sends no more after release than a 3 s session; sent in one request at release it does", async () => {
     const rig = await appRig({
       settings: { ...SERVER },
       jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
@@ -858,30 +877,41 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
       const link = slowLink(800_000);
       const e = engine({ url: `http://127.0.0.1:${rig.port}`, key }, { fetch: link });
       const session = (seconds: number) => concat(HELLO, silence(seconds - HELLO.length / 16000));
+      /** Release to text in ms, and the bytes the link sent after release. */
       const streamed = async (seconds: number) => {
         const samples = session(seconds);
         const hold = e.open();
+        const before = link.sent();
         for (const p of packets(samples)) {
           hold.push(p);
           await Bun.sleep(10);
         }
-        const t0 = performance.now();
+        // The hold is over once its audio has left: 2 bytes a sample.
+        await drained(link, before + samples.length * 2);
+        const [t0, at] = [performance.now(), link.sent()];
         const r = await hold.decode(samples);
         expect(r).toMatchObject({ engine: "remote" });
         expect(r.text).toContain("hello world");
-        return performance.now() - t0;
+        return { ms: performance.now() - t0, after: link.sent() - at };
       };
       const atRelease = async (seconds: number) => {
-        const t0 = performance.now();
+        const [t0, at] = [performance.now(), link.sent()];
         const r = await e.decode(session(seconds));
         expect(r).toMatchObject({ engine: "remote" });
-        return performance.now() - t0;
+        return { ms: performance.now() - t0, after: link.sent() - at };
       };
       const [s3, s20] = [await streamed(3), await streamed(20)];
-      expect(Math.abs(s20 - s3)).toBeLessThan(200);
-      // The positive control: the same link makes the one request at release 200 ms slower.
+      // At release only the body's end is left, whatever the hold's length.
+      expect(s20.after).toBe(s3.after);
+      expect(s3.after).toBeLessThan(1024);
+      // The positive control: in one request at release, the 20 s session's 17 s more of audio
+      // (32 KB a second) all leaves after release.
       const [o3, o20] = [await atRelease(3), await atRelease(20)];
-      expect(o20 - o3).toBeGreaterThan(200);
+      expect(o20.after - o3.after).toBeGreaterThanOrEqual(17 * 32_000);
+      if (TIMING) {
+        expect(Math.abs(s20.ms - s3.ms)).toBeLessThan(200);
+        expect(o20.ms - o3.ms).toBeGreaterThan(200);
+      }
     } finally {
       await rig.close();
     }
@@ -1162,7 +1192,7 @@ describe("DC-R6: a spoken session streams to the remote while the key is held", 
     expect(sent.some((c) => c.type === "insert")).toBe(false);
   });
 
-  test("against the server rig over a slow link, a 20 s hold's release-to-text is within 200 ms of a 3 s hold's; an engine that cannot stream is not", async () => {
+  test("against the server rig over a slow link, a 20 s hold sends no more after release than a 3 s hold; an engine that cannot stream does", async () => {
     const rig = await appRig({
       settings: { ...SERVER },
       jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
@@ -1170,27 +1200,36 @@ describe("DC-R6: a spoken session streams to the remote while the key is held", 
     cleanups.push(() => rig.close());
     const key = (await newKey(rig, "dictation")).key;
     // 800 KB/s up; the hold's 32 KB/s of audio is played here at ten times real time.
-    const remote = engine(
-      { url: `http://127.0.0.1:${rig.port}`, key },
-      { fetch: slowLink(800_000) },
-    );
+    const link = slowLink(800_000);
+    const remote = engine({ url: `http://127.0.0.1:${rig.port}`, key }, { fetch: link });
     const audio = (seconds: number) => concat(HELLO, silence(seconds - HELLO.length / 16000));
     let n = 0;
+    /** Release to text in ms, and the bytes the link sent after release. */
     const releaseToText = async (e: DictationEngine, seconds: number) => {
       const { s, inserted } = session(e);
       const id = String(++n);
-      await hold(s, audio(seconds), id, 10);
-      const t0 = performance.now();
+      const before = link.sent();
+      const samples = audio(seconds);
+      await hold(s, samples, id, 10);
+      // A streaming engine's hold is over once its audio has left: 2 bytes a sample.
+      if (e.open) await drained(link, before + samples.length * 2);
+      const [t0, at] = [performance.now(), link.sent()];
       s.onMessage({ type: "session.ended", id, reason: "release" });
       await until(() => inserted() !== undefined, "the insert", 20_000);
       expect(inserted()?.text).toContain("hello world");
-      return performance.now() - t0;
+      return { ms: performance.now() - t0, after: link.sent() - at };
     };
     const [s3, s20] = [await releaseToText(remote, 3), await releaseToText(remote, 20)];
-    expect(Math.abs(s20 - s3)).toBeLessThan(200);
+    // At release only the body's end is left, whatever the hold's length.
+    expect(s20.after).toBe(s3.after);
+    expect(s3.after).toBeLessThan(1024);
     // The positive control: the same engine without `open` sends the whole buffer at release.
     const atRelease: DictationEngine = { name: "remote", decode: (b, o) => remote.decode(b, o) };
     const [o3, o20] = [await releaseToText(atRelease, 3), await releaseToText(atRelease, 20)];
-    expect(o20 - o3).toBeGreaterThan(200);
+    expect(o20.after - o3.after).toBeGreaterThanOrEqual(17 * 32_000);
+    if (TIMING) {
+      expect(Math.abs(s20.ms - s3.ms)).toBeLessThan(200);
+      expect(o20.ms - o3.ms).toBeGreaterThan(200);
+    }
   });
 });

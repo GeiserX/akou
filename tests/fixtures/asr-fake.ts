@@ -66,6 +66,9 @@ export const WORDS: readonly { sound: string; heard?: string; term?: string }[] 
   { sound: "example" },
   { sound: "dot" },
   { sound: "com" },
+  // A symbol alone as a dictation replacement (DC-U5): "at sign" to @.
+  { sound: "at" },
+  { sound: "sign" },
 ];
 
 export const wordFreq = (i: number) => 300 + 60 * i;

@@ -18,6 +18,7 @@ import type { ExportResult } from "../handoff/export.ts";
 import type { HookReport } from "../handoff/hooks.ts";
 import type { ImportResult } from "../import/hark-viewer.ts";
 import type { Provider } from "../llm/provider.ts";
+import type { Preset } from "../notes/presets.ts";
 import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
@@ -88,6 +89,8 @@ export interface ApiApp {
   askSessions?(): SessionStore | undefined;
   /** The shipped templates, replaced or added to by the user's folder. */
   templates(): Template[];
+  /** The shipped ask presets, replaced or added to by the user's folder, read on every call. */
+  presets(): Preset[];
   /** The speech models on disk, or the download in progress (`GET /models`). */
   models(): ModelsStatus;
   /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
@@ -183,6 +186,16 @@ export interface ApiApp {
   } | null;
   /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
   exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
+  /** `PATCH /calls/{id} {workspace}`: the folder moves, then a `call.moved` (PG-A4). */
+  moveCall(
+    id: string,
+    workspace: string,
+    by: string,
+  ): Promise<Outcome<{ workspace: string; seq: number | null }>>;
+  /** `DELETE /calls/{id}`: the call's folder goes to the trash, kept 30 days (PG-A4). */
+  trashCall(id: string): Promise<Outcome<{ dir: string }>>;
+  /** `POST /calls/{id}/restore`: a trashed call back where it was, unchanged (PG-A4). */
+  restoreCall(id: string): Promise<Outcome<{ dir: string; workspace: string }>>;
   /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */
   runHooks(id: string, stages?: readonly HookStage[]): Promise<Outcome<{ runs: HookReport[] }>>;
   /** `POST /import/hark-viewer`: predecessor call folders into calls. */

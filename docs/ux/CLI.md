@@ -70,7 +70,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 |---|---|---|
 | Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--live MODEL] [--review MODEL] [--review-every S] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
-| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
+| Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `ask --preset NAME [--speaker NAME]` and `presets list` (PG-F2) · `search "Q" [-k N]` · `events [-f] [--type T,…]` (PG-S3) · `wait --for STAGE [--timeout 30m]` (PG-S5) | has |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
@@ -302,7 +302,7 @@ The window's copy button already has a terminal form that needs nothing new: `ak
 | CLI-34 | `akou mark [LABEL]`: mark this moment in the notepad, with the wall time | P2 | Otter, tl;dv, Fathom; PRINCIPLES rule 11 | Writes the same mark event the window's mark key writes ([WINDOW.md](WINDOW.md)), at the current wall time, on the live call; with nothing live it exits 3 | missing |
 | CLI-11 | `akou api METHOD PATH [-f key=value] [--input FILE]`: any route with the token added and the proxy bypassed | P2 | `gh api` | `akou api GET /status` answers with `HTTP_PROXY` set to a dead address; `-f` fields become the JSON body on POST; the exit code follows the status as in section 6 | missing |
 | CLI-30 | `akou open [-w WS]`: with a headless app, opens the one-time address in the default browser; `-w` puts that workspace first in the call picker, as hark-viewer's `?workspace=` did. Needs `workspace` on `POST /window` | P2 | Audit; hark-viewer carry-over | With a fake `open`/`xdg-open`/`start` on `PATH`, the program receives the URL the API returned; `--print` prints it instead. `akou open -w work` sends `{"workspace": "work"}` to `POST /window` | partial: prints the URL only |
-| CLI-33 | `akou skill uninstall [--harness …]` removes everything `skill install` wrote, including any harness registration PG-M1 adds | P2 | the reverse of every state | After install then uninstall on a scratch home, the skills folders and the harness's MCP config are byte-identical to before | partial: `skill uninstall` removes the skills and the MCP entries (TS-25); the byte-identical check is not written |
+| CLI-33 | `akou skill uninstall [--harness …]` removes everything `skill install` wrote, including any harness registration PG-M1 adds | P2 | the reverse of every state | After install then uninstall on a scratch home, the skills folders and the harness's MCP config are byte-identical to before | has: `skill uninstall` removes the skills, the MCP entries (TS-25) and a harness's skills folder it leaves empty, while a `--dir` folder stays; `tests/skill.test.ts` compares a scratch home byte for byte before install and after uninstall, for a fresh harness and for one with another skill and another MCP server |
 
 Commands designed in a sibling, listed here so the tree is complete. Each has its bead there, not here:
 
@@ -387,10 +387,11 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Restart | `restart` | `POST …/restart` | `akou_restart` | Restart | none |
 | Status | `status` | `GET /status` | `akou_status` | header, tray | none |
 | Read the transcript | `tail`, `show` | `GET …/transcript` | `akou_read`, `akou_get_call` | transcript | `show` lacks time and speaker filters (CLI-27) |
-| Event stream | `tail -f`, `events -f` | `GET …/stream`, `…/events` | (monitor, PG-K3) | pushed | `events` missing (PG-S3) |
+| Event stream | `tail -f`, `events -f` | `GET …/stream`, `…/events` | (monitor, PG-K3) | pushed | none |
 | Wait for a stage | `wait` | long poll on `…/events` | none, by design: an agent is told by the monitor | status | `wait` missing (PG-S5) |
 | Context pack | `context` | `POST …/context` | `akou_context` | "Copy context for my agent" | none |
 | Ask | `ask` | `POST …/ask` | `akou_ask` (hidden when the client is the provider) | Ask pane | none |
+| Ask presets | `presets list`, `ask --preset` | `GET /presets` | MCP prompts, one per preset file (PG-M7) | the ask box's menu | none |
 | Search one call | `search` | `GET …/search` | `akou_search` | none | window find is in [WINDOW.md](WINDOW.md) |
 | Speakers | `name` | `POST …/speakers…` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | speaker chip | none |
 | Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes`, `akou_edit_note`, `akou_delete_note` | notepad | none |
@@ -405,8 +406,8 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | sidebar | none |
 | Rename a call | `calls rename` | `PATCH /calls/{id}` | `akou_rename_call` | the title in the call header | none |
 | List and add workspaces | `workspaces`, `workspace add` | `GET /workspaces`, `POST /workspaces` | none | the workspace menu in the Record row, New workspace in the sidebar | MCP: `akou_start` names the workspace and makes its folder |
-| Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | all missing (CLI-26) |
-| Edit a line | `edit` | PG-A5 | none yet | inline edit | all missing (CLI-29) |
+| Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | API done; CLI, MCP and window missing (CLI-26) |
+| Edit a line | `edit` | PG-A5 | none yet | inline edit | API done (speaker; text through `fix`); CLI and window missing (CLI-29) |
 | Share | `share` | `/share` | `akou_share_on`, `akou_share_off`, `akou_share_status`; no `bind`, a setting | share pill | none |
 | Templates | `templates list\|show` | `GET /templates`, `GET /templates/{name}` | `akou_template_list`, `akou_template_get` | none: the window always uses the automatic choice | the window on purpose |
 | Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | none |
@@ -423,7 +424,7 @@ Names differ where a terminal verb is shorter (`name` against `akou_name_speaker
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-31 | The generated CLI reference (`docs/cli.md`: every command's help page, plus the parity table rendered from TS-13's table) with a drift check | P1 | Minutes "Generated file. Do not edit by hand"; TRAPS T1.39 | CI regenerates the file and fails on a diff. Positive control: adding a flag to a command without regenerating fails the job. Parity gaps are TS-13's test, not a second one here | missing: DESIGN 6.1 is hand-written and already differs from the registry |
+| CLI-31 | The generated CLI reference (`docs/cli.md`: every command's help page, plus the parity table rendered from TS-13's table) with a drift check | P1 | Minutes "Generated file. Do not edit by hand"; TRAPS T1.39 | CI regenerates the file and fails on a diff. Positive control: adding a flag to a command without regenerating fails the job. Parity gaps are TS-13's test, not a second one here | has: `scripts/cli-reference.ts` writes `docs/cli.md` from the command registry and the parity table; `tests/cli-reference.test.ts` fails when the committed page differs, with a flag added and a parity row changed as positive controls |
 
 ## 15. Testing
 

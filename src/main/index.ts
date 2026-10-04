@@ -212,6 +212,7 @@ import {
   reEnhanceState,
   storeEnhanced,
 } from "./notes/enhance.ts";
+import { listPresets, type Preset } from "./notes/presets.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
 import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
@@ -309,6 +310,8 @@ export const REEXPORT_DEBOUNCE_MS = 1_500;
 
 /** Events after which an exported call is exported again (DESIGN 8.2): names and corrections. */
 const REEXPORT_ON: ReadonlySet<string> = new Set([
+  // The export file takes the new title's name (PG-A4).
+  "call.renamed",
   "speaker.name",
   "speaker.merge",
   "speaker.unmerge",
@@ -680,6 +683,8 @@ export class AkouApp implements ApiApp {
   private accel: AcceleratorState | null = null;
   /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
   private dictationSvc: DictationService | null = null;
+  /** The cue player dictation plays through; its files go when the app closes (DC-O3). */
+  private cuePlayer: SystemCuePlayer | null = null;
   /** Dictation's vocabulary (DC-L6), read on the first dictation after a change. */
   private dictationVocab: Promise<MergedEntry[]> | null = null;
   /** The `remote` dictation engine, made at the first remote dictation; it reads its settings live. */
@@ -717,6 +722,7 @@ export class AkouApp implements ApiApp {
       this.runMode === "server"
         ? new KeyStore(
             this.configDir,
+            // clock: the key store's injected clock, real in the app.
             () => Date.now(),
             (line) => this.log("info", line),
           )
@@ -1176,6 +1182,7 @@ export class AkouApp implements ApiApp {
           pull.done.set(pull.file, p.bytes);
           // The progress rides the status push (DESKTOP DK-E2), at most once a second, so the
           // window's welcome follows it without polling `GET /models`.
+          // clock: throttles a progress push to once a second of real time.
           const now = Date.now();
           if (now - pushedAt < 1000) return;
           pushedAt = now;
@@ -1210,6 +1217,12 @@ export class AkouApp implements ApiApp {
   templates(): Template[] {
     return listTemplates(this.configDir, {
       onError: (msg) => this.log("warn", `template: ${msg}`),
+    });
+  }
+
+  presets(): Preset[] {
+    return listPresets(this.configDir, {
+      onError: (msg) => this.log("warn", `preset: ${msg}`),
     });
   }
 
@@ -1494,6 +1507,7 @@ export class AkouApp implements ApiApp {
     if (this.cfg.settings["export.dir"] === "") return;
     const t = this.reexports.get(id);
     if (t) clearTimeout(t);
+    // clock: debounces a re-export after edits, in real time.
     const timer = setTimeout(() => {
       this.reexports.delete(id);
       if (this.quitting || this.finals.has(id)) return;
@@ -1542,6 +1556,48 @@ export class AkouApp implements ApiApp {
       }
       return { ok: true, ...(await this.exportTo(id, root)) };
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Move, trash and restore (PROGRAMMABILITY PG-A4), each after the call's hand-off work
+
+  async moveCall(
+    id: string,
+    workspace: string,
+    by: string,
+  ): Promise<Outcome<{ workspace: string; seq: number | null }>> {
+    return this.serial(id, async () => {
+      const r = await this.manager.move(id, workspace);
+      if (!r.ok) return r;
+      const to = this.manager.summary(id)?.workspace ?? workspace;
+      if (r.dir === r.from) return { ok: true, workspace: to, seq: null };
+      const e = await this.write(id, (c) => ({
+        type: "call.moved",
+        rev: c.view.workspaceRev + 1,
+        workspace: to,
+        by,
+      }));
+      return { ok: true, workspace: to, seq: e.seq };
+    });
+  }
+
+  async trashCall(id: string): Promise<Outcome<{ dir: string }>> {
+    return this.serial(id, async () => {
+      if (this.manager.live()?.id === id) {
+        return fail(409, "live_call", "the call is recording; stop it first", { call: id });
+      }
+      // A link to a call that is gone would show nothing: it stops first.
+      await this.stopShare(id);
+      const t = this.reexports.get(id);
+      if (t) clearTimeout(t);
+      this.reexports.delete(id);
+      const r = await this.manager.trash(id);
+      return r.ok ? { ok: true, dir: r.dir } : r;
+    });
+  }
+
+  restoreCall(id: string): Promise<Outcome<{ dir: string; workspace: string }>> {
+    return this.manager.restore(id);
   }
 
   /** The hooks of one stage, in order, each recorded as `hook.done`. */
@@ -1983,6 +2039,8 @@ export class AkouApp implements ApiApp {
         after["dictation.preferBuiltInOverBluetooth"]
     )
       this.dictationSvc?.rebuildMic();
+    if (before["dictation.muteMedia"] !== after["dictation.muteMedia"])
+      this.dictationSvc?.pauseMedia();
     // Fewer days, or the audio no longer kept: what is past it goes now, not at the next sweep.
     if (
       before["dictation.retainDays"] !== after["dictation.retainDays"] ||
@@ -2971,13 +3029,11 @@ export class AkouApp implements ApiApp {
    */
   private startDictation(): void {
     if (this.runMode !== "app") return;
-    const cues = new Cues(
-      new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) }),
-      () => ({
-        sounds: this.cfg.settings["dictation.sounds"],
-        pill: this.cfg.settings["dictation.pill"],
-      }),
-    );
+    this.cuePlayer ??= new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) });
+    const cues = new Cues(this.cuePlayer, () => ({
+      sounds: this.cfg.settings["dictation.sounds"],
+      pill: this.cfg.settings["dictation.pill"],
+    }));
     this.dictationSvc ??= new DictationService({
       configDir: this.configDir,
       now: () => this.clock.now(),
@@ -3074,6 +3130,7 @@ export class AkouApp implements ApiApp {
         device: this.cfg.settings["dictation.mic"],
         preferBuiltIn: this.cfg.settings["dictation.preferBuiltInOverBluetooth"],
       }),
+      pauseMedia: () => this.cfg.settings["dictation.muteMedia"],
       onLog: (level, msg) => this.log(level, msg),
     });
     // Qwen landing while `best` waits for it: it is warmed at once (DC-E3).
@@ -3663,6 +3720,7 @@ export class AkouApp implements ApiApp {
         remotes: () => (server ? s()["server.remotes"] : []),
         env: this.o.env ?? process.env,
         concurrency: () => s()["server.concurrency"],
+        modelIdleMinutes: () => s()["server.model_idle_minutes"],
         queueMax: () => s()["server.queue_max"],
         queueMaxPerKey: () => s()["server.queue_max_per_key"],
         dictationSlots: () => (server ? s()["server.dictation_slots"] : 0),
@@ -3843,6 +3901,7 @@ export class AkouApp implements ApiApp {
     this.quitting ??= (async () => {
       this.appLog?.line("info", "quitting");
       // Let the answer to `POST /quit` go out first.
+      // clock: lets the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
       try {
         await this.window?.close();
@@ -3864,6 +3923,7 @@ export class AkouApp implements ApiApp {
         }
       }
       await this.dictationSvc?.close();
+      this.cuePlayer?.close();
       this.remoteDictation?.close();
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();

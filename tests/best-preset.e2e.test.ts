@@ -7,7 +7,6 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
@@ -17,7 +16,7 @@ import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
-import { tempDir } from "./helpers.ts";
+import { jsonLines, tempDir } from "./helpers.ts";
 import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helpers.ts";
 
 setDefaultTimeout(60_000);
@@ -63,13 +62,9 @@ async function done(id: string) {
 }
 
 function requests(): { messages: { role: string; content: unknown }[] }[] {
-  if (!existsSync(log)) return [];
-  return readFileSync(log, "utf8")
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l))
+  return jsonLines(log)
     .filter((l) => l.body)
-    .map((l) => l.body);
+    .map((l) => l.body as { messages: { role: string; content: unknown }[] });
 }
 
 describe("akou-5an.93: preset best", () => {

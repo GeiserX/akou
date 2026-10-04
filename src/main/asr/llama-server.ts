@@ -195,6 +195,7 @@ export function extractBuild(dir: string, archives: readonly string[], platform:
     const found = findFile(bin, name);
     if (found) return found;
   }
+  // clock: a unique name for a temporary folder, not a time.
   const tmp = join(dir, `bin.${process.pid}.${Date.now()}.tmp`);
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
@@ -333,7 +334,9 @@ function alive(pid: number): boolean {
 }
 
 async function waitGone(pid: number, ms: number): Promise<boolean> {
+  // clock: waiting on a process we signalled, bounded by `ms`.
   const end = Date.now() + ms;
+  // clock: waiting on a process we signalled, bounded by `ms`.
   while (Date.now() < end) {
     if (!alive(pid)) return true;
     // clock: polling a process we signalled, bounded by `ms`.
@@ -462,6 +465,7 @@ export class LlamaServer {
         );
       }
     }
+    // clock: a deadline on a real server loading its model.
     const deadline = Date.now() + (this.o.healthTimeoutMs ?? 300_000);
     for (;;) {
       if (proc.exitCode !== null || proc.signalCode !== null) {
@@ -476,6 +480,7 @@ export class LlamaServer {
       } catch {
         // Not listening yet.
       }
+      // clock: a deadline on a real server loading its model.
       if (Date.now() > deadline) {
         await this.stop();
         throw new Error(

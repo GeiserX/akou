@@ -96,6 +96,13 @@ export const PARITY: readonly Row[] = [
     window: [rpc("follow"), app("/transcript?format=export")],
   },
   {
+    action: "Follow the event log as JSON lines",
+    cli: ["events"],
+    api: ["GET /calls/:id/events", "GET /calls/:id/stream"],
+    mcp: { none: "an agent is pushed the events by the plugin monitor (PG-K3), which runs it" },
+    window: { none: "the raw log is for programs; the window shows the call it describes" },
+  },
+  {
     action: "Wait for a stage after the call",
     cli: ["wait"],
     api: ["GET /calls/:id/events"],
@@ -127,6 +134,16 @@ export const PARITY: readonly Row[] = [
     mcp: ["akou_ask"],
     window: [rpc("ask")],
     note: "akou_ask is listed only when a provider can answer, and hidden from a harness client when that harness is the provider (src/main/mcp/server.ts askListed)",
+  },
+  {
+    action: "Ask presets",
+    cli: ["presets", "ask"],
+    api: ["GET /presets"],
+    mcp: {
+      none: "the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7)",
+    },
+    window: [ui("ask.ts", "`/presets?call=#{encodeURIComponent(call)}`")],
+    note: "`akou ask --preset NAME` asks one; the files live in the config folder's presets/ (PG-F2)",
   },
   {
     action: "Search one call",
@@ -315,6 +332,21 @@ export const PARITY: readonly Row[] = [
     api: ["PATCH /calls/:id"],
     mcp: ["akou_rename_call"],
     window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
+  },
+  {
+    action: "Trash and restore a call",
+    cli: { none: "missing: CLI-26 adds calls delete and calls restore" },
+    api: ["DELETE /calls/:id", "POST /calls/:id/restore"],
+    mcp: { none: "missing: PG-M4 names move, delete and restore (CLI.md doors table)" },
+    window: { none: "missing: W13.3 adds Delete and the Trash" },
+    note: "Moving a call to another workspace is `PATCH /calls/:id {workspace}`, the rename row's route.",
+  },
+  {
+    action: "Change who spoke one line",
+    cli: { none: "missing: CLI-29 adds edit SEG --speaker" },
+    api: ["PATCH /calls/:id/segments/:sid"],
+    mcp: { none: "no tool yet, and no design item names one" },
+    window: { none: "missing: W4.10 adds the speaker picker on a line" },
   },
   {
     action: "List and add workspaces",

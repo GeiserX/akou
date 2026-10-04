@@ -944,20 +944,23 @@ describe("SV-J5: ?format on the result route", () => {
 });
 
 describe("SV-J6: delete and retention", () => {
-  test("after delete the result route answers 404, the upload is gone and the feed keeps the id and final state", async () => {
+  test("after delete the job answers 410, the upload is gone and the feed keeps the id and final state", async () => {
     const k = await newKey(server, "j6");
     const { id } = await transcribe(server, k.key, NOTE, { metadata: '{"secret": "x"}' });
     const del = await call(server, k.key, "DELETE", `/jobs/${id}`);
     expect(del.status).toBe(200);
     expect(del.body).toMatchObject({ id, status: "done", deleted: true });
-    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
-    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "GET", `/jobs/${id}/result`)).status).toBe(410);
+    expect((await call(server, k.key, "GET", `/jobs/${id}`)).status).toBe(410);
     expect(audioFiles(server).length).toBe(0);
     const feed = await call(server, k.key, "GET", "/events");
     expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
       { job_id: id, status: "done", deleted: true },
     ]);
-    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(404);
+    expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(410);
+    // Another key never had it: 404, as for an id that never was.
+    const other = await newKey(server, "j6-other");
+    expect((await call(server, other.key, "GET", `/jobs/${id}`)).status).toBe(404);
   });
 
   test("a queued job is dropped with its upload, and its feed says cancelled", async () => {
@@ -1043,7 +1046,16 @@ describe("SV-J6: delete and retention", () => {
       expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(200);
       now += 86_400_000 + 1;
       expect(jobs.sweep()).toBe(1);
-      expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
+      // Expired: 410 with the window named, on the job and its result; a typo stays 404.
+      for (const path of [`/jobs/${id}`, `/jobs/${id}/result`]) {
+        const gone = await call(rig, k.key, "GET", path);
+        expect(gone.status).toBe(410);
+        expect(gone.body).toMatchObject({ error: "gone", id, retain_days: 7 });
+        expect(gone.body.message).toContain("7 days");
+      }
+      const typo = await call(rig, k.key, "GET", `/jobs/${id}x`);
+      expect(typo.status).toBe(404);
+      expect(typo.body.error).toBe("not_found");
       const feed = await call(rig, k.key, "GET", "/events");
       expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
         { job_id: id, status: "done", deleted: true },
@@ -1086,6 +1098,60 @@ describe("SV-J6: delete and retention", () => {
       expect(await cancelled()).toEqual({ job_id: q.body.id, status: "cancelled", deleted: true });
     } finally {
       g.open();
+      await rig.close();
+    }
+  });
+});
+
+describe("akou-5an.116 and .115: a running job says where it is, a done one how long each stage took", () => {
+  test("polling a diarized job shows the stage and the seconds done moving, then the stage times", async () => {
+    // Every decode busy-waits, so the transcribe stage lasts long enough to be seen moving.
+    const slow: ModelSpec = {
+      kind: "module",
+      path: FAKE_MODELS,
+      model: "fake-parakeet",
+      options: { slowMs: 400 },
+    };
+    const rig = await appRig({ settings: SERVER, models: slow });
+    try {
+      const k = await newKey(rig, "progress");
+      const clip = monoWav(
+        concat(
+          silence(0.3),
+          speak(["hello", "world"]),
+          silence(1.5),
+          speak(["ok", "great"]),
+          silence(1.5),
+          speak(["thanks"]),
+          silence(1.5),
+          speak(["deploy"]),
+          silence(0.3),
+        ),
+      );
+      const s = await submit(rig, k.key, clip, { diarize: "true" });
+      expect(s.status).toBe(202);
+      const seen: { stage: string; done_s: number; total_s: number | null }[] = [];
+      let job = s.body;
+      while (job.status === "queued" || job.status === "running") {
+        if (job.progress) seen.push(job.progress);
+        await Bun.sleep(25);
+        job = (await call(rig, k.key, "GET", `/jobs/${s.body.id}`)).body;
+      }
+      expect(`${job.status} ${job.error?.message ?? ""}`).toBe("done ");
+      const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+      expect(new Set(done).size).toBeGreaterThan(1);
+      expect(Math.max(...done)).toBeGreaterThan(Math.min(...done));
+      for (const p of seen) expect(["decode", "diarize", "transcribe"]).toContain(p.stage);
+      // Done: no progress any more, and the stage times on the job and in the result.
+      expect(job.progress).toBeUndefined();
+      expect(job.timings).toMatchObject({
+        decode_s: expect.any(Number),
+        diarize_s: expect.any(Number),
+      });
+      expect(job.timings.transcribe_s).toBeGreaterThan(1);
+      const r = await call(rig, k.key, "GET", `/jobs/${s.body.id}/result`);
+      expect(r.body.timings).toEqual(job.timings);
+    } finally {
       await rig.close();
     }
   });
@@ -1377,7 +1443,7 @@ describe("SV-D1: transcribing a file is a product feature", () => {
       expect(j.code).toBe(0);
       const id = (j.json as { job_id: string }).job_id;
       expect(id).toMatch(/^job_/);
-      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(404);
+      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(410);
     } finally {
       f.cleanup();
     }
@@ -1410,6 +1476,117 @@ describe("SV-D1: transcribing a file is a product feature", () => {
       expect(r.err).toContain("not built");
     } finally {
       f.cleanup();
+    }
+  });
+
+  test("--keyword, --keywords-file and --priority: the server takes them, and its refusals print as it words them", async () => {
+    const f = noteFile();
+    const t = tempDir("akou-transcribe-keywords-");
+    const env = { ...process.env, ...server.env };
+    const terms = (lines: string[]) => {
+      const path = join(t.dir, `terms-${lines.length}-${lines[0]?.length}.txt`);
+      writeFileSync(path, `${lines.join("\n")}\n`);
+      return path;
+    };
+    try {
+      const ok = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        terms(["Hetzner", "", "Kubernetes"]),
+        "--keyword",
+        "Terraform",
+        "--priority",
+        "5",
+      ]);
+      expect(`${ok.code} ${ok.out}`).toBe("0 hello world");
+      // 25 keywords, a keyword of 101 characters, priority 11: each refused by the server (exit
+      // 64, nothing on stdout) in the server's words, which the CLI does not repeat on its own.
+      const many = Array.from({ length: 25 }, (_, i) => `term${i}`);
+      const refusals: [string[], string][] = [
+        [["--keywords-file", terms(many)], "at most 24 keywords"],
+        [["--keyword", "x".repeat(101)], "a keyword is at most 100 characters"],
+        [["--priority", "11"], "priority is a whole number from -10 to 10"],
+      ];
+      for (const [args, words] of refusals) {
+        const r = await cli(env, ["transcribe", f.path, ...args]);
+        expect([r.code, r.out, r.err]).toEqual([64, "", `akou: ${words}`]);
+      }
+      // Positive control: 24 keywords, the most there may be, are taken.
+      const most = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        terms(many.slice(0, 24)),
+      ]);
+      expect(`${most.code} ${most.out}`).toBe("0 hello world");
+      const missing = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keywords-file",
+        join(t.dir, "nope"),
+      ]);
+      expect(missing.code).toBe(64);
+    } finally {
+      f.cleanup();
+      t.cleanup();
+    }
+  });
+
+  test("--keyword, --keywords-file and --priority send the fields the HTTP door reads: keywords[] and priority", async () => {
+    const f = noteFile();
+    const t = tempDir("akou-transcribe-form-");
+    const sent: { keywords: unknown[]; priority: unknown[] }[] = [];
+    // A stand-in for the server that keeps each submitted form; the real route reads these
+    // fields in the test above.
+    const fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (req) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/v1/server") return Response.json({ capabilities: { jobs: true } });
+        if (req.method === "POST" && path === "/v1/jobs") {
+          const form = await req.formData();
+          sent.push({ keywords: form.getAll("keywords[]"), priority: form.getAll("priority") });
+          return Response.json({ id: "job_1", status: "done" }, { status: 202 });
+        }
+        if (path === "/v1/jobs/job_1/result") return Response.json({ text: "hello world" });
+        return new Response(null, { status: 204 });
+      },
+    });
+    try {
+      const terms = join(t.dir, "terms.txt");
+      writeFileSync(terms, "Hetzner\r\n\n  Kubernetes  \n");
+      const env = {
+        ...process.env,
+        AKOU_HOME: t.dir,
+        AKOU_URL: `http://127.0.0.1:${fake.port}`,
+        AKOU_API_KEY: "ak_transcribe-form-test",
+      };
+      const r = await cli(env, [
+        "transcribe",
+        f.path,
+        "--keyword",
+        "Terraform",
+        "--keywords-file",
+        terms,
+        "--keyword",
+        "Ceph",
+        "--priority",
+        "-3",
+      ]);
+      expect(`${r.code} ${r.out} ${r.err}`).toBe("0 hello world ");
+      expect(sent[0]).toEqual({
+        keywords: ["Terraform", "Ceph", "Hetzner", "Kubernetes"],
+        priority: ["-3"],
+      });
+      // Without the flags, neither field is sent, so the server's defaults apply.
+      await cli(env, ["transcribe", f.path]);
+      expect(sent[1]).toEqual({ keywords: [], priority: [] });
+    } finally {
+      fake.stop(true);
+      f.cleanup();
+      t.cleanup();
     }
   });
 

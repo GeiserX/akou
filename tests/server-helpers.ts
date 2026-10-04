@@ -131,5 +131,13 @@ export const RESULT = z
       .strict(),
     warnings: z.array(z.string()),
     metadata: z.unknown(),
+    // Wall seconds per stage (akou-5an.115).
+    timings: z
+      .object({
+        decode_s: z.number().nonnegative(),
+        diarize_s: z.number().nonnegative().nullable(),
+        transcribe_s: z.number().nonnegative(),
+      })
+      .strict(),
   })
   .strict();

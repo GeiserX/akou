@@ -47,7 +47,7 @@ import {
   wavBytes,
 } from "../src/main/asr/qwen.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { tempDir } from "./helpers.ts";
+import { jsonLines, tempDir } from "./helpers.ts";
 
 setDefaultTimeout(30_000);
 
@@ -78,13 +78,7 @@ function fakeServer(
     ...o,
   });
   cleanups.push(() => server.stop());
-  const log = () =>
-    existsSync(logFile)
-      ? readFileSync(logFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((l) => JSON.parse(l) as Record<string, unknown>)
-      : [];
+  const log = () => jsonLines(logFile);
   return { server, log, dir };
 }
 

@@ -474,22 +474,6 @@ export function askUnavailable(reason: string | undefined, kind: string | undefi
   return said;
 }
 
-// ---------------------------------------------------------------------------
-// The ask box presets (DESIGN 7)
-
-export function presets(speakers: readonly string[]): { label: string; question: string }[] {
-  const out = [
-    { label: "Catch me up", question: "Catch me up: what has been said so far?" },
-    { label: "Was my name mentioned?", question: "Was my name mentioned? By whom and when?" },
-    { label: "Decisions so far", question: "What decisions have been made so far?" },
-    { label: "Action items", question: "What are the action items so far, with owners?" },
-  ];
-  for (const s of speakers) {
-    out.push({ label: `What did ${s} say?`, question: `What did ${s} say so far?` });
-  }
-  return out;
-}
-
 /** The markers the notepad knows: `- `, `[] ` (action), `? ` (open question), `# ` (section). */
 export function noteKind(text: string): "text" | "bullet" | "action" | "question" | "section" {
   if (text.startsWith("[] ") || text.startsWith("[ ] ")) return "action";

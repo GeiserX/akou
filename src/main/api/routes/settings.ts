@@ -19,6 +19,7 @@ import {
   type SettingSpec,
 } from "../../config/schema.ts";
 import { STORED_SECRETS } from "../../config/secrets.ts";
+import { fillPreset, type Preset, usesSpeaker } from "../../notes/presets.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -145,6 +146,74 @@ export function settingsRoutes(r: Router<ApiApp>): void {
           sections: t.sections.map((s) => s.heading),
           bundled: t.bundled,
         })),
+      });
+    },
+  );
+
+  r.add(
+    "GET",
+    "/presets",
+    {
+      id: "presets.list",
+      doc: "The ask presets: the shipped ones and the user's own files, in menu order, read from the folder on every request. Without `call`, each `question` is the file's body with `{speaker}`, `{user}` and `{title}` unfilled, and `usesSpeaker` says which ask about one speaker. With `call`, they are filled in for that call: `{user}` from `user.name`, `{title}` from its title, and a preset that names `{speaker}` once per named speaker, or for `speaker` alone. A preset is a question for one call: ask it with `POST /calls/{id}/ask`.",
+      access: "admin",
+      modes: ["app"],
+      query: {
+        call: {
+          type: "string",
+          doc: "Fill the presets in for this call: `live`, `last` or an id.",
+        },
+        speaker: {
+          type: "string",
+          doc: "With `call`: fill `{speaker}` with this name instead of each named speaker.",
+        },
+      },
+      ok: 200,
+    },
+    async (c) => {
+      const all = c.app.presets();
+      const dir = join(c.app.configDir, "presets");
+      const ref = c.query.raw("call");
+      if (ref === null) {
+        return json(200, {
+          dir,
+          presets: all.map((p) => ({
+            name: p.name,
+            label: p.label,
+            order: p.order,
+            question: p.question,
+            usesSpeaker: usesSpeaker(p),
+            bundled: p.bundled,
+          })),
+        });
+      }
+      const view = (await c.app.call(resolveRef(c.app, ref, { allowLast: true }))).view;
+      const one = c.query.raw("speaker")?.trim();
+      const speakers = one
+        ? [one]
+        : view
+            .roster()
+            .filter((s) => s.spk !== "you" && !s.mergedInto && s.name)
+            .map((s) => s.label);
+      const base = { user: c.app.config().settings["user.name"], title: view.call?.title ?? "" };
+      const filled = (p: Preset, speaker?: string) => {
+        const v = { ...base, speaker };
+        return {
+          name: p.name,
+          label: fillPreset(p.label, v),
+          order: p.order,
+          question: fillPreset(p.question, v),
+          usesSpeaker: speaker !== undefined,
+          ...(speaker !== undefined ? { speaker } : {}),
+          bundled: p.bundled,
+        };
+      };
+      return json(200, {
+        dir,
+        call: view.call?.id ?? null,
+        presets: all.flatMap((p) =>
+          usesSpeaker(p) ? speakers.map((s) => filled(p, s)) : [filled(p)],
+        ),
       });
     },
   );

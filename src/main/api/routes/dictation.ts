@@ -69,6 +69,7 @@ export function dictationBody(it: DictationItem) {
     ...(it.fallback_from ? { fallback_from: it.fallback_from } : {}),
     ...(it.language_forced !== null ? { language_forced: it.language_forced } : {}),
     ...(it.echo_retry ? { echo_retry: true } : {}),
+    ...(it.formatted ? { formatted: true } : {}),
     ...(it.error ? { error: it.error } : {}),
     ...(it.learn ? { learn: it.learn } : {}),
   };
@@ -362,7 +363,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation",
     {
       id: "dictation.status",
-      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), what a dictation inserts now as `final` (`dictation.final` as it resolves here: parakeet, live or qwen; remote; null with no model) and the streaming model the words while you speak come from as `live` (null: Parakeet, refreshed twice a second), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
+      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), what a dictation inserts now as `final` (`dictation.final` as it resolves here: parakeet, live or qwen; remote; null with no model) and the streaming model the words while you speak come from as `live` (null: Parakeet, refreshed twice a second), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, whether it can hold Escape and Enter during a session (`swallow_keys`), the `engines` a retry can use on this machine now (of fast, best, live and remote: an engine whose model is not downloaded, or remote with no address, is not listed), and `latency`: for live, parakeet, qwen and remote, how long the text takes after the key is let go for 10 s of speech (`ms`), `measured` on this kind of machine or an estimate (DC-T3).',
       access: "admin",
       modes: ["app"],
       ok: 200,
@@ -398,6 +399,8 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         lost: svc.status().lost,
         backend: st.backend,
         swallow_keys: st.swallow_keys,
+        latency: st.latency,
+        engines: st.engines,
       });
     },
   );

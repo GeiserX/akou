@@ -127,6 +127,9 @@ export class FakeProvider implements Provider {
 /**
  * TS-15, "hidden means hidden": every element with the `hidden` attribute has computed
  * `display: none` and holds no focus. Returns what breaks the rule, as `#id` or `tag.class`.
+ * An element inside a hidden ancestor cannot show, and the ancestor is checked itself, so it is
+ * skipped: WebKit leaves the computed style of a `display: none` subtree stale, and a page hidden
+ * with the `#pages` host around it read `display: block` there.
  */
 export function hiddenOffenders(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -134,6 +137,7 @@ export function hiddenOffenders(page: Page): Promise<string[]> {
       el.id ? `#${el.id}` : [el.tagName.toLowerCase(), ...el.classList].join(".");
     const out: string[] = [];
     for (const el of document.querySelectorAll("[hidden]")) {
+      if (el.parentElement?.closest("[hidden]")) continue;
       if (getComputedStyle(el).display !== "none") out.push(`${name(el)} shows`);
     }
     const a = document.activeElement;
@@ -156,6 +160,7 @@ function watchHidden(): void {
     el.id ? `#${el.id}` : [el.tagName.toLowerCase(), ...el.classList].join(".");
   const check = () => {
     for (const el of document.querySelectorAll("[hidden]")) {
+      if (el.parentElement?.closest("[hidden]")) continue;
       if (getComputedStyle(el).display !== "none") found.add(`${name(el)} shows`);
     }
   };
@@ -504,6 +509,8 @@ export interface DictationFixture {
   retry: (d: DictationRow, engine: string) => DictationRow;
   /** The helper's grants on `GET /dictation`; null answers 404, as an app without the route. */
   grants: DictationGrants | null;
+  /** `GET /dictation`'s `engines`, the ones a retry can use; left out, an app that does not say. */
+  engines?: string[];
 }
 
 /**
@@ -568,7 +575,12 @@ export async function dictationFixture(
       fx.grants
         ? route.fulfill({
             status: 200,
-            json: { enabled: fx.settings["dictation.enabled"], state: "idle", grants: fx.grants },
+            json: {
+              enabled: fx.settings["dictation.enabled"],
+              state: "idle",
+              grants: fx.grants,
+              ...(fx.engines ? { engines: fx.engines } : {}),
+            },
           })
         : route.fulfill({ status: 404, json: { error: "not_found", message: "no such route" } }),
   );
@@ -935,6 +947,8 @@ export async function windowPage(
     /** The streaming model and the resolved text inserted on `GET /dictation` (DC-E7). */
     live?: string | null;
     final?: string | null;
+    /** Each choice's time after the key is let go on `GET /dictation` (DC-T3); absent, none. */
+    latency?: Record<string, { ms: number; measured: boolean }>;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -968,6 +982,7 @@ export async function windowPage(
           lost: o.lost ?? [],
           live: o.live ?? null,
           final: o.final ?? null,
+          ...(o.latency ? { latency: o.latency } : {}),
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {

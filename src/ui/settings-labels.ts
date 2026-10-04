@@ -328,6 +328,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Each loads its own copy of the model.",
     unit: "jobs",
   },
+  "server.model_idle_minutes": {
+    label: "Keep the model loaded between jobs for",
+    help: "0: let it go after each run of jobs.",
+    unit: "minutes",
+  },
   "server.queue_max": { label: "Jobs waiting, at most", help: "0: no limit.", unit: "jobs" },
   "server.queue_max_per_key": {
     label: "Jobs waiting per key, at most",
@@ -462,7 +467,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "dictation.spokenSend": { label: "Say “send it” to send" },
   "dictation.format": {
     label: "Tidy the text with AI",
-    help: "Fixes punctuation and capitals before the text goes in. History keeps what you said.",
+    help: "Fixes punctuation and capitals. History keeps what you said. A local model is the quickest.",
     choices: [
       ["off", "Off"],
       ["provider", "With your assistant"],

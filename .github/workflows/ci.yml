@@ -128,13 +128,27 @@ jobs:
 
   # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake
-  # provider. Only Chromium's headless shell is installed; nothing plays audio or opens a window.
+  # provider, once in Chromium's headless shell and once in Playwright's WebKit, the closest
+  # stand-in for the WKWebView and WebKitGTK the app ships (docs/TESTING.md TS-14), each engine
+  # with its own floor. Nothing plays audio or opens a window.
   ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            install: --only-shell chromium
+            floor: ui
+          - browser: webkit
+            install: webkit
+            floor: ui-webkit
+    name: ui (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
     env:
+      AKOU_UI_BROWSER: ${{ matrix.browser }}
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,18 +156,18 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      # The browser build pinned by playwright-core, headless shell only, with its system libraries.
-      - run: bunx playwright-core install --with-deps --only-shell chromium
-      # Every parity screen in both themes, for review (TS-15c): saved, never compared. A repeat
-      # dispatch saves none.
+      # The browser build pinned by playwright-core, with its system libraries.
+      - run: bunx playwright-core install --with-deps ${{ matrix.install }}
+      # Every parity screen in both themes, for review (TS-15c), from the Chromium leg: saved, never
+      # compared. A repeat dispatch saves none.
       - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
         env:
-          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && 'ui-shots' || '' }}
-      - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+          AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && matrix.browser == 'chromium' && 'ui-shots' || '' }}
+      - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: junit-ui
+          name: junit-ui-${{ matrix.browser }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
           include-hidden-files: true
           path: .junit-ui.xml
@@ -415,7 +429,10 @@ jobs:
           answer p1
           echo "{\"type\":\"insert\",\"id\":\"t1\",\"text\":\"typed é 😀\",\"method\":\"type\",\"send_key\":\"none\",\"target\":$target}" >&4
           answer t1
-          sleep 0.5
+          # The target writes its field to field.txt every 0.1 s, and the typed events land after
+          # the answer: wait for the text, with a deadline, rather than a fixed 0.5 s.
+          want=$(printf 'pasted by akou\ntyped é 😀')
+          for _ in $(seq 1 100); do [ "$(cat field.txt)" = "$want" ] && break; sleep 0.1; done
           echo '{"type":"stop"}' >&4
           exec 4>&-
           wait "$helper"
@@ -426,7 +443,7 @@ jobs:
           echo "clipboard: $(pbpaste)"
           grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
           grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
-          [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
+          [ "$field" = "$want" ] || { echo "the field holds the wrong text"; exit 1; }
           [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
       # DC-N2 on a real Mac: bound to Fn, the shipping helper sets the Globe key's action to Do
       # Nothing and gives the runner's value back on stop; killed while it owns the key, the next

@@ -15,7 +15,7 @@ Versions read for this: sherpa-onnx-node 1.13.8 (`package.json:27`), llama.cpp r
 - **Final pass:** Qwen + Parakeet + Whisper, fused by confidence ROVER. Pooled WER 7.97 to 7.98, against 8.63 for Qwen alone with the language set and 11.23 for akou today.
 - **LLM fusion is off by default.** It is available as `pick` or `free` through the existing providers, and the pass keeps the vote when the provider is `none` or fails.
 - **Change now:** Parakeet decodes greedy. Beam search empties whole meeting chunks, and hotwords at boost 3 insert false names.
-- **Impossible only where Apple hardware is the substrate** (Core ML, the Neural Engine, Metal, MLX). Everything else on Windows and Linux is hard and mostly unmeasured. Nothing has run on Windows yet, and a Windows gate (ASR-12) comes before any Windows default.
+- **Impossible only where Apple hardware is the substrate** (Core ML, the Neural Engine, Metal, MLX). Everything else on Windows and Linux is hard, not impossible. On Windows the live engine and Qwen are measured ([ASR-12](../gates/asr-12-windows.md)); the transcribe-cpp engines are not yet.
 
 ```mermaid
 flowchart LR
@@ -116,8 +116,8 @@ N-way by construction: `asr.final.engines` is a list, the final pass runs every 
 
 | Runtime | Ships how | Runs | Engines | Evidence |
 |---|---|---|---|---|
-| **sherpa-onnx-node 1.13.8** (already in `package.json`) | npm, in-process, in the two existing Workers | CPU, all three OSes | Live: Nemotron 3.5 streaming (all tiers), nemotron-en, Kroko. Final: Parakeet fp32, Silero VAD | Measured on macOS for all of them. The Windows and Linux packages are CPU builds (npm assets read, not run) |
-| **llama-server** (llama.cpp; measured on b11166, pinned at b11200 when ASR-5 shipped) | One binary per OS and accelerator, downloaded like a model into `<models>/runtimes/`, run as a child process under a supervisor | Metal on macOS; CPU, CUDA or Vulkan on Windows and Linux | Qwen3-ASR-1.7B (Q8_0 GGUF + mmproj) | Measured: macOS Metal bf16 3.79 / 2.89 and Linux arm64 CPU Q8_0 3.76 / 2.81 (fleurs_en / fleurs_es), 150/150 clips each; token log-probs returned on both. Windows binaries exist, unmeasured |
+| **sherpa-onnx-node 1.13.8** (already in `package.json`) | npm, in-process, in the two existing Workers | CPU, all three OSes | Live: Nemotron 3.5 streaming (all tiers), nemotron-en, Kroko. Final: Parakeet fp32, Silero VAD | Measured on macOS for all of them; nemotron-en on Windows x64 too ([ASR-12](../gates/asr-12-windows.md): RTF 0.28 to 0.29 at 2 threads on 4 cores). The Windows and Linux packages are CPU builds |
+| **llama-server** (llama.cpp; measured on b11166, pinned at b11200 when ASR-5 shipped) | One binary per OS and accelerator, downloaded like a model into `<models>/runtimes/`, run as a child process under a supervisor | Metal on macOS; CPU, CUDA or Vulkan on Windows and Linux | Qwen3-ASR-1.7B (Q8_0 GGUF + mmproj) | Measured: macOS Metal bf16 3.79 / 2.89 and Linux arm64 CPU Q8_0 3.76 / 2.81 (fleurs_en / fleurs_es), 150/150 clips each; token log-probs returned on both. Windows x64 Q8_0 3.53 to 3.82 / 1.73 on 30 clips on CPU, Vulkan and CUDA ([ASR-12](../gates/asr-12-windows.md)) |
 | **transcribe-cpp 0.2.4** (MIT, npm, koffi FFI) | npm with per-platform packages: `darwin-arm64-metal`, `darwin-x64-cpu`, `linux-x64-cpu-vulkan`, `linux-arm64-cpu-vulkan`, `win32-x64-cpu-vulkan` (registry read) | Metal, Vulkan or CPU | Whisper large-v3, Cohere Transcribe, Canary-1b-v2, Voxtral-3B, and more | Measured from Bun on macOS (0.2.3): loaded next to sherpa in one process, correct text from both. Windows and Linux not run |
 
 llama-server needs the model card's system turn on every request, empty when there is no glossary. Without one, llama.cpp's template leaves the turn out, and on non-speech Qwen names a language (Chinese "嗯", Portuguese "Sim") instead of None, which lidc then forces into words: 78 words on the 25 silent clips (b11200, Q8_0, Metal), none with the empty turn. The nightly checks it.
@@ -172,7 +172,7 @@ So the new path shows words sooner, closes lines sooner, costs less, and never r
 - The live path costs nothing against the engine alone: at most 0.06 worse on any row, and up to 0.18 better.
 - Number-normalized (Whisper's English normalizer, `text2num` for Spanish), Spanish reads 4.60 to 4.65 against the benchmark's 4.75. English reads 9.58 (`nemotron-en-560`) and 10.59 (both 3.5 tiers) against the benchmark's 8.15, a gap we have not explained. The benchmark harness is not in the repository yet (ASR-11). Part of the English errors are words spoken in a clip beyond its reference sentence, and one clip loops on a syllable under greedy decoding (15 errors).
 - A word shows 0.70 s (p50) after the audio at its token time reached the app, with both channels fed at real time; the same feed held back 1.5 s reads 2.24 s. This was measured while other jobs loaded the machine, and from the token's time rather than from the end of the word as in the table above.
-- One stream over many utterances loses words that a fresh stream per clip keeps. The first 40 English clips joined into one call with 0.9 s gaps read 12.84, against 8.05 for the same clips run one call each; whole sentences go missing, with or without the gain. That is the engine, not the line cutter, but the gated test runs each clip as its own call and so cannot see it. A multi-utterance case (a few minutes of e22 or ami, or the joined clips) belongs in that test, with a bound taken from the single-stream figures above.
+- One stream over many utterances loses words that a fresh stream per clip keeps. The first 40 English clips joined into one call with 0.9 s gaps read 12.84, against 8.05 for the same clips run one call each; whole sentences go missing, with or without the gain. That is the engine, not the line cutter. The gated test (`tests/live-nemotron.test.ts`) now runs that case too: the same 40 clips joined with 0.9 s gaps into one call, bounded at 12.84 + 0.5. It read 12.84 again on the reference Mac mini (2026-10-02), and the same call through a stream that loses every fifth token read 60.28, past the bound, so the case can fail.
 - Lines in Chinese, Japanese and Thai break before a token that starts with one of those scripts, since their tokens rarely carry a leading space. Any line a second past the window breaks before the next token, word start or not.
 - The Parakeet path stays. It runs a call when no streaming model is on disk (the first-run download does not include one yet), and it is the `parakeet` model of the live choice (`asr.live`, akou-chp.23).
 - The live choice is `asr.live`: a live model's id (each Nemotron, or Parakeet), the older `nemotron` and `parakeet`, and `auto`, which picks Nemotron when its model is on disk. The Record row's menu and the Models page name each model ("Nemotron 3.5", "Nemotron English", "Parakeet"), and the Models page shows four bars from the numbers above: accuracy `100 - 2 x` AMI WER (Parakeet 28, Nemotron 62), latency `100 - 50 x` seconds to a shown word (61, 77), cores `100 - 50 x` cores per channel (53, 81) and memory `100 - 6.25 x` GB (78, 86). The second pass is a separate choice (section 3.2). A change applies from the next call; `akou start --live` sets it for one call.
@@ -409,8 +409,8 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 Out of the box:
 
 - **A 16 GB Apple Silicon Mac:** live nemotron-en or Nemotron 3.5 by language, no in-call upgrade unless chosen, final Q+P+W with confidence ROVER, no LLM, greedy Parakeet.
-- **Windows x64 and Linux x64 with a Vulkan or CUDA GPU:** the same set. Extrapolated from the release assets; on Linux only Qwen on the CPU is measured.
-- **CPU-only x64:** live as above (sherpa runs on the CPU; RTF extrapolated), final Q+P (Qwen on the CPU measured at RTF 0.08 to 0.10 on a 6-vCPU arm64 VM; x64 unmeasured), Whisper off unless the user adds it.
+- **Windows x64 and Linux x64 with a Vulkan or CUDA GPU:** the same set. On Windows, Qwen measured on CUDA at RTF 0.025 (RTX 4070 Ti SUPER) and on Vulkan at 0.50 on an integrated Intel GPU, half the CPU's speed there ([ASR-12](../gates/asr-12-windows.md)); Whisper extrapolated. On Linux only Qwen on the CPU is measured.
+- **CPU-only x64:** live as above at `asr.threads` 2 (nemotron-en at RTF 0.28 to 0.29 on 4 Windows x64 cores; 4 threads there measured 0.73 to 0.98, close to falling behind), final Q+P (Qwen on the CPU at about RTF 0.28 on a 16-core Windows x64, 0.08 to 0.10 on a 6-vCPU arm64 VM), Whisper off unless the user adds it. Measured on Windows in [ASR-12](../gates/asr-12-windows.md).
 
 The models pill shows the live engine, the upgrade state, the final engines and the fuser. `final.done` gains `engines[]`, `fusion` and `dropped[]` (engine, reason). `GET /models` lists every registry entry with its `state` per platform. MCP `akou_status` carries the same block. `akou models pull` takes `--engine`.
 
@@ -449,7 +449,7 @@ The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, 
 - **Streaming hotwords.** Needs sherpa-onnx after 1.13.8: build from master, or wait for the release.
 - **Qwen as a true streaming engine on every OS.** Port the re-decode-with-rollback loop onto llama.cpp. The in-call upgrade gives Qwen-quality text about 45 s after the words, once a minute, without it.
 - **Voxtral Mini 4B Realtime live**, the best measured streaming accuracy (7.19 / 3.60 on FLEURS). It runs at RTF 1.0 on the M4, so it needs a faster GPU and one channel, and it has no timestamps and no biasing.
-- **Anything on Windows.** No Windows run exists; every Windows claim comes from release assets. A Windows measurement (ASR-12) is the gate before any Windows default.
+- **The transcribe-cpp engines on Windows.** The live engine and Qwen are measured there ([ASR-12](../gates/asr-12-windows.md)); the transcribe-cpp win32 package waits for ASR-8.
 - **Qwen3-ForcedAligner on every OS.** Through CrispASR's GGUF (one clip checked) or an ONNX Runtime session (not run).
 - **Voxtral-Small-24B**, the best English in the transcribe.cpp catalogue (3.55 / 2.86). It is 14.3 GB at Q4_K_M and needs a 32 GB machine.
 
@@ -470,7 +470,7 @@ Ordered by risk removed per PR. Model-gated tests skip loudly on PRs and belong 
 | ASR-9 | **feat(fusion): LLM fusers through `Provider`.** `pick` and `free`, batches of units with confidences, a constrained parser, invented-word and agreed-change counters written to `final.done`, fallback to ROVER on any failure | P1 | ASR-6 | The parser on the benchmark's raw LLM outputs (pick, 5-way, ami and the other sets). The fallback path. Provider `none` |
 | ASR-10 | **feat(settings): surface and docs.** Schema keys, workspace overrides, call flags on the CLI, API and MCP, the models pill, `GET /models` per platform, the generated settings doc, DESIGN 3 rewritten to this design, and [providers.md](../providers.md) on the fusion LLM | P1 | ASR-6, ASR-7 | Schema round-trip. A diff between the settings registry and the generated settings doc, run in `check` (not there today; this step adds it). Positive control: a key missing from the doc fails it |
 | ASR-11 | **chore(bench): the benchmark harness into the repo.** `scripts/asr-bench/` with the public-set manifests, so `models-nightly` re-scores a 30-clip slice per set and posts WER, RTF and invented-word counts as the job summary | P1 | | A WER floor per set that a mutated normalizer must breach |
-| ASR-12 | **Windows gate before Windows defaults.** Run ASR-5 and ASR-8 on a Windows x64 machine: Qwen through win-cpu and win-vulkan, the transcribe-cpp win32 package, sherpa streaming RTF on a 4-core x64 | P1 | | The measured numbers recorded in [`docs/gates/`](../gates/). Until then the Windows defaults in section 6 are marked extrapolated in the settings doc |
+| ASR-12 | **Windows gate before Windows defaults.** Run ASR-5 and ASR-8 on a Windows x64 machine: Qwen through win-cpu and win-vulkan, the transcribe-cpp win32 package, sherpa streaming RTF on a 4-core x64 | P1 | | The measured numbers recorded in [`docs/gates/`](../gates/). Until then the Windows defaults in section 6 are marked extrapolated in the settings doc. Measured for the live engine and Qwen in [asr-12-windows.md](../gates/asr-12-windows.md); the transcribe-cpp leg waits for ASR-8 |
 
 ASR-1 and ASR-2 can start at once. ASR-12 gates the Windows defaults.
 
@@ -486,9 +486,9 @@ Each is cheap once the harness is in the repo (ASR-11):
 
 ## 10. Measured versus extrapolated
 
-**Measured:** every WER, bootstrap range, latency, RTF and memory figure above, all on an Apple M4 with 16 GB; Qwen on Linux on an arm64 VM; LLM fusion with claude-opus-5-5 through `claude -p`, and with gemma-4-12B through llama-server.
+**Measured:** every WER, bootstrap range, latency, RTF and memory figure above, on an Apple M4 with 16 GB unless it names another machine; Qwen on Linux on an arm64 VM; the live engine and Qwen on Windows x64, Qwen on CPU, Vulkan and CUDA ([ASR-12](../gates/asr-12-windows.md)); LLM fusion with claude-opus-5-5 through `claude -p`, and with gemma-4-12B through llama-server.
 
-**Extrapolated:** anything on Windows; x64 CPU speed; transcribe-cpp on Linux and Windows; Whisper's initial-prompt effect; the region-restricted LLM variant; the aligner off MLX; the download sizes of the runtime binaries; the memory budget rule; and the cost of the `lidc` second decode in production (13 %, from edacc's language-ID counts, not timed).
+**Extrapolated:** x64 CPU speed on Linux; transcribe-cpp on Linux and Windows; Whisper's initial-prompt effect; the region-restricted LLM variant; the aligner off MLX; the download sizes of the runtime binaries; the memory budget rule; and the cost of the `lidc` second decode in production (13 %, from edacc's language-ID counts, not timed).
 
 ## Summary
 
@@ -496,4 +496,4 @@ Each is cheap once the harness is in the repo (ASR-11):
 - Three runtimes: sherpa-onnx in the app for live streaming and Parakeet, llama-server as a child process for Qwen3-ASR-1.7B, transcribe-cpp from npm for Whisper, Cohere and Canary. One registry with `FinalEngine`, `LiveEngine` and `Fuser`; any number of engines in `asr.final.engines`.
 - Defaults: live nemotron-en or Nemotron 3.5 by language; the second pass (one Qwen or Parakeet rewrite per line, once a minute by default) only when chosen; final pass Qwen + Parakeet + Whisper with confidence ROVER (pooled 7.97 to 7.98, against 8.63 for Qwen with the language set and 11.23 for akou today); LLM fusion off.
 - Change now: Parakeet to greedy (ASR-1).
-- Impossible only where Apple hardware is the substrate. Windows is unmeasured, and ASR-12 gates its defaults.
+- Impossible only where Apple hardware is the substrate. On Windows the live engine and Qwen are measured (ASR-12): 2 live threads on 4 cores, and Qwen on an integrated GPU is slower than on the CPU.
