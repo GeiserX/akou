@@ -245,8 +245,12 @@ describe("the Settings page", () => {
         await page.selectOption(engine, "best");
         await until(() => sent.length === 1, 5000, "the save");
         expect(sent).toEqual([{ "server.dictation_engine": "best" }]);
-        expect((await rig.api("GET", "/config")).body.settings["server.dictation_engine"]).toBe(
-          "best",
+        // Sent is not saved yet: the request is seen as it leaves the page.
+        await until(
+          async () =>
+            (await rig.api("GET", "/config")).body.settings["server.dictation_engine"] === "best",
+          5000,
+          "the engine saved",
         );
       });
     },
