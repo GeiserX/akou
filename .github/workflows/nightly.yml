@@ -14,6 +14,11 @@ name: nightly
 #   for 3, 10 and 30 s of speech (docs/ux/DICTATION.md DC-T3), recorded and uploaded as this OS's
 #   entry of docs/gates/dictation-latency.json. That committed table comes from a real machine,
 #   since these runners have no GPU worth the name; the night's numbers sit beside it.
+#   Dictation's biasing gate (docs/ux/DICTATION.md DC-L7) on the same Qwen: hits, false insertions,
+#   WER and echo rate with the learned terms as context against none, with its positive control.
+#   It decodes 90 clips four times (about two hours on the macOS runner, past this job's timeout
+#   with the rest), so it runs by hand only (`only: biasing`); the committed result in
+#   docs/gates/dictation-biasing.json comes from a real machine.
 # - soak: one call through the app's call manager and the fake helper at 10x speed for one runner
 #   hour, so ten hours of audio, checked for holes in the audio, memory growth, a held event loop
 #   and an unreadable or swelling log (docs/TESTING.md TS-24, scripts/soak.ts).
@@ -30,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Stages to run, comma separated (fleurs, ami, replay, qwen, dictation); empty runs them all"
+        description: "Stages to run, comma separated (fleurs, ami, replay, qwen, dictation, biasing); empty runs all but biasing"
         required: false
         default: ""
 
