@@ -9,7 +9,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
-import { stereoWav } from "../fixtures/audio.ts";
+import { silentOpus } from "../fixtures/opus.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
 import {
@@ -42,14 +42,14 @@ async function withRig<T>(
 
 const text = (page: Page, sel: string) => page.locator(sel).first().textContent();
 
-/** Silent stereo audio of `seconds` for part 1 of a seeded call. */
+/**
+ * Silent stereo audio of `seconds` for part 1 of a seeded call, as Ogg Opus: the route serves a
+ * part as `audio/ogg`, and Linux WebKit now and then refused a WAV under that type with
+ * MEDIA_ERR_SRC_NOT_SUPPORTED, so the line never played.
+ */
 async function audio(rig: UiRig, id: string, seconds: number): Promise<void> {
   const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
-  const n = 16000 * seconds;
-  writeFileSync(
-    join(folder, "audio", "part-001.opus"),
-    stereoWav(new Float32Array(n), new Float32Array(n)),
-  );
+  writeFileSync(join(folder, "audio", "part-001.opus"), silentOpus(seconds));
 }
 
 const player = (page: Page) =>
