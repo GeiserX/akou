@@ -11,13 +11,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineLatency } from "../../scripts/eval/dictation-latency.ts";
 import {
+  exitCode,
   failureVerdicts,
   memoryMb,
+  nightVerdicts,
   pinned,
   readWav,
   SILENCE,
   timeEngines,
 } from "../../scripts/eval/nightly.ts";
+import type { Measure } from "../../scripts/eval/score.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -228,6 +231,27 @@ describe("the dictation stage when an engine fails", () => {
     expect(Object.keys(r.out)).toEqual(["remote"]);
     expect(r.failed).toEqual([{ engine: "live", why: "the stream stopped answering" }]);
     expect(closed).toEqual(["live-model", "remote-model"]);
+  });
+
+  test("a failed stage makes the night red: the verdicts carry it and the exit code is 1", () => {
+    const measures: Measure[] = [
+      {
+        key: "dictation.release_to_text.3s.live.p50",
+        value: 120,
+        unit: "ms",
+        better: "lower",
+        gate: "record",
+      },
+    ];
+    const failed = failureVerdicts("dictation", [{ engine: "qwen", why: "llama-server is down" }]);
+    const v = nightVerdicts(measures, {}, failed);
+    expect(v.map((x) => [x.key, x.ok])).toEqual([
+      ["dictation.release_to_text.3s.live.p50", true],
+      ["dictation.qwen", false],
+    ]);
+    expect(exitCode(v)).toBe(1);
+    // Positive control: the same night with no failed stage passes.
+    expect(exitCode(nightVerdicts(measures, {}, []))).toBe(0);
   });
 
   test("positive control: with every engine timed, nothing fails and no row is red", async () => {
