@@ -58,7 +58,12 @@ const player = (page: Page) =>
     return { paused: p.paused, at: p.currentTime, rate: p.playbackRate, line: p.dataset.line };
   });
 
-/** Plays a row from its own Play button and waits for its audio to load. */
+/**
+ * Plays a row from its own Play button and waits until its audio plays: past the line's start,
+ * not only unpaused. The player starts only once the seek to the line has landed, a moment after
+ * the metadata, so a pause sent before that finds nothing playing and the audio then starts
+ * behind the test's back; and Linux WebKit dropped a pause sent while play() was still pending.
+ */
 async function playRow(page: Page, lid: string): Promise<void> {
   await page.hover(`#lines .row[data-id="${lid}"]`);
   await page.click(`#lines .row[data-id="${lid}"] .play`);
@@ -66,12 +71,16 @@ async function playRow(page: Page, lid: string): Promise<void> {
     async () =>
       await page.evaluate((l) => {
         const p = document.getElementById("player") as HTMLAudioElement;
-        return p.dataset.line === l && p.readyState >= 1;
+        // A seek can land a few ms past the line's start: playing means well past it.
+        return p.dataset.line === l && !p.paused && p.currentTime > Number(p.dataset.seek) + 0.05;
       }, lid),
     8000,
-    "the line's audio",
+    "the line playing",
   );
 }
+
+/** Where a seek lands: WebKit's media backend puts a seek a few milliseconds past the time asked. */
+const near = (at: number, want: number) => Math.abs(at - want) < 0.05;
 
 /** Pauses the player and waits for its `pause` event, so every listener has run. */
 const pauseNow = (page: Page) =>
@@ -549,7 +558,6 @@ describe("the player bar (W5.3 to W5.6)", () => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
           await playRow(page, "l000003");
-          await until(async () => !(await player(page)).paused, 5000, "the line playing");
           // Restart makes the call record again: the bar goes, and the audio with it.
           const r = await rig.api("POST", `/calls/${id}/restart`, { force: true });
           expect(r.status).toBe(200);
@@ -681,15 +689,6 @@ describe("the player bar (W5.3 to W5.6)", () => {
           expect(await text(page, "#readout")).toBe("");
           expect(await page.locator("#marks .mk").count()).toBe(0);
           await playRow(page, "l000003");
-          // WebKit starts the audio a moment after the line's metadata: pause it once it plays.
-          await until(
-            async () =>
-              !(await page.evaluate(
-                () => (document.getElementById("player") as HTMLAudioElement).paused,
-              )),
-            5000,
-            "the line playing",
-          );
           await pauseNow(page);
           await until(
             async () => (await page.locator("#marks .mk").count()) === 2,
@@ -799,7 +798,7 @@ describe("the player bar (W5.3 to W5.6)", () => {
           const at = async () => (await player(page)).at;
           const press = async (key: string, want: number) => {
             await page.keyboard.press(key);
-            await until(async () => (await at()) === want, 5000, `${key} to ${want} s`);
+            await until(async () => near(await at(), want), 5000, `${key} to ${want} s`);
           };
           await press("Shift+ArrowRight", 8);
           await press("Shift+ArrowRight", 12);
@@ -807,17 +806,21 @@ describe("the player bar (W5.3 to W5.6)", () => {
           await press("Shift+ArrowLeft", 7);
           await press("Shift+ArrowLeft", 2);
           await press("Shift+ArrowLeft", 0);
+          // In a text field the key selects and the player stays where it is. The player's key
+          // handler runs in the same dispatch as the field's own action, so both are settled when
+          // the press returns. From 2 s, where a seek that leaked would still move it.
+          await seekTo(page, 2);
           await page.fill("#note-input", "abc");
           await page.focus("#note-input");
+          const before = await at();
           await page.keyboard.press("Shift+ArrowLeft");
-          await page.waitForTimeout(200);
-          expect(await at()).toBe(0);
           expect(
             await page.$eval("#note-input", (el) => {
               const i = el as HTMLInputElement;
               return (i.selectionEnd ?? 0) - (i.selectionStart ?? 0);
             }),
           ).toBe(1);
+          expect(await at()).toBe(before);
         },
       );
     },
@@ -1037,7 +1040,7 @@ describe("the player bar (W5.3 to W5.6)", () => {
           const at = async () => (await player(page)).at;
           const press = async (key: string, want: number) => {
             await page.keyboard.press(key);
-            await until(async () => (await at()) === want, 5000, `${key} to ${want} s`);
+            await until(async () => near(await at(), want), 5000, `${key} to ${want} s`);
           };
           // The scrubber's title promises Shift+← and Shift+→; its arrows take the same 5 s.
           expect(await page.getAttribute("#scrub", "title")).toContain("Shift+→");
@@ -1064,10 +1067,10 @@ describe("the player bar (W5.3 to W5.6)", () => {
           const from = await at();
           await press("Shift+ArrowRight", Math.min(12, from + 5));
           expect(await page.inputValue("#speed")).toBe("1.5");
-          // Space stays the picker's own key (it opens the list): the player does not start.
+          // Space stays the picker's own key (it opens the list): the player does not start. play()
+          // clears paused at once, inside the key's own dispatch, so no wait is needed to see it.
           expect((await player(page)).paused).toBe(true);
           await page.keyboard.press(" ");
-          await page.waitForTimeout(300);
           expect((await player(page)).paused).toBe(true);
         },
       );
