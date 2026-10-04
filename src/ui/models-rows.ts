@@ -51,6 +51,14 @@ export const DEFAULTS: Readonly<Record<string, string>> = {
   "server.default_model": "auto",
 };
 
+/** The engines of a fusion pass, short, as the window names a fusion. */
+const FUSED_NAMES: Readonly<Record<string, string>> = {
+  [QWEN_ID]: "Qwen3-ASR",
+  [RECOGNIZER_ID]: "Parakeet",
+  "whisper-large-v3": "Whisper",
+  "canary-1b-v2": "Canary",
+};
+
 const NAMES: Readonly<Record<string, string>> = {
   [RECOGNIZER_ID]: "Parakeet v3",
   [QWEN_ID]: "Qwen3-ASR 1.7B",
@@ -85,6 +93,13 @@ const BUILDS: Readonly<Record<string, string>> = {
  */
 export function modelName(r: Pick<ModelRow, "id" | "job"> & { name?: string | null }): string {
   if (NAMES[r.id]) return NAMES[r.id] as string;
+  // A fusion pass's id, `rover-conf(<ids>)`: its engines by name.
+  const fused = /^(?:rover-conf|rover-freq|first)\((.+)\)$/.exec(r.id)?.[1];
+  if (fused) {
+    const names = fused.split(",").map((id) => FUSED_NAMES[id] ?? NAMES[id] ?? id);
+    const last = names.pop() as string;
+    return `${names.length > 0 ? `${names.join(", ")} and ${last}` : last}, combined`;
+  }
   if (r.name) return r.name;
   if (r.id.startsWith("llama-server")) {
     const on = BUILDS[r.id.slice(r.id.lastIndexOf("-") + 1)];

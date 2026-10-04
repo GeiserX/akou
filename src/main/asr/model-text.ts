@@ -99,8 +99,13 @@ export function liveModelName(id: string): string {
   return MODEL_TEXT[id]?.name ?? VALUE_NAMES[id] ?? id;
 }
 
-/** The short name, for the Record row's button: `Qwen` for Qwen3-ASR. */
+/**
+ * The short name, for the Record row's button: `Qwen` for Qwen3-ASR, `Qwen + Whisper + Parakeet`
+ * for a pass that fused them (`rover-conf(<ids>)`).
+ */
 export function shortModelName(id: string): string {
+  const fused = /^(?:rover-conf|rover-freq|first)\((.+)\)$/.exec(id)?.[1];
+  if (fused) return fused.split(",").map(shortModelName).join(" + ");
   return MODEL_TEXT[id]?.short ?? liveModelName(id);
 }
 

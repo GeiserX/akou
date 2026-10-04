@@ -80,9 +80,11 @@ import {
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import {
   chooseFinalModel,
+  FINAL_FUSION,
   type FinalChoice,
   finalModelId,
   finalModelOf,
+  fusionEnginesHere,
 } from "./asr/final-model.ts";
 import type { FinalStep } from "./asr/final-text.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
@@ -2469,14 +2471,25 @@ export class AkouApp implements ApiApp {
     if (this.runMode === "server") return null;
     const setting = this.cfg.settings["asr.final.model"];
     const named = finalModelOf(setting);
+    const fused = setting === FINAL_FUSION ? this.finalFusion() : null;
     return {
       setting,
       named: named ? finalModelId(named) : null,
-      next: ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model),
+      next:
+        fused && fused.ids.length > 0
+          ? fused.ids.length === 1
+            ? (fused.ids[0] as string)
+            : fusionModelId(fused.fuser, fused.ids)
+          : ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model),
     };
   }
 
   finalChoice(asked?: string): FinalChoice {
+    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], this.finalContext());
+  }
+
+  /** What decides the final pass's models here. */
+  private finalContext(): LiveSetupContext {
     const ctx = this.liveContext();
     // A recognizer given on purpose (tests) stands for Parakeet: here with no test catalog, else
     // when the catalog's recognizer set is on disk, whatever that recognizer is called.
@@ -2484,10 +2497,22 @@ export class AkouApp implements ApiApp {
       this.o.models !== undefined
         ? this.givenRecognizer() || this.finalModelsPresent(false)
         : ctx.present(RECOGNIZER);
-    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], {
-      ...ctx,
-      present: (id) => (id === RECOGNIZER ? given : ctx.present(id)),
-    });
+    return { ...ctx, present: (id) => (id === RECOGNIZER ? given : ctx.present(id)) };
+  }
+
+  /**
+   * A fusion pass here (`asr.final.model` `fusion`): the `fusion` preset's fuser and engines
+   * (`asr.final.engines`, `asr.fusion`), the ones downloaded in the list's order, and the rest.
+   */
+  private finalFusion(): {
+    fuser: string;
+    ids: string[];
+    dropped: { engine: string; reason: string; units: null }[];
+  } {
+    const f = fusionChoice(this.cfg.settings);
+    // A recognizer given on purpose (tests) with no catalog: every engine is the test's own.
+    if (this.givenRecognizer()) return { fuser: f.fuser, ids: [...f.engines], dropped: [] };
+    return { fuser: f.fuser, ...fusionEnginesHere(f.engines, this.finalContext()) };
   }
 
   /**
@@ -2605,21 +2630,55 @@ export class AkouApp implements ApiApp {
         why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
-    // The engine first, so the presence check below is that engine's own.
-    const choice = this.finalChoice(asked);
-    const named = finalModelOf(asked);
-    const title = (m: string) => (m === "qwen" ? "Qwen" : "Parakeet");
-    // A model asked for by name for this run and not here: refused, never the other in its place.
-    if (named && choice.model !== named)
-      return { why: `${title(named)} cannot run this pass: ${choice.note}` };
-    if (!choice.model)
-      return { why: `no model can run the final pass: ${choice.note}`, unavailable: true };
-    const base = this.finalModels(choice.model === "qwen");
-    if (!base) return { why: "the speech models are not downloaded", unavailable: true };
-    if (choice.note) this.log("info", `final ${id}: runs ${title(choice.model)}: ${choice.note}`);
-    const qwen = choice.model === "qwen";
-    const models: ModelSpec = qwen ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
-    const model = models.final?.engine ?? modelNameFor(models);
+    // This run's model, else the call's own (`akou start --final`), else the setting.
+    const setting = asked ?? c.view.call?.final ?? this.cfg.settings["asr.final.model"];
+    const fused = setting === FINAL_FUSION ? this.finalFusion() : null;
+    if (fused && fused.ids.length === 0 && asked === FINAL_FUSION)
+      return {
+        why: `fusion cannot run this pass: ${fused.dropped.map((d) => `${d.engine} is ${d.reason}`).join("; ")}`,
+      };
+    let models: ModelSpec;
+    let qwen: boolean;
+    if (fused && fused.ids.length > 0) {
+      // The fusion preset's engines that are here, through the pass a fusion job runs.
+      for (const d of fused.dropped)
+        this.log("info", `final ${id}: ${d.engine} does not run: ${d.reason}`);
+      if (!this.finalModels(!fused.ids.includes(RECOGNIZER)))
+        return { why: "the speech models are not downloaded", unavailable: true };
+      const spec = this.fusionModels(fused.fuser, fused.ids);
+      if (!spec?.fusion) return { why: "the speech models are not downloaded", unavailable: true };
+      models = { ...spec, fusion: { ...spec.fusion, dropped: fused.dropped } };
+      qwen = fused.ids.includes(QWEN_ASR);
+    } else {
+      // The engine first, so the presence check below is that engine's own. A fusion list with
+      // nothing downloaded runs what `auto` runs, and says why.
+      const choice = this.finalChoice(fused ? "auto" : setting);
+      const named = asked === undefined ? null : finalModelOf(asked);
+      const title = (m: string) => (m === "qwen" ? "Qwen" : "Parakeet");
+      // A model asked for by name for this run and not here: refused, never the other in its place.
+      if (named && choice.model !== named)
+        return { why: `${title(named)} cannot run this pass: ${choice.note}` };
+      if (!choice.model)
+        return { why: `no model can run the final pass: ${choice.note}`, unavailable: true };
+      const base = this.finalModels(choice.model === "qwen");
+      if (!base) return { why: "the speech models are not downloaded", unavailable: true };
+      if (fused)
+        this.log(
+          "info",
+          `final ${id}: no engine of the fusion list is downloaded (${fused.dropped.map((d) => d.engine).join(", ")}), so it runs ${title(choice.model)}`,
+        );
+      if (choice.note) this.log("info", `final ${id}: runs ${title(choice.model)}: ${choice.note}`);
+      qwen = choice.model === "qwen";
+      models = qwen ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
+    }
+    const model = models.fusion
+      ? models.fusion.engines.length === 1
+        ? (models.fusion.engines[0]?.engine as string)
+        : fusionModelId(
+            models.fusion.fuser,
+            models.fusion.engines.map((e) => e.engine),
+          )
+      : (models.final?.engine ?? modelNameFor(models));
     const ws = c.view.call?.workspace ?? "";
     // One Qwen pass at a time: this one waits for the one ahead of it.
     const ahead = qwen ? this.qwenLine : null;
@@ -2730,6 +2789,17 @@ export class AkouApp implements ApiApp {
   private ranModels(model: string, audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
+    // A fusion pass: each engine was used, and the pass's time is theirs together, so it measures
+    // no one engine's speed.
+    const fused = fusionParts(model)?.engines;
+    if (fused) {
+      const set = this.runningSet()
+        .map((m) => m.id)
+        .filter((m) => m !== RECOGNIZER || fused.includes(RECOGNIZER));
+      const q = fused.includes(QWEN_ASR) ? reviewModels("qwen", this.liveContext()) : [];
+      shelf.touch([...new Set([...set, ...fused, ...q])]);
+      return;
+    }
     // On Qwen, Parakeet was not used (and may not be on disk).
     const qwen = model === QWEN_ASR;
     const set = this.runningSet()

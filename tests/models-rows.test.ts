@@ -396,6 +396,9 @@ describe("All models: the whole catalog by what each model does, the ones on dis
     }
     const tier = rows(HERE).find((r) => r.id === "nemotron-en-80") as ModelRow;
     expect(modelName(tier)).toBe("Nemotron streaming, English, 80 ms");
+    // A fusion pass after the call is named by its engines, never by its `rover-conf(...)` id.
+    const fused = "rover-conf(qwen3-asr-1.7b,whisper-large-v3,parakeet-tdt-0.6b-v3-fp32)";
+    expect(modelName({ id: fused, job: "" })).toBe("Qwen3-ASR, Whisper and Parakeet, combined");
     expect(catalogLine(tier)).toContain("Accuracy not measured yet.");
     expect(allModelsText(rows(HERE), "this Mac")).toBe(
       `5 on this Mac, ${MODELS.length - 5} more to download.`,

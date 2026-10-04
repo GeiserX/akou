@@ -126,6 +126,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["auto", "Automatic: Qwen when it is downloaded"],
       ["qwen3-asr-1.7b", "Qwen3-ASR"],
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
+      ["fusion", "Qwen, Whisper and Parakeet, combined"],
     ],
   },
   "asr.parakeet.decoding": {

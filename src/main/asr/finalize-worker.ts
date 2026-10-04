@@ -39,11 +39,11 @@
  *
  * A file job's pass runs any number of engines (`runEngines`, ASR-6): every engine decodes every
  * piece, one engine loaded at a time, and confidence ROVER fuses them (the `fusion` preset). A
- * call's pass stays single-engine (Parakeet or Qwen, `asr.final.model`) for now. Fusing it is not
- * a change to this loop alone: each engine in turn needs the pieces of every part and channel,
- * which this pass reads one channel at a time and never holds together; `final.done` needs fields
- * for the engines and the dropped ones in the event schema and the fold; and the pass's budget,
- * the Qwen-pass queue and the models ledger are all per engine today.
+ * call's pass runs one engine (Parakeet or Qwen, `asr.final.model`) unless the call asks for
+ * `fusion`: then the pass cuts every part and channel into its pieces first, keeping a 16-bit copy
+ * of each piece's audio (about 0.25 GB per hour of a two-channel call), runs the preset's engines
+ * over all of them through the same `runEngines`, and writes the lines from the fused words.
+ * `final.done` names the engines that decoded and the ones left out, and why.
  */
 
 import { closeSync, openSync, readSync } from "node:fs";
@@ -59,6 +59,7 @@ import {
   ASR_RATE,
   type DiarizedSpan,
   type FinalEngine,
+  type FusionEngineSpec,
   type FusionSpec,
   type Hypothesis,
   loadModelSet,
@@ -322,6 +323,25 @@ export async function openFinalAudio(spec: FinalAudioSpec): Promise<FinalAudio> 
 // ---------------------------------------------------------------------------
 // The pass
 
+/**
+ * Samples in -1..1 as 16-bit, clamped: how a fusion pass keeps its pieces between engines. The
+ * scale is the readers' (`/ 32768`), so audio that came from 16-bit samples comes back exactly and
+ * a fusion pass decodes what a single pass decodes.
+ */
+export function toPcm16(x: Float32Array): Int16Array {
+  const out = new Int16Array(x.length);
+  for (let i = 0; i < x.length; i++)
+    out[i] = Math.max(-32768, Math.min(32767, Math.round((x[i] as number) * 32768)));
+  return out;
+}
+
+/** 16-bit samples back to -1..1, as the readers turn them into floats. */
+export function fromPcm16(x: Int16Array): Float32Array {
+  const out = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = (x[i] as number) / 32768;
+  return out;
+}
+
 function readAll(audio: FinalAudio, part: number, ch: Channel, chunk: number): Float32Array {
   const n = audio.length(part);
   const out = new Float32Array(n);
@@ -502,9 +522,11 @@ export async function runFinalPass(
   models: ModelSet,
   emit: (d: EventDraft) => void,
   log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
-  engine?: FinalEngine,
+  engine?: FinalEngine | FusionPass,
 ): Promise<FinalResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
+  const fusion = engine && "engines" in engine ? engine : null;
+  const one = engine && !("engines" in engine) ? engine : undefined;
   const view = fold(input.events);
   const audio = input.audio;
   const chunk = Math.round(o.chunkSeconds * ASR_RATE);
@@ -515,8 +537,18 @@ export async function runFinalPass(
     .filter((p) => audio.length(p) > 0);
   const skipped: SkippedSpan[] = [];
   // With an engine (Qwen) the model set's recognizer is never prepared, so it never loads. The
-  // recognizer's name is known before it loads; the lines take the loaded one's own.
-  let modelId = engine ? engine.id : models.recognizerModel;
+  // recognizer's name is known before it loads; the lines take the loaded one's own. A fusion
+  // pass is named by its whole list until it has run, then by the engines that decoded.
+  let modelId = fusion
+    ? fusion.engines.length === 1
+      ? (fusion.engines[0] as FinalEngine).id
+      : fusionModelId(
+          fusion.fuser,
+          fusion.engines.map((e) => e.id),
+        )
+    : one
+      ? one.id
+      : models.recognizerModel;
   let step = "energy";
   if (!input.announced)
     emit({ type: "final.started", pid: input.pid ?? process.pid, model: modelId });
@@ -564,11 +596,11 @@ export async function runFinalPass(
     progress(0, "starting");
     // Qwen's llama-server starts now, so the step says so while it loads. A start that fails is
     // tried again by the first piece's decode, which restarts it once before the pass fails.
-    if (engine) {
+    if (one) {
       try {
-        await engine.load();
+        await one.load();
       } catch (err) {
-        log("warn", `${engine.id} did not start: ${(err as Error).message}; trying again`);
+        log("warn", `${one.id} did not start: ${(err as Error).message}; trying again`);
       }
     }
     const glossary = input.glossary ?? input.decode?.entries.map((e) => e.term) ?? [];
@@ -584,7 +616,7 @@ export async function runFinalPass(
     for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
     for (const w of hw?.warnings ?? []) log("warn", w);
     const unit = { lang: input.language ?? "auto", glossary };
-    const decoder = engine ?? hotwordEngine(hw as PreparedHotwords);
+    const decoder = fusion ? null : (one ?? hotwordEngine(hw as PreparedHotwords));
 
     // 3. Diarization over the call channel of all parts, concatenated.
     step = "diarize";
@@ -635,58 +667,180 @@ export async function runFinalPass(
     let callText = false;
     let callEnergy = false;
     const finals: TimedLabel[] = [];
-    for (const p of parts) {
-      const clock = view.part(p)?.clock;
-      if (!clock) continue;
-      const lines: Omit<Extract<EventDraft, { type: "seg" }>, "id">[] = [];
-      for (const ch of CHANNELS) {
-        if (!energy.get(`${p}:${ch}`)) continue;
-        if (ch === "call") callEnergy = true;
-        const samples = readAll(audio, p, ch, chunk);
-        const { flags, window } = speechFlags(samples, models);
-        const spans = spansByPart.get(p) ?? [];
-        const turns = ch === "call" ? spans : [];
-        for (const piece of timelinePieces(samples, flags, window, o, turns)) {
-          const skip = (from: number, to: number, error: string) =>
-            skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error });
-          // Qwen: an engine that stays down (it failed twice) fails the pass, never falls back.
-          // The words come back with the text; the log keeps the text only.
-          const r = await decodeUnit(decoder, unit, samples, piece.from, piece.to, o, skip);
-          progress(piece.to);
-          if (r.lang) languages.add(r.lang);
-          if (r.text === "") continue;
-          if (ch === "call") callText = true;
-          const a0 = piece.from / ASR_RATE;
-          const a1 = piece.to / ASR_RATE;
-          const spk = ch === "mic" ? "you" : labelPiece(piece, spans, o.attachSeconds);
-          const w0 = Math.round(clock.wallFromAudio(a0));
-          const w1 = Math.round(clock.wallFromAudio(a1));
-          if (ch === "call") finals.push({ spk, t0: w0, t1: w1 });
-          lines.push({
-            type: "seg",
-            rev: 1,
-            layer: "final",
-            part: p,
-            ch,
-            spk,
-            a0: round3(a0),
-            a1: round3(a1),
-            w0,
-            w1,
-            text: r.text,
-            model: modelId,
-            ...(r.lang ? { lang: r.lang } : {}),
-          });
-        }
-        worked += samples.length;
-        progress(0);
-      }
+    type Line = Omit<Extract<EventDraft, { type: "seg" }>, "id">;
+    /** A decoded piece as a line of part `p`, or nothing when it has no text. */
+    const lineOf = (
+      p: number,
+      ch: Channel,
+      piece: Piece,
+      r: Hypothesis,
+      clock: { wallFromAudio(a: number): number },
+      spans: readonly DiarizedSpan[],
+    ): Line | null => {
+      if (r.lang) languages.add(r.lang);
+      if (r.text === "") return null;
+      if (ch === "call") callText = true;
+      const a0 = piece.from / ASR_RATE;
+      const a1 = piece.to / ASR_RATE;
+      const spk = ch === "mic" ? "you" : labelPiece(piece, spans, o.attachSeconds);
+      const w0 = Math.round(clock.wallFromAudio(a0));
+      const w1 = Math.round(clock.wallFromAudio(a1));
+      if (ch === "call") finals.push({ spk, t0: w0, t1: w1 });
+      return {
+        type: "seg",
+        rev: 1,
+        layer: "final",
+        part: p,
+        ch,
+        spk,
+        a0: round3(a0),
+        a1: round3(a1),
+        w0,
+        w1,
+        text: r.text,
+        model: modelId,
+        ...(r.lang ? { lang: r.lang } : {}),
+      };
+    };
+    const closePart = (p: number, lines: Line[]) => {
       lines.sort((a, b) => (a.w0 as number) - (b.w0 as number) || (a.ch === "mic" ? -1 : 1));
       for (const l of lines) {
         layer.push({ ...l, id: `f${String(nextFinal).padStart(6, "0")}` } as EventDraft);
         nextFinal++;
       }
       layer.push({ type: "final.part.done", part: p });
+    };
+    let fused: { engines: string[]; dropped: EngineDrop[] } | null = null;
+    if (fusion) {
+      // Every piece of every part and channel first, each with a copy of its audio: each engine in
+      // turn decodes all of them (`runEngines`), so the channels cannot be read one at a time.
+      const units: {
+        p: number;
+        ch: Channel;
+        piece: Piece;
+        /** The piece's audio as 16-bit samples, half the memory, widened again for each decode. */
+        pcm: Int16Array;
+        spans: readonly DiarizedSpan[];
+      }[] = [];
+      for (const p of parts) {
+        if (!view.part(p)?.clock) continue;
+        for (const ch of CHANNELS) {
+          if (!energy.get(`${p}:${ch}`)) continue;
+          if (ch === "call") callEnergy = true;
+          const samples = readAll(audio, p, ch, chunk);
+          const { flags, window } = speechFlags(samples, models);
+          const spans = spansByPart.get(p) ?? [];
+          for (const piece of timelinePieces(samples, flags, window, o, ch === "call" ? spans : []))
+            units.push({
+              p,
+              ch,
+              piece,
+              pcm: toPcm16(samples.subarray(piece.from, piece.to)),
+              spans,
+            });
+        }
+      }
+      const total = units.reduce((n, u) => n + u.pcm.length, 0);
+      const ends: number[] = [];
+      for (const u of units) ends.push((ends.at(-1) ?? 0) + u.pcm.length);
+      let shown = 0;
+      const pass =
+        units.length > 0
+          ? await runEngines(
+              fusion.engines,
+              units.map((u) => ({
+                // A fresh array per engine's decode: nothing holds the widened copy after it.
+                get samples() {
+                  return fromPcm16(u.pcm);
+                },
+                from: 0,
+                to: u.pcm.length,
+              })),
+              {
+                fuser: fusion.fuser,
+                lang: unit.lang,
+                glossary,
+                minSplitSeconds: o.minSplitSeconds,
+                memoryBudgetMb: fusion.memoryBudgetMb,
+                log,
+                // With several engines the figure only grows: the first engine to reach a piece.
+                onUnit: (k) => {
+                  const end = ends[k] as number;
+                  if (end <= shown) return;
+                  shown = end;
+                  input.progress?.((callSeconds * end) / total, callSeconds, "decoding");
+                },
+              },
+            )
+          : null;
+      if (pass) modelId = pass.model;
+      fused = {
+        engines: (pass?.ran ?? []).filter((r) => r.units > 0).map((r) => r.id),
+        dropped: [...(fusion.dropped ?? []), ...(pass?.dropped ?? [])],
+      };
+      for (const k of pass?.skipped ?? []) {
+        const u = units[k.unit] as (typeof units)[number];
+        skipped.push({
+          part: u.p,
+          ch: u.ch,
+          a0: (u.piece.from + k.from) / ASR_RATE,
+          a1: (u.piece.from + k.to) / ASR_RATE,
+          error: k.error,
+        });
+      }
+      for (const p of parts) {
+        const clock = view.part(p)?.clock;
+        if (!clock) continue;
+        const lines: Line[] = [];
+        for (const [k, u] of units.entries()) {
+          if (u.p !== p) continue;
+          const l = lineOf(
+            p,
+            u.ch,
+            u.piece,
+            (pass as EnginesResult).hyps[k] as Hypothesis,
+            clock,
+            u.spans,
+          );
+          if (l) lines.push(l);
+        }
+        closePart(p, lines);
+      }
+    } else {
+      for (const p of parts) {
+        const clock = view.part(p)?.clock;
+        if (!clock) continue;
+        const lines: Line[] = [];
+        for (const ch of CHANNELS) {
+          if (!energy.get(`${p}:${ch}`)) continue;
+          if (ch === "call") callEnergy = true;
+          const samples = readAll(audio, p, ch, chunk);
+          const { flags, window } = speechFlags(samples, models);
+          const spans = spansByPart.get(p) ?? [];
+          const turns = ch === "call" ? spans : [];
+          for (const piece of timelinePieces(samples, flags, window, o, turns)) {
+            const skip = (from: number, to: number, error: string) =>
+              skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error });
+            // Qwen: an engine that stays down (it failed twice) fails the pass, never falls back.
+            // The words come back with the text; the log keeps the text only.
+            const r = await decodeUnit(
+              decoder as FinalEngine,
+              unit,
+              samples,
+              piece.from,
+              piece.to,
+              o,
+              skip,
+            );
+            progress(piece.to);
+            const l = lineOf(p, ch, piece, r, clock, spans);
+            if (l) lines.push(l);
+          }
+          worked += samples.length;
+          progress(0);
+        }
+        closePart(p, lines);
+      }
     }
     const decode_s = (performance.now() - decodeFrom) / 1000;
     for (const d of layer) emit(d);
@@ -717,6 +871,7 @@ export async function runFinalPass(
       ...(languages.size > 0 ? { languages: [...languages].sort() } : {}),
       ...(warning ? { warning } : {}),
       model: modelId,
+      ...(fused ? { engines: fused.engines, dropped: fused.dropped } : {}),
     });
     const audio_s = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
     return {
@@ -1121,8 +1276,10 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
   let models: ModelSet | undefined;
   let engine: FinalEngine | undefined;
-  // The VAD and the speaker labels come from the model set; the words from Qwen when it is named.
-  const { final: llama, ...setSpec } = m.models;
+  let fused: FinalEngine[] = [];
+  // The VAD and the speaker labels come from the model set; the words from Qwen when it is named,
+  // or from the fusion list's engines.
+  const { final: llama, fusion, ...setSpec } = m.models;
   let sent = Number.NEGATIVE_INFINITY;
   let sentStep: FinalStep | null = null;
   // A new step always goes; within decoding, at most once a second, and the last figure.
@@ -1135,14 +1292,18 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   };
   try {
     models = await loadModelSet(setSpec as ModelSpec);
-    if (llama) {
+    if (fusion) fused = await fusionEngines(fusion, models, m.decode, reply);
+    else if (llama) {
       const { createLlamaEngine } = await import("./llama-server.ts");
       engine = createLlamaEngine(llama, {
         onChild: (pid, alive) => reply({ type: "child", pid, alive }),
         log,
       });
     }
-    const langs = llama?.languages ?? [];
+    const langs =
+      llama?.languages ??
+      fusion?.engines.flatMap((e) => ("languages" in e && e.languages ? [e.languages] : []))[0] ??
+      [];
     const audio = await openFinalAudio(m.audio);
     try {
       result = await runFinalPass(
@@ -1160,7 +1321,14 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
         models,
         emit,
         log,
-        engine,
+        fusion
+          ? {
+              engines: fused,
+              fuser: fusion.fuser,
+              memoryBudgetMb: fusion.memoryBudgetMb,
+              dropped: fusion.dropped,
+            }
+          : engine,
       );
     } finally {
       audio.close?.();
@@ -1171,8 +1339,10 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
     emit({ type: "final.failed", step: "start", error });
     result = { ok: false, parts: [], skipped: [], error };
   }
-  // Qwen's llama-server stops with the pass: it holds the GPU and gigabytes of memory.
+  // Qwen's llama-server stops with the pass: it holds the GPU and gigabytes of memory. So does
+  // every engine of a fusion list (one left loaded when it was the only one).
   await engine?.unload().catch(() => {});
+  for (const e of fused) await e.unload().catch(() => {});
   // Before the answer: the host terminates this Worker on it, and a terminated Worker never frees
   // a model still waiting on its finalizer (`ModelSet.release`).
   await models?.release?.();
@@ -1260,7 +1430,15 @@ export async function finalizeCall(
   o: FinalizeOptions,
 ): Promise<FinalResult & { loads: Record<string, number> }> {
   const release = call.holdWriter();
-  const model = o.models.final?.engine ?? modelNameFor(o.models);
+  const fusion = o.models.fusion;
+  const model = fusion
+    ? fusion.engines.length === 1
+      ? (fusion.engines[0] as FusionEngineSpec).engine
+      : fusionModelId(
+          fusion.fuser,
+          fusion.engines.map((e) => e.engine),
+        )
+    : (o.models.final?.engine ?? modelNameFor(o.models));
   // Written before the first await, so the pass is in the log by the time the caller answers: a
   // `finalize --force` followed by `akou wait` never takes the earlier final.done for this one.
   call.record({ type: "final.started", pid: process.pid, model });
@@ -1301,8 +1479,12 @@ export async function finalizeCall(
       options: o.options,
     };
     const clock = o.clock ?? realClock;
+    // A fusion pass decodes the call once per engine, one after another.
+    const llama = o.models.final || fusion?.engines.some((e) => e.kind === "llama-server");
     const budget =
-      o.budgetMs ?? finalBudgetMs(events) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
+      o.budgetMs ??
+      finalBudgetMs(events) * Math.max(1, fusion?.engines.length ?? 1) +
+        (llama ? FINAL_LLAMA_START_MS : 0);
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
@@ -1477,6 +1659,8 @@ export interface FusionPass {
   fuser: BuiltFuser;
   /** MB; 0 or absent: none. */
   memoryBudgetMb?: number;
+  /** Engines of the list the host left out before the pass (not downloaded), and why. */
+  dropped?: readonly EngineDrop[];
 }
 
 /**
@@ -1770,7 +1954,7 @@ async function fusionEngines(
   spec: FusionSpec,
   models: ModelSet,
   decode: DecodeList | null,
-  reply: (r: FromJob) => void,
+  reply: (r: Extract<FromJob, { type: "log" | "child" }>) => void,
 ): Promise<FinalEngine[]> {
   const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
   const out: FinalEngine[] = [];

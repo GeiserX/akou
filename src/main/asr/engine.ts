@@ -323,7 +323,7 @@ export type FusionEngineSpec = (
   | { kind: "module"; path: string; engine: string; options?: unknown }
 ) & { memoryMb?: number };
 
-/** The N-engine pass of a file job (ASR-6). */
+/** The N-engine pass of a file job, or of a call's final pass on `fusion` (ASR-6). */
 export interface FusionSpec {
   /** `asr.fusion`. */
   fuser: "first" | "rover-freq" | "rover-conf";
@@ -331,6 +331,8 @@ export interface FusionSpec {
   engines: readonly FusionEngineSpec[];
   /** The memory budget, MB; an engine whose estimate is over it is dropped. 0 or absent: none. */
   memoryBudgetMb?: number;
+  /** Engines the host left out before the pass (a call's: not downloaded), for `final.done`. */
+  dropped?: readonly { engine: string; reason: string; units: number | null }[];
 }
 
 export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
