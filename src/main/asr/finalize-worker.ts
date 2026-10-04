@@ -876,8 +876,11 @@ export interface EnginesOptions {
   /** An engine whose `memoryMb` is over this is dropped before it loads. 0 or absent: none. */
   memoryBudgetMb?: number;
   log?(level: "info" | "warn" | "error", msg: string): void;
-  /** Unit `u` was decoded by the engine whose turn it is, whole or in part (a job's progress). */
-  onUnit?(u: number): void;
+  /**
+   * Unit `u` was decoded, whole or in part, by the engine whose turn is `k` of `n` (0-based, in the
+   * order the engines run, a dropped one's turn included): a job's progress over every engine.
+   */
+  onUnit?(u: number, k: number, n: number): void;
 }
 
 export interface EnginesResult {
@@ -962,6 +965,7 @@ export async function runEngines(
     }
     const idx = remaining.splice(at, 1)[0] as number;
     const e = engines[idx] as FinalEngine;
+    const turn = n - remaining.length - 1;
     const drop = (reason: string, units: number | null, err: Error) => {
       dropped.push({ engine: e.id, reason, units });
       errors[idx] = err;
@@ -1020,7 +1024,7 @@ export async function runEngines(
           break;
         }
         run.decode_s += (performance.now() - t) / 1000;
-        o.onUnit?.(u);
+        o.onUnit?.(u, turn, n);
         // Fusion aligns words; a single engine's result keeps exactly what the engine gave.
         if (n > 1) h = withWords(h);
         const said = heard[u];
@@ -1557,7 +1561,8 @@ export async function runJobPass(
     }
     diarize_s = round3((performance.now() - diarizeFrom) / 1000);
   }
-  tell("transcribe", from / ASR_RATE);
+  // Where the speech starts, of every engine's pass over the file (the share each piece adds below).
+  tell("transcribe", from / ASR_RATE / engines.length);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
   const words: JobWord[] = [];
@@ -1576,7 +1581,6 @@ export async function runJobPass(
   const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) =>
     heardSpeech.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true),
   );
-  let shown = from / ASR_RATE;
   const pass = await runEngines(
     engines,
     pieces.map((p) => ({ samples, from: p.from, to: p.to })),
@@ -1588,13 +1592,12 @@ export async function runJobPass(
       minSplitSeconds: o.minSplitSeconds,
       memoryBudgetMb: fusion?.memoryBudgetMb,
       log,
-      // The transcribe stage's progress, piece by piece; with several engines it only grows, so
-      // the first engine to reach a piece is what it shows.
-      onUnit: (u) => {
+      // The transcribe stage's progress, piece by piece over every engine: with `n` engines the
+      // file is gone through `n` times, so engine `k` at second `end` has done `k` passes and
+      // `end` seconds of one more, of `n` whole passes.
+      onUnit: (u, k, n) => {
         const end = (from + (pieces[u] as { to: number }).to) / ASR_RATE;
-        if (end <= shown) return;
-        shown = end;
-        tell("transcribe", end);
+        tell("transcribe", (k * duration_s + end) / n);
       },
     },
   );

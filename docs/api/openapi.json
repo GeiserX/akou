@@ -1029,7 +1029,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -6881,7 +6881,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (seconds of the file transcribed so far) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
+        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (how much of the work is done, in seconds of `total_s`; with several engines, every engine's pass over the file counts) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
         "parameters": [
           {
             "name": "id",

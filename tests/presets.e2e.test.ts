@@ -15,6 +15,7 @@ import { ApiClient } from "../src/main/cli/client.ts";
 import { createMcpServer } from "../src/main/mcp/server.ts";
 import { fillPreset, listPresets, parsePreset, usesSpeaker } from "../src/main/notes/presets.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 import { fakeApi, mcpClient } from "./mcp-helpers.ts";
@@ -149,8 +150,18 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
       "---\nlabel: Risks for {user}\norder: 35\n---\nWhat risks came up in {title}?\n",
     );
     try {
-      const raw = await rig.api("GET", "/presets");
-      expect(raw.body.presets.find((p: { name: string }) => p.name === "risks")).toEqual({
+      // The route reads the folder on every request; a loaded or scanned disk may show a file
+      // just written a moment late, so it is polled, with a bound, never slept on.
+      let raw: Awaited<ReturnType<typeof rig.api>> | undefined;
+      await until(
+        async () => {
+          raw = await rig.api("GET", "/presets");
+          return raw.body.presets.some((p: { name: string }) => p.name === "risks");
+        },
+        5000,
+        "the dropped file listed",
+      );
+      expect(raw?.body.presets.find((p: { name: string }) => p.name === "risks")).toEqual({
         name: "risks",
         label: "Risks for {user}",
         order: 35,
@@ -183,8 +194,14 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
     } finally {
       rmSync(join(userDir(), "risks.md"));
     }
-    const gone = await rig.api("GET", "/presets");
-    expect(gone.body.presets.map((p: { name: string }) => p.name)).not.toContain("risks");
+    await until(
+      async () =>
+        !(await rig.api("GET", "/presets")).body.presets.some(
+          (p: { name: string }) => p.name === "risks",
+        ),
+      5000,
+      "the removed file gone from the list",
+    );
   });
 
   test("akou ask --preset asks the file's question of one call, even one about all my calls", async () => {

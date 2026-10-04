@@ -228,6 +228,90 @@ describe("the Settings page", () => {
   );
 
   test(
+    "call audio's One app picks from the apps playing now, keeps one that is not, and takes a typed id",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        const sent = patches(page);
+        await openSettings(page);
+        const row = "#page-settings .pg-row[data-key='capture.call']";
+        const pick = "#set-capture-call-pick";
+        const typed = "#set-capture-call-app";
+        const options = () =>
+          page.$$eval(`${pick} option`, (os) =>
+            os.map((o) => [(o as HTMLOptionElement).value, o.textContent]),
+          );
+        // The whole computer by default: no list until One app is chosen.
+        expect(await page.isVisible(pick)).toBe(false);
+        await page.click(`${row} label:has-text('One app')`);
+        await page.waitForSelector(`${pick}:visible`);
+        // The fake helper's apps by name, a first row asking for one and the typed way last.
+        expect(await options()).toEqual([
+          ["", "Choose an app"],
+          ["com.example.call", "Example Call"],
+          ["com.example.music", "com.example.music"],
+          ["~", "An app by its id…"],
+        ]);
+        // Choosing the mode saves nothing until an app is picked.
+        expect(sent).toEqual([]);
+        await page.selectOption(pick, "com.example.call");
+        await until(() => sent.length === 1, 5000, "the app's save");
+        expect(sent[0]).toEqual({ "capture.call": "app:com.example.call" });
+        // An app not running now, by its id.
+        expect(await page.isVisible(typed)).toBe(false);
+        await page.selectOption(pick, "~");
+        await page.waitForSelector(`${typed}:visible`);
+        await page.fill(typed, "us.zoom.xos");
+        await page.press(typed, "Tab");
+        await until(() => sent.length === 2, 5000, "the typed app's save");
+        expect(sent[1]).toEqual({ "capture.call": "app:us.zoom.xos" });
+        // Shown again, the saved app stays chosen, marked as not playing, never swapped.
+        await page.click("#calls-open");
+        await openSettings(page);
+        await page.waitForSelector(`${pick}:visible`);
+        expect(await page.inputValue(pick)).toBe("us.zoom.xos");
+        expect((await options()).at(-2)).toEqual(["us.zoom.xos", "us.zoom.xos (not playing now)"]);
+        expect(await page.textContent(row)).toContain("Whole computer is the default");
+        await page.click(`${row} label:has-text('Whole computer')`);
+        await until(() => sent.length === 3, 5000, "back to the whole computer");
+        expect(sent[2]).toEqual({ "capture.call": "system" });
+        expect(await page.isVisible(pick)).toBe(false);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "where one app cannot be recorded, One app is not offered and the row says why",
+    async () => {
+      await withRig({ helperArgs: ["--no-apps"] }, async (rig) => {
+        const page = await rig.open();
+        await openSettings(page);
+        const row = "#page-settings .pg-row[data-key='capture.call']";
+        expect(await page.$(`${row} input[data-value='app']`)).toBeNull();
+        expect(await page.$(`${row} input[data-value='system']`)).not.toBeNull();
+        expect(await page.$("#set-capture-call-pick")).toBeNull();
+        expect(await page.textContent(row)).toContain(
+          "Capturing one app is not available on this fake.",
+        );
+        // An app saved before shows as one app that cannot work here, not as the whole computer.
+        const r = await rig.api("PATCH", "/config", { "capture.call": "app:com.example.call" });
+        expect(r.status).toBeLessThan(400);
+        await page.click("#calls-open");
+        await openSettings(page);
+        const app = `${row} input[data-value='app']`;
+        await page.waitForSelector(app, { state: "attached" });
+        expect(await page.isChecked(app)).toBe(true);
+        expect(await page.textContent(`${row} label:has(input[data-value='app'])`)).toBe(
+          "One app (not available here)",
+        );
+        expect(await page.isVisible("#set-capture-call-app")).toBe(false);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Server mode's engine for other computers' dictation is a choice in words, as on the server's page",
     async () => {
       await withRig({}, async (rig) => {
