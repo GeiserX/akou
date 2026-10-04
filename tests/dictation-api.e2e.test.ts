@@ -204,4 +204,54 @@ describe("DC-L6: a dictation goes through its vocabulary", () => {
     const second = await upload(r, path);
     expect(second.body).toMatchObject({ raw: "deploy hetzna", text: "deploy hetzna" });
   });
+
+  test('DC-U5: "at sign" to @ saves as a dictation word and the next dictation inserts @; a call word cannot be a symbol alone', async () => {
+    const r = await rig();
+    const path = clip(scratch(), ["hello", "at", "sign", "example"]);
+    // Before the word exists, what was heard goes in.
+    expect((await upload(r, path)).body).toMatchObject({ text: "hello at sign example" });
+    // The control: without `scope: dictation` the term is refused, as calls have always refused it.
+    const call = await r.api("POST", "/vocab", { term: "@", heard: ["at sign"] });
+    expect([call.status, call.body.error]).toEqual([400, "bad_term"]);
+    const add = await r.api("POST", "/vocab", {
+      term: "@",
+      heard: ["at sign"],
+      scope: "dictation",
+    });
+    expect(add.status).toBe(201);
+    // A second symbol is its own entry, never the first one replaced.
+    const hash = await r.api("POST", "/vocab", {
+      term: "#",
+      heard: ["hash sign"],
+      scope: "dictation",
+    });
+    expect(hash.status).toBe(201);
+    const listed = (await r.api("GET", "/vocab")).body.entries as { term: string }[];
+    expect(listed.map((e) => e.term).filter((t) => t === "@" || t === "#")).toEqual(["@", "#"]);
+    expect((await upload(r, path)).body).toMatchObject({
+      raw: "hello at sign example",
+      text: "hello @ example",
+    });
+  });
+
+  test("DC-U5: an import with `scope: dictation` takes a symbol alone; without it the line is skipped", async () => {
+    const r = await rig();
+    // The control: an import for calls skips the symbol, as `POST /vocab` refuses it.
+    const plain = await r.api("POST", "/vocab/import", { text: "& <= and sign\n" });
+    expect([plain.body.imported, plain.body.skipped.length]).toEqual([0, 1]);
+    const dict = await r.api("POST", "/vocab/import", {
+      text: "& <= and sign\n",
+      scope: "dictation",
+    });
+    expect([dict.body.imported, dict.body.skipped]).toEqual([1, []]);
+    const listed = (await r.api("GET", "/vocab")).body.entries as {
+      term: string;
+      heard: string[];
+      entryScope?: string;
+    }[];
+    expect(listed.find((e) => e.term === "&")).toMatchObject({
+      heard: ["and sign"],
+      entryScope: "dictation",
+    });
+  });
 });

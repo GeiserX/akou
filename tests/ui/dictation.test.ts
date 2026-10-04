@@ -22,6 +22,7 @@ import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import {
   type DictionaryEntry,
   isReplacement,
+  readVocab,
   WORDS_SHOWN,
 } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
@@ -3646,6 +3647,65 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "DC-L5: a fix left unanswered waits under To review; Learn it writes it, and Remove in the editor gives the heard form back",
+    async () => {
+      // The fake engine hears "kubernetes" as "kubernetis" unless the vocabulary fixes it.
+      const clip = monoWav(concat(silence(0.6), speak(["deploy", "to", "kubernetes"]), silence(1)));
+      const dictate = async () => {
+        const form = new FormData();
+        form.append("file", new Blob([new Uint8Array(clip)]), "clip.wav");
+        form.append("engine", "fast");
+        const res = await fetch(`http://127.0.0.1:${rig.port}/v1/dictations`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${rig.token}`, "x-akou-client": "test" },
+          body: form,
+        });
+        return ((await res.json()) as { text: string }).text;
+      };
+      expect(await dictate()).toBe("deploy to kubernetis");
+      const d = rig.app.dictation();
+      if (!d) throw new Error("the app runs no dictation");
+      const id = [...d.log.events()].reverse().find((e) => e.type === "dictation.started")
+        ?.id as string;
+      // As the draft box's chip writes a fix the user let go.
+      const pair = {
+        type: "dictation.learn",
+        id,
+        term: "Kubernetes",
+        heard: "kubernetis",
+      } as const;
+      d.log.append({ ...pair, status: "proposed", evidence: "none" });
+      d.log.append({ ...pair, status: "ignored", evidence: "none" });
+
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.click("#dictation-review-open");
+      const review = (x: string) => `#dictionary-list .review-dictation [data-term='${x}']`;
+      await page.waitForSelector(review("Kubernetes"));
+      expect(await text(page, "#dictionary-list .review-dictation .pg-sec")).toBe("To review");
+      expect(await page.getAttribute(review("Kubernetes"), "data-state")).toBe("waiting");
+      await page.click(`${review("Kubernetes")} button[data-action='approve']`);
+      await page.waitForSelector(`${review("Kubernetes")}[data-state='accepted']`);
+      expect(vocabFile().find((e) => e.term === "Kubernetes")).toMatchObject({
+        heard: ["kubernetis"],
+        entryScope: "dictation",
+      });
+      expect(await dictate()).toBe("deploy to Kubernetes");
+
+      // The editor's one click: the entry leaves the file, and the next dictation writes what
+      // it heard again, read through the fold.
+      const word = "section[data-section='Words'] li[data-term='Kubernetes']";
+      await page.waitForSelector(word);
+      await page.click(`${word} .pg-link`);
+      await page.click(`${word} button.remove`);
+      await page.waitForSelector(word, { state: "detached" });
+      expect(vocabFile().some((e) => e.term === "Kubernetes")).toBe(false);
+      expect(await dictate()).toBe("deploy to kubernetis");
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("DC-U3: the dictation key recorder", () => {
@@ -4022,6 +4082,42 @@ describe("DC-U4: reading the microphones", () => {
     expect(await readMics(answering(200, { inputs }))).toEqual({
       inputs: [{ id: "m1", name: "Desk Mic" }],
     });
+  });
+});
+
+describe("DC-U5: the Words page reads the vocabulary of the call on screen", () => {
+  /** A transport that answers each path as `answers` says, recording the paths asked. */
+  const answering = (answers: Record<string, { status: number; body: unknown }>) => {
+    const asked: string[] = [];
+    const t = {
+      kind: "browser",
+      request: async (_m: string, path: string) => {
+        asked.push(path);
+        return answers[path] ?? { status: 404, body: {} };
+      },
+    } as unknown as Transport;
+    return { t, asked };
+  };
+  const words = {
+    status: 200,
+    body: {
+      entries: [
+        { term: "Vercel", heard: [], confirmed: true, scope: "global", file: "/c/vocabulary.yaml" },
+      ] as DictionaryEntry[],
+    },
+  };
+
+  test("a call folder named so the vocabulary refuses it as a workspace still shows the global words", async () => {
+    const a = answering({
+      "/vocab?workspace=con": { status: 400, body: { message: 'invalid workspace "con"' } },
+      "/vocab": words,
+    });
+    expect(await readVocab(a.t, "con")).toEqual(words);
+    expect(a.asked).toEqual(["/vocab?workspace=con", "/vocab"]);
+    // The control: a workspace the vocabulary takes is read once, as it is.
+    const b = answering({ "/vocab?workspace=work": words });
+    expect(await readVocab(b.t, "work")).toEqual(words);
+    expect(b.asked).toEqual(["/vocab?workspace=work"]);
   });
 });
 
