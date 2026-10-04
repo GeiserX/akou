@@ -132,6 +132,18 @@ describe("notifyFor", () => {
     expect(suspect?.body).toContain("System Audio Recording");
   });
 
+  test("a per-app call that lost its app says it now records the whole computer, with no app name", () => {
+    const e: NotifyEvent = { type: "capture", call: "c1", ch: "call", state: "tapped-apps-exited" };
+    const got = notifyFor(e, at(false));
+    expect(got).toEqual({
+      title: "Recording the whole computer now",
+      body: "The app you picked quit or restarted. akou now records the whole computer so nothing is lost. Stop it if the meeting is over.",
+      key: "capture:c1:call:tapped-apps-exited",
+    });
+    // The window's banner says it in place.
+    expect(notifyFor(e, at(true))).toBeNull();
+  });
+
   test("the author of a start names its door", () => {
     expect(originOf("user")).toBe("window");
     expect(originOf("agent:cli")).toBe("cli");

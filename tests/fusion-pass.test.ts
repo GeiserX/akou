@@ -11,6 +11,7 @@ import type { FinalEngine, FinalUnit, Hypothesis, WordHyp } from "../src/main/as
 import {
   type EnginesOptions,
   type EngineUnit,
+  type JobProgress,
   recognizerEngine,
   runEngines,
   runJobPass,
@@ -476,6 +477,31 @@ describe("[ASR-6] the N-engine pass in a file job", () => {
         units: null,
       },
     ]);
+  });
+
+  test("[akou-5an.116] the progress counts every engine: each piece once per engine, and it only grows", async () => {
+    const models = new FakeModels({ words: true });
+    const seen: JobProgress[] = [];
+    const r = await runJobPass(
+      { samples: NOTE, diarize: false, decode: null, progress: (p) => seen.push(p) },
+      models,
+      () => {},
+      {
+        engines: [createEngine({}, WHISPER_LARGE_V3), recognizerEngine(RECOGNIZER, models, null)],
+        fuser: "rover-conf",
+      },
+    );
+    const done = seen.filter((p) => p.stage === "transcribe").map((p) => p.done_s);
+    // The stage's start, then one report per piece per engine.
+    expect(done.length).toBe(1 + 2 * r.segments.length);
+    for (let i = 1; i < done.length; i++) {
+      expect(done[i] as number).toBeGreaterThan(done[i - 1] as number);
+    }
+    // The first engine takes it to half way at most; the second one past it, never past the file.
+    expect(done[r.segments.length] as number).toBeLessThanOrEqual(r.duration_s / 2);
+    expect(done.at(-1) as number).toBeGreaterThan(r.duration_s / 2);
+    expect(done.at(-1) as number).toBeLessThanOrEqual(r.duration_s);
+    for (const p of seen) expect(p.total_s).toBe(r.duration_s);
   });
 
   test("a single-engine job carries no fusion report and keeps its engine's own words", async () => {

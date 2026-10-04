@@ -12,6 +12,7 @@ on:
       - src/main/asr/models.ts
       - src/main/asr/sherpa.ts
       - scripts/models-smoke.ts
+      - scripts/clip.ts
       - bun.lock
       - .github/workflows/models.yml
   pull_request:
@@ -19,6 +20,7 @@ on:
       - src/main/asr/models.ts
       - src/main/asr/sherpa.ts
       - scripts/models-smoke.ts
+      - scripts/clip.ts
       - bun.lock
       - .github/workflows/models.yml
   workflow_dispatch:
