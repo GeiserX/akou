@@ -829,7 +829,9 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
 
   test("the app carries the binary where the menu looks: beside the main process", () => {
     // The build copies it to `bun/akou`, beside `bun/tray`; the menu reads it beside the tray.
-    expect(builtCopies((p) => p === BUILT.cli)).toEqual({ [BUILT.cli]: `${MAIN_OUT}/akou` });
+    expect(builtCopies((p) => p === BUILT.cli, "darwin")).toEqual({
+      [BUILT.cli]: `${MAIN_OUT}/akou`,
+    });
     expect(builtCopies(() => false)).toEqual({});
     expect(dirname(BUNDLED_CLI)).toBe(dirname(TRAY_DIR));
     expect(basename(BUNDLED_CLI)).toBe("akou");

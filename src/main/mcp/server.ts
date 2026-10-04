@@ -33,6 +33,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
 import { type LearnedItem, learnedNote } from "../../core/vocab/learned.ts";
 import { APP_VERSION } from "../app-info.ts";
+import { callModeWords } from "../capture/call-mode.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
 import { listPresets, usesSpeaker } from "../notes/presets.ts";
@@ -223,6 +224,12 @@ const OUT = {
       .boolean()
       .optional()
       .describe("True when a call was already recording: this is that call, not a new one."),
+    callMode: z
+      .string()
+      .optional()
+      .describe(
+        'With attached: what that call records as its call side ("system", "none" or "app:ID"), which may differ from the call asked for.',
+      ),
     folder: z.string(),
     url: z.string().nullable(),
   }),
@@ -605,7 +612,7 @@ export function createMcpServer(o: McpOptions): McpServer {
       void refreshAsk();
       return asResult(r, (b) => ({
         text: b.attached
-          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder}`
+          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}${typeof b.callMode === "string" ? `; ${callModeWords(b.callMode)}` : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder}`
           : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder}`,
         // An older app still answers a dead `akou://` link here (PG-U1): never pass it on.
         data: { ...b, url: null },
