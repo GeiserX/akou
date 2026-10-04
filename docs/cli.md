@@ -919,7 +919,7 @@ example: akou serve
 | Play the audio | none: playback happens in the window | `GET /calls/:id/audio/:part` | none: playback happens in the window | `src/ui/window.ts` |
 | Quit | `quit` | `POST /quit` | none: left out on purpose (PG-M4 exclusions) | `src/main/window/shell.ts` |
 | Import from hark-viewer | `import` | `POST /import/hark-viewer` | none: left out on purpose (PG-M4 exclusions) | none: a one-time migration; the CLI is enough |
-| Devices and apps | `devices`, `apps` | `GET /devices`, `GET /apps` | `akou_devices` | `src/ui/dictation-mic.ts` |
+| Devices and apps | `devices`, `apps` | `GET /devices`, `GET /apps` | `akou_devices` | `src/ui/dictation-mic.ts`, `src/ui/settings-page.ts` |
 | Update the CLI | `self-update` | none: the CLI replaces its own binary; not built yet | none: touches only akou's own folders or the terminal (docs/ux/CLI.md section 14) | none: the app's update notice is DK-U1 |
 | What this akou is and can do | none: a program reads it before it offers presets; the CLI already knows its akou | `GET /server`, `GET /openapi.json` | none: the MCP server talks to the akou it was installed with | none: the window is the app itself |
 | Transcribe a file as a job (server mode) | `transcribe`, `jobs` | `POST /jobs`, `GET /jobs`, `GET /jobs/:id`, `GET /jobs/:id/result`, `DELETE /jobs/:id`, `GET /events`, `POST /audio/transcriptions` | `akou_transcribe`, `akou_job_get`, `akou_jobs_list` | `src/ui/server-jobs.ts` |
