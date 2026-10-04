@@ -42,8 +42,8 @@
  * call's pass runs one engine (Parakeet or Qwen, `asr.final.model`) unless the call asks for
  * `fusion`: then the pass cuts every part and channel into its pieces first, keeping a 16-bit copy
  * of each piece's audio (about 0.25 GB per hour of a two-channel call), runs the preset's engines
- * over all of them through the same `runEngines`, and writes the lines from the fused words. `final.done` names the engines that decoded and the ones
- * left out, and why.
+ * over all of them through the same `runEngines`, and writes the lines from the fused words.
+ * `final.done` names the engines that decoded and the ones left out, and why.
  */
 
 import { closeSync, openSync, readSync } from "node:fs";
@@ -323,18 +323,22 @@ export async function openFinalAudio(spec: FinalAudioSpec): Promise<FinalAudio> 
 // ---------------------------------------------------------------------------
 // The pass
 
-/** Samples in -1..1 as 16-bit, clamped: how a fusion pass keeps its pieces between engines. */
+/**
+ * Samples in -1..1 as 16-bit, clamped: how a fusion pass keeps its pieces between engines. The
+ * scale is the readers' (`/ 32768`), so audio that came from 16-bit samples comes back exactly and
+ * a fusion pass decodes what a single pass decodes.
+ */
 export function toPcm16(x: Float32Array): Int16Array {
   const out = new Int16Array(x.length);
   for (let i = 0; i < x.length; i++)
-    out[i] = Math.round(Math.max(-1, Math.min(1, x[i] as number)) * 32767);
+    out[i] = Math.max(-32768, Math.min(32767, Math.round((x[i] as number) * 32768)));
   return out;
 }
 
-/** 16-bit samples back to -1..1. */
+/** 16-bit samples back to -1..1, as the readers turn them into floats. */
 export function fromPcm16(x: Int16Array): Float32Array {
   const out = new Float32Array(x.length);
-  for (let i = 0; i < x.length; i++) out[i] = (x[i] as number) / 32767;
+  for (let i = 0; i < x.length; i++) out[i] = (x[i] as number) / 32768;
   return out;
 }
 

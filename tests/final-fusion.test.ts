@@ -187,12 +187,19 @@ describe("[ASR-6] a call's final pass on fusion", () => {
     });
   });
 
-  test("a piece kept between engines as 16-bit comes back within one step, clamped to -1..1", () => {
-    const x = Float32Array.from([0, 0.5, -0.25, 0.123456, 1.5, -2]);
-    const back = fromPcm16(toPcm16(x));
-    for (const [i, v] of [0, 0.5, -0.25, 0.123456, 1, -1].entries())
-      expect(Math.abs((back[i] as number) - v)).toBeLessThanOrEqual(1 / 32767);
-    expect(toPcm16(x).byteLength).toBe(x.byteLength / 2);
+  test("a piece kept between engines as 16-bit comes back exactly when it came from 16-bit audio, clamped otherwise", () => {
+    // The readers' own scale, k / 32768: every 16-bit value, the extremes included.
+    const ks = [-32768, -32767, -12345, -1, 0, 1, 2, 16384, 32766, 32767];
+    const read = Float32Array.from(ks, (k) => k / 32768);
+    const back = fromPcm16(toPcm16(read));
+    expect([...back]).toEqual([...read]);
+    expect([...toPcm16(read)]).toEqual(ks);
+    // Positive control: the old 32767 scale moves such samples by half a step.
+    expect(Math.round((16384 / 32768) * 32767) / 32767).not.toBe(16384 / 32768);
+    // Out of range is clamped to the 16-bit extremes; the copy is half the bytes.
+    const loud = Float32Array.from([1.5, -2]);
+    expect([...toPcm16(loud)]).toEqual([32767, -32768]);
+    expect(toPcm16(read).byteLength).toBe(read.byteLength / 2);
   });
 
   test("the last engine going down fails the pass, as one engine always did", async () => {
