@@ -124,6 +124,25 @@ function manyLines(b: LogBuilder, n: number): void {
 const scrollerTop = (page: Page) =>
   page.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
 
+/**
+ * Where a smooth scroll that started from `from` comes to rest: moved off `from`, then the same
+ * over five reads in a row. Follow shows as the scroll begins, before the pane has moved, and a
+ * loaded machine can leave two quick reads equal while the scroll is still on its way.
+ */
+async function restingTop(page: Page, from: number, what: string): Promise<number> {
+  const seen: number[] = [];
+  await until(
+    async () => {
+      seen.push(await scrollerTop(page));
+      const last = seen.slice(-5);
+      return last.length === 5 && last.every((t) => t === last[0] && t !== from);
+    },
+    5000,
+    what,
+  );
+  return seen.at(-1) as number;
+}
+
 const chip = (page: Page, lid: string) =>
   page.evaluate((l) => {
     const who = document.querySelector(`#lines .row[data-id="${l}"] .who`) as HTMLElement | null;
@@ -893,19 +912,10 @@ describe("the player bar (W5.3 to W5.6)", () => {
           // A scroll by hand stops the following, and Follow appears.
           await resume();
           await page.mouse.move(400, 300);
+          const unwheeled = await top();
           await page.mouse.wheel(0, 3000);
           await until(async () => await page.locator("#follow").isVisible(), 5000, "Follow shown");
-          let settled = -1;
-          await until(
-            async () => {
-              const now = await top();
-              const same = now === settled;
-              settled = now;
-              return same;
-            },
-            5000,
-            "the wheel's scroll settling",
-          );
+          const settled = await restingTop(page, unwheeled, "the wheel's scroll settling");
           const before = (await lit()).ids[0];
           await until(
             async () => (await lit()).ids[0] !== before && (await player(page)).at > 14,
@@ -954,21 +964,12 @@ describe("the player bar (W5.3 to W5.6)", () => {
           expect(
             await page.evaluate(() => document.activeElement?.classList.contains("play")),
           ).toBe(true);
+          const unkeyed = await scrollerTop(page);
           await page.keyboard.press("PageUp");
           await page.keyboard.press("PageUp");
           await until(async () => await page.locator("#follow").isVisible(), 5000, "Follow shown");
           // The transcript scrolls smoothly: wait for the keys' scroll to come to rest.
-          let moved = -1;
-          await until(
-            async () => {
-              const now = await scrollerTop(page);
-              const same = now === moved;
-              moved = now;
-              return same;
-            },
-            5000,
-            "the keys' scroll settling",
-          );
+          const moved = await restingTop(page, unkeyed, "the keys' scroll settling");
           await playFor(1.5);
           // Not yanked back to the line being played.
           expect(await scrollerTop(page)).toBe(moved);
