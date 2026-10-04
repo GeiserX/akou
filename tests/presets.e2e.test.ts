@@ -152,7 +152,7 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
     try {
       // The route reads the folder on every request; a loaded or scanned disk may show a file
       // just written a moment late, so it is polled, with a bound, never slept on.
-      let raw = await rig.api("GET", "/presets");
+      let raw: Awaited<ReturnType<typeof rig.api>> | undefined;
       await until(
         async () => {
           raw = await rig.api("GET", "/presets");
@@ -161,7 +161,7 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
         5000,
         "the dropped file listed",
       );
-      expect(raw.body.presets.find((p: { name: string }) => p.name === "risks")).toEqual({
+      expect(raw?.body.presets.find((p: { name: string }) => p.name === "risks")).toEqual({
         name: "risks",
         label: "Risks for {user}",
         order: 35,

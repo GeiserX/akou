@@ -899,6 +899,20 @@ export async function timeEngines<E extends { model: string; close(): Promise<vo
   return { out, failed };
 }
 
+/** The night's verdicts: each measure against its baseline, then every failed stage's row. */
+export function nightVerdicts(
+  measures: readonly Measure[],
+  baselines: Readonly<Record<string, number>>,
+  failures: readonly Verdict[],
+): Verdict[] {
+  return [...compare(measures, baselines), ...failures];
+}
+
+/** `main`'s exit code: 1 when any verdict is not ok, a failed stage included. */
+export function exitCode(verdicts: readonly Verdict[]): number {
+  return verdicts.every((v) => v.ok) ? 0 : 1;
+}
+
 /** A failed stage as a verdict row: never ok, so `main` exits 1 and the summary lists it first. */
 export function failureVerdicts(stage: string, failed: readonly StageFailure[]): Verdict[] {
   return failed.map((f) => ({
@@ -1244,14 +1258,14 @@ async function main(argv: string[]): Promise<number> {
         platforms: Record<string, Record<string, number>>;
       }
     ).platforms[platform] ?? {};
-  const verdicts = [...compare(measures, baselines), ...stageFailures];
+  const verdicts = nightVerdicts(measures, baselines, stageFailures);
   const text = summary(`models-nightly on ${platform}`, verdicts, notes);
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY)
     writeFileSync(process.env.GITHUB_STEP_SUMMARY, text, { flag: "a" });
   const out = flag("--out");
   if (out) writeFileSync(out, `${JSON.stringify({ platform, verdicts }, null, 2)}\n`);
-  return verdicts.every((v) => v.ok) ? 0 : 1;
+  return exitCode(verdicts);
 }
 
 if (import.meta.main) process.exit(await main(process.argv.slice(2)));
