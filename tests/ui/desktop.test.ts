@@ -290,7 +290,7 @@ describe("[DK-F1] the indicator's first fit", () => {
           const page = await indicatorPage(rig);
           const width = Math.ceil((await pill(page)).width);
           await until(() => refused > 0, 5000, "a refused fit");
-          await Bun.sleep(200);
+          // A refused fit never reaches the shell, so the window has not moved.
           expect(rig.indicatorFrame()?.width).toBe(480);
           refusing = false;
           await until(

@@ -187,6 +187,8 @@ export function settingsRoutes(r: Router<ApiApp>): void {
           })),
         });
       }
+      // Outside `/calls`, so the server did not wait for recovery to index the calls: wait here.
+      await c.app.manager.init();
       const view = (await c.app.call(resolveRef(c.app, ref, { allowLast: true }))).view;
       const one = c.query.raw("speaker")?.trim();
       const speakers = one
