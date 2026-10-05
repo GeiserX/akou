@@ -1,6 +1,6 @@
 /**
  * ROADMAP G2, recognition in the packaged app: sherpa-onnx-node loads in a Bun Worker inside the
- * built bundle and transcribes a fixture, while the main thread's timer never waits 20 ms or more.
+ * built bundle and transcribes a fixture, while the main thread's timer never waits 100 ms or more.
  * Run on the machine that built the app, after `scripts/build-app.ts`:
  *
  *   bun scripts/gates/g2-worker.ts --models <models dir> [--out result.json]
@@ -13,8 +13,8 @@
  *    app's own `node_modules`.
  * 3. The app's bundled Bun runs the probe twice. `worker`: the recognizer loads and decodes in a
  *    Worker while the main thread ticks every 1 ms; pass when the clip's words come back and the
- *    longest tick is under 20 ms. `main`, the positive control: the same decode on the main thread
- *    must leave a tick of 20 ms or more, or the measure could not see a blocked thread and the run
+ *    longest tick is under 100 ms. `main`, the positive control: the same decode on the main thread
+ *    must leave a tick of 100 ms or more, or the measure could not see a blocked thread and the run
  *    fails.
  *
  * Prints one JSON object with both runs and the verdict; exits 1 unless the gate passes.
@@ -28,7 +28,13 @@ import { downloadFile, downloadModels, RECOGNIZER } from "../../src/main/asr/mod
 import { readClip } from "../clip.ts";
 import { unpackApp } from "../smoke-app.ts";
 
-const LIMIT_MS = 20;
+/**
+ * About where a wait starts to be noticed. A blocked main thread waits as long as the decode,
+ * 2.4 s or more in the control. One that only shares the CPU with the recognizer's two threads
+ * waits a scheduler turn or two: up to 72 ms on a 4-core Windows runner (under 10 ms with no
+ * recognizer running), so the 20 ms this was failed a third of the Windows runs on the OS.
+ */
+const LIMIT_MS = 100;
 const PHRASE = "ask not what your country can do for you";
 
 const argv = process.argv.slice(2);
