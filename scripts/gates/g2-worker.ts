@@ -32,7 +32,8 @@ import { unpackApp } from "../smoke-app.ts";
  * About where a wait starts to be noticed. A blocked main thread waits as long as the decode,
  * 2.4 s or more in the control. One that only shares the CPU with the recognizer's two threads
  * waits a scheduler turn or two: up to 72 ms on a 4-core Windows runner (under 10 ms with no
- * recognizer running), so the 20 ms this was failed a third of the Windows runs on the OS.
+ * recognizer running). The limit was 20 ms until 2026-10-05, which sat below that scheduler noise
+ * and failed a third of the Windows runs; from then on it is 100 ms.
  */
 const LIMIT_MS = 100;
 const PHRASE = "ask not what your country can do for you";
