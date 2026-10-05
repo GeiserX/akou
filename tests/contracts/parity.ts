@@ -514,6 +514,24 @@ export const PARITY: readonly Row[] = [
     },
   },
   {
+    action: "Download a kept recording (server mode)",
+    cli: { none: "the client that recorded keeps its own copy until the server keeps one" },
+    api: ["GET /jobs/:id/audio"],
+    mcp: { none: "an agent reads a job's text; the audio is for the client that recorded it" },
+    window: { none: "the Jobs page lists jobs; the recording plays in the client that made it" },
+  },
+  {
+    action: "Live words while a client records (server mode)",
+    cli: {
+      none: "a WebSocket for a client that records, such as a phone; `scripts/live-client.ts` is its test client",
+    },
+    api: ["GET /live"],
+    mcp: { none: "a tool call cannot hold a socket open while audio streams" },
+    window: {
+      none: "server mode's web UI records nothing; the desktop app's live words are its own",
+    },
+  },
+  {
     action: "Run the server in the foreground (server mode)",
     cli: ["serve"],
     api: { none: "it starts the API, so the API cannot start it" },

@@ -7,6 +7,7 @@
       "dependencies": {
         "@modelcontextprotocol/server": "2.1.0",
         "double-metaphone": "2.0.1",
+        "opus-decoder": "0.7.12",
         "sherpa-onnx-node": "1.13.8",
         "transcribe-cpp": "0.2.4",
         "zod": "4.6.5",
@@ -40,6 +41,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.5.14", "", { "os": "win32", "cpu": "arm64" }, "sha512-pHgAFffmZtaYoxavEsWEYNvcA7NwOIjLyqw2HXyLbt16xYryX0L4fMV2u0G9ag6LNYPIoqWaWqzUcnc6rLGGXg=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.14", "", { "os": "win32", "cpu": "x64" }, "sha512-oJWmBhoHsnhUKIke+0gXDX0mltJrWHA1UyHsrTlXwX0TL64ilVZAo+TYZm97baecV0esBdpzy3k96q+09JaZUQ=="],
+
+    "@eshaz/web-worker": ["@eshaz/web-worker@1.2.2", "", {}, "sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw=="],
 
     "@koromix/koffi-android-arm64": ["@koromix/koffi-android-arm64@3.3.2", "", { "os": "android", "cpu": "arm64" }, "sha512-6mFtwFJCy1skaf/qzl82OtELmT2BwHXbephfrIFqKoxIghc7N+kiW33J3ZNRP8JhBYFI6xJ8jiatGwPJ7mCOMw=="],
 
@@ -141,6 +144,8 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
+    "@wasm-audio-decoders/common": ["@wasm-audio-decoders/common@9.0.7", "", { "dependencies": { "@eshaz/web-worker": "1.2.2", "simple-yenc": "^1.0.4" } }, "sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag=="],
+
     "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
@@ -160,6 +165,8 @@
     "jose": ["jose@6.2.12", "", {}, "sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw=="],
 
     "koffi": ["koffi@3.3.2", "", { "optionalDependencies": { "@koromix/koffi-android-arm64": "3.3.2", "@koromix/koffi-android-x64": "3.3.2", "@koromix/koffi-darwin-arm64": "3.3.2", "@koromix/koffi-darwin-x64": "3.3.2", "@koromix/koffi-freebsd-arm64": "3.3.2", "@koromix/koffi-freebsd-ia32": "3.3.2", "@koromix/koffi-freebsd-x64": "3.3.2", "@koromix/koffi-linux-arm": "3.3.2", "@koromix/koffi-linux-arm64": "3.3.2", "@koromix/koffi-linux-ia32": "3.3.2", "@koromix/koffi-linux-loong64": "3.3.2", "@koromix/koffi-linux-ppc64": "3.3.2", "@koromix/koffi-linux-riscv64": "3.3.2", "@koromix/koffi-linux-x64": "3.3.2", "@koromix/koffi-openbsd-arm64": "3.3.2", "@koromix/koffi-openbsd-ia32": "3.3.2", "@koromix/koffi-openbsd-x64": "3.3.2", "@koromix/koffi-win32-arm64": "3.3.2", "@koromix/koffi-win32-ia32": "3.3.2", "@koromix/koffi-win32-x64": "3.3.2" } }, "sha512-f9Rrcmpy7lQs0ayJfhaxiG5OLp1aZjXKOFLXo7Gax6snJRKmdpYnYEOkpQ7ImCBrbvOdzFT06EP+FaLZv35W7Q=="],
+
+    "opus-decoder": ["opus-decoder@0.7.12", "", { "dependencies": { "@wasm-audio-decoders/common": "9.0.7" } }, "sha512-6zpHFDi/MhYvMwyYiuJPqJ2lcRkfm7wHblSvT3lUtx/kLvHkunoe/rhTn1dLKxqVGLeQj3gQi7CnR0N2p3RuOg=="],
 
     "path-key": ["path-key@3.1.1", "", {}, "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q=="],
 
@@ -184,6 +191,8 @@
     "sherpa-onnx-win-ia32": ["sherpa-onnx-win-ia32@1.13.8", "", { "os": "win32", "cpu": "ia32" }, "sha512-H0Ojln9hfvM+pxWqW0cnjB/XK8/JPq4/k0IWu2JpY5Z458M3zv+XC3Hu+wmot3AoH/K1Bgt23n/tTKtPV9x8qg=="],
 
     "sherpa-onnx-win-x64": ["sherpa-onnx-win-x64@1.13.8", "", { "os": "win32", "cpu": "x64" }, "sha512-oZF1c9VPOKtMwn83Bboc5XSWL+76BRoyB3eUuVnCknBKxwSULZU2Foia9VHWzU+n4I12rPsP6z6H9Rp1hD9o8g=="],
+
+    "simple-yenc": ["simple-yenc@1.0.4", "", {}, "sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw=="],
 
     "transcribe-cpp": ["transcribe-cpp@0.2.4", "", { "dependencies": { "koffi": "^3.0.2" }, "optionalDependencies": { "@transcribe-cpp/darwin-arm64-metal": "0.2.4", "@transcribe-cpp/darwin-x64-cpu": "0.2.4", "@transcribe-cpp/linux-arm64-cpu-vulkan": "0.2.4", "@transcribe-cpp/linux-x64-cpu-vulkan": "0.2.4", "@transcribe-cpp/win32-x64-cpu-vulkan": "0.2.4" } }, "sha512-PS5dgcYEIWCVmJNgbFdafntyUX/1OxQPTscOrBcmXiIuvZY6skXwwG2KcDS2FVO48aavx5/9t8RkStespaDPxg=="],
 

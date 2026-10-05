@@ -53,6 +53,7 @@ import {
   readLock,
 } from "../core/log/writer.ts";
 import { Cues } from "../ui/dictation-cues.ts";
+import { APP_IDENTITY } from "./api/access.ts";
 import {
   ensureToken,
   type Guard,
@@ -226,6 +227,7 @@ import {
 } from "./query/memo.ts";
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
+import { LiveRefused, LiveService } from "./server/live.ts";
 import {
   type AutoChoice,
   autoChoice,
@@ -674,6 +676,8 @@ export class AkouApp implements ApiApp {
    * them (`akou transcribe`) and owns every job, as the key id `app`.
    */
   private jobService: JobService | null = null;
+  /** The live door, `GET /v1/live`; server mode only, made at its first use. */
+  private liveService: LiveService | null = null;
   /**
    * The models on disk, their per-model downloads, last use, measured speed and the unused-days
    * sweep, in both modes (SERVER.md section 12.3, DESKTOP.md DK-E2). Made at start.
@@ -1319,6 +1323,7 @@ export class AkouApp implements ApiApp {
     this.asrState = { state: "loading" };
     // Dictation's models load first: the Worker runs this right after its start (DC-E7).
     this.warmDictationModels();
+    if (this.runMode === "server") this.warmLive(asr);
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
@@ -2847,6 +2852,53 @@ export class AkouApp implements ApiApp {
 
   jobs(): JobService | null {
     return this.jobService;
+  }
+
+  /**
+   * The live door (`GET /v1/live`), server mode only: a session's stream is a dictation's stream on
+   * the live Worker (`openDictation`), so the streaming model loads once whoever uses it.
+   */
+  live(): LiveService | null {
+    if (this.runMode !== "server") return null;
+    this.liveService ??= new LiveService({
+      present: (id) => {
+        const m = (this.o.modelRegistry ?? MODELS).find((x) => x.id === id);
+        return m !== undefined && modelsPresent(this.cfg.settings["asr.modelsDir"], [m]);
+      },
+      open: (choice, languages, onWords) => {
+        const asr = this.asr;
+        if (!asr || this.asrState.state === "unavailable") {
+          throw new LiveRefused(
+            "no_live_engine",
+            this.asrState.reason ?? "no recognizer runs here",
+          );
+        }
+        const s = asr.openDictation(choice, languages, onWords);
+        // A streaming model a live session uses counts as used, so the sweep keeps it.
+        void s.opened.then((c) => this.shelf?.touch([c.engine])).catch(() => {});
+        return s;
+      },
+      // The key store reads keys.json again when it changes: a revoked key is gone from it.
+      keyAlive: (who) =>
+        who.id === APP_IDENTITY.id || who.scopes.some((sc) => this.keyStore?.has(who.id, sc)),
+      log: (level, msg) => this.log(level, msg),
+    });
+    return this.liveService;
+  }
+
+  /**
+   * Server mode: the streaming model a `hello` with no language opens is loaded at start, when it
+   * is on disk, so the first live session does not wait for it. Only at start: a model the Worker
+   * let go of when idle loads again at the next session.
+   */
+  private warmLive(asr: LiveAsr): void {
+    const { choice } = chooseLiveEngine("auto", [], this.liveContext().present);
+    if (!choice) return;
+    asr
+      .warmDictation(choice, false)
+      .catch((err: Error) =>
+        this.log("warn", `live: ${choice.engine} not loaded ahead: ${err.message}`),
+      );
   }
 
   queueDepth(): number {

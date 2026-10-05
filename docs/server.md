@@ -59,9 +59,9 @@ Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That i
 
 ## A reverse proxy in front
 
-akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. There is no WebSocket to upgrade. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits.
+akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. The live door (`GET /v1/live`, below) is a WebSocket, so the proxy must pass the upgrade and keep a quiet socket open; akou pings an idle socket and closes it after two minutes without an answer. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits.
 
-Caddy passes events on and holds long requests by default; it only needs the body limit:
+Caddy passes events on, holds long requests and passes WebSockets through by default; it only needs the body limit:
 
 ```caddyfile
 akou.example {
@@ -74,9 +74,14 @@ akou.example {
 }
 ```
 
-nginx needs each of them said:
+nginx needs each of them said, the WebSocket's `Upgrade` and `Connection` headers included:
 
 ```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 443 ssl;
     server_name akou.example;
@@ -91,6 +96,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
         proxy_request_buffering off;
         proxy_buffering off;
         proxy_read_timeout 300s;
@@ -100,6 +107,31 @@ server {
 ```
 
 If you raise `server.max_upload_mb`, raise `max_size` or `client_max_body_size` with it. Then `curl https://akou.example/v1/server` answers the server's description.
+
+## A phone or another live client
+
+A client that records, such as a phone, gets two things from a server: the words while it records, from `GET /v1/live`, and the transcript of record once it stops, from a job. Its recording stays its own until the job has it, so a dropped connection costs a gap in the live words, never audio.
+
+**Live words.** Open a WebSocket to `wss://akou.example/v1/live` with `Authorization: Bearer <key>` on the upgrade request; any key reaches it. A missing, wrong or revoked key gets a plain 401 answer, never a socket. `GET /v1/server` says whether it works here: `capabilities.live`, and `live.engines` lists the streaming models on disk (`akou models pull nemotron-3.5-560` fetches one). On a server, akou loads the streaming model a `hello` with no language opens at start, so the first session does not wait for it.
+
+Text frames are JSON, binary frames are audio:
+
+| From | Message | What it says |
+|---|---|---|
+| client | `{"type":"hello","v":1,"codec":"ogg-opus","language":"auto","model":"auto"}` | First, once. `codec` is `ogg-opus` or `pcm16`; `language` is `auto` or a BCP 47 tag, and picks the model as a call's languages do (`en`: `nemotron-en-560`, `es`: `nemotron-3.5-1120`, else `nemotron-3.5-560`), among the models on disk; `model` names one instead |
+| server | `{"type":"ready","engine","lang","tier_ms","load_ms"}` | The stream is open. `tier_ms` is how far behind the audio a word can come |
+| client | binary | With `ogg-opus`, exactly one Ogg page per frame, the bytes the client appends to its own file: the OpusHead page, the OpusTags page, then the audio pages in order, mono. With `pcm16`, raw 16 kHz 16-bit little-endian samples (for tests and measurements). At most 64 KB a frame |
+| server | `{"type":"words","tokens":[{"text":" hola","t":1.23,"conf":0.91}]}` | The model's tokens as it gives them, append-only: a token is never taken back. A token with a leading space starts a word. `t` is seconds into the recording |
+| client | `{"type":"stop"}` | The end: the server sends the last words, then `{"type":"closed"}`, and closes with 1000 |
+| server | `{"type":"error","code","message"}` | A refusal, then a close: 4400 for a message or page that is not valid (`bad_message`, `bad_page`, `unknown_model`, `unsupported_language`), 4401 `key_revoked`, 4409 `engine_busy`, 4500 `stream_lost`, 4503 `no_live_engine` |
+
+A server holds one streaming model at a time, so while a session is open, a `hello` that resolves to another model is refused with 4409; one that resolves to the same model runs beside it. A key revoked while its session is open closes it with 4401 at its next message.
+
+There is no resume. A new socket is a new session: send `hello`, the OpusHead and OpusTags pages again, then the pages from where the recording is now. The server places the words on the recording's timeline from the first audio page's granule position, so `t` stays seconds into the file across reconnects; the pages sent while the connection was down are in the file, and the job covers them. Opus at 16 kHz, 24 kbit/s VBR and 20 ms frames, in pages of 200 ms, is about 11 MB an hour on the socket (a minute of speech measured 178 KB), against 115 MB for `pcm16`.
+
+`bun scripts/live-client.ts FILE --codec ogg-opus --pace realtime` streams a file the way a client records it and prints the words with their times, for a check against a server: `AKOU_URL` and `AKOU_API_KEY` name the server and the key, and `ffmpeg` converts a file that is not Ogg Opus.
+
+**The recording, kept.** At the end, upload the file as a job: `POST /v1/jobs` with `keep_audio=true`, an `Idempotency-Key` header of the recording's own id (a retried upload gets the first job back), and `metadata` for what the client files it under, such as `{"workspace": "home", "recording_id": "…"}`, which every job answer carries back. A kept job keeps its upload after it ends, `GET /v1/jobs/{id}/audio` serves it back byte for byte (with `Range`, so a player can seek), and `server.retain_days` never removes it: the job, its result, its events and its audio stay until a client deletes the job. The job's `keep_audio` says whether the server keeps it, so a client deletes its own copy only once it reads `true`. The words with times come from `GET /v1/jobs/{id}/result`.
 
 ## A Mac as the server
 

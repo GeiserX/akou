@@ -20,6 +20,8 @@
  *   `dictation` is the reserved lane for dictation (DICTATION.md DC-R2): `slots`, `engine` and
  *   `served_last_hour`, null in the desktop app; `capabilities.interactive` is true while it has a
  *   slot, so a dictating client knows its requests will not wait behind the queue.
+ *   `live` is the live door (`GET /v1/live`) in server mode: `engines`, the streaming models on disk
+ *   a `hello` can name; `capabilities.live` is true while there is one.
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
@@ -79,7 +81,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -96,6 +98,9 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const remotes = jobs?.remotes;
       // The desktop app dictates through its own engine, not a lane of the job queue.
       const dictation = c.app.mode?.() === "server" ? (jobs?.dictationStats() ?? null) : null;
+      // The live door: the streaming models a `hello` can name, once the route exists.
+      const live = has("GET", "/live") ? (c.app.live?.() ?? null) : null;
+      const liveEngines = live?.enginesOnDisk() ?? [];
       const offered = (name: string): boolean => {
         const p = PRESETS.find((x) => x.name === name);
         return !!p?.built && (c.app.presetAvailable?.(p.name) ?? ready);
@@ -168,6 +173,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
         queue: queueOf(c.app),
         // DC-R2: the lane dictations run in; null in the desktop app.
         dictation,
+        // The live door's streaming models on disk; null in the desktop app.
+        live: live ? { engines: liveEngines } : null,
         capabilities: {
           // In both modes: the desktop app takes file jobs with its one token (SV-J1).
           jobs: has("POST", "/jobs"),
@@ -180,6 +187,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
           interactive: has("POST", "/audio/transcriptions") && (dictation?.slots ?? 0) > 0,
           // A job's `languages[]` bounds its `auto` language (`bound_languages` are the codes).
           languages_bound: has("POST", "/jobs"),
+          // `GET /v1/live` answers with words: the route exists and a streaming model is on disk.
+          live: liveEngines.length > 0,
           wyoming: false,
           bazarr: false,
         },

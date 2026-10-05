@@ -476,6 +476,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
         .sort();
       expect(ids).toEqual([
         "events.list",
+        "jobs.audio",
         "jobs.create",
         "jobs.delete",
         "jobs.get",

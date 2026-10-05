@@ -102,6 +102,9 @@
       "name": "openai"
     },
     {
+      "name": "live"
+    },
+    {
       "name": "openapi"
     }
   ],
@@ -6567,7 +6570,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
@@ -6647,7 +6650,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`.",
         "parameters": [
           {
             "name": "wait",
@@ -6711,6 +6714,9 @@
                     "type": "integer"
                   },
                   "interactive": {
+                    "type": "boolean"
+                  },
+                  "keep_audio": {
                     "type": "boolean"
                   }
                 },
@@ -7160,6 +7166,71 @@
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs/{id}/audio": {
+      "get": {
+        "operationId": "jobs.audio",
+        "tags": [
+          "jobs"
+        ],
+        "description": "The audio a job was submitted with, byte for byte, when it was submitted with `keep_audio=true`; honours `Range`. The content type follows the file (`audio/ogg` for Ogg Opus). 409 `not_kept` for a job that kept none: its upload was deleted when it ended. A kept job and its audio stay until `DELETE /v1/jobs/{id}`, whatever `server.retain_days` says.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "audio/ogg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.not_kept"
+          },
+          "410": {
+            "$ref": "#/components/responses/410.gone"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "416": {
+            "$ref": "#/components/responses/416.bad_range"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
@@ -7653,6 +7724,46 @@
         ],
         "x-akou-access": "jobs",
         "x-akou-door": "compat"
+      }
+    },
+    "/v1/live": {
+      "get": {
+        "operationId": "live.open",
+        "tags": [
+          "live"
+        ],
+        "description": "A WebSocket for live words while a client records: open it with `Upgrade: websocket` and a key. Text frames are JSON. Send `{\"type\":\"hello\",\"v\":1,\"codec\":\"ogg-opus\"|\"pcm16\",\"language\":\"auto\"|<BCP 47>,\"model\":\"auto\"|<streaming model id>}` first; the answer is `{\"type\":\"ready\",\"engine\",\"lang\",\"tier_ms\",\"load_ms\"}`. Then send audio as binary frames: with `ogg-opus` exactly one Ogg page per frame (the OpusHead page, the OpusTags page, then the audio pages in order, mono, at most 64 KB each); with `pcm16` raw 16 kHz 16-bit little-endian mono samples (for tests). The server sends `{\"type\":\"words\",\"tokens\":[{\"text\",\"t\",\"conf\"}]}` as the model gives them, append-only; `t` is seconds into the recording (an `ogg-opus` session that starts mid-file, a reconnect, is placed by its first page's granule). Send `{\"type\":\"stop\"}` to end: the last words, then `{\"type\":\"closed\"}` and a 1000 close. A refusal is `{\"type\":\"error\",\"code\",\"message\"}` then a close: 4400 (`bad_message`, `bad_page`, `unknown_model`, `unsupported_language`), 4401 (`key_revoked`), 4409 (`engine_busy`: another open session runs another streaming model, and the server holds one at a time), 4500 (`stream_lost`), 4503 (`no_live_engine`). Nothing of a session is kept: upload the recording as a job for the transcript of record. `GET /v1/server` `live` lists the streaming models on disk.",
+        "responses": {
+          "101": {
+            "description": "Switching protocols: the WebSocket is open"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "426": {
+            "$ref": "#/components/responses/426.upgrade_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "503": {
+            "$ref": "#/components/responses/503.no_live_engine"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs",
+        "x-akou-upgrade": "websocket"
       }
     },
     "/v1/openapi.json": {
@@ -9338,6 +9449,29 @@
           }
         }
       },
+      "409.not_kept": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "not_kept"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.not_live": {
         "description": "Conflict",
         "content": {
@@ -9792,6 +9926,29 @@
           }
         }
       },
+      "426.upgrade_required": {
+        "description": "Upgrade required",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "upgrade_required"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "429.queue_full": {
         "description": "Too many requests",
         "content": {
@@ -10116,6 +10273,29 @@
                     "error": {
                       "enum": [
                         "models_missing"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.no_live_engine": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_live_engine"
                       ]
                     }
                   }
@@ -10455,6 +10635,10 @@
             "description": "Nothing is recording, so `live` names no call; `last` names the latest."
           },
           {
+            "const": "no_live_engine",
+            "description": "No streaming model can run the live words here; the message says why."
+          },
+          {
             "const": "no_remote",
             "description": "No remote dictation server is set."
           },
@@ -10493,6 +10677,10 @@
           {
             "const": "not_imported",
             "description": "Nothing to import."
+          },
+          {
+            "const": "not_kept",
+            "description": "The job did not ask `keep_audio`, so its upload was deleted when it ended."
           },
           {
             "const": "not_live",
@@ -10593,6 +10781,10 @@
           {
             "const": "unsupported_language",
             "description": "A `languages[]` code is one no engine here can choose; `codes` names them."
+          },
+          {
+            "const": "upgrade_required",
+            "description": "The route is a WebSocket; send `Upgrade: websocket`."
           },
           {
             "const": "vocab_file_invalid",

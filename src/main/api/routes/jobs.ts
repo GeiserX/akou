@@ -18,11 +18,14 @@
  * - `GET /v1/jobs/{id}/result?format=` (SV-J4, SV-J5): the result of a done job, as JSON, the
  *   OpenAI shape, text, SRT or WebVTT.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
+ * - `GET /v1/jobs/{id}/audio`: the upload of a job submitted with `keep_audio=true`, honouring
+ *   `Range`. Such a job keeps its upload after it ends, and retention skips it until a delete.
  * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
  *   first, as JSON `{events, cursor, has_more, feed_id}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
  *   `Last-Event-ID`.
  */
 
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { QWEN_LANGUAGE_CODES } from "../../asr/llama-catalog.ts";
 import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
@@ -45,8 +48,28 @@ import type { ApiApp } from "../server.ts";
 import { checkTitle } from "./calls.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 import { RESULT_FORMATS, type ResultFormat, renderResult } from "./openai.ts";
+import { fileResponse } from "./post-call.ts";
 
 export const MAX_WAIT_SECONDS = 60;
+
+/** A kept upload's content type, from its first bytes: the formats a client records in. */
+function audioType(path: string): string {
+  const fd = openSync(path, "r");
+  const b = Buffer.alloc(12);
+  try {
+    readSync(fd, b, 0, 12, 0);
+  } finally {
+    closeSync(fd);
+  }
+  const at = (i: number, text: string) => b.toString("latin1", i, i + text.length) === text;
+  if (at(0, "OggS")) return "audio/ogg";
+  if (at(0, "RIFF") && at(8, "WAVE")) return "audio/wav";
+  if (at(0, "fLaC")) return "audio/flac";
+  if (at(4, "ftyp")) return "audio/mp4";
+  if (at(0, "ID3") || (b[0] === 0xff && ((b[1] as number) & 0xe0) === 0xe0)) return "audio/mpeg";
+  if (b.readUInt32BE(0) === 0x1a45dfa3) return "audio/webm";
+  return "application/octet-stream";
+}
 export const MAX_KEYWORDS = 24;
 export const MAX_METADATA_BYTES = 4096;
 /** A job's `priority` runs from -10 to 10, default 0 (SV-Q2). */
@@ -281,6 +304,7 @@ const JOB_FIELDS = new Set([
   "callback_url",
   "metadata",
   "interactive",
+  "keep_audio",
 ]);
 
 /** A callback the caller may name (SV-K4), at an address the rules allow (SV-E7), and can sign. */
@@ -386,6 +410,7 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       idempotency_key: idem,
       request,
       interactive,
+      keep_audio: booleanOf(form, "keep_audio") ?? false,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
     // One this server cannot run goes to a remote that offers it (section 14), unless a remote sent
@@ -485,7 +510,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`.",
       ...JOB_ROUTE,
       query: { wait: WAIT },
       body: {
@@ -502,6 +527,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "metadata?": "string",
           "priority?": "integer",
           "interactive?": "boolean",
+          "keep_audio?": "boolean",
         },
       },
       ok: 202,
@@ -650,6 +676,34 @@ export function jobRoutes(r: Router<ApiApp>): void {
         });
       }
       return renderResult(j, format);
+    },
+  );
+
+  r.add(
+    "GET",
+    "/jobs/:id/audio",
+    {
+      id: "jobs.audio",
+      doc: "The audio a job was submitted with, byte for byte, when it was submitted with `keep_audio=true`; honours `Range`. The content type follows the file (`audio/ogg` for Ogg Opus). 409 `not_kept` for a job that kept none: its upload was deleted when it ended. A kept job and its audio stay until `DELETE /v1/jobs/{id}`, whatever `server.retain_days` says.",
+      ...JOB_ROUTE,
+      params: { id: JOB_ID },
+      ok: 200,
+      type: "audio",
+      errors: { 404: ["not_found"], 409: ["not_kept"], 410: ["gone"], 416: ["bad_range"] },
+    },
+    (c) => {
+      const j = jobsOf(c).get(caller(c), c.params.id as string);
+      if (!j) throw noJob(jobsOf(c), caller(c), c.params.id as string);
+      // Before the job ends its upload is still where it was written; after, it is `kept`.
+      const path = j.keep_audio ? (j.kept ?? j.audio) : null;
+      if (!path || !existsSync(path)) {
+        throw new HttpError(
+          409,
+          "not_kept",
+          `job ${j.id} was not submitted with keep_audio, so its upload is gone`,
+        );
+      }
+      return fileResponse(c.req, path, audioType(path), `job ${j.id}'s audio`);
     },
   );
 
