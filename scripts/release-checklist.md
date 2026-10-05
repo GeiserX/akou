@@ -49,17 +49,17 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
 
 ## After the workflow
 
-1. The release page lists the DMG, the zip, four CLI archives, the update manifest and bundle (`stable-macos-arm64-*`) and `SHA256SUMS`, and its notes start with the version's changelog section, then the unsigned first-open step. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
+1. The release page lists the DMG, the zip, four CLI archives, the update manifest and bundle (`stable-macos-arm64-*`) and `SHA256SUMS`, and its notes start with the version's changelog section, then the signed-and-notarized note. From a downloaded asset, `gh attestation verify <file> -R GeiserX/akou` passes (CI-21).
    `Casks/akou.rb` in https://github.com/GeiserX/homebrew-akou says this version (CI-25).
    The `update-feed` release holds the same manifest and bundle: the release job replaced them and fetched the manifest back as the app does (CI-23).
 2. On a test Mac (never the build machine), from the downloaded DMG:
    - `shasum -a 256 -c SHA256SUMS --ignore-missing` passes.
-   - The first open needs the documented step (Control-click Open on macOS 14, Open Anyway on 15 and later) and nothing else; macOS never says the app is damaged.
+   - The first open needs no extra step: macOS opens the notarized app after its usual downloaded-from-the-internet question, and never says the app is damaged.
    - The window shows the models card; the download completes and the card goes away.
    - The first recording asks for the microphone and for system audio, and the prompts name akou.
    - A 60-second call records both channels; the transcript appears live.
    - The real harnesses answer through the packaged app (TS-27). With Claude Code logged in, `akou config set provider.kind harness`, `akou config set provider.harness claude`, then `akou ask "What was said in this call?" --call last --json` about the 60-second call: it prints `"answered": true` and Claude Code's answer. Then the same with Codex logged in and `provider.harness codex`. Put both settings back as they were. CI never runs this: it needs a logged-in subscription.
-   - Install the previous release, grant, then update to this one: record 10 s and note whether macOS asked again (expected while builds are ad-hoc signed) and whether both channels have sound after allowing.
+   - Install the previous release, grant, then update to this one: record 10 s and note whether macOS asked again (it should not between two signed releases; from 0.6.0 or older it asks once) and whether both channels have sound after allowing.
    - The Bluetooth probe-click listening test ([TRAPS](../docs/TRAPS.md) "Probe click in Bluetooth headphones").
    - The idle tray item shows its icon in a dark and a light menu bar (System Settings > Appearance). Save both screenshots under `docs/gates/` with the date, the macOS version and the akou version ([DESKTOP](../docs/ux/DESKTOP.md) DK-T1, [TRAPS](../docs/TRAPS.md) "An invisible tray").
    - Record from the tray: the item becomes the mark with a red dot and no text, still in the dark and the light menu bar, and its menu still opens. Stop: the idle icon is back and follows the bar again (DK-T2; on macOS the shell swaps the status item, since ElectroBun's `setImage` drops the template flag).
@@ -75,16 +75,16 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
 4. On Ubuntu 24.04 with the GNOME AppIndicator extension, once a Linux app build exists: the tray icon shows (DK-T1).
 5. Once Windows and Linux app builds exist, at 150 % display scaling (Windows 11; GNOME on Wayland, and X11 with scaling): during a recording the floating indicator ends at the pill's rounded edge, Stop is not cut off, and no dark rectangle shows around it (DK-F1). The window library sizes Windows windows in DIPs, which match the page's CSS pixels; on Linux the GTK path sizes in logical pixels, and whether WebKitGTK's CSS pixels match them under fractional scaling is not settled.
 
-## Signing, when the Developer ID exists
+## Signing
 
-Add these repository secrets; the next run signs with the Developer ID and notarizes, with no code change:
+A tag or a dispatch signs the app and the macOS CLI with the Developer ID and notarizes both; the `app` job fails when a secret below is missing, and checks the zip's and the DMG's app with `spctl` and `stapler`, and the CLI with `codesign --check-notarization`, before it uploads them. A pull request's dry run never reads them and builds ad-hoc. The secrets:
 
 | Secret | Value |
 |---|---|
 | `MACOS_CERTIFICATE_P12` | The Developer ID Application certificate and key, `.p12`, base64 |
 | `MACOS_CERTIFICATE_PASSWORD` | Its password |
-| `ELECTROBUN_DEVELOPER_ID` | The identity, `Developer ID Application: <name> (<team id>)` |
+| `ELECTROBUN_DEVELOPER_ID` | The identity's SHA-1 hash, as `security find-identity -v -p codesigning` prints it (the full name works too, but a name with accents can fail to match) |
 | `ELECTROBUN_TEAMID` | The team id |
 | `ELECTROBUN_APPLEID`, `ELECTROBUN_APPLEIDPASS` | The Apple ID and an app-specific password, for notarization |
 
-Then check on the first signed run: `codesign --verify --deep --strict` still passes in the smoke check (Hutch patches the plists before it signs, so the order holds), `spctl --assess --type execute` accepts the app on the test Mac, and the grants survive an update (TRAPS "Permission grant keyed by path"). Drop the unsigned first-open step from [docs/getting-started.md](../docs/getting-started.md), the [README](../README.md) and the release notes in the workflow.
+Still to check on hardware: the grants survive an update between two signed releases (TRAPS "Permission grant keyed by path").
