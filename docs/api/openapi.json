@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "akou",
-    "version": "0.6.0",
+    "version": "0.6.1",
     "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
     "license": {
       "name": "GPL-3.0-or-later",
@@ -1029,7 +1029,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` (`system`, the whole computer; `none`; or `app:<id>[,<id>]`; anything else is refused with 422) and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`; `final` the model of its final pass (`auto`, a model id, `qwen`, `parakeet`, or `fusion` for the `fusion` preset's engines fused) instead of `asr.final.model`, kept in the call's log so a pass after a restart runs it too. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state, and callMode, what it records as its call side). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1069,6 +1069,9 @@
                   },
                   "reviewEvery": {
                     "type": "number"
+                  },
+                  "final": {
+                    "type": "string"
                   },
                   "attach": {
                     "type": "boolean"
@@ -5871,7 +5874,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced.",
+        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, a model's id, or `fusion` for the `fusion` preset's engines fused) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced, and `fusion` is refused when none of its engines is downloaded.",
         "parameters": [
           {
             "name": "id",

@@ -96,6 +96,16 @@ jobs:
       # ffmpeg (SV-P6, SV-J5) run in CI instead of skipping; the floor's maxSkip counts on it.
       - if: runner.os == 'Linux'
         run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
+      # The tests' temporary folders on the runner's D: drive. Left to TEMP they land on C:, the
+      # runner's OS disk, where an fsync takes 3.5 ms at the median and up to a second, against
+      # 0.24 ms and 150 ms on D:. The dictation log fsyncs every event and the call log as it
+      # goes, so a stall there pushed tests that take 50 ms past bun's 5 s limit, a different one
+      # each run.
+      - if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
       # The pinned Bun, Biome, tsc twice, bun test, then the job's floor. On Linux the same run
       # measures coverage and holds it to its floor (scripts/ci/coverage-floor.ts, TS-8, TS-8b).
       - if: runner.os != 'Linux'

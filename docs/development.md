@@ -34,7 +34,7 @@ Most tests need no microphone, no model and no network. A fake capture helper, [
 bun scripts/build-app.ts
 ```
 
-It builds the capture helper with `cargo build --locked --release`, the window, the recognition Workers and the bundled `akou` command, then the macOS app, ad-hoc signed, and copies the DMG and a zip to `dist/release/`. Nothing in the build opens the app; `scripts/smoke-app.ts` checks what was built.
+It builds the capture helper with `cargo build --locked --release`, the window, the recognition Workers and the bundled `akou` command, then the macOS app, ad-hoc signed unless `ELECTROBUN_DEVELOPER_ID` names a Developer ID, and copies the DMG and a zip to `dist/release/`. Nothing in the build opens the app; `scripts/smoke-app.ts` checks what was built.
 
 ## Releases
 

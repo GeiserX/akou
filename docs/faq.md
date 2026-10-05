@@ -14,9 +14,9 @@ The questions people ask first. Each answer points at the page with the detail.
 
     The app is macOS only today, on Apple silicon with macOS 14.4 or later. The Windows and Linux downloads are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. The transcription server runs on Linux in Docker. See [Getting started](getting-started.md) and [Server mode](server.md).
 
-??? question "Why is the app unsigned?"
+??? question "Is the app signed?"
 
-    Apple lets an app open without a warning only when it is signed with a paid Developer ID and notarized. The 0.x builds carry an ad-hoc signature instead, so the first open needs your OK once, and an update may ask for the microphone and system audio grants again. Check the download against `SHA256SUMS`. See [Why macOS refuses it](getting-started.md#why-macos-refuses-it).
+    Yes, since 0.6.1. The app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them without a warning and should keep the microphone and system audio grants across updates. 0.6.0 and older carry an ad-hoc signature only. Check the download against `SHA256SUMS`. See [Signed and notarized](getting-started.md#signed-and-notarized).
 
 ??? question "Does it record Zoom, Meet or Teams?"
 

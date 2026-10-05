@@ -105,6 +105,8 @@ const rebinds = (h: Helper) =>
     .map((c) => c.hotkey);
 
 describe("DC-A7: a changed dictation key applies at once from any door", () => {
+  // A whole app and a dictation spoken in real time: about 2.4 s on every OS, and the waits allow
+  // 10 s, so bun's 5 s default was never these tests' budget.
   test("PATCH /config rebinds the helper, and a press of the new key dictates", async () => {
     const h = helper("RightShift");
     const r = await rig({ helperArgs: h.args, settings: DICTATING });
@@ -114,7 +116,7 @@ describe("DC-A7: a changed dictation key applies at once from any door", () => {
     expect(rebinds(h)).toEqual(["RightCommand", "RightShift"]);
     await until(() => lines(h.inserted).length === 1, 10_000, "the new key's dictation");
     expect(lines(h.inserted)[0]).toMatchObject({ type: "insert", text: "hello" });
-  });
+  }, 20_000);
 
   test("the window's door rebinds the same way", async () => {
     const h = helper("RightShift");
@@ -139,7 +141,7 @@ describe("DC-A7: a changed dictation key applies at once from any door", () => {
     expect(cfg.body.settings["dictation.hotkey"]).toBe("RightCommand");
     await until(() => lines(h.inserted).length === 1, 10_000, "the old key's dictation");
     expect(lines(h.inserted)[0]).toMatchObject({ text: "hello" });
-  });
+  }, 20_000);
 
   test("fix last's default follows the dictation key", async () => {
     const h = helper("RightShift");

@@ -1410,6 +1410,8 @@ describe("DC-O1: the pill over a whole app", () => {
     expect(await p.control("stop")).toBe(true);
   }
 
+  // Two app rigs and two spoken dictations played in real time: about 3.7 s on every OS, and its
+  // waits allow 10 s, so bun's 5 s default was never this test's budget.
   test("the helper's press names the window with the keyboard: the pill moves to its display, then the dot shows", async () => {
     const two: Rect[] = [
       { x: 0, y: 25, width: 1440, height: 850 },
@@ -1425,8 +1427,9 @@ describe("DC-O1: the pill over a whole app", () => {
     await dictate(plain);
     expect(plain.moves).toEqual([]);
     expect(plain.rec.states()[0]).toEqual({ state: "pressed" });
-  });
+  }, 20_000);
 
+  // A whole app and a dictation in real time, about 2.2 s; its waits allow 10 s too.
   test("DC-E2: a press while the live Worker still loads its model shows loading model, and inserts once it is ready", async () => {
     const t = tempDir("akou-dict-pill-load-");
     cleanups.push(t.cleanup);
@@ -1466,7 +1469,7 @@ describe("DC-O1: the pill over a whole app", () => {
     );
     expect(p.rec.states().at(-1)).toEqual({ state: "done", how: "inserted" });
     expect(r.app.dictation()?.log.items()[0]).toMatchObject({ state: "inserted", text: "hello" });
-  });
+  }, 20_000);
 
   test("DC-E3: best chosen with Qwen missing starts its download, and the pill says fast ran meanwhile", async () => {
     const fetched: string[] = [];

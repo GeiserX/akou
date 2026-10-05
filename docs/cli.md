@@ -11,7 +11,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 bad vocabulary term, 69 unavailab
 ```text
 akou start: Start a call; answers once audio is being written
 
-usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]
+usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--final MODEL] [--without-models] [--attach] [--json]
 
   -w, --workspace WS    the workspace the call goes in
   -t, --title TITLE     the call's title
@@ -22,6 +22,7 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
       --live MODEL      the live model for this call only: auto, a model id from `akou models list`, nemotron or parakeet (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen
       --review MODEL    the second pass for this call only: none, a model id, qwen or parakeet (default: asr.review.model)
       --review-every S  how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)
+      --final MODEL     the final pass's model for this call only: auto, qwen, parakeet, a model id, or fusion for the fusion preset's engines with their words combined (default: asr.final.model)
       --without-models  record audio now and transcribe later, before the models are downloaded
       --attach          if a call is already recording, answer with that call (exit 0) instead of exit 75
       --json            print the answer as JSON, errors included
@@ -31,6 +32,7 @@ usage: akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app
 example: akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform
 example: akou start --live nemotron
 example: akou start --live nemotron --review qwen --review-every 120
+example: akou start --final fusion
 example: akou start --attach --json
 ```
 
@@ -226,11 +228,11 @@ example: akou show -c last
 ```text
 akou finalize: Run the accurate final pass on an ended call
 
-usage: akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet] [--json]
+usage: akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet|fusion] [--json]
 
   -c, --call CALL    live, last or a call id (default: last)
       --force        run it again on a call that already has a final layer
-      --model MODEL  the model for this run only: qwen or parakeet (default: asr.final.model)
+      --model MODEL  the model for this run only: qwen, parakeet, or fusion for the fusion preset's engines (default: asr.final.model)
       --json         print the answer as JSON, errors included
   -h, --help         show this help
       --restart      if akou takes the connection and never answers, restart it first, even for a command that only reads

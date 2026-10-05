@@ -1,5 +1,5 @@
 /**
- * Builds the desktop app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md),
+ * Builds the desktop app, ad-hoc signed unless a Developer ID is given, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md),
  * on macOS arm64, Windows x64 or Linux x64, each on its own machine (ElectroBun cannot cross-compile):
  *
  *   bun scripts/build-app.ts [--allow-missing-helper]

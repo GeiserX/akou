@@ -8,6 +8,10 @@
  * back to the other model with a note, a run that names its model is refused, and with neither
  * downloaded no pass runs. With Qwen the pass never needs Parakeet on disk: the model set loads its
  * recognizer only when asked to decode, and the VAD and speaker labels are models of their own.
+ *
+ * `fusion` runs the `fusion` preset's engines instead (`asr.final.engines`, fused by `asr.fusion`),
+ * the same list and the same pass (`runEngines`) a file job on that preset runs. Of the list, the
+ * engines that are downloaded run; the rest are named in `final.done` as not downloaded.
  */
 
 import { type LiveSetupContext, reviewModels } from "./live-setups.ts";
@@ -18,11 +22,26 @@ import { RECOGNIZER } from "./models.ts";
 /** The recognizers a final pass runs. */
 export type FinalModel = "qwen" | "parakeet";
 
+/** The value of `asr.final.model` that runs the `fusion` preset's engines. */
+export const FINAL_FUSION = "fusion";
+
 /**
- * The values of `asr.final.model`: `auto` or a model's id. The short names `qwen` and `parakeet`
- * are read as the ids and saved that way (`legacyValues`), and `akou finalize --model` takes them.
+ * The values of `asr.final.model`: `auto`, a model's id, or `fusion`. The short names `qwen` and
+ * `parakeet` are read as the ids and saved that way (`legacyValues`), and `akou finalize --model`
+ * and `akou start --final` take them.
  */
-export const FINAL_MODELS: readonly string[] = ["auto", QWEN_ASR, RECOGNIZER];
+export const FINAL_MODELS: readonly string[] = ["auto", QWEN_ASR, RECOGNIZER, FINAL_FUSION];
+
+/** Whether `v` is a value a call or a run may name for its final pass. */
+export function isFinalChoice(v: string): boolean {
+  return v === "auto" || v === FINAL_FUSION || finalModelOf(v) !== null;
+}
+
+/** A per-call or per-run value as the setting saves it: the short names become ids. */
+export function finalChoiceValue(v: string): string {
+  const m = finalModelOf(v);
+  return m ? finalModelId(m) : v;
+}
 
 /** What a value of `asr.final.model` (or `akou finalize --model`) names; null for `auto`. */
 export function finalModelOf(v: string | undefined): FinalModel | null {
@@ -75,4 +94,27 @@ export function chooseFinalModel(setting: string, c: LiveSetupContext): FinalCho
   const other: FinalModel = want === "qwen" ? "parakeet" : "qwen";
   if (why[other] === null) return { model: other, note: why[want] as string };
   return { model: null, note: `${why[want]}, and ${why[other]}` };
+}
+
+/**
+ * The engines of a fusion pass that can run here, in the list's order, and the ones left out
+ * because their files are not on disk. Qwen needs its llama-server build too.
+ */
+export function fusionEnginesHere(
+  ids: readonly string[],
+  c: LiveSetupContext,
+): { ids: string[]; dropped: { engine: string; reason: string; units: null }[] } {
+  const here: string[] = [];
+  const dropped: { engine: string; reason: string; units: null }[] = [];
+  for (const id of ids) {
+    const missing = id === QWEN_ASR ? qwenMissing(c) : c.present(id) ? [] : [id];
+    if (missing.length === 0) here.push(id);
+    else
+      dropped.push({
+        engine: id,
+        reason: `not downloaded (${missing.join(", ")}; \`akou models pull <id>\`)`,
+        units: null,
+      });
+  }
+  return { ids: here, dropped };
 }

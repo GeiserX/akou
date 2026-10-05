@@ -29,7 +29,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--final MODEL] [--without-models] [--attach] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -57,6 +57,11 @@ const start: Command = {
       value: "S",
       desc: "how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)",
     },
+    final: {
+      type: "string",
+      value: "MODEL",
+      desc: "the final pass's model for this call only: auto, qwen, parakeet, a model id, or fusion for the fusion preset's engines with their words combined (default: asr.final.model)",
+    },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
     "without-models": {
       type: "boolean",
@@ -72,6 +77,7 @@ const start: Command = {
     'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
     "akou start --live nemotron",
     "akou start --live nemotron --review qwen --review-every 120",
+    "akou start --final fusion",
     "akou start --attach --json",
   ],
   run: async (ctx, p) => {
@@ -89,6 +95,7 @@ const start: Command = {
         live: str(p, "live"),
         review: str(p, "review"),
         reviewEvery: int(p, "review-every", REVIEW_EVERY_MIN, REVIEW_EVERY_MAX),
+        final: str(p, "final"),
         attach: bool(p, "attach") || undefined,
       },
     });
@@ -348,14 +355,14 @@ const show: Command = {
 const finalize: Command = {
   name: "finalize",
   summary: "Run the accurate final pass on an ended call",
-  usage: "akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet] [--json]",
+  usage: "akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet|fusion] [--json]",
   flags: {
     call: callFlag("last"),
     force: { type: "boolean", desc: "run it again on a call that already has a final layer" },
     model: {
       type: "string",
       value: "MODEL",
-      desc: "the model for this run only: qwen or parakeet (default: asr.final.model)",
+      desc: "the model for this run only: qwen, parakeet, or fusion for the fusion preset's engines (default: asr.final.model)",
     },
   },
   examples: ["akou finalize last --force", "akou finalize last --force --model qwen"],

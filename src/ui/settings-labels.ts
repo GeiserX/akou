@@ -127,6 +127,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["auto", "Automatic: Qwen when it is downloaded"],
       ["qwen3-asr-1.7b", "Qwen3-ASR"],
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
+      ["fusion", "Qwen, Whisper and Parakeet, combined"],
     ],
   },
   "asr.parakeet.decoding": {
@@ -138,6 +139,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     ],
   },
   "asr.threads": { label: "Threads per recognizer", unit: "threads" },
+  "asr.modelIdleMinutes": {
+    label: "Unload the speech models after",
+    help: "Frees their memory when no call or dictation used them. Dictation's own model loads back.",
+    unit: "idle minutes",
+  },
   "asr.segmentPause": {
     label: "Pause that ends a live line",
     help: "Must be shorter than the longest live line.",
