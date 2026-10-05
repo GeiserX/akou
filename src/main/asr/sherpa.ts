@@ -51,6 +51,7 @@ import {
 } from "./engine.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveEngineInfo } from "./live-engines.ts";
 import { modelEntry, modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
+import { warmNativeLoad } from "./native-warm.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: sherpa-onnx-node ships no TypeScript types.
@@ -58,7 +59,12 @@ type Sherpa = any;
 
 let sherpaModule: Sherpa | null = null;
 function sherpa(): Sherpa {
-  sherpaModule ??= createRequire(import.meta.url)("sherpa-onnx-node");
+  if (sherpaModule === null) {
+    const req = createRequire(import.meta.url);
+    // On Windows the first load happens in a child, so this thread never holds the loader lock long.
+    warmNativeLoad(req.resolve("sherpa-onnx-node"));
+    sherpaModule = req("sherpa-onnx-node");
+  }
   return sherpaModule;
 }
 
