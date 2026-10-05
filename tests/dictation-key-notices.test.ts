@@ -380,6 +380,8 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
     return { ...a, tap: lines(tap), d };
   }
 
+  // Keys played in real time from 0.9 s to 2 s after a whole app starts: about 2.5 s on every OS,
+  // and the waits allow 10 s, so bun's 5 s default was never these tests' budget.
   test("a keyed chord starts nothing and the island says why", async () => {
     const s = await press("Command+Shift+D", ["LeftCommand", "LeftShift", "D"], 0);
     await until(() => s.states.some((x) => x.state === "notice"), 5000, "the notice");
@@ -392,7 +394,7 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
     await Bun.sleep(500);
     expect(s.d?.log.items()).toEqual([]);
     expect(s.states.some((x) => x.state === "listening")).toBe(false);
-  });
+  }, 20_000);
 
   test("a modifier alone still starts a session under Secure Input", async () => {
     const s = await press("RightCommand", ["RightCommand"], 0);
@@ -402,13 +404,13 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
     expect(s.states.map((x) => x.state)).toEqual(["pressed", "listening", "transcribing", "done"]);
     expect(s.states.at(-1)).toEqual({ state: "done", how: "copied", note: "⌘V" });
     expect(s.d?.log.items()[0]).toMatchObject({ state: "inserted", text: null });
-  });
+  }, 20_000);
 
   test("control: the same chord with Secure Input off starts a session", async () => {
     const s = await press("Command+Shift+D", ["LeftCommand", "LeftShift", "D"], null);
     await until(() => s.d?.log.items()[0]?.state === "inserted", 10_000, "the dictation inserted");
     expect(s.states.some((x) => x.state === "notice")).toBe(false);
-  });
+  }, 20_000);
 });
 
 describe("DC-N1 over a whole app: the grant taken back and given again", () => {
