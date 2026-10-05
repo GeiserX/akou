@@ -6,9 +6,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { WARM_TIMEOUT_MS, warmNativeLoad } from "../src/main/asr/native-warm.ts";
 
@@ -48,7 +47,10 @@ describe("[G2] a Worker's first native load leaves the main thread running", () 
     const pkg = dirname(createRequire(import.meta.url).resolve("sherpa-onnx-win-x64/package.json"));
     // On the system drive, where an app is installed: the check points TEMP at the runner's faster
     // D: drive, where a first load is too quick to show the stall.
-    const base = join(process.env.LOCALAPPDATA ?? tmpdir(), "Temp");
+    const base = process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, "Temp")
+      : join(`${process.env.SystemDrive ?? "C:"}\\`, "Windows", "Temp");
+    mkdirSync(base, { recursive: true });
     const run = (warm: boolean) => {
       const dir = mkdtempSync(join(base, "akou-native-"));
       cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
