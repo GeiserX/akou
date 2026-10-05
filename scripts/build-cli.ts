@@ -25,7 +25,11 @@ import { sourceVersion } from "./stamp-version.ts";
 const ROOT = join(import.meta.dir, "..");
 export const MIN_BUN = "1.4.2";
 
-/** What a Developer ID signed binary may do under the hardened runtime: Bun's JIT needs these. */
+/**
+ * What a Developer ID signed binary may do under the hardened runtime: Bun's JIT needs the first two,
+ * and `akou serve` loads native addons that are not signed by this team (the app gets the same three
+ * from Hutch).
+ */
 export const CLI_ENTITLEMENTS = join(ROOT, "scripts", "cli-entitlements.plist");
 
 type Env = Record<string, string | undefined>;

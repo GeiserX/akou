@@ -520,7 +520,7 @@ jobs:
           case "$version" in 0.*|*-*) prerelease="--prerelease" ;; esac
           { cat ../notes/changelog.md; echo; } > notes.md
           cat >> notes.md <<'EOF'
-          **Signed and notarized.** The app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them without an extra step, and the microphone and system audio grants survive updates. Coming from 0.6.0 or older, which were not signed, macOS asks for both grants once more. The speech models are downloaded on first run. See [docs/getting-started.md](https://github.com/GeiserX/akou/blob/main/docs/getting-started.md).
+          **Signed and notarized.** The app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them without an extra step, and the microphone and system audio grants should survive updates. Coming from 0.6.0 or older, which were not signed, macOS asks for both grants once more. The speech models are downloaded on first run. See [docs/getting-started.md](https://github.com/GeiserX/akou/blob/main/docs/getting-started.md).
           EOF
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
