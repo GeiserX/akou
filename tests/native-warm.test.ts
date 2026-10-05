@@ -34,7 +34,7 @@ describe("[G2] a Worker's first native load leaves the main thread running", () 
     expect(calls[0]?.cmd).toBe("bun.exe");
     expect(calls[0]?.args).toEqual(["-e", 'require("C:\\\\a\\\\b.node")']);
     expect(calls[0]?.o).toMatchObject({ stdio: "ignore", timeout: WARM_TIMEOUT_MS });
-    expect((calls[0]?.o.env as Record<string, string>).BUN_BE_BUN).toBe("1");
+    expect(calls[0]?.o.env).toMatchObject({ BUN_BE_BUN: "1" });
   });
 
   // The first load of a freshly written DLL is the slow one, so every run gets its own copy of the
