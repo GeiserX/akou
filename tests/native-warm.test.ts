@@ -6,11 +6,11 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { WARM_TIMEOUT_MS, warmNativeLoad } from "../src/main/asr/native-warm.ts";
-import { tempDir } from "./helpers.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "addon-load-stall.ts");
 const cleanups: (() => void)[] = [];
@@ -39,20 +39,23 @@ describe("[G2] a Worker's first native load leaves the main thread running", () 
 
   // The first load of a freshly written DLL is the slow one, so every run gets its own copy of the
   // addon's files, as after an install. On a Windows runner a cold load took 0.1 to 1.7 s, and the
-  // main thread waited that long in 109 of 120 runs; with the child first, 0 of 120 (worst 8 ms).
+  // main thread waited that long in 111 of 120 runs; with the child first, 0 of 120 (worst 15 ms).
   test("on fresh copies of the addon, the main thread never waits 50 ms; without the child it does", () => {
     if (process.platform !== "win32") {
       expect(warmNativeLoad("x")).toBe(false);
       return;
     }
     const pkg = dirname(createRequire(import.meta.url).resolve("sherpa-onnx-win-x64/package.json"));
+    // On the system drive, where an app is installed: the check points TEMP at the runner's faster
+    // D: drive, where a first load is too quick to show the stall.
+    const base = join(process.env.LOCALAPPDATA ?? tmpdir(), "Temp");
     const run = (warm: boolean) => {
-      const t = tempDir("akou-native-");
-      cleanups.push(t.cleanup);
-      cpSync(pkg, t.dir, { recursive: true });
+      const dir = mkdtempSync(join(base, "akou-native-"));
+      cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+      cpSync(pkg, dir, { recursive: true });
       const r = spawnSync(
         process.execPath,
-        [FIXTURE, join(t.dir, "sherpa-onnx.node"), warm ? "1" : "0"],
+        [FIXTURE, join(dir, "sherpa-onnx.node"), warm ? "1" : "0"],
         {
           encoding: "utf8",
           timeout: 60_000,
