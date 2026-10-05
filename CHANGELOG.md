@@ -2,9 +2,9 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
-## 0.6.1 — akou idles in about 2 GB, a call records the app you pick, and a call's final pass can fuse engines
+## 0.6.1 — akou is signed and notarized, idles in about 2 GB, records the app you pick, and a call's final pass can fuse engines
 
-On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, because the models a call or a dictation loaded were never let go. Recording one app instead of the whole computer meant typing an app id into Settings, and the call stopped the moment that app quit. In 0.6.1 an idle app drops back to about 2 GB, a menu beside Record picks the app for one call from the apps playing now, and a call whose app quits goes on recording the whole computer. A call's final pass can also run the fusion preset's engines, as a fusion file job does.
+On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, because the models a call or a dictation loaded were never let go. Recording one app instead of the whole computer meant typing an app id into Settings, and the call stopped the moment that app quit. In 0.6.1 an idle app drops back to about 2 GB, a menu beside Record picks the app for one call from the apps playing now, and a call whose app quits goes on recording the whole computer. A call's final pass can also run the fusion preset's engines, as a fusion file job does. And 0.6.1 is the first release signed with a Developer ID and notarized, so macOS opens it without an extra step and keeps its permissions across updates.
 
 ### Calls
 - **A call's final pass can fuse several engines.** `asr.final.model` takes `fusion`, and so do `akou start --final`, `POST /calls {final}`, `akou_start {final}` and `akou finalize --model`. The pass runs the `fusion` preset's engines over the whole call and joins their words, and its lines read `rover-conf(<ids>)`. An engine that is not downloaded is left out, and `final.done` names the engines that decoded and the ones left out, with why. It is slower by about one pass per engine and holds about 0.25 GB per hour of call while it runs. The default stays one engine (#325).
@@ -51,6 +51,7 @@ On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, b
 - `akou ask --preset` right after the app starts no longer answers "not found" for a call on disk (#327).
 
 ### Install and releases
+- **The app and the macOS command line are signed with a Developer ID and notarized by Apple.** macOS opens akou without the Open Anyway step, the `akou` binary runs after a browser download without clearing its download mark, and the microphone, system audio and Accessibility grants now survive updates. A release fails when a signing secret is missing, and checks the shipped app and command line with Gatekeeper before it publishes them (#330).
 - **Homebrew installs akou** with `brew install --cask geiserx/akou/akou`, and every release bumps the cask (#298).
 - **Each release publishes an update feed**, so an installed app can learn that a newer version exists (#291).
 - **A tag releases only a commit whose CI passed.** The release notes are its CHANGELOG section, and every asset carries a build attestation (#281).
@@ -59,7 +60,7 @@ On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, b
 - More checks behind the scenes: a coverage floor, a running test for every trap, no new wall-clock reads in the code, a nightly a year ahead, fuzzing, an 8-hour soak, the window suite in WebKit on every pull request, and fixes for the flakiest tests (#256, #269, #272, #274, #279, #292, #299, #327). The release gates gained their runners, including a speech run on Windows (#294, #296, #307, #312, #313, #314, #316).
 
 ### Known limitations
-- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility, as [docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing) shows.
+- **Coming from 0.6.0 or older, macOS asks for the microphone, system audio and Accessibility once more**, because those builds were ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, as [docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing) shows.
 - **One app cannot be recorded on Linux**, so the mode is hidden there.
 - **Pause music while you dictate cannot work on a Mac**, because macOS does not let one app see what another is playing.
 - Every item under 0.5.5's Known limitations still applies.

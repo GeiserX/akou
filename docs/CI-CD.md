@@ -141,7 +141,7 @@ These are specified in [TESTING.md](TESTING.md); this is where each runs.
 
 Seen and worth keeping in mind, not beads until someone needs them.
 
-- Signing on Windows: a signed installer. Until then the SmartScreen step is documented. macOS builds are signed with the Developer ID and notarized since 0.6.2.
+- Signing on Windows: a signed installer. Until then the SmartScreen step is documented. macOS builds are signed with the Developer ID and notarized since 0.6.1.
 - A beta channel: a scheduled prerelease from `main` that the updater offers when the user opts in (Granola and anarlog have a staging channel).
 - An SBOM: an SPDX file per artifact, attached to the attestation.
 - Issue templates, once issues arrive.

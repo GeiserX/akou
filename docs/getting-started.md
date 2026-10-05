@@ -24,9 +24,9 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 
 ### Signed and notarized
 
-Since 0.6.2 the app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them like any other app. The `SHA256SUMS` check above confirms the file is the one this repository built.
+Since 0.6.1 the app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them like any other app. The `SHA256SUMS` check above confirms the file is the one this repository built.
 
-0.6.1 and older carry an ad-hoc signature only, and macOS refuses their first open:
+0.6.0 and older carry an ad-hoc signature only, and macOS refuses their first open:
 
 - On macOS 14, Control-click akou in Applications, choose Open, then Open again.
 - On macOS 15 and later, open System Settings after the refusal, then Privacy & Security. Near the bottom it says akou was blocked. Click Open Anyway and confirm with your password.
@@ -49,7 +49,7 @@ Until the models are there, akou does not start a recording: `akou start` answer
 
 The first time you record, macOS asks two questions: may akou use the **microphone**, and may it record **system audio** (the other side of the call). Answer Allow to both. Both grants belong to the akou app, whichever way you started the recording.
 
-**After an update, macOS keeps the grants.** macOS remembers a grant for an app by its signature, and every release since 0.6.2 carries the same Developer ID. Coming from 0.6.1 or older, which were ad-hoc signed, macOS treats the update as a different app and asks once more. If a recording after an update is silent on one side, open System Settings, then Privacy & Security, then Microphone or Screen & System Audio Recording, remove akou with the minus button, and record again so macOS asks.
+**After an update, macOS keeps the grants.** macOS remembers a grant for an app by its signature, and every release since 0.6.1 carries the same Developer ID. Coming from 0.6.0 or older, which were ad-hoc signed, macOS treats the update as a different app and asks once more. If a recording after an update is silent on one side, open System Settings, then Privacy & Security, then Microphone or Screen & System Audio Recording, remove akou with the minus button, and record again so macOS asks.
 
 ## The command line
 
@@ -68,7 +68,7 @@ akou --version
 
 On Linux it is the same with `linux-x64` in place of `darwin-arm64`. On Windows, unzip `akou-cli-<version>-windows-x64.zip` and move `akou.exe` into a folder on your `PATH`.
 
-`~/.local/bin` must be on your `PATH`. The macOS binary is signed and notarized, so it runs even when a browser downloaded it. For 0.6.1 and older, which macOS refuses to run after a browser download, clear the download mark once:
+`~/.local/bin` must be on your `PATH`. The macOS binary is signed and notarized, so it runs even when a browser downloaded it. For 0.6.0 and older, which macOS refuses to run after a browser download, clear the download mark once:
 
 ```sh
 xattr -d com.apple.quarantine ~/.local/bin/akou

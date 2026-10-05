@@ -39,7 +39,7 @@ The first window asks what you will use akou for and downloads the speech models
 
 ## Status
 
-The 0.x releases are prereleases: macOS on Apple silicon only, signed with a Developer ID and notarized since 0.6.2. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
+The 0.x releases are prereleases: macOS on Apple silicon only, signed with a Developer ID and notarized since 0.6.1. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
 
 ## Documentation
 

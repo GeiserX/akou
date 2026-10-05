@@ -16,7 +16,7 @@ The questions people ask first. Each answer points at the page with the detail.
 
 ??? question "Is the app signed?"
 
-    Yes, since 0.6.2. The app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them without a warning and keeps the microphone and system audio grants across updates. 0.6.1 and older carry an ad-hoc signature only. Check the download against `SHA256SUMS`. See [Signed and notarized](getting-started.md#signed-and-notarized).
+    Yes, since 0.6.1. The app and the `akou` command line are signed with a Developer ID and notarized by Apple, so macOS opens them without a warning and keeps the microphone and system audio grants across updates. 0.6.0 and older carry an ad-hoc signature only. Check the download against `SHA256SUMS`. See [Signed and notarized](getting-started.md#signed-and-notarized).
 
 ??? question "Does it record Zoom, Meet or Teams?"
 
