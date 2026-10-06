@@ -27,7 +27,9 @@
  *   sent to a remote. With no slots, `interactive` is ignored and the job queues like any other.
  * - **Nothing is kept longer than needed** (SV-J6). The upload is deleted when the job ends; a
  *   delete removes the job and its result and leaves the feed the id and the final state; a job
- *   older than `server.retain_days` goes the same way on a timer.
+ *   older than `server.retain_days` goes the same way on a timer. A job submitted `keep_audio`
+ *   is the one exception the client asked for: its upload stays after it ends, and retention
+ *   skips it whole (row, result, events, audio) until a client deletes it.
  */
 
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
@@ -260,6 +262,7 @@ export function jobView(
     model_source: j.model_source,
     priority: j.priority,
     interactive: j.interactive,
+    keep_audio: j.keep_audio,
     language: j.language,
     languages: j.languages,
     diarize: j.diarize,
@@ -273,6 +276,7 @@ export function jobView(
       self: `/v1/jobs/${j.id}`,
       result: `/v1/jobs/${j.id}/result`,
       events: "/v1/events",
+      ...(j.keep_audio ? { audio: `/v1/jobs/${j.id}/audio` } : {}),
     },
   };
 }
@@ -869,6 +873,7 @@ export class JobService {
     this.sent.get(id)?.abort.abort();
     if (r.job.remote && r.job.remote_job) this.remotes.cancel(r.job.remote, r.job.remote_job);
     if (r.job.audio) rmSync(r.job.audio, { force: true });
+    if (r.job.kept) rmSync(r.job.kept, { force: true });
     this.notify(id, r.final);
     if (r.final === "cancelled") this.announce(id);
     if (slot) this.pump();
@@ -912,7 +917,10 @@ export class JobService {
     this.o.shelf.sweep(new Set([...defaults, ...inUse]));
   }
 
-  /** Every job older than `server.retain_days` is deleted as a client's delete would. */
+  /**
+   * Every job older than `server.retain_days` is deleted as a client's delete would, except a job
+   * that keeps its audio, which only a client's delete removes.
+   */
   private sweepJobs(): number {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
@@ -1298,7 +1306,8 @@ export class JobService {
             data: failedData(job, end.error),
             deliverTo: job.callback_url,
           });
-    if (job.audio) rmSync(job.audio, { force: true });
+    // A job that keeps its audio holds the upload from now on (`kept`), until it is deleted.
+    if (job.audio && !job.keep_audio) rmSync(job.audio, { force: true });
     if (!r) return;
     this.measure(job, end);
     this.o.log(

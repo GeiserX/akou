@@ -146,7 +146,7 @@ describe("[SV-T5] one table of who may call each route", () => {
     expect(accessDrift(doc, TABLE)).toEqual(["PATCH /v1/config: table admin, file jobs"]);
   });
 
-  test("the jobs column is exactly the served ?scope=jobs view, compatibility routes and the file aside", () => {
+  test("the jobs column is exactly the served ?scope=jobs view, compatibility routes, the WebSocket and the file aside", () => {
     const full = committed();
     for (const mode of ["app", "server"] as const) {
       const view = servedOpenApi(full, { mode, scope: "jobs", serverUrl: "http://x" });
@@ -154,7 +154,13 @@ describe("[SV-T5] one table of who may call each route", () => {
         .map((o) => key(o.method, o.path))
         .sort();
       const fromTable = operations(full)
-        .filter((o) => o.op["x-akou-modes"].includes(mode) && o.op["x-akou-door"] === undefined)
+        // A WebSocket (`GET /v1/live`) is no tool: a client opens it, so the view leaves it out.
+        .filter(
+          (o) =>
+            o.op["x-akou-modes"].includes(mode) &&
+            o.op["x-akou-door"] === undefined &&
+            o.op["x-akou-upgrade"] === undefined,
+        )
         .map((o) => key(o.method, o.path))
         .filter((k) => expected(TABLE[k] as Access, "jobs") === "allowed")
         .sort();

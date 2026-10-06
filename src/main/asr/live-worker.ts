@@ -1250,6 +1250,8 @@ export type FromWorker =
   | { type: "dstream.failed"; token: number; error: string }
   /** Words a dictation's stream decoded; `done` after its close, with the last of them. */
   | { type: "dstream-words"; token: number; tokens: LiveToken[]; done: boolean }
+  /** A dictation stream's audio push was decoded: `samples` of it. */
+  | { type: "dstream-ack"; token: number; samples: number }
   /** A dictation's models are loaded, or `error` says why not. */
   | { type: "dwarmed"; token: number; error?: string }
   /** Tagged with the call it belongs to, so a late result never lands in the next call. */
@@ -1325,6 +1327,7 @@ export class WorkerSide {
           const tokens = p.dictationAudio(m.token, m.samples);
           if (tokens.length > 0)
             this.reply({ type: "dstream-words", token: m.token, tokens, done: false });
+          this.reply({ type: "dstream-ack", token: m.token, samples: m.samples.length });
           break;
         }
         case "dwarm":
@@ -1578,6 +1581,8 @@ export interface DictationStream {
   /** The engine and language it runs on and its load time; rejects when it could not open. */
   readonly opened: Promise<LiveChoice & { ms: number }>;
   push(samples: Float32Array): void;
+  /** Samples pushed that the engine has not decoded yet (the live door's bound). */
+  pending?(): number;
   /** Flushes its last audio: resolves once its last words came through `onWords`. */
   finish(): Promise<void>;
   /** Drops it: no more words come. */
@@ -1595,6 +1600,9 @@ interface HostDictationStream {
   lost(e: Error): void;
   done: { resolve(): void; reject(e: Error): void } | null;
   cancelled: boolean;
+  /** Samples posted to the Worker, and samples it said it decoded. */
+  posted: number;
+  acked: number;
 }
 
 /**
@@ -1959,6 +1967,8 @@ export class LiveAsr {
       lost: lose,
       done: null,
       cancelled: false,
+      posted: 0,
+      acked: 0,
     };
     const gone = this.failed ?? (this.closed ? "the recognizer is closed" : null);
     if (gone) {
@@ -1979,8 +1989,10 @@ export class LiveAsr {
       push: (samples) => {
         if (d.cancelled || !this.dstreams.has(token)) return;
         const copy = samples.slice();
+        d.posted += copy.length;
         this.transport.post({ type: "dstream-audio", token, samples: copy }, [copy.buffer]);
       },
+      pending: () => d.posted - d.acked,
       finish: () => {
         if (d.cancelled || !this.dstreams.has(token))
           return Promise.reject(new Error("the dictation's stream is not open"));
@@ -2395,6 +2407,11 @@ export class LiveAsr {
         this.warms.delete(m.token);
         if (m.error) w?.reject(new Error(m.error));
         else w?.resolve();
+        return;
+      }
+      case "dstream-ack": {
+        const d = this.dstreams.get(m.token);
+        if (d) d.acked += m.samples;
         return;
       }
       case "dstream-words": {

@@ -102,6 +102,36 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end };
 }
 
+/**
+ * A file on disk as the answer, honouring one `Range`: 206 with the bytes asked for, 416
+ * `bad_range` for bytes outside it. `what` names the file in the refusal.
+ */
+export function fileResponse(req: Request, path: string, type: string, what: string): Response {
+  const size = statSync(path).size;
+  const file = Bun.file(path);
+  const headers = { "content-type": type, "accept-ranges": "bytes", "cache-control": "no-store" };
+  const range = req.headers.get("range");
+  if (range === null) {
+    return new Response(file, { headers: { ...headers, "content-length": String(size) } });
+  }
+  const rg = parseRange(range, size);
+  if (!rg) {
+    return json(
+      416,
+      { error: "bad_range", message: `the range is outside the ${size} bytes of ${what}` },
+      { "content-range": `bytes */${size}` },
+    );
+  }
+  return new Response(file.slice(rg.start, rg.end + 1), {
+    status: 206,
+    headers: {
+      ...headers,
+      "content-range": `bytes ${rg.start}-${rg.end}/${size}`,
+      "content-length": String(rg.end - rg.start + 1),
+    },
+  });
+}
+
 /** A route of this file: app mode, admin, on one call. */
 function doc(d: Omit<RouteDoc, "access" | "modes">): RouteDoc {
   return { access: "admin", modes: ["app"], ...d, params: { id: CALL_ID, ...d.params } };
@@ -374,33 +404,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
       if (!path.startsWith(normalize(call.dir) + sep) || !existsSync(path)) {
         throw new HttpError(404, "not_found", `the audio of part ${n} is missing`);
       }
-      const size = statSync(path).size;
-      const file = Bun.file(path);
-      const headers = {
-        "content-type": "audio/ogg",
-        "accept-ranges": "bytes",
-        "cache-control": "no-store",
-      };
-      const range = c.req.headers.get("range");
-      if (range === null) {
-        return new Response(file, { headers: { ...headers, "content-length": String(size) } });
-      }
-      const rg = parseRange(range, size);
-      if (!rg) {
-        return json(
-          416,
-          { error: "bad_range", message: `the range is outside the ${size} bytes of part ${n}` },
-          { "content-range": `bytes */${size}` },
-        );
-      }
-      return new Response(file.slice(rg.start, rg.end + 1), {
-        status: 206,
-        headers: {
-          ...headers,
-          "content-range": `bytes ${rg.start}-${rg.end}/${size}`,
-          "content-length": String(rg.end - rg.start + 1),
-        },
-      });
+      return fileResponse(c.req, path, "audio/ogg", `part ${n}`);
     },
   );
 }

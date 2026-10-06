@@ -114,7 +114,10 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/jobs/{id}": "jobs",
   "PATCH /v1/jobs/{id}": "jobs",
   "GET /v1/jobs/{id}/result": "jobs",
+  "GET /v1/jobs/{id}/audio": "jobs",
   "DELETE /v1/jobs/{id}": "jobs",
+  // The live door, a WebSocket: any key, the guard before the upgrade.
+  "GET /v1/live": "jobs",
   "GET /v1/events": "jobs",
   "POST /v1/audio/transcriptions": "jobs",
 };

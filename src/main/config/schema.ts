@@ -264,7 +264,7 @@ export const SETTINGS = {
     min: 1,
     max: 3650,
     default: 7,
-    doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
+    doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends. A job submitted with `keep_audio=true` keeps its upload and is never deleted by this: only a client's delete removes it.",
   },
   "server.concurrency": {
     type: "integer",

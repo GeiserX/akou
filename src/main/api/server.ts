@@ -33,8 +33,10 @@ import {
   HttpError,
   isMultipart,
   json,
+  MAX_FRAME_BYTES,
   type Mode,
   Router,
+  type SocketHandler,
 } from "./http.ts";
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
@@ -46,6 +48,7 @@ import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
 import { keyRoutes } from "./routes/keys.ts";
+import { liveRoutes } from "./routes/live.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { openaiRoutes } from "./routes/openai.ts";
@@ -233,6 +236,8 @@ export interface ApiApp {
   jobs?(): import("../server/jobs.ts").JobService | null;
   /** Dictation (docs/ux/DICTATION.md); app mode only. */
   dictation?(): import("../dictation/service.ts").DictationService | null;
+  /** The live door, `GET /v1/live` (server mode); null with no recognizer. */
+  live?(): import("../server/live.ts").LiveService | null;
 }
 
 export interface ServerOptions {
@@ -301,6 +306,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   if (mode !== "app") {
     keyRoutes(r);
     openaiRoutes(r);
+    liveRoutes(r);
   }
   openapiRoutes(r);
   return r;
@@ -325,6 +331,8 @@ export async function routeRequest(
   o: {
     by: string;
     timeout?: (seconds: number) => void;
+    /** Upgrades the request to a WebSocket; absent in process. */
+    upgrade?: (socket: SocketHandler) => boolean;
     onError?(err: unknown, req: Request): void;
     /** Who is calling (the guard's answer); absent in process, which is the user. */
     identity?: Identity | null;
@@ -356,6 +364,7 @@ export async function routeRequest(
       app,
       by: o.by,
       timeout: o.timeout,
+      upgrade: o.upgrade,
       identity: o.identity,
       source: o.source,
     });
@@ -391,7 +400,7 @@ export function startApiServer(o: ServerOptions): ApiServer {
   const check = o.guard ?? defaultGuard;
   const maxUploadBytes = o.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
   const trusted = o.trustedProxies ?? [];
-  const server = Bun.serve({
+  const server = Bun.serve<SocketHandler>({
     // IPv4 loopback by address, so no name is resolved at bind (DESIGN 6.3 rule 1); server mode
     // binds `api.bind`, which startApp has checked against `server.behind_proxy` (SV-P5).
     hostname: o.hostname ?? "127.0.0.1",
@@ -403,6 +412,17 @@ export function startApiServer(o: ServerOptions): ApiServer {
     maxRequestBodySize: Math.max(DRAIN_BODY_BYTES, maxUploadBytes + MAX_BODY_BYTES),
     // Long polls wait up to 30 s; streams send a keep-alive every 15 s.
     idleTimeout: 60,
+    // The live door's sockets (`GET /v1/live`): each is handed to the session its route made. A
+    // frame past the limit closes the socket (1009); a quiet socket is pinged, and closed after
+    // two minutes without an answer.
+    websocket: {
+      maxPayloadLength: MAX_FRAME_BYTES,
+      idleTimeout: 120,
+      open: (ws) => ws.data.opened(ws),
+      message: (ws, data) =>
+        ws.data.message(typeof data === "string" ? data : new Uint8Array(data)),
+      close: (ws) => ws.data.closed(),
+    },
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       const inV1 = url.pathname.startsWith(`${API_PREFIX}/`);
@@ -425,17 +445,24 @@ export function startApiServer(o: ServerOptions): ApiServer {
         maxUploadBytes,
         source,
       });
+      // A route that upgrades the request (`GET /v1/live`) answers nothing itself: Bun does.
+      let upgraded = false;
       const res =
         "refused" in g
           ? g.refused
           : await routeRequest(router, o.app, req, {
               by: authorOf(req),
               timeout: (seconds) => srv.timeout(req, seconds),
+              upgrade: (socket) => {
+                upgraded = srv.upgrade(req, { data: socket });
+                return upgraded;
+              },
               onError: o.onError,
               identity: g.identity,
               source,
               root,
             });
+      if (upgraded) return undefined;
       // An answer never closes the socket on unread bytes: the client would get a reset, not it.
       if (!req.bodyUsed && req.body) await drainBody(req.body.getReader());
       return res;

@@ -565,11 +565,15 @@ describe("SV-K1: GET /v1/server", () => {
           "interactive",
           "jobs",
           "languages_bound",
+          "live",
           "openai",
           "webhooks",
           "wyoming",
         ].sort(),
       );
+      // The live door is server mode's; no streaming model is on disk here, so it has no words.
+      expect(b.capabilities.live).toBe(false);
+      expect(b.live === null).toBe(mode === "app");
       // server.dictation_slots reserves one Worker by default (DC-R2); the app dictates through
       // its own engine, with no lane in its job queue.
       expect(b.capabilities.interactive).toBe(mode === "server");

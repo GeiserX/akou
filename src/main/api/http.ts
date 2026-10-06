@@ -251,6 +251,21 @@ export interface RouteContext<A> {
    * (ask, enhance) turns it off, so a slow answer is not cut at the server's idle limit.
    */
   timeout?: (seconds: number) => void;
+  /**
+   * Turns this request into a WebSocket whose frames go to `socket` (a route with
+   * `upgrade: "websocket"`); false when the request cannot be upgraded. Absent in process.
+   */
+  upgrade?: (socket: SocketHandler) => boolean;
+}
+
+/** The largest WebSocket frame: a 200 ms Ogg Opus page at 24 kbit/s is about 650 bytes. */
+export const MAX_FRAME_BYTES = 64 * 1024;
+
+/** What an upgraded request's WebSocket is handed to: its open, each message, its close. */
+export interface SocketHandler {
+  opened(ws: { send(data: string): unknown; close(code?: number, reason?: string): void }): void;
+  message(data: string | Uint8Array): void;
+  closed(): void;
 }
 
 export type Handler<A> = (c: RouteContext<A>) => Response | Promise<Response>;
@@ -305,6 +320,11 @@ export interface RouteDoc extends RouteMeta {
   query?: Readonly<Record<string, QueryParam>>;
   /** The path parameters, `:name` in the pattern, described. */
   params?: Readonly<Record<string, string>>;
+  /**
+   * `websocket`: the route upgrades the request, and the success is `101 Switching Protocols`
+   * (`x-akou-upgrade` in the file); the protocol is in the route's `doc`.
+   */
+  upgrade?: "websocket";
   /** The status of a success. */
   ok: number;
   /** Other success statuses, same body type: `POST /calls` answers 200 when it attaches. */
