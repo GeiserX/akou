@@ -684,7 +684,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/audio",
     {
       id: "jobs.audio",
-      doc: "The audio a job was submitted with, byte for byte, when it was submitted with `keep_audio=true`; honours `Range`. The content type follows the file (`audio/ogg` for Ogg Opus). 409 `not_kept` for a job that kept none: its upload was deleted when it ended. A kept job and its audio stay until `DELETE /v1/jobs/{id}`, whatever `server.retain_days` says.",
+      doc: "The audio a job was submitted with, byte for byte, when it was submitted with `keep_audio=true`; honours `Range`. The content type follows the file (`audio/ogg` for Ogg Opus). 409 `not_kept` for a job that kept none: its upload was deleted when it ended; 410 `gone` when a kept file is no longer on disk. A kept job and its audio stay until `DELETE /v1/jobs/{id}`, whatever `server.retain_days` says.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,
@@ -695,12 +695,22 @@ export function jobRoutes(r: Router<ApiApp>): void {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
       if (!j) throw noJob(jobsOf(c), caller(c), c.params.id as string);
       // Before the job ends its upload is still where it was written; after, it is `kept`.
-      const path = j.keep_audio ? (j.kept ?? j.audio) : null;
-      if (!path || !existsSync(path)) {
+      if (!j.keep_audio) {
         throw new HttpError(
           409,
           "not_kept",
           `job ${j.id} was not submitted with keep_audio, so its upload is gone`,
+        );
+      }
+      const path = j.kept ?? j.audio;
+      if (!path || !existsSync(path)) {
+        throw new HttpError(
+          410,
+          "gone",
+          `job ${j.id} kept its audio, but the file is no longer on disk`,
+          {
+            id: j.id,
+          },
         );
       }
       return fileResponse(c.req, path, audioType(path), `job ${j.id}'s audio`);

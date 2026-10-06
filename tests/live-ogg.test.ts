@@ -160,6 +160,33 @@ describe("OggOpusIn: libopus at 16 kHz, page by page", () => {
     );
   });
 
+  test("a second OpusHead page, or a granule that goes back, is refused even on a reconnect", async () => {
+    const run = async (pages: Uint8Array[]) => {
+      const inp = new OggOpusIn();
+      try {
+        for (const p of pages) await inp.push(p);
+        return null;
+      } catch (err) {
+        return err instanceof LiveRefused ? err.message : String(err);
+      } finally {
+        inp.close();
+      }
+    };
+    // A reconnect's first audio page is any page; the control goes through.
+    expect(await run([...PAGES.slice(0, 2), PAGES[6] as Uint8Array])).toBeNull();
+    expect(await run([...PAGES.slice(0, 2), PAGES[0] as Uint8Array])).toBe(
+      "an OpusHead page after the stream began: open a new socket",
+    );
+    // Page 7 renumbered to follow page 6 but carrying page 5's granule: the clock went back.
+    const back = (PAGES[5] as Uint8Array).slice();
+    const v = new DataView(back.buffer);
+    v.setUint32(18, 7, true);
+    v.setUint32(22, oggCrc(back), true);
+    expect(await run([...PAGES.slice(0, 2), PAGES[6] as Uint8Array, back])).toBe(
+      "page 7's granule 38400 is before the last page's 48000",
+    );
+  });
+
   test("a stereo stream is refused: the live words are mono", async () => {
     const head = PAGES[0]?.slice() as Uint8Array;
     // The OpusHead's channel count is byte 9 of the packet, after the 28-byte page header.

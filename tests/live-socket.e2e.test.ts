@@ -36,7 +36,11 @@ const cleanups: (() => void | Promise<void>)[] = [];
 let rig: AppRig;
 
 /** A server in server mode with the fake recognizer, and both streaming models on disk. */
-async function serverRig(o: { streams: boolean }): Promise<{ rig: AppRig; models: string }> {
+async function serverRig(o: {
+  streams: boolean;
+  /** The fake models' options; with them, the recognizer runs on its own Worker, as in the app. */
+  options?: Record<string, unknown>;
+}): Promise<{ rig: AppRig; models: string }> {
   const home = tempDir("akou-live-e2e-");
   cleanups.push(home.cleanup);
   const reg = modelRegistry();
@@ -53,7 +57,8 @@ async function serverRig(o: { streams: boolean }): Promise<{ rig: AppRig; models
   for (const m of catalog.slice(0, o.streams ? 5 : 3)) reg.install(dir, m);
   const r = await appRig({
     modelRegistry: catalog,
-    models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+    models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: o.options ?? {} },
+    ...(o.options ? { asrInThread: false } : {}),
     settings: { ...SERVER, "asr.modelsDir": dir },
   });
   cleanups.push(() => r.close());
@@ -292,6 +297,48 @@ describe("GET /v1/live: one streaming engine at a time, and keys that go away", 
     s.ws.send(frames[1] as Uint8Array);
     expect((await s.closed).code).toBe(4401);
     expect(await s.next("error")).toMatchObject({ code: "key_revoked" });
+  });
+});
+
+describe("GET /v1/live: a quiet revoked key, and a client faster than the engine", () => {
+  test("[4401] a key revoked while its client sends nothing is closed within about two seconds", async () => {
+    const k = await newKey(rig, "live-quiet");
+    const s = await open(rig, k.key);
+    s.ws.send(hello());
+    await s.next("ready");
+    const t0 = performance.now();
+    new KeyStore(rig.app.configDir).revoke(k.id);
+    expect((await s.closed).code).toBe(4401);
+    expect(performance.now() - t0).toBeLessThan(2500);
+    expect(await s.next("error")).toMatchObject({ code: "key_revoked" });
+    // Positive control: a quiet session whose key stays open for the same time.
+    const k2 = await newKey(rig, "live-quiet-kept");
+    const t = await open(rig, k2.key);
+    t.ws.send(hello());
+    await t.next("ready");
+    await Bun.sleep(2500);
+    expect(t.ws.readyState).toBe(WebSocket.OPEN);
+    t.ws.send(JSON.stringify({ type: "stop" }));
+    expect((await t.closed).code).toBe(1000);
+  });
+
+  test("[too_fast] audio sent far ahead of a slow engine closes 4400; 20 s ahead does not", async () => {
+    // Each 200 ms frame takes the engine 20 ms, on its own Worker: a minute sent at once is
+    // decoded in about 6 s, so most of it waits in flight.
+    const slow = await serverRig({ streams: true, options: { livePushMs: 20 } });
+    const k = await newKey(slow.rig, "live-fast");
+    const s = await open(slow.rig, k.key);
+    s.ws.send(hello());
+    await s.next("ready");
+    for (const f of pcm16Frames(silence(60))) s.ws.send(f);
+    expect((await s.closed).code).toBe(4400);
+    expect(await s.next("error")).toMatchObject({ code: "too_fast" });
+    // Positive control: 20 s at once stays under the 30 s bound and ends well.
+    const t = await open(slow.rig, k.key);
+    t.ws.send(hello());
+    await t.next("ready");
+    expect((await streamAndStop(t, pcm16Frames(concat(CLIP, silence(17))))).code).toBe(1000);
+    expect(t.msgs.some((m) => m.type === "error")).toBe(false);
   });
 });
 

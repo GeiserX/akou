@@ -8,7 +8,7 @@
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appRig } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -106,6 +106,15 @@ describe("keep_audio: a job that keeps its recording", () => {
       expect(rig.app.jobs()?.sweep()).toBe(0);
       expect(files().length).toBe(1);
       expect((await asKey(rig, k.key, "GET", `/jobs/${kept}/audio`)).status).toBe(200);
+      // A kept job whose file is gone from disk answers 410, not 409 not_kept: it was kept.
+      const [file] = files();
+      const onDisk = join(uploads, file as string);
+      const saved = readFileSync(onDisk);
+      rmSync(onDisk);
+      const missing = await asKey(rig, k.key, "GET", `/jobs/${kept}/audio`);
+      expect(missing.status).toBe(410);
+      expect(missing.body.error).toBe("gone");
+      writeFileSync(onDisk, saved);
       // A client's delete removes the job and its file.
       expect((await asKey(rig, k.key, "DELETE", `/jobs/${kept}`)).status).toBe(200);
       expect(files()).toEqual([]);

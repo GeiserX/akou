@@ -18,12 +18,17 @@
  *   places the session on the recording's timeline (a reconnect that starts mid-file included);
  *   with `pcm16` it counts from the session's first sample.
  * - A refusal is an `error` `{code, message}` frame, then a close: 4400 for a message or page that
- *   is not valid (`bad_message`, `bad_page`, `unknown_model`, `unsupported_language`), 4401 when
+ *   is not valid (`bad_message`, `bad_page`, `unknown_model`, `unsupported_language`) or audio
+ *   sent more than `MAX_IN_FLIGHT_SECONDS` ahead of the engine (`too_fast`), 4401 when
  *   the key was revoked, 4409 `engine_busy` when another open session runs another engine (the
  *   Worker holds one streaming engine at a time), 4500 `stream_lost`, 4503 `no_live_engine`.
  */
 
-import { OpusDecoder } from "opus-decoder";
+// A type only: the WASM decoder loads at a session's first OpusHead page (`OggOpusIn`), so the
+// desktop app and the CLI never load it. A static value import also breaks `bun build --compile`:
+// the package says `sideEffects: false`, the bundler drops its Worker class and keeps a line of
+// its index that names it, and the compiled CLI throws at start.
+import type { OpusDecoder } from "opus-decoder";
 import type { Identity } from "../api/access.ts";
 import type { SocketHandler } from "../api/http.ts";
 import type { LiveToken } from "../asr/engine.ts";
@@ -52,13 +57,20 @@ export const LIVE_CODECS = ["ogg-opus", "pcm16"] as const;
 export type LiveCodec = (typeof LIVE_CODECS)[number];
 const RATE = 16_000 as const;
 const LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
-/** How often a session checks that its key still exists, at most. */
+/** How often a session checks that its key still exists: on a timer, and at most this often per message. */
 const KEY_CHECK_MS = 1_000;
+/**
+ * The most audio a session may have sent that the engine has not decoded yet, seconds. A client
+ * sending faster than the engine decodes is closed with 4400 `too_fast` past it, so its frames
+ * never pile up in memory: a client that records sends in real time and stays far below it.
+ */
+export const MAX_IN_FLIGHT_SECONDS = 30;
 
 /** Each refusal's close code. */
 export const CLOSE_CODES = {
   bad_message: 4400,
   bad_page: 4400,
+  too_fast: 4400,
   unknown_model: 4400,
   unsupported_language: 4400,
   key_revoked: 4401,
@@ -201,6 +213,7 @@ export class OggOpusIn implements AudioIn {
   private head: OpusHead | null = null;
   private tags = false;
   private lastSeq: number | null = null;
+  private lastGranule: bigint | null = null;
   /** The pieces of a packet that goes on onto the next page. */
   private partial: Uint8Array[] | null = null;
   private decoder: OpusDecoder<16000> | null = null;
@@ -221,11 +234,18 @@ export class OggOpusIn implements AudioIn {
     } else if (page.serial !== this.serial) {
       throw new LiveRefused("bad_page", "the page belongs to another Ogg stream (its serial)");
     }
+    if (this.head && page.bos) {
+      throw new LiveRefused(
+        "bad_page",
+        "an OpusHead page after the stream began: open a new socket",
+      );
+    }
     if (!this.head) {
       const head = page.packets[0] ? this.readHead(page.packets[0]) : null;
       if (!head) throw new LiveRefused("bad_page", "the first page holds no OpusHead");
       this.head = head;
-      this.decoder = new OpusDecoder({ sampleRate: RATE, channels: 1, preSkip: 0 });
+      const { OpusDecoder: Decoder } = await import("opus-decoder");
+      this.decoder = new Decoder({ sampleRate: RATE, channels: 1, preSkip: 0 });
       await this.decoder.ready;
       return new Float32Array(0);
     }
@@ -241,6 +261,16 @@ export class OggOpusIn implements AudioIn {
       throw new LiveRefused("bad_page", `page ${page.seq} follows page ${this.lastSeq}`);
     }
     this.lastSeq = page.seq;
+    // -1: no packet ends on this page. Any other granule only ever grows (RFC 7845).
+    if (page.granule >= 0n) {
+      if (this.lastGranule !== null && page.granule < this.lastGranule) {
+        throw new LiveRefused(
+          "bad_page",
+          `page ${page.seq}'s granule ${page.granule} is before the last page's ${this.lastGranule}`,
+        );
+      }
+      this.lastGranule = page.granule;
+    }
     const done = this.packets(page);
     if (this.offset === null) {
       if (done.length === 0) return new Float32Array(0);
@@ -326,6 +356,7 @@ export class LiveSession implements SocketHandler {
   private queue: Promise<void> = Promise.resolve();
   private ended = false;
   private keyCheckedAt = Number.NEGATIVE_INFINITY;
+  private keyTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly service: LiveService,
@@ -335,6 +366,14 @@ export class LiveSession implements SocketHandler {
 
   opened(socket: LiveSocket): void {
     this.socket = socket;
+    // clock: a revoked key closes a quiet session too, not only at its next message.
+    this.keyTimer = setInterval(() => {
+      try {
+        this.checkKey(true);
+      } catch (err) {
+        this.fail(err);
+      }
+    }, KEY_CHECK_MS);
   }
 
   /** A message from the client, text or binary. */
@@ -356,6 +395,13 @@ export class LiveSession implements SocketHandler {
     if (!this.input) throw new LiveRefused("bad_message", "send hello before any audio");
     const samples = await this.input.push(data);
     if (samples.length > 0) this.stream?.push(samples);
+    const behind = (this.stream?.pending?.() ?? 0) / RATE;
+    if (behind > MAX_IN_FLIGHT_SECONDS) {
+      throw new LiveRefused(
+        "too_fast",
+        `${Math.round(behind)} s of audio are waiting for the engine, past the ${MAX_IN_FLIGHT_SECONDS} s limit; send at the pace you record`,
+      );
+    }
   }
 
   private async control(text: string): Promise<void> {
@@ -438,9 +484,9 @@ export class LiveSession implements SocketHandler {
   }
 
   /** A revoked key's session ends at its next message, checked at most once a second. */
-  private checkKey(): void {
+  private checkKey(force = false): void {
     const now = this.deps.now?.() ?? performance.now();
-    if (now - this.keyCheckedAt < KEY_CHECK_MS) return;
+    if (!force && now - this.keyCheckedAt < KEY_CHECK_MS) return;
     this.keyCheckedAt = now;
     if (!this.deps.keyAlive(this.who)) {
       throw new LiveRefused("key_revoked", "the key this session was opened with was revoked");
@@ -463,6 +509,8 @@ export class LiveSession implements SocketHandler {
   private end(): void {
     if (this.ended) return;
     this.ended = true;
+    if (this.keyTimer !== null) clearInterval(this.keyTimer);
+    this.keyTimer = null;
     this.service.release(this);
     this.input?.close();
   }
