@@ -51,6 +51,8 @@ function run(env: { FAKE_MACOS: string; FAKE_HELPER_EXIT?: string }) {
   chmodSync(helper, 0o755);
   const out = join(t.dir, "out");
   const r = Bun.spawnSync(["bash", SCRIPT, helper, out], {
+    // A script that blocks fails here, not at CI's job limit.
+    timeout: 25_000,
     env: {
       ...process.env,
       ...env,

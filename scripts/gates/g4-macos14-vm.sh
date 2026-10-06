@@ -20,9 +20,10 @@
 #   measure that reads every file as loud fails here.
 #
 # The gate passes when both hold. It fails without recording when the guest is not macOS 14.3.x,
-# and fails when the helper exits non-zero in either recording, even if it left a file. A tone run that reads silent with a `warn open` line in its log
-# usually means the system-audio prompt is waiting in the VM: run with VNC=1, connect to the
-# address printed, allow the prompt once, and run again (TRAPS: one pending prompt blocks every tap).
+# and fails when the helper exits non-zero in either recording, even if it left a file. A tone run
+# that reads silent with a `warn open` line in its log usually means the system-audio prompt is
+# waiting in the VM: run with VNC=1, connect to the address printed, allow the prompt once, and
+# run again (TRAPS: one pending prompt blocks every tap).
 #
 # Writes <out>/verdict.json (with the reason), then whichever recordings and helper logs exist.
 # Leaves the VM in place for a re-run; `tart delete akou-g4-macos14` removes it.
@@ -70,7 +71,7 @@ finish() {
   local verdict="$1" reason="$2" tone_rms="${3:-}" silent_rms="${4:-}"
   cat > "$out/verdict.json" <<EOF
 {
-  "gate": "G4, macOS 14.2 or 14.3",
+  "gate": "G4, macOS 14.3",
   "image": "$image",
   "macos": "$macos",
   "tone_call_rms_dbfs": "$tone_rms",
@@ -92,8 +93,8 @@ case "$macos" in
 esac
 
 # One recording in the VM: the helper for 12 s (RECORD_SECONDS, which the test shortens), stopped
-# on stdin as the app stops it; the tone, if any, plays from a quarter of the way in. The helper's own exit status is the recording's: one that exits
-# non-zero fails it, even when it left a file.
+# on stdin as the app stops it; the tone, if any, plays from a quarter of the way in. The helper's
+# own exit status is the recording's: one that exits non-zero fails it, even when it left a file.
 seconds="${RECORD_SECONDS:-12}"
 record() {
   local name="$1" play="$2"
