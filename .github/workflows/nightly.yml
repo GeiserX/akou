@@ -183,8 +183,6 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun test tests/dictation-remote.e2e.test.ts -t "after release"
-      - name: planted failure (temporary, proves the report job's red path)
-        run: exit 1
 
   soak:
     runs-on: ubuntu-latest
@@ -197,13 +195,13 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - run: bun scripts/soak.ts --speed 10 --minutes 1
+      - run: bun scripts/soak.ts --speed 10 --minutes 60
 
   # A red night on main opens the standing issue or comments on it; a green one closes it. Scheduled
   # nights and full dispatches only: a dispatch of a few stages, or on a branch, is someone's test.
   report:
     needs: [models-nightly, clock-shift, dictation-timing, soak]
-    if: always()
+    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.only == '')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
