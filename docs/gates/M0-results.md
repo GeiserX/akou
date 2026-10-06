@@ -49,7 +49,7 @@ So on this box, a recording with both a real mic and a real tap needs one of two
 
 **Verdict: partial.** The tap works through the app-spawned helper and lands on the correct channel. Real mic audio through the same helper was not shown in any one session on this box. Permission attribution to a signed app cannot be judged on a SIP-off box: nothing here is signed, and the prompts that did appear named Terminal, the process that launched everything.
 
-**Still open.** G3 as [ROADMAP](../ROADMAP.md) now states it for the unsigned build: the packaged app on a Mac with SIP on, opened without a terminal, prompts that name akou, both chirp trains found, and the grant holding across an app restart. The signed half (prompts that name a Developer ID signed app, grants that survive a signed update) moved to the signing milestone.
+**Still open.** G3 as [ROADMAP](../ROADMAP.md) states it, in two halves on a Mac with SIP on. First, the signed and notarized 0.6.1, opened without a terminal: prompts and System Settings grants that name akou, both chirp trains found, and the grants holding across an app restart. Second, the next signed release installed over 0.6.1: a recording with both trains and no new prompt. G3 is Pass here only once both halves have evidence.
 
 ## G4: two-clock capture
 
