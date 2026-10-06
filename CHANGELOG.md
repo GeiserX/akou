@@ -2,6 +2,29 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.6.2 — a phone can stream live words to an akou server, and the server can keep its recordings
+
+On 0.6.1 nothing on the network could reach the streaming model a server already runs. The only streamed input was a WAV, decoded once its body ended, and a job deleted its upload the moment it finished, so a phone that dropped its copy after uploading lost the audio for good. In 0.6.2 a server takes a live recording over a WebSocket and sends the words back while you speak, and it keeps a client's recording until the client deletes it. This is the server half of a phone client. No phone app ships yet, and so far a command-line client drives it.
+
+### Server
+- **Live words over a WebSocket.** In server mode, any key can open `GET /v1/live`. The client sends Ogg Opus pages or 16-bit PCM and gets the words back with their times in seconds into the recording. A client that reconnects partway through gets its words at file times without keeping track itself. A missing or revoked key never gets a socket, and a key revoked mid-session closes it within about a second. akou closes a client that gets more than 30 s of audio ahead of the model with `too_fast`, instead of piling its frames up in memory. `GET /v1/server` lists `capabilities.live` and the streaming models on disk in `live.engines` (#335).
+- **A server can keep a recording.** `keep_audio=true` on `POST /v1/jobs` keeps the upload after the job ends. `GET /v1/jobs/{id}/audio` serves it byte for byte, with `Range`, and the retention sweep leaves the job alone until the client deletes it. The job answer carries `keep_audio`, so a client deletes its own copy only after reading `true` (#335).
+- **A server loads its streaming model at start** when the model is on disk, so the first live session does not wait for the load. The idle release still frees it later (#335).
+- The [server page](docs/server.md) has a section for a phone or another live client, and its reverse proxy blocks now pass WebSockets. [`scripts/live-client.ts`](scripts/live-client.ts) streams a file at real-time pace, the way a phone records it (#335).
+
+### Windows
+- **The recognizer's first load no longer freezes the app's main thread on Windows.** Windows holds a lock for a library's whole first load, up to 1.7 s for fresh files, and the main thread waited on it. The recognizer now loads it once in a short child process first. Stalls of 50 ms or more fell from 111 of 120 runs to none (#334). The Windows desktop app is still not published.
+
+### Behind the scenes
+- The Windows test run no longer times out on a different test each time (#332), and the G2 gate holds the main thread to a 100 ms wait, above a 4-core runner's scheduling noise (#333).
+- The 1.0 gates rest on firmer ground. The terms reading cites both regional versions of Anthropic's Consumer Terms and names one open question per vendor, and the macOS 14.3 VM run fails a guest on any other version or a helper that exits non-zero (#328).
+- akou now depends on `opus-decoder` 0.7.12 at run time. It loads only when a live session receives Ogg Opus, so the desktop app and the CLI never load it (#335).
+
+### Known limitations
+- **No phone app yet.** Only `scripts/live-client.ts` has driven `GET /v1/live`.
+- **One streaming engine serves every live session at a time.** akou refuses a session that asks for another engine while one is open, with `engine_busy`.
+- Every item under 0.6.1's Known limitations still applies.
+
 ## 0.6.1 — akou is signed and notarized, idles in about 2 GB, records the app you pick, and a call's final pass can fuse engines
 
 On 0.6.0 an idle akou held about 3.9 GB, enough to start freezing a 24 GB Mac, because the models a call or a dictation loaded were never let go. Recording one app instead of the whole computer meant typing an app id into Settings, and the call stopped the moment that app quit. In 0.6.1 an idle app drops back to about 2 GB, a menu beside Record picks the app for one call from the apps playing now, and a call whose app quits goes on recording the whole computer. A call's final pass can also run the fusion preset's engines, as a fusion file job does. And 0.6.1 is the first release signed with a Developer ID and notarized, so macOS opens it without an extra step and should keep its permissions across updates.
