@@ -76,6 +76,7 @@ export const ERROR_CODES = {
   no_draft_box: "The draft box needs the desktop window.",
   no_lan: "No private LAN address on this machine.",
   no_live_call: "Nothing is recording, so `live` names no call; `last` names the latest.",
+  no_live_engine: "No streaming model can run the live words here; the message says why.",
   no_remote: "No remote dictation server is set.",
   no_tailnet: "This machine is not on a tailnet.",
   no_target: "There is no field to put the text into.",
@@ -86,6 +87,7 @@ export const ERROR_CODES = {
   not_found: "The thing named does not exist.",
   not_implemented: "Not built yet.",
   not_imported: "Nothing to import.",
+  not_kept: "The job did not ask `keep_audio`, so its upload was deleted when it ended.",
   not_live: "The call is not recording.",
   not_merged: "The speaker is not merged into anyone.",
   not_paused: "The call is not paused.",
@@ -112,6 +114,7 @@ export const ERROR_CODES = {
   unknown_model: "No model of that name in the catalog.",
   unsupported_language:
     "A `languages[]` code is one no engine here can choose; `codes` names them.",
+  upgrade_required: "The route is a WebSocket; send `Upgrade: websocket`.",
   vocab_file_invalid: "The vocabulary file could not be read.",
   workspace_not_folder: "The workspace's name is taken by something that is not a folder.",
 } as const satisfies Record<string, string>;

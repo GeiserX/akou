@@ -49,6 +49,8 @@ export interface OpenApiOperation {
   "x-akou-modes": Mode[];
   "x-akou-access": Access;
   "x-akou-door"?: "compat" | "spec";
+  /** The operation upgrades to a WebSocket: a client opens it, a tool cannot call it. */
+  "x-akou-upgrade"?: "websocket";
 }
 
 export interface OpenApiDoc {
@@ -66,6 +68,7 @@ export interface OpenApiDoc {
 }
 
 const STATUS_TEXT: Record<number, string> = {
+  101: "Switching protocols: the WebSocket is open",
   200: "OK",
   201: "Created",
   202: "Accepted",
@@ -82,6 +85,7 @@ const ERROR_STATUS_TEXT: Record<number, string> = {
   415: "Unsupported media type",
   416: "Range not satisfiable",
   422: "Unprocessable",
+  426: "Upgrade required",
   429: "Too many requests",
   499: "Cancelled",
   500: "Internal error",
@@ -272,7 +276,10 @@ function operation(
       ...Object.fromEntries(
         [d.ok, ...(d.alsoOk ?? [])].map((status) => [
           String(status),
-          { description: STATUS_TEXT[status] ?? "Success", content: { [media]: { schema } } },
+          // An upgrade's success has no body: the socket carries what follows.
+          d.upgrade
+            ? { description: STATUS_TEXT[status] ?? "Success" }
+            : { description: STATUS_TEXT[status] ?? "Success", content: { [media]: { schema } } },
         ]),
       ),
       ...errorResponses(method, d, refusals),
@@ -283,6 +290,7 @@ function operation(
     "x-akou-modes": [...d.modes],
     "x-akou-access": d.access,
     ...(d.door ? { "x-akou-door": d.door } : {}),
+    ...(d.upgrade ? { "x-akou-upgrade": d.upgrade } : {}),
   };
   return op;
 }
@@ -360,9 +368,16 @@ export function buildOpenApi(
   };
 }
 
-/** Whether a `jobs` key may call an operation, and it belongs in the `?scope=jobs` view. */
+/**
+ * Whether a `jobs` key may call an operation, and it belongs in the `?scope=jobs` view: a WebSocket
+ * is not, since a tool built from it could never hold the socket.
+ */
 function inJobsView(op: OpenApiOperation): boolean {
-  return op["x-akou-access"] !== "admin" && op["x-akou-door"] === undefined;
+  return (
+    op["x-akou-access"] !== "admin" &&
+    op["x-akou-door"] === undefined &&
+    op["x-akou-upgrade"] === undefined
+  );
 }
 
 /**
@@ -543,6 +558,10 @@ export function openApiProblems(doc: OpenApiDoc): string[] {
     const door = op["x-akou-door"];
     if (door !== undefined && door !== "compat" && door !== "spec") {
       problems.push(`${where}: x-akou-door ${JSON.stringify(door)}`);
+    }
+    const upgrade = op["x-akou-upgrade"];
+    if (upgrade !== undefined && (upgrade !== "websocket" || method !== "get")) {
+      problems.push(`${where}: x-akou-upgrade ${JSON.stringify(upgrade)}`);
     }
     // The `?scope=jobs` view drops a compatibility route by its door, so the OpenAI dialect must
     // carry it, and nothing else may.

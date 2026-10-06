@@ -3,7 +3,9 @@
  * `bun:sqlite`, holding three tables and nothing else.
  *
  * - `jobs`: one row per job, from submit until the client deletes it or retention does. The
- *   uploaded audio is a file beside the database, named in the row, deleted when the job ends.
+ *   uploaded audio is a file beside the database, named in the row, deleted when the job ends,
+ *   unless the job asked `keep_audio`: then it stays (`kept`) until the job is deleted, and
+ *   retention never removes the job.
  * - `events`: the per-key feed (SV-E1), one row per outcome, in the order they happened. A deleted
  *   job keeps its events with the job id and the final state only, except a cancelled event, which
  *   keeps the job's metadata until retention removes it.
@@ -90,6 +92,13 @@ export interface Job {
   file_sha256: string;
   /** The uploaded file on disk, until the job ends. */
   audio: string | null;
+  /**
+   * The client asked to keep the upload: it stays on disk after the job ends (`kept`) until a
+   * delete, and retention never removes the job.
+   */
+  keep_audio: boolean;
+  /** The kept upload, once the job ended; null for a job that keeps none. */
+  kept: string | null;
   created_at: number;
   running_at: number | null;
   /** How many times a process started this job; a job left running is queued again once. */
@@ -211,7 +220,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   interactive INTEGER NOT NULL DEFAULT 0,
   title TEXT,
   languages TEXT,
-  quiet INTEGER NOT NULL DEFAULT 0
+  quiet INTEGER NOT NULL DEFAULT 0,
+  keep_audio INTEGER NOT NULL DEFAULT 0,
+  kept TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -242,6 +253,9 @@ CREATE INDEX IF NOT EXISTS outbox_due ON outbox (state, next_at);
 
 type Row = Record<string, string | number | null>;
 
+/** A job's end: its upload is no longer to run, and a job that keeps it holds it as `kept`. */
+const KEEP_UPLOAD = "kept = CASE WHEN keep_audio = 1 THEN audio ELSE kept END, audio = NULL";
+
 function jobOf(r: Row): Job {
   return {
     id: r.id as string,
@@ -268,6 +282,8 @@ function jobOf(r: Row): Job {
     request: typeof r.request === "string" ? JSON.parse(r.request) : null,
     file_sha256: r.file_sha256 as string,
     audio: (r.audio as string | null) ?? null,
+    keep_audio: r.keep_audio === 1,
+    kept: (r.kept as string | null) ?? null,
     created_at: r.created_at as number,
     running_at: (r.running_at as number | null) ?? null,
     starts: (r.starts as number | null) ?? 0,
@@ -332,6 +348,8 @@ export interface NewJob {
   request?: JobRequest | null;
   file_sha256: string;
   audio: string;
+  /** Keep the upload after the job ends, and the job past retention. Default false. */
+  keep_audio?: boolean;
 }
 
 /** An outcome to record with a job's last state change: its feed event, and its delivery. */
@@ -386,6 +404,7 @@ export class JobStore {
       "request",
       "title",
       "languages",
+      "kept",
     ]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
@@ -400,6 +419,10 @@ export class JobStore {
     // One from before quiet jobs gains the column; its jobs write their events.
     if (!cols.has("quiet")) {
       this.db.run("ALTER TABLE jobs ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0");
+    }
+    // One from before kept recordings gains the column; its jobs keep nothing.
+    if (!cols.has("keep_audio")) {
+      this.db.run("ALTER TABLE jobs ADD COLUMN keep_audio INTEGER NOT NULL DEFAULT 0");
     }
     // The queue's order, after the column exists on an older file.
     this.db.run("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, priority DESC, seq)");
@@ -429,8 +452,8 @@ export class JobStore {
       this.db
         .query(
           `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive, quiet,
-            language, keywords, languages, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
-           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            language, keywords, languages, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, keep_audio, created_at)
+           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -453,6 +476,7 @@ export class JobStore {
           j.request ? JSON.stringify(j.request) : null,
           j.file_sha256,
           j.audio,
+          j.keep_audio ? 1 : 0,
           now,
         );
       return { job: this.job(id) as Job, existing: false };
@@ -553,12 +577,14 @@ export class JobStore {
     );
   }
 
-  /** Every upload a job row names. */
+  /** Every upload a job row names: one still to run, or one kept. */
   uploads(): Set<string> {
-    const rows = this.db.query("SELECT audio FROM jobs WHERE audio IS NOT NULL").all() as {
-      audio: string;
-    }[];
-    return new Set(rows.map((r) => r.audio));
+    const rows = this.db
+      .query(
+        "SELECT coalesce(audio, kept) AS f FROM jobs WHERE audio IS NOT NULL OR kept IS NOT NULL",
+      )
+      .all() as { f: string }[];
+    return new Set(rows.map((r) => r.f));
   }
 
   /** Jobs left running, as the last process left them. */
@@ -596,12 +622,12 @@ export class JobStore {
         end.status === "done"
           ? this.db
               .query(
-                "UPDATE jobs SET status = 'done', done_at = ?, result = ?, audio = NULL WHERE id = ? AND status = 'running'",
+                `UPDATE jobs SET status = 'done', done_at = ?, result = ?, ${KEEP_UPLOAD} WHERE id = ? AND status = 'running'`,
               )
               .run(now, JSON.stringify(end.result), id).changes
           : this.db
               .query(
-                "UPDATE jobs SET status = 'failed', failed_at = ?, error = ?, audio = NULL WHERE id = ? AND status IN ('running', 'queued')",
+                `UPDATE jobs SET status = 'failed', failed_at = ?, error = ?, ${KEEP_UPLOAD} WHERE id = ? AND status IN ('running', 'queued')`,
               )
               .run(now, JSON.stringify(end.error), id).changes;
       if (changed === 0) return null;
@@ -728,10 +754,12 @@ export class JobStore {
     ).map(jobOf);
   }
 
-  /** Every job created before `t`: what `server.retain_days` removes. */
+  /** Every job created before `t` that keeps no audio: what `server.retain_days` removes. */
   createdBefore(t: number): Job[] {
     return (
-      this.db.query("SELECT * FROM jobs WHERE created_at < ? ORDER BY seq").all(t) as Row[]
+      this.db
+        .query("SELECT * FROM jobs WHERE created_at < ? AND keep_audio = 0 ORDER BY seq")
+        .all(t) as Row[]
     ).map(jobOf);
   }
 
