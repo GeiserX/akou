@@ -1,7 +1,8 @@
 name: nightly
 
-# Once a day on main, and by hand (docs/CI-CD.md section 2.2). Nothing here is a required check;
-# a red night shows in the job summary and GitHub emails whoever last changed the schedule.
+# Once a day on main, and by hand (docs/CI-CD.md section 2.2). Nothing here is a required check,
+# so a red night on main opens one standing issue, "nightly is red", or adds the night to it, and
+# the next green night closes it (the `report` job at the end).
 #
 # - models-nightly: the real recognizer and the real diarizer on public, openly licensed audio,
 #   through the app's own code, on every OS (docs/TESTING.md TS-19 and TS-20). WER per engine and
@@ -151,6 +152,8 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # ffmpeg as on check's Linux leg, so the same tests run and the same floor holds.
+      - run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
       - name: bun test, ${{ matrix.run }}
         shell: bash
         env:
@@ -161,8 +164,9 @@ jobs:
           if [ -n "$ZONE" ]; then export TZ="$ZONE"; fi
           bun -e 'console.log(`the clock reads ${new Date().toString()}`)'
           bun test --reporter=junit --reporter-outfile=.junit-check.xml
-      # The same suite as check's Linux leg, so the same pass floor; six more may skip, the tests
-      # that compare a file's mtime with `Date.now()` a year ahead (CLOCK_SHIFTED).
+      # The same suite as check's Linux leg, so check's floor moved by the tests that compare a
+      # file's mtime with `Date.now()` and skip a year ahead (CLOCK_SHIFTED); tests/ci-gates.test.ts
+      # holds the two floors together on every pull request.
       - run: bun scripts/ci/test-floor.ts clock-shift .junit-check.xml
 
   dictation-timing:
@@ -192,3 +196,33 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - run: bun scripts/soak.ts --speed 10 --minutes 60
+
+  # A red night on main opens the standing issue or comments on it; a green one closes it. Scheduled
+  # nights and full dispatches only: a dispatch of a few stages, or on a branch, is someone's test.
+  report:
+    needs: [models-nightly, clock-shift, dictation-timing, soak]
+    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.only == '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: open, update or close the standing issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="nightly is red"
+          red=$(echo "$RESULTS" | jq -r 'to_entries[] | select(.value.result != "success") | "- \(.key): \(.value.result)"')
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$red" ]; then
+            body=$(printf 'The nightly of %s failed:\n\n%s\n\n%s\n' "$(date -u +%F)" "$red" "$RUN")
+            if [ -n "$open" ]; then gh issue comment "$open" --body "$body"
+            else gh issue create --title "$title" --body "$body"; fi
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "Green again: $RUN"
+          fi
+          echo "red: ${red:-none}; issue: ${open:-none open before this run}"

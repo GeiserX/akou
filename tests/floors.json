@@ -16,5 +16,5 @@
   "capture-live-pipewire:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-pulseaudio:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-windows:win32": { "minPass": 6, "maxSkip": 0 },
-  "clock-shift:linux": { "minPass": 1970, "maxSkip": 34 }
+  "clock-shift:linux": { "minPass": 2327, "maxSkip": 44 }
 }

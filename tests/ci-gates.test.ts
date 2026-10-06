@@ -149,6 +149,26 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
+  test("the nightly clock-shift floor is check's Linux floor, plus the tests a shifted clock skips", () => {
+    // clock-shift runs check's suite on the same runner, ffmpeg included; a year ahead it also skips
+    // each test marked to skip when CLOCK_SHIFTED. Its floor drifted four skips behind check's while
+    // nothing on a pull request read it, and the nightly was red for it every night.
+    const floors = JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8")) as Record<
+      string,
+      { minPass: number; maxSkip: number }
+    >;
+    const dir = join(ROOT, "tests");
+    const shifted = [...new Bun.Glob("**/*.ts").scanSync(dir)]
+      .map((f) => readFileSync(join(dir, f), "utf8").match(/\btest\.skipIf\(CLOCK_SHIFTED\)\(/g))
+      .reduce((a, m) => a + (m?.length ?? 0), 0);
+    expect(shifted).toBeGreaterThan(0);
+    const check = floors["check:linux"] as { minPass: number; maxSkip: number };
+    expect(floors["clock-shift:linux"]).toEqual({
+      minPass: check.minPass - shifted,
+      maxSkip: check.maxSkip + shifted,
+    });
+  });
+
   test("a floor whose tests ran once is not scaled by a repeat dispatch", () => {
     // A dispatch with repeat=50 multiplies every floor by TEST_REPEAT; `cargo test` runs once,
     // and the helper legs failed 565 passes against a floor of 25450 until this step pinned it.
