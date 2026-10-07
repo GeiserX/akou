@@ -42,6 +42,7 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -455,6 +456,8 @@ class App {
       else delete env.AKOU_HEADLESS;
       this.child = spawn(how.launcher, [], { env, stdio: ["ignore", out, out] });
     }
+    // The child holds its own copy; this one would keep the file locked on Windows.
+    closeSync(out);
   }
 
   /** `akou status` once the app answers, or null after `ms`. */
@@ -755,7 +758,11 @@ async function main(): Promise<void> {
     await app.quit(configDir).catch(() => false);
   } finally {
     machine.tearDown();
-    rmSync(work, { recursive: true, force: true });
+    // Windows keeps a file open a moment after its process ends; a leftover temp folder is no
+    // finding.
+    try {
+      rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 1000 });
+    } catch {}
   }
 
   const result = {
