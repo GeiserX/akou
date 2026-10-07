@@ -231,7 +231,10 @@ export function termsProblems(providersMd: string, previousStableDate: string | 
   return [];
 }
 
-/** Every M0 gate from G1 to G8 without a Pass verdict in the summary table of M0-results.md. */
+/**
+ * Every M0 gate from G1 to G8 without a plain Pass verdict in the summary table of M0-results.md.
+ * A qualified verdict such as "Pass (M-series half)" does not count.
+ */
 export function gateProblems(m0Md: string): string[] {
   const where = "docs/gates/M0-results.md";
   const summary = m0Md.split(/^## Summary\s*$/m)[1]?.split(/^## /m)[0];
@@ -249,6 +252,9 @@ export function gateProblems(m0Md: string): string[] {
     const v = verdicts.get(id);
     if (v === undefined) out.push(`${where}: ${id} has no row in the summary table`);
     else if (v.split(/\s/)[0] !== "Pass") out.push(`${where}: ${id} is ${v}, not Pass`);
+    // "Pass (M-series half)" passed part of its gate; only the whole gate counts.
+    else if (v !== "Pass")
+      out.push(`${where}: ${id} is ${v}, a qualified Pass; only a plain Pass counts`);
   }
   return out;
 }
