@@ -474,11 +474,14 @@ describe("[SV-X8] server.remotes_overflow: a named job runs here while every rem
   });
   afterAll(() => fake.stop(true));
 
-  test("overflowRoute: here only with overflow on, and never for a job only a remote can run", () => {
-    expect(overflowRoute(null, true)).toEqual({ where: "local" });
-    expect(overflowRoute(null, false)).toEqual({ where: "wait" });
-    expect(overflowRoute("remote", true)).toEqual({ where: "wait" });
-    expect(overflowRoute("remote", false)).toEqual({ where: "wait" });
+  test("overflowRoute: here only with overflow on and every remote known full, never for a job only a remote can run", () => {
+    expect(overflowRoute(null, true, "busy")).toEqual({ where: "local" });
+    expect(overflowRoute(null, false, "busy")).toEqual({ where: "wait" });
+    expect(overflowRoute("remote", true, "busy")).toEqual({ where: "wait" });
+    expect(overflowRoute("remote", false, "busy")).toEqual({ where: "wait" });
+    // A remote not probed yet may have room: the job waits for the probe, overflow or not.
+    expect(overflowRoute(null, true, "pending")).toEqual({ where: "wait" });
+    expect(overflowRoute(null, false, "pending")).toEqual({ where: "wait" });
   });
 
   const third = async (overflow: boolean): Promise<string> => {
@@ -517,6 +520,111 @@ describe("[SV-X8] server.remotes_overflow: a named job runs here while every rem
 
   test("on: the third job runs here and is done while the remote still holds two", async () => {
     expect(await third(true)).toBe("done");
+  });
+
+  test("turning it on over the API runs a job already waiting for the busy remote", async () => {
+    posts = 0;
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({
+      home: pdir,
+      installed: true,
+      keyName: "archive",
+      settings: {
+        "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)} fast`],
+      },
+    });
+    try {
+      await remoteState(primary, "up");
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++)
+        ids.push((await submit(primary, { preset: "fast" })).body.id as string);
+      await until(async () => posts === 2, 10_000, "the busy remote to hold two jobs");
+      expect((await get(primary, `/v1/jobs/${ids[2]}`)).body.status).toBe("queued");
+      const set = await primary.api("PATCH", "/config", { "server.remotes_overflow": true });
+      expect(set.status).toBe(200);
+      // No probe period passes (PROBE_MS) and no other job ends: only the save routes it.
+      expect((await get(primary, `/v1/jobs/${ids[2]}?wait=5`)).body.status).toBe("done");
+      expect(posts).toBe(2);
+    } finally {
+      await primary.close();
+    }
+  });
+});
+
+describe("[SV-X8] server.remotes_overflow never runs a job here before a named remote's first probe", () => {
+  // A remote whose `GET /v1/server` answers only when the test lets it, so the primary starts
+  // with it unprobed and a job queued for it.
+  const FAKE_KEY = "ak_slowprobekey0123456789";
+  let posts = 0;
+  let open: () => void = () => {};
+  let opened = new Promise<void>((r) => {
+    open = r;
+  });
+  let fake: ReturnType<typeof Bun.serve>;
+
+  beforeAll(() => {
+    fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (req) => {
+        const u = new URL(req.url);
+        if (u.pathname === "/v1/server") {
+          await opened;
+          return Response.json({
+            name: "akou",
+            version: "9.9.9",
+            mode: "server",
+            presets: [{ name: "fast", available: true }],
+            engines: [{ id: RECOGNIZER, installed: true }],
+            capabilities: { jobs: true, events: true, webhooks: true },
+          });
+        }
+        if (req.headers.get("authorization") !== `Bearer ${FAKE_KEY}`)
+          return Response.json({ error: "unauthorized", message: "no" }, { status: 401 });
+        if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+        if (u.pathname === "/v1/jobs" && req.method === "POST") {
+          await req.formData();
+          posts++;
+          return Response.json({ id: `job_SLOW${posts}`, status: "queued" }, { status: 202 });
+        }
+        if (u.pathname.startsWith("/v1/jobs/job_SLOW")) {
+          if (req.method === "DELETE") return Response.json({ ok: true });
+          await Bun.sleep(200);
+          return Response.json({ id: u.pathname.split("/").pop(), status: "running" });
+        }
+        return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+      },
+    });
+  });
+  afterAll(() => {
+    open();
+    fake.stop(true);
+  });
+
+  test("the job waits while the remote is unprobed, then goes to it once it answers", async () => {
+    posts = 0;
+    opened = new Promise<void>((r) => {
+      open = r;
+    });
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({
+      home: pdir,
+      installed: true,
+      keyName: "archive",
+      settings: {
+        "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)} fast`],
+        "server.remotes_overflow": true,
+      },
+    });
+    try {
+      const id = (await submit(primary, { preset: "fast" })).body.id as string;
+      expect((await get(primary, `/v1/jobs/${id}?wait=2`)).body.status).toBe("queued");
+      expect(posts).toBe(0);
+      open();
+      await until(async () => posts === 1, 10_000, "the job to go to the remote once probed");
+    } finally {
+      await primary.close();
+    }
   });
 });
 

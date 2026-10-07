@@ -2037,6 +2037,9 @@ export class AkouApp implements ApiApp {
     if (!same("vocab.extraFiles") || !same("vocab.languages")) this.vocabChanged();
     // Keys changed while the helper is still starting need nothing: it is bound from the
     // settings once it reports `ready`.
+    // Overflow on: a job waiting for a busy remote may run here now, not at the next job event.
+    if (before["server.remotes_overflow"] !== after["server.remotes_overflow"])
+      this.jobService?.reroute();
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
       this.warmDictation();

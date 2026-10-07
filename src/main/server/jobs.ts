@@ -372,11 +372,17 @@ type Waiter = (j: { id: string; status: JobStatus }) => void;
 export type Route = { where: "local" } | { where: "wait" } | { where: "remote"; url: string };
 
 /**
- * Where a job goes when every remote that would take it is busy: here when overflow is on and this
- * server can run it, else it waits. A job only a remote can run (`route` `remote`) always waits.
+ * Where a job goes when no remote that would take it has room: here when overflow is on, every
+ * such remote is known to be full (`busy`) and this server can run it, else it waits. A remote not
+ * probed yet (`pending`) may have room, so the job waits for its probe. A job only a remote can
+ * run (`route` `remote`) always waits.
  */
-export function overflowRoute(route: Job["route"], overflow: boolean): Route {
-  return overflow && route !== "remote" ? { where: "local" } : { where: "wait" };
+export function overflowRoute(
+  route: Job["route"],
+  overflow: boolean,
+  full: "busy" | "pending",
+): Route {
+  return overflow && full === "busy" && route !== "remote" ? { where: "local" } : { where: "wait" };
 }
 
 /** A job only a remote can run: the names sent to it (section 14). */
@@ -1353,9 +1359,16 @@ export class JobService {
     // Back to the remote that already has it, so a returning remote's copy is followed, not redone.
     if (j.remote && this.remotes.up(j.remote, names)) return { where: "remote", url: j.remote };
     const url = this.remotes.pick(names, j.route !== "remote");
-    if (url === "busy") return overflowRoute(j.route, this.o.remotesOverflow?.() ?? false);
+    if (url === "busy" || url === "pending")
+      return overflowRoute(j.route, this.o.remotesOverflow?.() ?? false, url);
     if (url !== null) return { where: "remote", url };
     return j.route === "remote" ? { where: "wait" } : { where: "local" };
+  }
+
+  /** A setting that changes where a queued job runs was saved: route the queue again now. */
+  reroute(): void {
+    this.dispatch();
+    this.pump();
   }
 
   /** Sends every queued job whose route is a remote to it, while each remote has room. */
