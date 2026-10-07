@@ -176,12 +176,9 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
           "docs/providers.md: the terms table has no dated row",
         );
         // G1 passed on Linux and Windows only; macOS has no result.
-        for (const g of ["G1", "G3", "G4", "G7"])
+        // G6: speed passes on both halves, the committed line misses 1.5 s on the call channel.
+        for (const g of ["G1", "G3", "G4", "G6", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
-        // G6 passed on M-series Macs only; the 4-core x64 half is unmeasured.
-        expect(r.out).toContain(
-          "docs/gates/M0-results.md: G6 is Pass (M-series half), a qualified Pass; only a plain Pass counts",
-        );
         // G2, G5 and G8 are on record as passed.
         for (const g of ["G2", "G5", "G8"]) expect(r.out).not.toContain(`: ${g} `);
         // Outside a checkout it also says it could not read the tags, and still lists the rest.

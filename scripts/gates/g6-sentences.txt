@@ -1,0 +1,24 @@
+The akou recorder keeps the microphone on the left channel.
+Parakeet transcribes both sides of the call.
+We moved the dashboards from Datadog to Grafana last week.
+Silero decides where each segment starts and ends.
+The Terraform plan touched three Kubernetes clusters.
+Please open a Zendesk ticket for the billing question.
+TitaNet gives every speaker a voice print.
+The final pass runs pyannote over the whole call.
+ElectroBun hosts the window and the tray item.
+Opus files stay playable while they are being written.
+Can you share the Grafana link with the team?
+Yes, the Kubernetes upgrade is scheduled for Friday.
+I think Datadog was cheaper for us in the end.
+Let us check what akou heard in the last five minutes.
+The Parakeet model runs on the CPU with two threads.
+Zendesk and Terraform both need a new owner.
+We should keep ElectroBun pinned until the next release.
+Silero and TitaNet both run in the same worker.
+Send me the Opus file after the call ends.
+Who owns the pyannote configuration now?
+The demo went well and the customer asked for pricing.
+Thanks everyone. See you all next Tuesday.
+Could you repeat the last number, please?
+Okay, I will write the action items down.
