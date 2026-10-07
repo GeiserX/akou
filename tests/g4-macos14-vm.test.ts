@@ -1,9 +1,14 @@
 /**
  * ROADMAP G4's macOS 14.3 run (scripts/gates/g4-macos14-vm.sh) against stand-ins: `tart` boots
- * nothing, the "guest" is this machine reached through a fake `sshpass` with its own `sw_vers` and
- * `afplay`, the helper writes a file and exits with the code it is given, and `ffmpeg` reports a
- * loud call channel for the tone recording and silence for the other. The verdict must refuse a
- * guest that is not 14.3 and a helper that exits non-zero, and pass the run with neither.
+ * nothing, the "guest" is this machine reached through a fake `sshpass` with its own `sw_vers`,
+ * `afplay` and `open`, the helper writes a file and exits with the code it is given, and `ffmpeg`
+ * reports a loud call channel for a tone recording the helper really heard, and silence otherwise.
+ * The verdict must refuse a guest that is not 14.3, a helper that exits non-zero and a recording
+ * that never finishes, and pass the run with none of them.
+ *
+ * The helper only "hears" when Terminal started it, as in the VM: a helper started over SSH has no
+ * process that macOS can ask for system-audio access, so its tap delivers digital zeros and no
+ * prompt ever appears. Started from Terminal in the guest's console session, it gets the prompt.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -24,21 +29,39 @@ esac`,
 exec bash -c "$*"`,
   sw_vers: `echo "$FAKE_MACOS"`,
   afplay: "exit 0",
+  // \`open -a Terminal <file>\`: Terminal runs the file in the console session, detached.
+  open: `[ "$1" = -a ] && shift 2
+[ -n "\${FAKE_OPEN_HANG:-}" ] && exit 0
+AKOU_FAKE_VIA=Terminal nohup bash "$1" > /dev/null 2>&1 &`,
   ffmpeg: `case "$*" in
   *lavfi*) for a; do last="$a"; done; : > "$last" ;;
-  *astats*) case "$*" in
-    *tone.opus*) echo "[Parsed_astats_1] RMS level dB: -24.0" >&2 ;;
-    *) echo "[Parsed_astats_1] RMS level dB: -inf" >&2 ;;
-  esac ;;
+  *astats*)
+    while [ $# -gt 0 ]; do [ "$1" = -i ] && in="$2"; shift; done
+    case "$in" in
+      *tone.opus) if grep -q heard "$in"; then db=-24.0; else db=-inf; fi ;;
+      *) db=-inf ;;
+    esac
+    echo "[Parsed_astats_1] RMS level dB: $db" >&2 ;;
 esac`,
 };
 
-/** The helper stand-in: writes its `--out` file, then exits with FAKE_HELPER_EXIT. */
+/**
+ * The helper stand-in: writes its `--out` file (audio it heard only when Terminal started it),
+ * then exits with FAKE_HELPER_EXIT. Like the real
+ * helper in the VM, it cannot create its recording on the shared folder: the helper syncs the file
+ * with F_FULLFSYNC, which tart's shared folder refuses (`Inappropriate ioctl for device`), so
+ * the recording has to land on the guest's own disk first.
+ */
 const HELPER = `while [ $# -gt 0 ]; do [ "$1" = --out ] && out="$2"; shift; done
-printf OggS > "$out"
+case "$out" in /*) path="$out" ;; *) path="$PWD/$out" ;; esac
+case "$path" in "$SHARE_IN_VM"/*)
+  echo '{"type":"warn","code":"io","msg":"cannot create: Inappropriate ioctl for device (os error 25)"}' >&2
+  exit 74 ;;
+esac
+if [ "\${AKOU_FAKE_VIA:-}" = Terminal ]; then printf 'OggS heard' > "$out"; else printf 'OggS zeros' > "$out"; fi
 exit "\${FAKE_HELPER_EXIT:-0}"`;
 
-function run(env: { FAKE_MACOS: string; FAKE_HELPER_EXIT?: string }) {
+function run(env: { FAKE_MACOS: string; FAKE_HELPER_EXIT?: string; FAKE_OPEN_HANG?: string }) {
   const t = tempDir();
   const bin = join(t.dir, "bin");
   mkdirSync(bin);
@@ -60,6 +83,7 @@ function run(env: { FAKE_MACOS: string; FAKE_HELPER_EXIT?: string }) {
       TART_HOME: join(t.dir, "tart"),
       SHARE_IN_VM: join(out, "share"),
       RECORD_SECONDS: "1",
+      RECORD_TIMEOUT: "4",
     },
   });
   const file = join(out, "verdict.json");
@@ -76,6 +100,9 @@ describe.skipIf(process.platform === "win32")(
       try {
         expect(r.verdict).toMatchObject({ verdict: "pass", macos: "14.3.1" });
         expect(r.code).toBe(0);
+        // Both recordings came back from the guest's disk for the record.
+        expect(r.left("tone.opus")).toBe(true);
+        expect(r.left("silent.opus")).toBe(true);
       } finally {
         r.cleanup();
       }
@@ -100,6 +127,18 @@ describe.skipIf(process.platform === "win32")(
         expect(r.verdict.reason).toContain("exited non-zero");
         // It did leave a file, and the file is kept for the record.
         expect(r.left("tone.opus")).toBe(true);
+        expect(r.code).not.toBe(0);
+      } finally {
+        r.cleanup();
+      }
+    }, 30_000);
+
+    test("a recording that never finishes fails and points at the system-audio prompt", () => {
+      const r = run({ FAKE_MACOS: "14.3", FAKE_OPEN_HANG: "1" });
+      try {
+        expect(r.verdict).toMatchObject({ verdict: "fail" });
+        expect(r.verdict.reason).toContain("did not finish");
+        expect(r.verdict.reason).toContain("VNC=1");
         expect(r.code).not.toBe(0);
       } finally {
         r.cleanup();
