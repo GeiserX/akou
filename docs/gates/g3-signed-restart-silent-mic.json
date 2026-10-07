@@ -128,6 +128,8 @@
           "at": 148.1
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 12,
       "latencyMs": {
         "n": 12,
         "min": -9.68,
@@ -139,6 +141,7 @@
       "minScore": 0.603,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,
@@ -191,6 +194,8 @@
           "at": 143.1
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 11,
       "latencyMs": {
         "n": 11,
         "min": -12.827,
@@ -202,6 +207,7 @@
       "minScore": 0.561,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,

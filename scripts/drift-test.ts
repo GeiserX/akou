@@ -600,43 +600,58 @@ async function main(): Promise<void> {
       summary[key] = { found: 0 };
       continue;
     }
+    // Timing comes from the waveform matches: an envelope match sits a few ms off the waveform's
+    // position (the codec smears the burst's onset), so it counts as found but does not enter the
+    // latency, the slope or the first and last rows unless no waveform match exists at all.
+    const wave = rows.filter((r) => r.method === "waveform");
+    const env = rows.filter((r) => r.method === "envelope");
+    const timed = wave.length > 0 ? wave : env;
     const f = fit(
-      rows.map((r) => r.t),
-      rows.map((r) => r.ms),
+      timed.map((r) => r.t),
+      timed.map((r) => r.ms),
     );
+    const row = (r: (typeof rows)[number]) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) });
     summary[key] = {
       found: rows.length,
       expected: chirps.filter((c) => c.ch === key.split("@")[0]).length,
       missing: chirps
         .filter((c) => c.ch === key.split("@")[0] && !rows.some((r) => r.k === c.k))
         .map((c) => ({ k: c.k, at: round(expectAt(c.host_ns), 1) })),
-      latencyMs: stats(rows.map((r) => round(r.ms, 3))),
+      timingFrom: wave.length > 0 ? "waveform" : "envelope",
+      timed: timed.length,
+      latencyMs: stats(timed.map((r) => round(r.ms, 3))),
       slopeMsPerHour: round(f.slope * 3600, 2),
-      // The waveform matches' lowest correlation; the chirps the envelope found, and their lowest.
-      minScore: round(Math.min(...rows.filter((r) => r.method === "waveform").map((r) => r.score)), 3),
-      byEnvelope: rows.filter((r) => r.method === "envelope").length,
-      minEnvelopeScore: round(
-        Math.min(...rows.filter((r) => r.method === "envelope").map((r) => r.score)),
-        3,
-      ),
+      minScore: wave.length > 0 ? round(Math.min(...wave.map((r) => r.score)), 3) : null,
+      byEnvelope: env.length,
+      minEnvelopeScore: env.length > 0 ? round(Math.min(...env.map((r) => r.score)), 3) : null,
+      envelopeLatencyMs: env.length > 0 ? stats(env.map((r) => round(r.ms, 3))) : null,
       // The first and last few, so a step at a start or a rebuild is visible, not only the fit.
-      firstRows: rows.slice(0, 4).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
-      lastRows: rows.slice(-2).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
+      firstRows: timed.slice(0, 4).map(row),
+      lastRows: timed.slice(-2).map(row),
     };
   }
   result.chirps = summary;
 
   // Left-right offset: the call chirp against the mic chirp of the same period.
-  const lr: Array<{ t: number; ms: number }> = [];
-  const mic = new Map((latency["mic@left"] ?? []).map((r) => [r.k, r]));
-  for (const c of latency["call@right"] ?? []) {
-    const m = mic.get(c.k);
-    if (m) lr.push({ t: c.t, ms: c.ms - m.ms });
-  }
+  // Pairs use waveform matches on both sides. With fewer than two of those, every match pairs
+  // (`pairsFrom: "mixed"`), and an envelope match's few-ms bias is then inside the offset.
+  const pairFrom = (keep: (r: { method: Found["method"] }) => boolean) => {
+    const out: Array<{ t: number; ms: number }> = [];
+    const mic = new Map((latency["mic@left"] ?? []).filter(keep).map((r) => [r.k, r]));
+    for (const c of (latency["call@right"] ?? []).filter(keep)) {
+      const m = mic.get(c.k);
+      if (m) out.push({ t: c.t, ms: c.ms - m.ms });
+    }
+    return out;
+  };
+  const wavePairs = pairFrom((r) => r.method === "waveform");
+  const pairsFrom = wavePairs.length > 1 ? "waveform" : "mixed";
+  const lr = pairsFrom === "waveform" ? wavePairs : pairFrom(() => true);
   result.leftRight =
     lr.length > 1
       ? {
           pairs: lr.length,
+          pairsFrom,
           offsetMs: stats(lr.map((r) => round(r.ms, 3))),
           slopeMsPerHour: round(
             fit(

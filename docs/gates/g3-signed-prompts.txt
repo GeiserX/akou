@@ -6,6 +6,7 @@
   2026-10-07 21:42:26.580 kTCCServiceMicrophone
   2026-10-07 23:37:26.801 kTCCServiceAudioCapture
 # Total AUTHREQ_PROMPTING lines in the whole log (any app): 2
+# Grants recorded (TCCDEvent Create) for any other identifier in the whole log: 2 x kTCCServiceAppleEvents for a terminal app's bundle id; none for Terminal, sshd or the capture helper, and no Microphone or AudioCapture grant for anything but io.github.geiserx.akou
 # After the first restart (silent mic) (log line 404182): prompts=0; akou access results by service:
     kTCCServiceScreenCapture authValue 2 authReason 4 x 1200
 # After the second restart (the one on record) (log line 419243): prompts=0; akou access results by service:

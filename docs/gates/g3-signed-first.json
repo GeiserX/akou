@@ -100,37 +100,31 @@
           "at": 147.2
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 1,
       "latencyMs": {
-        "n": 11,
-        "min": -24.019,
-        "median": -23.561,
+        "n": 1,
+        "min": -21.089,
+        "median": -21.089,
         "max": -21.089,
-        "spread": 2.9299999999999997
+        "spread": 0
       },
-      "slopeMsPerHour": 21.42,
+      "slopeMsPerHour": null,
       "minScore": 0.665,
       "byEnvelope": 10,
       "minEnvelopeScore": 0.849,
+      "envelopeLatencyMs": {
+        "n": 10,
+        "min": -24.019,
+        "median": -23.592,
+        "max": -23.32,
+        "spread": 0.6989999999999981
+      },
       "firstRows": [
         {
-          "k": 1,
-          "t": 7.16,
-          "ms": -23.592
-        },
-        {
-          "k": 2,
-          "t": 17.16,
-          "ms": -23.561
-        },
-        {
-          "k": 3,
-          "t": 27.16,
-          "ms": -23.504
-        },
-        {
-          "k": 4,
-          "t": 37.16,
-          "ms": -23.977
+          "k": 10,
+          "t": 97.16,
+          "ms": -21.089
         }
       ],
       "lastRows": [
@@ -138,11 +132,6 @@
           "k": 10,
           "t": 97.16,
           "ms": -21.089
-        },
-        {
-          "k": 12,
-          "t": 117.16,
-          "ms": -23.992
         }
       ]
     },
@@ -170,6 +159,8 @@
           "at": 147.2
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 12,
       "latencyMs": {
         "n": 12,
         "min": -10.251,
@@ -181,6 +172,7 @@
       "minScore": 0.557,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,
@@ -233,6 +225,8 @@
           "at": 142.2
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 11,
       "latencyMs": {
         "n": 11,
         "min": -12.833,
@@ -244,6 +238,7 @@
       "minScore": 0.981,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,
@@ -282,6 +277,7 @@
   },
   "leftRight": {
     "pairs": 10,
+    "pairsFrom": "mixed",
     "offsetMs": {
       "n": 10,
       "min": 8.259,

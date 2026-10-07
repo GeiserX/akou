@@ -1,0 +1,15 @@
+{
+  "start": {
+    "code": 0,
+    "ms": 1154,
+    "firstAudioMs": 335,
+    "appWasRunning": false
+  },
+  "stop": {
+    "code": 0,
+    "ms": 350
+  },
+  "partEnded": true,
+  "recordedSeconds": 120,
+  "folder": "2026-10-07_233820_g3a"
+}

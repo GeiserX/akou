@@ -166,6 +166,8 @@
           "at": 149.5
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 11,
       "latencyMs": {
         "n": 11,
         "min": -21.351,
@@ -177,6 +179,7 @@
       "minScore": 0.693,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,
@@ -240,37 +243,46 @@
           "at": 149.5
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 6,
       "latencyMs": {
-        "n": 11,
+        "n": 6,
         "min": -22.161,
-        "median": -13.209,
+        "median": -10.319,
         "max": -9.417,
         "spread": 12.744000000000002
       },
-      "slopeMsPerHour": 26.77,
+      "slopeMsPerHour": -1.91,
       "minScore": 0.503,
       "byEnvelope": 5,
       "minEnvelopeScore": 0.868,
+      "envelopeLatencyMs": {
+        "n": 5,
+        "min": -17.157,
+        "median": -14.223,
+        "max": -13.209,
+        "spread": 3.9480000000000004
+      },
       "firstRows": [
-        {
-          "k": 1,
-          "t": 9.51,
-          "ms": -14.261
-        },
-        {
-          "k": 2,
-          "t": 19.51,
-          "ms": -13.209
-        },
         {
           "k": 3,
           "t": 29.51,
           "ms": -9.417
         },
         {
-          "k": 4,
-          "t": 39.51,
-          "ms": -13.61
+          "k": 5,
+          "t": 49.51,
+          "ms": -9.421
+        },
+        {
+          "k": 7,
+          "t": 69.51,
+          "ms": -22.161
+        },
+        {
+          "k": 9,
+          "t": 89.51,
+          "ms": -11.181
         }
       ],
       "lastRows": [
@@ -303,6 +315,8 @@
           "at": 144.5
         }
       ],
+      "timingFrom": "waveform",
+      "timed": 11,
       "latencyMs": {
         "n": 11,
         "min": -30.817,
@@ -314,6 +328,7 @@
       "minScore": 0.563,
       "byEnvelope": 0,
       "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 1,
@@ -352,6 +367,7 @@
   },
   "leftRight": {
     "pairs": 11,
+    "pairsFrom": "waveform",
     "offsetMs": {
       "n": 11,
       "min": -9.733,
