@@ -175,10 +175,9 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
           "docs/providers.md: the terms table has no dated row",
         );
-        for (const g of ["G1"])
-          expect(r.out).toContain(`docs/gates/M0-results.md: ${g} has no row in the summary table`);
+        // G1 passed on Linux and Windows only; macOS has no result.
         // G6: speed passes on both halves, the committed line misses 1.5 s on the call channel.
-        for (const g of ["G3", "G4", "G6", "G7"])
+        for (const g of ["G1", "G3", "G4", "G6", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
         // G2, G5 and G8 are on record as passed.
         for (const g of ["G2", "G5", "G8"]) expect(r.out).not.toContain(`: ${g} `);

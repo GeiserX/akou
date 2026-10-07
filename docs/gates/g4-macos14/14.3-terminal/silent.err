@@ -1,0 +1,2 @@
+{"type":"hello","protocol":"akou-capture/1","version":"0.6.2","caps":["tap","mic","probe","exclude-responsible","app"]}
+{"type":"warn","code":"open","msg":"the process tap did not open in time"}
