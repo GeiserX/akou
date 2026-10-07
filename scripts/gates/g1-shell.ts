@@ -513,6 +513,7 @@ async function main(): Promise<void> {
   const home = join(work, "home");
   const configDir = join(home, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
+  mkdirSync(join(work, "unpacked"));
   const unpacked = unpackApp(join(work, "unpacked"));
   if (typeof unpacked === "string") throw new Error(unpacked);
   const cliPath = join(unpacked.main, `akou${EXE}`);
@@ -715,4 +716,20 @@ async function main(): Promise<void> {
   if (problems.length > 0) process.exitCode = 1;
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  try {
+    await main();
+  } catch (err) {
+    // A run that stops before its phases still leaves a result to read.
+    const result = {
+      gate: "G1",
+      platform: hostPlatform(),
+      verdict: "fail",
+      problems: [`the run stopped: ${(err as Error).stack ?? err}`],
+    };
+    const out = opt("--out");
+    if (out) writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
+    console.log(JSON.stringify(result, null, 2));
+    process.exitCode = 1;
+  }
+}
