@@ -1,0 +1,349 @@
+{
+  "what": "G5 at 36a2237 under Bun 1.3.14, run before the pinned Bun 1.4.2 runs in g5-simulated-rerun.json and g5-kill-real-rerun.json",
+  "simulated": {
+    "at": "2026-10-07T08:21:37.533Z",
+    "positiveControl": {
+      "intact": 0,
+      "hole": 1.5,
+      "silent": 6
+    },
+    "hang": {
+      "start": {
+        "code": 0,
+        "ms": 286
+      },
+      "stop": {
+        "code": 0,
+        "ms": 5142,
+        "body": {
+          "ok": true,
+          "call": "01M4AQ8K25VR6G84S6JGH9C3TG",
+          "state": "ended"
+        }
+      },
+      "nextStart": {
+        "code": 0,
+        "ms": 166,
+        "whileTeardownHung": true,
+        "body": {
+          "call": "01M4AQ92228NQ3RGBETGF2MH8B",
+          "folder": "2026-10-07_102201_g5-after-hang",
+          "part": 1,
+          "firstAudioMs": 117,
+          "url": null
+        }
+      },
+      "partEnded": [
+        {
+          "seq": 3,
+          "t": 1791361325980,
+          "type": "part.ended",
+          "part": 1,
+          "reason": "killed",
+          "fileSeconds": 15.12
+        }
+      ],
+      "audio": {
+        "parts": [
+          {
+            "part": 1,
+            "wallStart": 1791361305842,
+            "endReason": "killed",
+            "loggedFileSeconds": 15.12,
+            "slices": 749,
+            "tonedSlices": 749
+          }
+        ],
+        "wallSeconds": 15.005,
+        "capturedSeconds": 14.98,
+        "lostSeconds": 0.025
+      },
+      "apiDuring": {
+        "requests": 199,
+        "failed": 0,
+        "p50Ms": 1,
+        "p99Ms": 21.9,
+        "maxMs": 61.2
+      },
+      "verdict": {
+        "everyPartEnded": true,
+        "nextStart201Within3s": true,
+        "lostUnder2s": true,
+        "apiNeverFailed": true,
+        "pass": true
+      }
+    },
+    "crash": {
+      "start": {
+        "code": 0,
+        "ms": 174
+      },
+      "stop": {
+        "code": 0,
+        "ms": 1285
+      },
+      "nextStart": {
+        "code": 0,
+        "ms": 296,
+        "body": {
+          "call": "01M4AQAEVDYCBQ182S361TB810",
+          "folder": "2026-10-07_102246_g5-after-crash",
+          "part": 1,
+          "firstAudioMs": 142,
+          "url": null
+        }
+      },
+      "partEnded": [
+        {
+          "seq": 3,
+          "t": 1791361350504,
+          "type": "part.ended",
+          "part": 1,
+          "reason": "helper-exit",
+          "fileSeconds": 20
+        },
+        {
+          "seq": 5,
+          "t": 1791361365761,
+          "type": "part.ended",
+          "part": 2,
+          "reason": "stop",
+          "fileSeconds": 15.12
+        }
+      ],
+      "events": [
+        {
+          "seq": 2,
+          "t": 1791361330459,
+          "type": "part.started",
+          "part": 1,
+          "file": "audio/part-001.opus",
+          "wallStart": 1791361330459,
+          "monoStart": 271161083.382833,
+          "mic": "g5-fixture.wav (left)",
+          "call": {
+            "mode": "file"
+          },
+          "capture": "akou-capture 0.6.2"
+        },
+        {
+          "seq": 3,
+          "t": 1791361350504,
+          "type": "part.ended",
+          "part": 1,
+          "reason": "helper-exit",
+          "fileSeconds": 20
+        },
+        {
+          "seq": 4,
+          "t": 1791361350633,
+          "type": "part.started",
+          "part": 2,
+          "file": "audio/part-002.opus",
+          "wallStart": 1791361350633,
+          "monoStart": 271181251.054,
+          "mic": "g5-fixture.wav (left)",
+          "call": {
+            "mode": "file"
+          },
+          "capture": "akou-capture 0.6.2"
+        },
+        {
+          "seq": 5,
+          "t": 1791361365761,
+          "type": "part.ended",
+          "part": 2,
+          "reason": "stop",
+          "fileSeconds": 15.12
+        },
+        {
+          "seq": 6,
+          "t": 1791361366728,
+          "type": "call.ended",
+          "reason": "stop"
+        }
+      ],
+      "audio": {
+        "parts": [
+          {
+            "part": 1,
+            "wallStart": 1791361330459,
+            "endReason": "helper-exit",
+            "loggedFileSeconds": 20,
+            "slices": 999,
+            "tonedSlices": 999
+          },
+          {
+            "part": 2,
+            "wallStart": 1791361350633,
+            "endReason": "stop",
+            "loggedFileSeconds": 15.12,
+            "slices": 756,
+            "tonedSlices": 756
+          }
+        ],
+        "wallSeconds": 35.009,
+        "capturedSeconds": 34.815,
+        "lostSeconds": 0.194
+      },
+      "apiDuring": {
+        "requests": 357,
+        "failed": 0,
+        "p50Ms": 0.9,
+        "p99Ms": 11.8,
+        "maxMs": 117.6
+      },
+      "verdict": {
+        "everyPartEnded": true,
+        "nextStart201Within3s": true,
+        "lostUnder2s": true,
+        "apiNeverFailed": true,
+        "pass": true
+      }
+    }
+  },
+  "killReal": {
+    "at": "2026-10-07T08:23:32.133Z",
+    "positiveControl": {
+      "intact": 0,
+      "hole": 1.5,
+      "silent": 6
+    },
+    "killReal": {
+      "killedAt": 1791361438337,
+      "helperOfThisCall": true,
+      "start": {
+        "code": 0,
+        "ms": 203
+      },
+      "stop": {
+        "code": 0,
+        "ms": 885
+      },
+      "nextStart": {
+        "code": 0,
+        "ms": 251,
+        "body": {
+          "call": "01M4AQD46874F462ZRVKFG3ETC",
+          "folder": "2026-10-07_102414_g5-after-kill",
+          "part": 1,
+          "firstAudioMs": 192,
+          "url": null
+        }
+      },
+      "partEnded": [
+        {
+          "seq": 3,
+          "t": 1791361438339,
+          "type": "part.ended",
+          "part": 1,
+          "reason": "helper-exit",
+          "fileSeconds": 19.94
+        },
+        {
+          "seq": 5,
+          "t": 1791361453457,
+          "type": "part.ended",
+          "part": 2,
+          "reason": "stop",
+          "fileSeconds": 14.8848125
+        }
+      ],
+      "events": [
+        {
+          "seq": 2,
+          "t": 1791361418291,
+          "type": "part.started",
+          "part": 1,
+          "file": "audio/part-001.opus",
+          "wallStart": 1791361418291,
+          "monoStart": 271248917.500125,
+          "mic": "BlackHole 2ch",
+          "call": {
+            "mode": "system",
+            "exclude": [
+              "pid 62571"
+            ]
+          },
+          "capture": "akou-capture 0.6.2"
+        },
+        {
+          "seq": 3,
+          "t": 1791361438339,
+          "type": "part.ended",
+          "part": 1,
+          "reason": "helper-exit",
+          "fileSeconds": 19.94
+        },
+        {
+          "seq": 4,
+          "t": 1791361438526,
+          "type": "part.started",
+          "part": 2,
+          "file": "audio/part-002.opus",
+          "wallStart": 1791361438525,
+          "monoStart": 271269152.19825,
+          "mic": "BlackHole 2ch",
+          "call": {
+            "mode": "system",
+            "exclude": [
+              "pid 63318"
+            ]
+          },
+          "capture": "akou-capture 0.6.2"
+        },
+        {
+          "seq": 5,
+          "t": 1791361453457,
+          "type": "part.ended",
+          "part": 2,
+          "reason": "stop",
+          "fileSeconds": 14.8848125
+        },
+        {
+          "seq": 6,
+          "t": 1791361454217,
+          "type": "call.ended",
+          "reason": "stop"
+        }
+      ],
+      "audio": {
+        "parts": [
+          {
+            "part": 1,
+            "wallStart": 1791361418291,
+            "endReason": "helper-exit",
+            "loggedFileSeconds": 19.94,
+            "slices": 949,
+            "tonedSlices": 949
+          },
+          {
+            "part": 2,
+            "wallStart": 1791361438525,
+            "endReason": "stop",
+            "loggedFileSeconds": 14.8848125,
+            "slices": 744,
+            "tonedSlices": 744
+          }
+        ],
+        "wallSeconds": 35.051,
+        "capturedSeconds": 33.777,
+        "lostSeconds": 1.274
+      },
+      "apiDuring": {
+        "requests": 355,
+        "failed": 0,
+        "p50Ms": 1,
+        "p99Ms": 3.3,
+        "maxMs": 25.3
+      },
+      "verdict": {
+        "everyPartEnded": true,
+        "nextStart201Within3s": true,
+        "lostUnder2s": true,
+        "apiNeverFailed": true,
+        "pass": true
+      }
+    }
+  }
+}

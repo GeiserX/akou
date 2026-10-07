@@ -6,7 +6,7 @@ This page records what the M0 gates measured on real hardware, gate by gate: wha
 
 **The setup.** akou at commit `f6cabfc` (the G5 re-run at the later commit that fixed its runner), the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
 
-There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers. The third re-ran G4 at commit `331c7e6`, after the two capture fixes in [#13](https://github.com/GeiserX/akou/pull/13), on the same machine under heavier background load (load average 4 to 20); its numbers sit next to the old ones in [the G4 re-run](#the-re-run-after-the-capture-fixes).
+There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers. The third re-ran G4 at commit `331c7e6`, after the two capture fixes in [#13](https://github.com/GeiserX/akou/pull/13), on the same machine under heavier background load (load average 4 to 20); its numbers sit next to the old ones in [the G4 re-run](#the-re-run-after-the-capture-fixes). The fourth, on 2026-10-07, re-ran G5 and G8 at commit `36a2237` (release 0.6.2), so their verdicts rest on current code and not on September's; see [the G5 re-run](#re-run-on-current-main) and [the G8 re-run](#re-run-on-current-main-1).
 
 ## Summary
 
@@ -14,9 +14,9 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 |---|---|---|
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
 | G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms on the call channel, which held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
-| G5 | Pass | Re-run with a stricter runner. Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 78 ms while the teardown still hung. Crash: new part in 79 ms, 0.13 s of call audio lost. Real device helper SIGKILLed: new part in 81 ms, 1.25 s lost. The API never missed a poll. |
+| G5 | Pass | Re-run at `36a2237` (2026-10-07). Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 154 ms while the teardown still hung. Crash: new part in 79 ms, 0.14 s of call audio lost. Real device helper SIGKILLed: new part in 212 ms, 1.30 s lost. The API never missed a poll. At `f6cabfc`: 78 ms; 79 ms and 0.13 s; 81 ms and 1.25 s. |
 | G6 | Pass (M-series half) | Real-time factor 0.081 for both channels, worst case. Committed line 1.02 s after the utterance ends (median), 1.14 s at worst. |
-| G8 | Pass | Cold `akou start` p95 193 ms (20 runs, 20 separate app processes), warm p95 159 ms. |
+| G8 | Pass | Re-run at `36a2237` (2026-10-07), on a quiet machine: cold `akou start` p95 578 ms (20 runs, 20 separate app processes), warm p95 319 ms; `f6cabfc` measured 193 ms and 159 ms. The app now takes about 180 ms longer to answer its API. Under heavy background load (load average 16 to 65) the cold p95 went over 3 s in two of four runs, and warm starts failed on both commits when the helper took over 3 s to open the devices (see below). |
 
 ## Recording from SSH versus the console session
 
@@ -212,6 +212,33 @@ The first run measured the same picture on file length: 0.01 s, 0.11 s and 1.13 
 
 **Verdict: pass.** The app stayed responsive, every part got its `part.ended`, a new call started 78 ms into a hanging teardown and the next start always answered 201 well within 3 s, and at most 1.25 s of call audio was lost, under the 2 s limit. The real-device kill is the closest to the limit, and almost all of it is the Opus page the helper had not yet written. One detail for M1: a SIGKILLed helper is logged as `helper-exit`, the same reason as a helper that exits on its own. The schema has a `crashed` reason that nothing wrote here.
 
+### Re-run on current main
+
+**Why.** The numbers above were measured at `f6cabfc` on 2026-09-24. Since then the app has gained streaming Nemotron, the final pass on Qwen3-ASR, the server and dictation, so we ran the gate again at `36a2237` (release 0.6.2) on 2026-10-07, on the same Mac mini (now macOS 26.6.1).
+
+**What ran.** The same runner, unchanged since the re-run above, the same two ways: the `simulate` build in file mode through the `--fault-file` wrapper ([g5-simulated-rerun.json](g5-simulated-rerun.json)), then the shipping helper on real devices, SIGKILLed 20 s into a call ([g5-kill-real-rerun.json](g5-kill-real-rerun.json)). The app ran from source under the Bun the repository pins (1.4.2), started by the source CLI as before. Four things differ from September:
+
+- The speech models are present: the set `akou models pull` fetches with default settings (Nemotron 3.5 at 560 ms for the live transcript, Nemotron 3 diarization, TitaNet small, Silero VAD, and Qwen3-ASR 1.7B with its llama-server for the final pass). So every start loads the live recognizer and every stop runs a final pass, as it does for users.
+- `api.port` was 0, because another akou on the machine held the default port.
+- The default output was BlackHole 2ch, not the built-in speakers, so the tone played into BlackHole. It read as muted before the run and after it. The tap hears processes before any device, and it heard the tone in every slice.
+- Background load average 10 to 12 during the simulated run and 10 to 13 during the real-device run, against 5 to 9 in September.
+
+The positive control matched as before: intact 0 s, 1.5 s hole 1.5 s, silent 6 s.
+
+**Numbers.**
+
+| Case | `part.ended` | Next part or next start | Call audio lost | API during it |
+|---|---|---|---|---|
+| Hang on stop | `killed`, stop answered after 5,090 ms (before: 5,067 ms) | Next `akou start`: 201 in 154 ms, sent and answered while the teardown still hung (before: 78 ms) | 0.03 s (before: 0.03 s) | 198 polls, 0 failed, slowest 28.3 ms (before: 194, 0, 20.1 ms) |
+| Crash at 20 s (exit 70) | `helper-exit` | Automatic new part 79 ms later (before: 79 ms); next `akou start` 201 in 162 ms (before: 73 ms) | 0.14 s (before: 0.13 s) | 356 polls, 0 failed, slowest 10.2 ms (before: 338, 0, 7.3 ms) |
+| Real device helper, SIGKILL | `helper-exit` | Automatic new part 212 ms later (before: 81 ms); next `akou start` 201 in 165 ms (before: 102 ms) | 1.30 s (before: 1.25 s): the killed part logged 19.96 s and decodes to 949 slices, 18.98 s, the same unflushed last Opus page as before | 359 polls, 0 failed, slowest 10.7 ms (before: 340, 0, 5.0 ms) |
+
+The tone was in all 949 slices of the killed part and all 741 of the new part; in September the first 20 ms of each part missed it.
+
+A first pass of both runs under Bun 1.3.14, the machine's default Bun, also passed every check ([g5-rerun-bun-1.3.14.json](g5-rerun-bun-1.3.14.json)): next start 166 ms into the hanging teardown, 0.19 s lost in the crash with a new part 129 ms later, and 1.27 s lost in the real-device kill with a new part 187 ms later.
+
+**Verdict: still pass.** Every criterion holds with room to spare. The restarts are slower than in September (a new part 212 ms after the real-device kill against 81 ms, a next start 154 to 165 ms against 73 to 102 ms), on a busier machine with the recognizer loaded; all of them are far inside the 3 s limit. The audio lost moved by 0.01 to 0.05 s. The `helper-exit` versus `crashed` note above still holds: the SIGKILLed helper is again logged as `helper-exit`.
+
 ## G6: recognizer speed
 
 **Models.** `akou models pull` fetched 688 MB in 16.3 s: 8 files, every checksum matched.
@@ -253,6 +280,49 @@ The first round, without the pid checks, measured cold p95 257 ms and warm p95 1
 **Verdict: pass.** The target is under 3 s p95 cold. Warm also meets the M1 target of 1 s.
 
 **Still open.** The first tap after a reboot, where a cold Core Audio open once took over 12 s, was not measured: we do not reboot a shared machine. The runs were over SSH, where the mic opens but is silent. A granted microphone may add time to the open, and that was not measured either.
+
+### Re-run on current main
+
+**Why.** The numbers above were measured at `f6cabfc` on 2026-09-24. The app has grown since (streaming Nemotron, the Nemotron diarizer, the server, dictation), so we ran the gate again at `36a2237` (release 0.6.2) on 2026-10-07, on the same Mac mini (now macOS 26.6.1).
+
+**What ran.** The same runner, unchanged since the pid checks, with 20 cold and 20 warm runs each time, the shipping helper on real devices, and the models `akou models pull` fetches with default settings (listed in [the G5 re-run](#re-run-on-current-main)), so the app loads the live recognizer at launch and runs a final pass after each stop. The first runs came out several times slower than September's while other work pushed the load average past 40. To tell the code from the machine, we ran the same runner against `f6cabfc` as a control, alternating with the current code, with its own models (Parakeet int8, as in September) and the load average logged every 10 s. The repository pins Bun 1.4.2; the machine's default Bun is 1.3.14, which the first three runs used. Every run, its load samples and the split below are in [g8-rerun-series.json](g8-rerun-series.json). The record run is [g8-start-rerun.json](g8-start-rerun.json). In control 1, `f6cabfc`'s code under today's Bun, one app process crashed in Bun and another logged an onnxruntime error while loading models; every start in that run still answered 201.
+
+**The record: a quiet machine, the pinned Bun.** Run 5, at load 6 to 11, with its control straight after at load 5 to 8:
+
+| | Runs | 201 | p50 | p95 | Worst | Helper audio after spawn |
+|---|---|---|---|---|---|---|
+| Cold, `36a2237` | 20 | 20 | 424 ms | 578 ms | 687 ms | 106 to 306 ms |
+| Cold, `f6cabfc` control | 20 | 20 | 277 ms | 322 ms | 338 ms | 111 to 155 ms |
+| Cold, `f6cabfc` in September | 20 | 20 | 185 ms | 193 ms | 199 ms | 65 to 82 ms |
+| Warm, `36a2237` | 20 | 20 | 199 ms | 319 ms | 324 ms | 107 to 256 ms |
+| Warm, `f6cabfc` control | 20 | 20 | 153 ms | 184 ms | 199 ms | 92 to 150 ms |
+| Warm, `f6cabfc` in September | 20 | 20 | 140 ms | 159 ms | 168 ms | 70 to 95 ms |
+
+**Where the extra time goes.** Current code is about 150 ms slower to a cold 201 than `f6cabfc` on the same machine the same hour. We split eight cold launches per commit in two: the app spawned directly until `GET /v1/status` answers, then one `akou start` on that fresh app. Booting to a live API took a median 66 ms at `f6cabfc` and 249 ms at `36a2237` (load 6 to 12; 268 ms under the pinned Bun, at a load near 30). The first start on the fresh app took 223 ms and 376 ms. So most of the cost is the app loading more code before its API answers, plus a slower first start.
+
+**Every run, in order.**
+
+| Run | Commit, Bun | Load average (1 min) | Cold 201 | Cold p50 / p95 / worst | Warm 201 | Warm p50 / p95 / worst |
+|---|---|---|---|---|---|---|
+| 1 | `36a2237`, 1.3.14 | 12 at the start, 41 at the end | 20 of 20 | 718 / 1,273 / 1,385 ms | 20 of 20 | 353 / 1,254 / 1,521 ms |
+| control 1 | `f6cabfc`, 1.3.14 | 16 to 35, median 23 | 20 of 20 | 675 / 2,511 / 3,396 ms | 20 of 20 | 321 / 1,881 / 2,504 ms |
+| 2 | `36a2237`, 1.3.14 | 16 to 65, median 27 | 19 of 20 | 844 / 4,438 / 5,014 ms | 20 of 20 | 272 / 393 / 405 ms |
+| control 2 | `f6cabfc`, 1.3.14 | 8 to 21, median 10 | 20 of 20 | 312 / 488 / 494 ms | 20 of 20 | 185 / 568 / 1,448 ms |
+| 3 | `36a2237`, 1.3.14 | 5 to 9, median 7 | 20 of 20 | 721 / 1,033 / 1,191 ms | 20 of 20 | 243 / 741 / 779 ms |
+| 4 | `36a2237`, 1.4.2 | 9 to 29, median 17 | 20 of 20 | 855 / 4,873 / 7,199 ms | 12 of 20 | 3,278 / 10,213 / 11,398 ms |
+| control 3 | `f6cabfc`, 1.3.14 | 10 to 39, median 27 | 20 of 20 | 545 / 1,543 / 6,497 ms | 18 of 20 | 1,139 / 4,113 / 7,305 ms |
+| 5 | `36a2237`, 1.4.2 | 6 to 11, median 7 | 20 of 20 | 424 / 578 / 687 ms | 20 of 20 | 199 / 319 / 324 ms |
+| control 4 | `f6cabfc`, 1.3.14 | 5 to 8, median 6 | 20 of 20 | 277 / 322 / 338 ms | 20 of 20 | 153 / 184 / 199 ms |
+
+The percentiles count failed starts too, as the runner always has. Three things failed, and the loaded runs show two weak spots:
+
+- **One cold start missed the 3 s launch budget** (run 2, its second cold run, 5,014 ms). The CLI gave up waiting for the app's API before the app answered: `app.log` shows the API up at 10:40:54.9 local, no call started, and the quit that followed. `f6cabfc`, whose app reaches its API about 180 ms sooner, never missed it in four runs, though under load its single slowest starts also took 3.4 and 6.5 s.
+- **Ten warm starts failed on both commits** with `call.failed {stage: open, error: "the capture helper did not start capturing within 3000 ms"}`: 8 of 20 in run 4 and 2 of 20 in control 3, which ran back to back. In the same stretch the helper's first audio on cold starts took up to 3.4 s with current code and 4.3 s with `f6cabfc`. The helper's device open, not the app, set those times, and it slowed down for both commits at once.
+- **Under load the cold p95 went over 3 s for current code twice** (runs 2 and 4: 4,438 and 4,873 ms) and never for `f6cabfc` (worst p95 2,511 ms).
+
+**Verdict: still pass.** On the reference Mac under the background load the gate was first measured at, cold p95 is 578 ms with the pinned Bun (1,033 ms under Bun 1.3.14), well inside 3 s, and warm p95 is 319 ms, inside the M1 target of 1 s. But the margin is smaller than September's numbers said. The app takes about 180 ms longer to answer its API than it did at `f6cabfc`, so under heavy load (load average 16 to 65 on 10 cores) the current code went over the 3 s target where `f6cabfc` stayed under it. And on both commits, a warm start fails outright when the helper needs more than 3 s to open the devices, instead of waiting longer.
+
+**Still open.** The two weak spots are filed: the slower path to a live API, and a warm start that fails when the device open passes 3 s. The first tap after a reboot and a granted microphone are still not measured (see above).
 
 ## How to re-run
 
