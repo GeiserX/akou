@@ -166,7 +166,7 @@ describe("one version everywhere", () => {
     const t = repoCopy();
     expect(quiet(() => main(["--set", "0.1.0", "--root", t.dir]))).toBe(0);
     expect(readAll(t.dir).every((f) => f.version === "0.1.0")).toBe(true);
-    expect(readAll(t.dir)).toHaveLength(8);
+    expect(readAll(t.dir)).toHaveLength(9);
     expect(quiet(() => main(["--check", "--tag", "v0.1.0", "--root", t.dir]))).toBe(0);
     expect(quiet(() => main(["--check", "--tag", "v0.1.1", "--root", t.dir]))).toBe(1);
     expect(tagVersion("refs/tags/v1.2.3-rc.1")).toBe("1.2.3-rc.1");
