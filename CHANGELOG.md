@@ -2,6 +2,21 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.6.3 — a server that hands work to other akou servers keeps working itself while they are busy
+
+On 0.6.2 a job that a `server.remotes` entry names waited whenever every remote that offers it was busy, even when the primary could run it and sat idle. A primary that is a good worker itself could not share a backlog with its remotes: it either kept every job or watched them queue behind its slower helpers. In 0.6.3 one setting lets it run those jobs itself while its remotes are full.
+
+### Server
+- **`server.remotes_overflow`.** Off by default, so nothing changes until you turn it on. On: a job a remote entry names runs on the primary while every remote that would take it already holds its jobs, instead of waiting. A job only a remote can run still waits for one, and after a start a job waits until the remotes it names have answered their first probe. Turning it on over the API routes the waiting jobs at once. Settings shows it under Other servers (#340).
+
+### Behind the scenes
+- The macOS nightly no longer dies in the Qwen stage on a runner short of memory (#339).
+- A 1.0.0 release is refused while any gate has only half a Pass on record (#341).
+
+### Known limitations
+- A remote that goes to sleep with a job keeps its copy and may finish it after the primary has run the job again elsewhere. Only the primary's answer reaches the client.
+- Every item under 0.6.2's Known limitations still applies.
+
 ## 0.6.2 — a phone can stream live words to an akou server, and the server can keep its recordings
 
 On 0.6.1 nothing on the network could reach the streaming model a server already runs. The only streamed input was a WAV, decoded once its body ended, and a job deleted its upload the moment it finished, so a phone that dropped its copy after uploading lost the audio for good. In 0.6.2 a server takes a live recording over a WebSocket and sends the words back while you speak, and it keeps a client's recording until the client deletes it. This is the server half of a phone client. No phone app ships yet, and so far a command-line client drives it.

@@ -300,6 +300,10 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Set in the config file.",
     empty: "None",
   },
+  "server.remotes_overflow": {
+    label: "Run work here while those servers are busy",
+    help: "Off: it waits for one of them.",
+  },
   "server.default_model": {
     label: "Model when a job names none",
     help: "A preset or a model from the catalog.",
