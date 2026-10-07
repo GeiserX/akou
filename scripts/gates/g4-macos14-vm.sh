@@ -33,10 +33,11 @@
 #
 # The gate passes when both hold. It fails without recording when the guest is not macOS 14.3.x,
 # and fails when the helper exits non-zero in either recording, even if it left a file. The first
-# run on a fresh clone shows "Terminal would like access to record your system audio" in the VM and
-# fails with "did not finish": run with VNC=1, open the vnc:// address tart prints (the VM's own
-# screen, on this Mac's loopback; from another Mac, an ssh tunnel to that port), click Allow once,
-# and run again (TRAPS: one pending prompt blocks every tap, and `afplay` with it).
+# run on a fresh clone shows a permission prompt for Terminal in the VM ("record your system audio"
+# on the first run seen, "access the microphone" on the next) and fails with "did not finish": run
+# with VNC=1, open the vnc:// address tart prints (the VM's own screen, on this Mac's loopback; from
+# another Mac, an ssh tunnel to that port), click Allow, and run again (TRAPS: one pending prompt
+# blocks every tap, and `afplay` with it).
 #
 # Writes <out>/verdict.json (with the reason), then whichever recordings and helper logs exist.
 # Leaves the VM in place for a re-run, so the Allow holds; `tart delete akou-g4-macos14` removes it.
@@ -142,7 +143,9 @@ EOF
   # The .rc file is the recording's exit status, read from the share on the host.
   for _ in $(seq "$timeout"); do [ -s "$share/$name.rc" ] && break; sleep 1; done
   if [ ! -s "$share/$name.rc" ]; then
-    ssh_vm "pkill -f akou-capture; pkill afplay" >/dev/null 2>&1 || true
+    # By process name: a full command-line match (-f) also hits this script, whose arguments
+    # name the helper, wherever host and guest are one machine (procps pkill spares only itself).
+    ssh_vm "pkill -x akou-capture; pkill -x afplay" >/dev/null 2>&1 || true
     return 124
   fi
   return "$(cat "$share/$name.rc")"
@@ -154,7 +157,7 @@ for run in "tone yes" "silent no"; do
   record "$name" "$play" || rc=$?
   if [ "$rc" = 124 ]; then stuck="$stuck $name"; elif [ "$rc" != 0 ]; then failed="$failed $name"; fi
 done
-[ -z "$stuck" ] || finish fail "the recording did not finish in:$stuck (a system-audio prompt is probably waiting in the VM: run with VNC=1, allow it, and run again)"
+[ -z "$stuck" ] || finish fail "the recording did not finish in:$stuck (a permission prompt for Terminal is probably waiting in the VM: run with VNC=1, allow it, and run again)"
 [ -z "$failed" ] || finish fail "the helper exited non-zero in:$failed (see the .err logs)"
 
 # The call channel (right) RMS over the whole file, in dBFS; -inf for digital silence.

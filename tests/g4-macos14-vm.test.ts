@@ -133,7 +133,7 @@ describe.skipIf(process.platform === "win32")(
       }
     }, 30_000);
 
-    test("a recording that never finishes fails and points at the system-audio prompt", () => {
+    test("a recording that never finishes fails and points at the permission prompt", () => {
       const r = run({ FAKE_MACOS: "14.3", FAKE_OPEN_HANG: "1" });
       try {
         expect(r.verdict).toMatchObject({ verdict: "fail" });
