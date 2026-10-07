@@ -15,7 +15,7 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
 | G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms on the call channel, which held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
 | G5 | Pass | Re-run at `36a2237` (2026-10-07). Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 154 ms while the teardown still hung. Crash: new part in 79 ms, 0.14 s of call audio lost. Real device helper SIGKILLed: new part in 212 ms, 1.30 s lost. The API never missed a poll. At `f6cabfc`: 78 ms; 79 ms and 0.13 s; 81 ms and 1.25 s. |
-| G6 | Pass (M-series half) | Real-time factor 0.081 for both channels, worst case. Committed line 1.02 s after the utterance ends (median), 1.14 s at worst. |
+| G6 | Partial | Speed passes on both halves (fp32, beam search, 12-word list): real-time factor 0.107 for both channels on a Mac mini M4 (target 0.25) and 0.25 on four x64 cores (target 0.5). The committed line misses 1.5 s on the call channel by default: 2.42 s at worst on the Mac, because each call line waits for the Nemotron diarizer to decide its speaker. With the embeddings diarizer, 1.25 s at worst. |
 | G7 | Partial | Fake run 5 of 5 against the signed 0.6.2 app: control `missing`, recorded streams answer (first token 113 ms claude, 62 ms codex), usage limits give excerpts only with `exhausted`. Real run: the app found both harnesses through the login shell with no harness on its `PATH`, but neither had a live sign-in on the machine (`errorKind: auth`; claude: OAuth session expired and not refreshable; codex: HTTP 401), so no real token and no time to first token. |
 | G8 | Pass | Re-run at `36a2237` (2026-10-07), on a quiet machine: cold `akou start` p95 578 ms (20 runs, 20 separate app processes), warm p95 319 ms; `f6cabfc` measured 193 ms and 159 ms. The app now takes about 180 ms longer to answer its API. Under heavy background load (load average 16 to 65) the cold p95 went over 3 s in two of four runs, and warm starts failed on both commits when the helper took over 3 s to open the devices (see below). |
 
@@ -242,28 +242,46 @@ A first pass of both runs under Bun 1.3.14, the machine's default Bun, also pass
 
 ## G6: recognizer speed
 
-**Models.** `akou models pull` fetched 688 MB in 16.3 s: 8 files, every checksum matched.
+**What G6 asks.** Parakeet TDT v3 fp32 on both channels, `modified_beam_search` with a 12-word decode list: the committed line within 1.5 s of the end of the utterance, and a real-time factor under 0.25 on an M-series Mac and under 0.5 on a 4-core x64. The words: akou, Parakeet, Datadog, Grafana, Silero, Terraform, Kubernetes, Zendesk, TitaNet, pyannote, ElectroBun, Opus. All 12 passed the tokenization check on both machines.
 
-**What ran.** Two halves, both in the production setting: Parakeet TDT v3 int8, `modified_beam_search`, 2 threads as `asr.threads` defaults to, and a 12-word decode list (akou, Parakeet, Datadog, Grafana, Silero, Terraform, Kubernetes, Zendesk, TitaNet, pyannote, ElectroBun, Opus). All 12 words passed the tokenization check.
+**The re-run of 2026-10-07.** The first run measured int8, the model before the benchmark moved akou to fp32, and only on the Mac. We ran it again on fp32, on both machines, at `origin/main` `36a2237d` with Bun 1.4.2.
 
-- Offline speed ([`g6-asr-speed.ts`](../../scripts/gates/g6-asr-speed.ts), [g6-offline.json](g6-offline.json)): 24 synthesized English sentences (66.3 s), each decoded through the app's own `SherpaModels` after one warm-up pass.
-- Live latency ([`g6-live-latency.ts`](../../scripts/gates/g6-live-latency.ts), [g6-live.json](g6-live.json)): the same 24 sentences laid out on a 58 s stereo timeline, alternating and overlapping between mic and call. The helper played them in file mode at real-time speed, a cold app ran the real live path (VAD, provisional re-decodes, beam search with the list), and each committed line's log time was compared with the moment its utterance ended.
+- **Clips.** [`g6-clips.sh`](../../scripts/gates/g6-clips.sh) speaks the 24 sentences in [`g6-sentences.txt`](../../scripts/gates/g6-sentences.txt) with macOS `say` (voice Samantha, written to a file, nothing played) and converts them to 16 kHz for the speed run and 48 kHz for the live run: 64.2 s of speech. The first run's audio was not kept, so the sentences were recovered from its transcripts, with the misheard words put back.
+- **Offline speed** ([`g6-asr-speed.ts`](../../scripts/gates/g6-asr-speed.ts)): each clip decoded through the app's own `SherpaModels` with 2 threads after one warm-up pass, run twice. A positive control: the same run with 1 thread, which must read slower.
+- **Live latency** ([`g6-live-latency.ts`](../../scripts/gates/g6-live-latency.ts)): the 24 sentences on a 56 s stereo timeline, alternating and overlapping between mic and call, played by `akou-capture` in file mode at real-time speed into a cold app (`AKOU_HEADLESS=1`, `AKOU_CAPTURE_FILE_ONLY=1`, a scratch `AKOU_HOME`). `capture.helper` points at a two-line wrapper that runs `akou-capture "$@" --from-wav <timeline> --realtime`, because the app adds `run` and its own arguments after the command. Live lines come from Parakeet as G6 states it: `asr.live` is `parakeet` (the default, `auto`, picks streaming Nemotron when its model is downloaded) and `asr.parakeet.decoding` is `beam`. Everything else is the default, so the call channel has the Nemotron stream diarizer (`asr.diarizer` `nemotron`, akou-diarize from the 0.6.2 release). We did not measure the default Nemotron live path.
 
-**Numbers.**
+**The machines.**
 
-| Measure | Result | Target |
-|---|---|---|
-| Real-time factor, one channel | 0.040 (2.67 s of decoding for 66.3 s of speech) | |
-| Real-time factor, both channels, speech on both all the time | 0.081 | under 0.25 |
-| Decode time per utterance | median 114 ms, at most 134 ms | |
-| Committed line after the utterance ends | median 1.02 s, 90th percentile 1.06 s, worst 1.14 s, best 0.81 s; 24 of 24 committed | within 1.5 s |
-| Recognizer load | 1.17 s | |
+- *M-series:* a Mac mini M4, 10 cores, 16 GB, macOS 26.6.1. It was quiet: load average about 2 on 10 cores, no other benchmark running. The same model of machine under CI load is in the files too: there the 1-thread control read *faster* than 2 threads, so those numbers measure the load, not the recognizer, and they are not the verdict.
+- *4-core x64:* a Windows 11 x64 desktop, Intel Core i9-12900, 32 GB, pinned to four performance cores with one thread each (processor affinity `0x55`, as in [asr-12-windows.md](asr-12-windows.md)). The affinity was set at launch and inherited: Bun, `akou-capture` and `akou-diarize` all read `0x55` during the runs. CPU load was 0 to 3 % before each run, and no Actions runner process was on the machine. The release ships no Windows helpers, so `akou-capture` and `akou-diarize` were built there with Rust 1.97.1.
 
-The live latency includes the 0.7 s of silence that closes a segment (`asr.segmentPause`), so decoding and writing take about 0.3 s of it. File mode skips the device path. On devices that adds about 8 to 12 ms, which is the chirp latency G4 measured.
+**Speed** ([g6-offline-fp32.json](g6-offline-fp32.json), [g6-x64.json](g6-x64.json)).
 
-**Verdict: pass on the M-series half**, with room to spare, on a machine under background load.
+| | Mac mini M4 | Four x64 cores | Target |
+|---|---|---|---|
+| Real-time factor, both channels, speech on both all the time | 0.107, again 0.107 | 0.250, again 0.249 | M-series under 0.25, x64 under 0.5 |
+| Real-time factor, one channel | 0.054 (3.45 s of decoding for 64.2 s) | 0.125 (8.04 s) | |
+| Decode time per utterance | median 143 ms, at most 163 ms | median 332 ms, at most 408 ms | |
+| Control: 1 thread, both channels | 0.132 (slower, as it must be) | 0.422 (slower) | |
 
-**Still open.** The 4-core x64 laptop half, whose target is under 0.5. And a vocabulary note for M1: in the live run, 10 of the 12 listed words came out right every time they were said. "pyannote" was right once and heard once as "pyanode" (utterance s08, [g6-live.json](g6-live.json); the offline pass got both right). "akou" was never right: it was heard as "ACA" and "Aka", even with the word in the decode list at boost 3.
+**Committed line after the utterance ends** ([g6-live-fp32.json](g6-live-fp32.json), [g6-x64.json](g6-x64.json)). Median and worst, 24 of 24 lines committed in every run.
+
+| Run | Mic | Call | All 24 |
+|---|---|---|---|
+| Mac, beam, default diarizer | 1.06 s, 1.14 s | 1.76 s, **2.42 s** | median 1.13 s, 90th percentile 2.04 s, worst 2.42 s |
+| Mac, greedy, default diarizer | 1.00 s, 1.60 s | 1.75 s, 2.44 s | worst 2.44 s |
+| Mac, beam, `asr.diarizer` `embeddings` | 1.05 s, 1.14 s | 1.05 s, 1.25 s | worst 1.25 s |
+| x64, beam, default diarizer | 1.39 s, 1.75 s | 2.47 s, 4.55 s | median 1.75 s, worst 4.55 s |
+| x64, beam, `asr.diarizer` `embeddings` | 1.31 s, 1.99 s | 1.53 s, 1.93 s | median 1.33 s, worst 1.99 s |
+
+Why the call channel is late: with a stream diarizer, the live worker holds each call line until Nemotron has decided the speaker of all of its audio (`src/main/asr/live-worker.ts`, step 5), and Nemotron runs live at about 2 s latency (the `asr.diarizer` setting says so). Two runs show it is the hold and not the recognizer. Greedy decoding leaves the call channel exactly as late, and with the embeddings diarizer, which holds nothing, the call channel matches the mic. The live latency includes the 0.7 s pause that closes a segment (`asr.segmentPause`).
+
+**Verdict: partial.** Speed passes on both halves: 0.107 against 0.25 on the Mac, and 0.25 against 0.5 on four x64 cores. The committed line fails on the call channel in the default setup, 2.42 s at worst on the Mac, because of the diarizer hold. With the embeddings diarizer it passes, 1.25 s at worst. On four x64 cores the line misses 1.5 s with either diarizer. The first run, int8 on the Mac with no stream diarizer yet, measured 0.081 and 1.14 s at worst ([g6-offline.json](g6-offline.json), [g6-live.json](g6-live.json)).
+
+**Still open.**
+
+- A decision for the latency clause: either a call line is shown before its speaker is decided and relabelled later, or G6 says what the 1.5 s covers when a stream diarizer is on.
+- Vocabulary, for M1: 10 of the 12 listed words came out right every time, in both the speed and the live runs. "akou" was never right ("ACA", "ACAR", "Akao", "Akau"), and on this voice "pyannote" never was either ("pianoed", "Pianote", "Pianode").
 
 ## G7: harness provider
 

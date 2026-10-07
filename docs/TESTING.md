@@ -164,7 +164,7 @@ Speed budgets apply to the default live and final engines only. Every other engi
 | Excerpt reply | under 300 ms | PR, synthetic call | partial |
 | Warm start answers 201 | under 1 s | reference Mac (`scripts/gates/g8-start.ts`, warm runs). On PR, [T3.6] proves from the steps that a warm start arms the warm budget and answers on `capturing`, and prints the time | partial |
 | Cold start p95 | under 3 s | reference Mac (`scripts/gates/g8-start.ts`, 578 ms at `36a2237`, 193 ms at `f6cabfc`); nightly on a macOS runner, recorded | partial |
-| Committed line after utterance end, default live engine | under 1.5 s | reference Mac (G6, 1.02 s median); nightly with the real model, recorded | partial |
+| Committed line after utterance end, default live engine | under 1.5 s | reference Mac and four x64 cores (G6, measured on Parakeet fp32 with beam search, not on the default Nemotron live engine): 1.13 s median and 2.42 s worst on the Mac, the call channel held by the Nemotron diarizer; nightly with the real model, recorded | partial |
 | Real-time factor, both channels, default live and final engines | under 0.25 on Apple silicon, under 0.5 on 4-core x64 | nightly: the Linux runner is a 4-core x64 machine, so the 0.5 budget gates there; macOS runner numbers are recorded only. Other engines: recorded | partial (G6 by hand) |
 
 | # | Item | P | From | Acceptance | Today |
