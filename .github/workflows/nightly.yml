@@ -54,7 +54,10 @@ jobs:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    # The macOS leg took 128 minutes on a passing night, and on 2026-10-07 it reached the long unit
+    # 15 minutes later than that night, so a night whose long requests run past 6 minutes needs more
+    # than 150.
+    timeout-minutes: 200
     env:
       CARGO_TERM_COLOR: always
       EXE: ${{ matrix.os == 'windows-latest' && '.exe' || '' }}

@@ -778,6 +778,33 @@ describe("the Qwen engine's protocol", () => {
     expect(h3.lang).toBe("es");
   });
 
+  // Issue #349: on GitHub's macOS runner a long-unit request took past 6 minutes, and Bun's own
+  // limit on a silent response (about 360 s on Bun 1.4.2) gave it up with "The operation timed
+  // out." while its 30-minute `timeoutMs` still had 24 to run. Bun lets a process shorten that limit
+  // (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`, read at start, so in a process of its own); with it at 1 s, Bun
+  // gives up on a silent response after about 8 s, which a 10 s decode passes.
+  test("a request waits its whole timeoutMs: Bun's own limit on a silent response never cuts a slow decode short", async () => {
+    const { server, log } = fakeServer(["--fake-slow-ms", "10000"]);
+    const base = await server.url();
+    const child = Bun.spawn(
+      [process.execPath, join(import.meta.dir, "fixtures", "qwen-ask.ts"), base, "60000"],
+      {
+        env: { ...process.env, BUN_CONFIG_HTTP_IDLE_TIMEOUT: "1" },
+        stdout: "pipe",
+        stderr: "inherit",
+      },
+    );
+    cleanups.push(() => child.kill());
+    const out = JSON.parse(await new Response(child.stdout).text()) as {
+      text?: string;
+      error?: string;
+    };
+    expect(out).toEqual(expect.objectContaining({ text: "hello world" }));
+    expect(out.error).toBeUndefined();
+    // One request, answered: no restart and no second try.
+    expect(bodies(log())).toHaveLength(1);
+  });
+
   test("the unit is sent as a 16 kHz 16-bit mono WAV", () => {
     const bytes = wavBytes(new Float32Array([0, 0.5, -1, 1.5]));
     const v = new DataView(bytes.buffer);

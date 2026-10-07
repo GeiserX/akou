@@ -13,7 +13,7 @@
  *
  *   bun tests/fixtures/fake-llama-server.ts [--fake-log FILE] [--fake-lang NAME] [--fake-lp NAME=LP]
  *     [--fake-die-after N] [--fake-die-on N] [--fake-hang] [--fake-hang-context] [--fake-500 N]
- *     [--fake-loading-ms MS]
+ *     [--fake-loading-ms MS] [--fake-slow-ms MS]
  *     [--fake-refuse-cache] [--fake-devices TEXT] <llama-server args>
  *
  * `--fake-log FILE` appends one JSON line per start (`{argv}`) and per request (`{body}`);
@@ -24,7 +24,8 @@
  * answers a completion; `--fake-hang-context` never answers one that carries a context (a non-empty
  * system message, as an audio check's); `--fake-500 N` answers the first N
  * completions with HTTP 500 (a Metal out-of-memory server), counted across restarts; `--fake-loading-ms` answers 503 on
- * `/health` for that long; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`;
+ * `/health` for that long; `--fake-slow-ms` answers each completion that long after it arrives,
+ * sending nothing before, as a real server decoding a long unit on a slow machine; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`;
  * `--list-devices` prints `--fake-devices` and exits.
  */
 
@@ -61,6 +62,7 @@ const takeFailure = (): boolean => {
   return true;
 };
 const loadedAt = Date.now() + Number(opt("--fake-loading-ms") ?? 0);
+const slowMs = Number(opt("--fake-slow-ms") ?? 0);
 const port = Number(opt("--port"));
 const host = opt("--host") ?? "127.0.0.1";
 
@@ -153,7 +155,7 @@ function complete(body: { messages: Message[]; logprobs?: boolean }): Record<str
 Bun.serve({
   port,
   hostname: host,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     if (url.pathname === "/health") {
       return Date.now() < loadedAt
@@ -173,6 +175,11 @@ Bun.serve({
             status: 500,
           },
         );
+      }
+      if (slowMs > 0) {
+        // Bun.serve would close the connection after 10 s of silence; llama-server keeps it open.
+        server.timeout(req, 0);
+        await Bun.sleep(slowMs);
       }
       const out = complete(body);
       answered++;

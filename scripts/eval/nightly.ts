@@ -353,8 +353,9 @@ export const QWEN_GATE = {
   /**
    * One FLEURS clip's request limit. The app's 120 s is a wait a person sits through; here it only
    * cut off a slow runner. On GitHub's macOS runner (3 cores, 7 GB, a paravirtual GPU) a clip of
-   * 13 to 27 s took up to 94 s in a passing night, and on three nights one request crossed 120 s
-   * twice in a row, which ended the whole night with no summary.
+   * 13 to 27 s took up to 94 s in a passing night. The nights that ended with no summary died in
+   * the long unit instead: a request past about 360 s, Bun's own limit on a silent response, which
+   * the engine now turns off (issue #349).
    */
   requestMs: 600_000,
 } as const;
