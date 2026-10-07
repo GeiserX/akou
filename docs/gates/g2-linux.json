@@ -1,0 +1,36 @@
+{
+  "gate": "G2",
+  "platform": "linux-x64",
+  "model": "parakeet-tdt-0.6b-v3-fp32",
+  "limitMs": 100,
+  "worker": {
+    "mode": "worker",
+    "bun": "1.4.0",
+    "platform": "linux-x64",
+    "text": "Ask not what your country can do for you. Ask what you can do for your country.",
+    "loadMs": 2169,
+    "decodeMs": 827,
+    "ticks": 2772,
+    "idleTickMsP50": 1.1,
+    "idleTickMsMax": 1.1,
+    "tickMsP50": 1.1,
+    "tickMsP99": 1.1,
+    "tickMsMax": 3.8
+  },
+  "control": {
+    "mode": "main",
+    "bun": "1.4.0",
+    "platform": "linux-x64",
+    "text": "Ask not what your country can do for you. Ask what you can do for your country.",
+    "loadMs": 2116,
+    "decodeMs": 468,
+    "ticks": 1,
+    "idleTickMsP50": 1.1,
+    "idleTickMsMax": 1.2,
+    "tickMsP50": 2584.7,
+    "tickMsP99": 2584.7,
+    "tickMsMax": 2584.7
+  },
+  "verdict": "pass",
+  "problems": []
+}

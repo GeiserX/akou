@@ -1,0 +1,36 @@
+{
+  "gate": "G2",
+  "platform": "darwin-arm64",
+  "model": "parakeet-tdt-0.6b-v3-fp32",
+  "limitMs": 100,
+  "worker": {
+    "mode": "worker",
+    "bun": "1.4.0",
+    "platform": "darwin-arm64",
+    "text": "Ask not what your country can do for you. Ask what you can do for your country.",
+    "loadMs": 12142,
+    "decodeMs": 4213,
+    "ticks": 10365,
+    "idleTickMsP50": 1.9,
+    "idleTickMsMax": 2,
+    "tickMsP50": 1.4,
+    "tickMsP99": 4.1,
+    "tickMsMax": 26.7
+  },
+  "control": {
+    "mode": "main",
+    "bun": "1.4.0",
+    "platform": "darwin-arm64",
+    "text": "Ask not what your country can do for you. Ask what you can do for your country.",
+    "loadMs": 10221,
+    "decodeMs": 1773,
+    "ticks": 1,
+    "idleTickMsP50": 1.8,
+    "idleTickMsMax": 1.9,
+    "tickMsP50": 11997.2,
+    "tickMsP99": 11997.2,
+    "tickMsMax": 11997.2
+  },
+  "verdict": "pass",
+  "problems": []
+}
