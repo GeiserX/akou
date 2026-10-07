@@ -46,12 +46,14 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { BUNDLE_ID } from "../../src/main/app-info.ts";
 import {
   downloadModels,
   hostPlatform,
@@ -61,8 +63,9 @@ import {
 } from "../../src/main/asr/models.ts";
 import { DEFAULT_HOTKEY } from "../../src/main/window/hotkey.ts";
 import { loginItemPath } from "../../src/main/window/login-item.ts";
-import { APP_DIR } from "../build-app.ts";
+import { APP_DIR, RELEASE_DIR, releaseName } from "../build-app.ts";
 import { unpackApp } from "../smoke-app.ts";
+import { sourceVersion } from "../stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const WIN = process.platform === "win32";
@@ -335,7 +338,11 @@ class Machine {
       return { items, control };
     }
     const items: TrayItem[] = [];
+    const seen = new Set<string>();
     for (const r of this.registrations().slice(mark)) {
+      // The indicator registers again when the watcher answers; one item, read once.
+      if (seen.has(r.sender + r.service)) continue;
+      seen.add(r.sender + r.service);
       const dest = r.service.startsWith("/") ? r.sender : r.service;
       const path = r.service.startsWith("/") ? r.service : "/StatusNotifierItem";
       const all = spawnSync(
@@ -489,6 +496,34 @@ class App {
 
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Windows: the release's installer, as a person runs it. `akou-<version>-setup` holds
+ * `akou-Setup.exe` with the packed app beside it; ElectroBun's installer installs into
+ * `%LOCALAPPDATA%\\<identifier>\\stable` and closes its final dialog itself with
+ * `ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1`. The built launcher alone is the self-extractor, which
+ * refuses to run without its archive.
+ */
+function installWindows(work: string): { launcher: string; detail: string } {
+  const version = sourceVersion(ROOT);
+  const name = readdirSync(RELEASE_DIR).find((f) => f.startsWith(`${releaseName(version)}-setup.`));
+  if (!name) return { launcher: "", detail: `no ${releaseName(version)}-setup in ${RELEASE_DIR}` };
+  const dir = join(work, "setup");
+  mkdirSync(dir);
+  const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  spawnSync(tar, ["-x", "-f", join(RELEASE_DIR, name), "-C", dir]);
+  const r = spawnSync(join(dir, "akou-Setup.exe"), [], {
+    cwd: dir,
+    env: { ...process.env, ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1" },
+    encoding: "utf8",
+    timeout: 300_000,
+  });
+  const root = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), BUNDLE_ID);
+  return {
+    launcher: join(root, "stable", "app", "bin", "launcher.exe"),
+    detail: `${name}: akou-Setup.exe exit ${r.status}${r.error ? ` (${r.error.message})` : ""}; ${(r.stdout + r.stderr).trim().slice(-400)}`,
+  };
+}
+
 async function main(): Promise<void> {
   const models = opt("--models");
   if (!models)
@@ -506,10 +541,15 @@ async function main(): Promise<void> {
     { env: {} },
   );
 
-  const launcher = join(APP_DIR, "bin", `launcher${EXE}`);
-  if (!existsSync(launcher))
-    throw new Error(`no launcher at ${launcher}; run scripts/build-app.ts`);
   const work = mkdtempSync(join(tmpdir(), "akou-g1-"));
+  const installed = WIN ? installWindows(work) : null;
+  // Linux: the built launcher, which unpacks the app into ~/.local/share on its first start, as
+  // the installed one does. Windows: the launcher the installer put in %LOCALAPPDATA%.
+  const launcher = installed?.launcher ?? join(APP_DIR, "bin", `launcher${EXE}`);
+  if (!existsSync(launcher))
+    throw new Error(
+      `no launcher at ${launcher}; ${installed?.detail ?? "run scripts/build-app.ts"}`,
+    );
   const home = join(work, "home");
   const configDir = join(home, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
@@ -535,13 +575,30 @@ async function main(): Promise<void> {
   const machine = new Machine(work);
   const problems: string[] = [];
   const fail = (what: string) => problems.push(what);
-  const phases: Record<string, unknown> = {};
+  const phases: Record<string, unknown> = { install: installed };
   const appLog = () => {
     try {
       return readFileSync(join(configDir, "app.log"), "utf8").split("\n").slice(-25);
     } catch {
       return [];
     }
+  };
+
+  /** Two presses of the hotkey: the first starts a call, the second stops it. */
+  const hotkeyToggles = async (p: Record<string, unknown>, label: string) => {
+    machine.hotkey();
+    const started = await waitFor(() => app.live(), 30_000);
+    p.liveAfterFirstPress = started;
+    if (!started) fail(`${label}: the first ${DEFAULT_HOTKEY} started no call within 30 s`);
+    await sleep(3000);
+    return () => {
+      machine.hotkey();
+      return waitFor(() => !app.live(), 30_000).then((stopped) => {
+        p.liveAfterSecondPress = !stopped;
+        if (!stopped)
+          fail(`${label}: the second ${DEFAULT_HOTKEY} did not stop the call within 30 s`);
+      });
+    };
   };
 
   try {
@@ -581,25 +638,17 @@ async function main(): Promise<void> {
       p.hotkeyRegistered = (status.app as { hotkey?: unknown }).hotkey ?? null;
       if (p.hotkeyRegistered !== DEFAULT_HOTKEY)
         fail(`normal start: the registered hotkey is ${p.hotkeyRegistered}, not ${DEFAULT_HOTKEY}`);
-      p.screenshot = machine.screenshot(join(shots, "1-normal.png")) ? "1-normal.png" : null;
-
-      // Control: with no key sent, no call starts.
+      // Control, and time for the page to draw before the screenshot: no key sent, no call.
       await sleep(5000);
+      p.screenshot = machine.screenshot(join(shots, "1-normal.png")) ? "1-normal.png" : null;
       const unsent = app.live();
       p.liveWithNoKeySent = unsent;
       if (unsent) fail("control: a call is live with no key sent");
-      machine.hotkey();
-      const started = await waitFor(() => app.live(), 30_000);
-      p.liveAfterFirstPress = started;
-      if (!started) fail(`hotkey: the first ${DEFAULT_HOTKEY} started no call within 30 s`);
+      const stop = await hotkeyToggles(p, "hotkey");
       p.screenshotRecording = machine.screenshot(join(shots, "2-recording.png"))
         ? "2-recording.png"
         : null;
-      await sleep(3000);
-      machine.hotkey();
-      const stopped = await waitFor(() => !app.live(), 30_000);
-      p.liveAfterSecondPress = !stopped;
-      if (!stopped) fail(`hotkey: the second ${DEFAULT_HOTKEY} did not stop the call within 30 s`);
+      await stop();
 
       p.loginItem = machine.loginItem();
       if ((p.loginItem as { present: boolean }).present)
@@ -632,6 +681,8 @@ async function main(): Promise<void> {
         p.windows = machine.windows();
         if ((p.windows as ShownWindow[]).length > 0) fail("headless start: a window showed");
         p.screenshot = machine.screenshot(join(shots, "3-headless.png")) ? "3-headless.png" : null;
+        // The tray and the hotkey are ready with no window (DK-L1).
+        await (await hotkeyToggles(p, "headless hotkey"))();
         const item = machine.loginItem();
         p.loginItem = item;
         if (!item.present) fail("login item: not written at the start after app.openAtLogin true");
@@ -667,6 +718,7 @@ async function main(): Promise<void> {
           p.screenshot = machine.screenshot(join(shots, "4-login-item.png"))
             ? "4-login-item.png"
             : null;
+          await (await hotkeyToggles(p, "login item hotkey"))();
           const off = app.akou("config", "set", "app.openAtLogin", "false");
           if (off.code !== 0) fail(`config set app.openAtLogin false failed: ${off.out}`);
           p.appLog = appLog();
@@ -678,10 +730,16 @@ async function main(): Promise<void> {
 
     // 4. The login item off: the next start removes it, and shows the window again.
     {
+      // Set off through `akou config set` in step 3; when step 3 could not run, in the file.
+      const cfgFile = join(configDir, "config.json");
+      const cfg = JSON.parse(readFileSync(cfgFile, "utf8"));
+      const offBy = cfg["app.openAtLogin"] === false ? "akou config set" : "config.json";
+      writeFileSync(cfgFile, `${JSON.stringify({ ...cfg, "app.openAtLogin": false }, null, 2)}\n`);
       app.start({ launcher, headless: false });
       const status = await app.answering(120_000);
       const p: Record<string, unknown> = { status: status?.app ?? null };
       phases.loginOff = p;
+      p.setOffBy = offBy;
       if (!status) fail(`last start: the API never answered; launcher output: ${app.tail()}`);
       else {
         p.windows = await waitFor(() => machine.windows(), 60_000);
