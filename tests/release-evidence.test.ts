@@ -31,6 +31,7 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "skills/akou-vocab/SKILL.md",
     ".claude-plugin/plugin.json",
     "docs/api/openapi.json",
+    "examples/compose/telegram-archive/.env.example",
     PROVIDERS,
     GATES,
   ]) {
