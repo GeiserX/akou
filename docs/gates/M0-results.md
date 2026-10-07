@@ -4,7 +4,7 @@ This page records what the M0 gates measured on real hardware, gate by gate: wha
 
 **The machine.** The reference Mac mini: Apple M4, 10 cores, 16 GB, macOS 26.6, with System Integrity Protection (SIP) turned off. It was running other work during every measurement (a virtual machine and compile jobs, load average 5 to 9 on 10 cores). So every speed figure here is a figure under background load.
 
-G2 is the exception: it ran on GitHub-hosted CI runners, inside the app bundles the release workflow built, on all three operating systems. Its section says which runners.
+G1 and G2 are the exceptions: they ran on GitHub-hosted CI runners, inside the app bundles the release workflow built (G1 on Windows and Linux, G2 on all three operating systems). Their sections say which runners.
 
 **The setup.** akou at commit `f6cabfc` (the G5 re-run at the later commit that fixed its runner), the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
 
@@ -14,6 +14,7 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 
 | Gate | Verdict | Key numbers |
 |---|---|---|
+| G1 | Partial | Re-run on 0.6.3 at `500ca8f` (2026-10-07), on GitHub's x64 runners, against the app the release job had just built. Linux x64 (Xvfb with Openbox, X11; Wayland not covered) and Windows x64 (installed with `akou-Setup.exe`) both pass every phase on that run: a window titled akou, a tray item, Control+Shift+F9 starting and stopping a call, the login item written with `AKOU_HEADLESS=1` and removed when turned off, and a headless start, both from the launcher and from the login item's own command, with the tray and the hotkey and no window. Every control came out the other way. A second run on the same code, at `d9f6864`, passed again on Windows but failed on Linux: after a call, `akou quit` never finished ([#351](https://github.com/GeiserX/akou/issues/351)). macOS arm64: not run, so not Pass. |
 | G2 | Pass | Ran inside the packaged bundle on macOS arm64, Windows x64 and Linux x64, on the v0.6.2 release's CI runners. The recognizer in a Worker transcribed the clip on all three, and the main thread's longest wait was 26.7 ms, 3.1 ms and 3.8 ms against the 100 ms limit. The same decode on the main thread, the positive control, blocked it for 11,997 ms, 4,085 ms and 2,585 ms. |
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
 | G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms on the call channel, which held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
@@ -44,6 +45,38 @@ Five things we learned the hard way, and they belong in [TRAPS.md](../TRAPS.md) 
 - **A missing microphone grant looks exactly like a quiet microphone.** Over SSH the mic stream opened, delivered buffers on time, sent `first_audio`, and every sample was zero. Nothing in the protocol says "denied". This is the mic-side twin of the `permission-suspect` rule in DESIGN 2.5, and akou has no mic-side rule yet.
 
 So on this box, a recording with both a real mic and a real tap needs one of two things. A person answers the system-audio prompt for Terminal at the console, or the Microphone grant exists for whatever runs over SSH. We changed neither, because both are security settings.
+
+## G1: the shell
+
+**What ran.** [`scripts/gates/g1-shell.ts`](../../scripts/gates/g1-shell.ts) in the release workflow's `app-desktop` job on GitHub's Windows and Linux x64 runners, on 2026-10-07, against the app that job had just built (0.6.3, the pull request's merge commit `500ca8f`, run [37621954844](https://github.com/GeiserX/akou/actions/runs/37621954844)), not a source run. A second run on the same code followed (merge commit `d9f6864`, run [37625259313](https://github.com/GeiserX/akou/actions/runs/37625259313)); the branch between the two changed only docs and a test comment. Unlike the gates below it did not run on the reference Mac mini. It gives the app a scratch `AKOU_HOME` and a fake capture helper, so a call records a generated signal and opens no audio device, and it reaches the app only through the `akou` command the bundle carries. Linux starts the built launcher, which unpacks the app into `~/.local/share` the way an installed one does, on an X display (Xvfb with Openbox) and a session bus where the runner owns the StatusNotifierWatcher. Windows runs the release's `akou-Setup.exe`, as a person installs it, then ends the app the installer starts when it finishes, so the controls see no akou and the gate's own start is the only one.
+
+The probes: on Linux, X11 windows by title and the StatusNotifierItem with ElectroBun's id and status Active; on Windows, `EnumWindows` for the window and `Shell_NotifyIcon` against ElectroBun's tray window for the notification-area icon, and the `Run` key for the login item. A screenshot of the screen for each start.
+
+**Result of run 37621954844: pass on both systems, every phase, no problem** ([g1-linux.json](g1-linux.json), [g1-windows.json](g1-windows.json), the run's artifacts `gate-g1-Linux` and `gate-g1-Windows` unchanged).
+
+| Phase | Window | Tray item | Hotkey | Login item |
+|---|---|---|---|---|
+| Control, before any start | none | none | | none |
+| Normal start | one, titled akou (shots: [Linux](g1-linux-shots/1-normal.png), [Windows](g1-windows-shots/1-normal.png)) | present (Linux `electrobun-tray-1`, Active) | no call with no key sent; first press started a call ([Linux](g1-linux-shots/2-recording.png), [Windows](g1-windows-shots/2-recording.png)), second stopped it | none with `app.openAtLogin` off |
+| Headless start, `AKOU_HEADLESS=1` | none after 10 s ([Linux](g1-linux-shots/3-headless.png), [Windows](g1-windows-shots/3-headless.png)) | present | start and stop | written: Linux `env AKOU_HEADLESS=1 "<launcher>"`, Windows `cmd /c "set AKOU_HEADLESS=1&& start "" "<launcher.exe>""` |
+| The login item's own command | none ([Linux](g1-linux-shots/4-login-item.png), [Windows](g1-windows-shots/4-login-item.png)) | present | start and stop | |
+| `app.openAtLogin` off, next start | one | | | removed |
+
+`akou status` read `headless: true` in both headless phases and `false` in the other two, and the registered hotkey was Control+Shift+F9. Setting `app.openAtLogin` through `akou config set` writes the login item at the next start, not at once (DK-L2 in [DESKTOP.md](../ux/DESKTOP.md)); the gate records that and does not judge it.
+
+**The login item started Bun's help, not akou.** The first runs found it: the login item named `process.execPath`, which in the packaged app is the bundled Bun (`bin/bun`, `bin\bun.exe`, `Contents/MacOS/bun`), and Bun started alone prints its help. The login item now names the launcher beside it (`loginProgram` in [`login-item.ts`](../../src/main/window/login-item.ts)), on all three systems. The login-command row above is the proof on Linux and Windows.
+
+**The first Windows run stopped after install.** The installer starts the installed app when it finishes, with the user's real home. That app held the installer's output open for the whole 300 s wait, the controls saw its window and tray icon, and the gate's own start in the scratch home exited at once with code 0. The runner now writes the installer's output to a file and ends that app (`akou quit`, then the process tree if it is still there) before the controls; on the 0.6.3 run `akou quit` alone ended it.
+
+**The second run failed on Linux, in the normal start's quit.** Run 37625259313 gave Windows a pass on every phase again, and Linux `"verdict": "fail"` with one problem: `normal start: the app did not quit within 30 s`. The call had stopped on the second hotkey press. The app logged `quitting` at 13:08:19.386 and `call ... ended` 51 ms later, then never its own `akou 0.6.3 quit` line, and `runtime.json` stayed. The gate ended the launcher 10 s later and the next phases ran and passed. `quitting` before `ended` is the normal order: every quit after a call in both runs logs it that way, and the good ones log `quit` right after `ended` (6 ms after it in run 37621954844's normal start). So the app hangs somewhere in its quit after the call ends, and none of those steps logs, so where is not known yet. That is an app bug on Linux the gate found, tracked in [#351](https://github.com/GeiserX/akou/issues/351). The committed Linux file is the passing run's; the failing run's file is in its `gate-g1-Linux` artifact.
+
+**Verdict: partial.** Windows x64 passes on both runs. Linux x64 on X11 passed every phase on one run and hung in quit after a call on the other. macOS arm64, which [ROADMAP](../ROADMAP.md) also lists under G1, was not run.
+
+**Still open.**
+
+- Linux: `akou quit` hanging after a call ([#351](https://github.com/GeiserX/akou/issues/351)); after the fix, the gate passing on several runs in a row.
+- macOS arm64: the same phases on a Mac, which the runner does not support yet (window, tray and login item probes exist for Linux and Windows only).
+- Linux on Wayland, and a desktop whose tray is not a StatusNotifierWatcher.
 
 ## G2: recognition in the packaged app
 

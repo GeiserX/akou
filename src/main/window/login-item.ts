@@ -135,3 +135,21 @@ export async function setLoginItem(enabled: boolean, o: LoginItemOptions): Promi
   if (r.code !== 0 && enabled) throw new Error(`reg add failed (${r.code})`);
   return enabled ? "on" : "off";
 }
+
+/**
+ * The program a login item starts: the app's launcher beside the Bun its main process runs on.
+ * `process.execPath` is that bundled Bun (`bin/bun`, `bin\\bun.exe`, `Contents/MacOS/bun`), and
+ * Bun started alone prints its help and starts no akou. With no launcher beside it (a checkout
+ * run by a Bun on PATH) the program stays what runs.
+ */
+export function loginProgram(
+  execPath: string,
+  exists: (path: string) => boolean = existsSync,
+): string {
+  // Either separator: the Windows path is read the same on every OS, as its tests do.
+  const cut = Math.max(execPath.lastIndexOf("/"), execPath.lastIndexOf("\\")) + 1;
+  const m = /^bun(\.exe)?$/i.exec(execPath.slice(cut));
+  if (!m) return execPath;
+  const launcher = `${execPath.slice(0, cut)}launcher${m[1] ?? ""}`;
+  return exists(launcher) ? launcher : execPath;
+}

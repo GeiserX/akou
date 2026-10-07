@@ -27,6 +27,7 @@ import {
   LOGIN_LABEL,
   launchAgentPlist,
   loginItemPath,
+  loginProgram,
   setLoginItem,
 } from "../src/main/window/login-item.ts";
 import { type WindowSend, windowRpc } from "../src/main/window/rpc.ts";
@@ -629,6 +630,24 @@ describe("the login item", () => {
     await setLoginItem(false, o);
     expect(await isLoginItem(o)).toBe(false);
     t.cleanup();
+  });
+
+  // G1 found it: the main process runs on the bundled Bun, so `process.execPath` is that Bun, and
+  // a login item that starts it alone prints Bun's help and no akou.
+  test("the program is the launcher beside the bundled Bun, never the Bun alone", () => {
+    const has = (paths: string[]) => (p: string) => paths.includes(p);
+    const linux = "/home/a/.local/share/io.github.geiserx.akou/stable/app/bin";
+    expect(loginProgram(`${linux}/bun`, has([`${linux}/launcher`]))).toBe(`${linux}/launcher`);
+    const win = "C:\\Users\\a\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin";
+    expect(loginProgram(`${win}\\bun.exe`, has([`${win}\\launcher.exe`]))).toBe(
+      `${win}\\launcher.exe`,
+    );
+    const mac = "/Applications/akou.app/Contents/MacOS";
+    expect(loginProgram(`${mac}/bun`, has([`${mac}/launcher`]))).toBe(`${mac}/launcher`);
+    // No launcher beside it (a checkout run by a Bun on PATH): the program stays what runs.
+    expect(loginProgram("/usr/local/bin/bun", has([]))).toBe("/usr/local/bin/bun");
+    // Already a launcher, or any other program: unchanged.
+    expect(loginProgram(`${linux}/launcher`, has([`${linux}/launcher`]))).toBe(`${linux}/launcher`);
   });
 
   test("Windows: the current user's Run key, added and deleted through reg.exe", async () => {
