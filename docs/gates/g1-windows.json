@@ -1,0 +1,42 @@
+{
+  "gate": "G1",
+  "platform": "win32-x64",
+  "display": "Windows desktop session",
+  "hotkey": "Control+Shift+F9",
+  "phases": {
+    "install": {
+      "launcher": "C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\launcher.exe",
+      "detail": "akou-0.6.2-windows-x64-setup.zip: akou-Setup.exe exit 0 (spawnSync C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-lJ4R4k\\setup\\akou-Setup.exe ETIMEDOUT); ortcuts and integration...\nCreated Windows shortcut: C:\\Users\\runneradmin\\Desktop\\akou.lnk\nCreated Windows shortcut: C:\\Users\\runneradmin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\akou.lnk\nRegistered Windows uninstaller: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\io.github.geiserx.akou.stable\n Done!\nInstallation completed successfully!\nInstallation completed successfully."
+    },
+    "before": {
+      "windows": [
+        {
+          "pid": 9512,
+          "title": "akou"
+        }
+      ],
+      "tray": [
+        {
+          "pid": 9512,
+          "props": {
+            "iconIds": "1"
+          }
+        }
+      ],
+      "loginItem": {
+        "present": false,
+        "command": null
+      }
+    },
+    "normal": {
+      "status": null
+    }
+  },
+  "verdict": "fail",
+  "problems": [
+    "control: an akou window exists before the first start",
+    "control: a tray item exists before the first start",
+    "normal start: the API never answered; launcher output: Launcher starting on windows...\nCurrent directory: C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\nSpawning: C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\bun.exe C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\..\\Resources\\main.js\nChild process spawned with PID 1164\nChild process exited with code: 0\n",
+    "the run stopped: the app did not start"
+  ]
+}
