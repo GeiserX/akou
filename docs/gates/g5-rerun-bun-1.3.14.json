@@ -261,9 +261,7 @@
           "mic": "BlackHole 2ch",
           "call": {
             "mode": "system",
-            "exclude": [
-              "pid 62571"
-            ]
+            "exclude": ["pid 62571"]
           },
           "capture": "akou-capture 0.6.2"
         },
@@ -286,9 +284,7 @@
           "mic": "BlackHole 2ch",
           "call": {
             "mode": "system",
-            "exclude": [
-              "pid 63318"
-            ]
+            "exclude": ["pid 63318"]
           },
           "capture": "akou-capture 0.6.2"
         },
