@@ -136,11 +136,14 @@ jobs:
           # the e2e tests spawn included; the clock keeps ticking from a year ahead.
           - run: a year ahead
             shift: true
+            floor: clock-shift
           # UTC+14, the first to reach a new day, and UTC-2:30, a half-hour offset with DST.
           - run: Pacific/Kiritimati
             zone: Pacific/Kiritimati
+            floor: check
           - run: America/St_Johns
             zone: America/St_Johns
+            floor: check
     name: clock-shift (${{ matrix.run }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -164,10 +167,10 @@ jobs:
           if [ -n "$ZONE" ]; then export TZ="$ZONE"; fi
           bun -e 'console.log(`the clock reads ${new Date().toString()}`)'
           bun test --reporter=junit --reporter-outfile=.junit-check.xml
-      # The same suite as check's Linux leg, so check's floor moved by the tests that compare a
-      # file's mtime with `Date.now()` and skip a year ahead (CLOCK_SHIFTED); tests/ci-gates.test.ts
-      # holds the two floors together on every pull request.
-      - run: bun scripts/ci/test-floor.ts clock-shift .junit-check.xml
+      # The same suite as check's Linux leg, so the zone runs take check's floor. The year-ahead run
+      # takes clock-shift's: check's moved by the tests that compare a file's mtime with `Date.now()`
+      # and skip a year ahead (CLOCK_SHIFTED); tests/ci-gates.test.ts holds the two together.
+      - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-check.xml
 
   dictation-timing:
     runs-on: ubuntu-latest

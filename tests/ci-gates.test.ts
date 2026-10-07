@@ -149,10 +149,11 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
-  test("the nightly clock-shift floor is check's Linux floor, plus the tests a shifted clock skips", () => {
-    // clock-shift runs check's suite on the same runner, ffmpeg included; a year ahead it also skips
-    // each test marked to skip when CLOCK_SHIFTED. Its floor drifted four skips behind check's while
-    // nothing on a pull request read it, and the nightly was red for it every night.
+  test("the nightly year-ahead floor is check's Linux floor, plus the tests a shifted clock skips", () => {
+    // clock-shift runs check's suite on the same runner, ffmpeg included, and its zone runs take
+    // check's floor; a year ahead it also skips each test marked to skip when CLOCK_SHIFTED. Its
+    // own floor drifted four skips behind check's while nothing on a pull request read it, and the
+    // nightly was red for it every night.
     const floors = JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8")) as Record<
       string,
       { minPass: number; maxSkip: number }
