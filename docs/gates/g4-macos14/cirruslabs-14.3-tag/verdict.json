@@ -1,0 +1,9 @@
+{
+  "gate": "G4, macOS 14.3",
+  "image": "ghcr.io/cirruslabs/macos-sonoma-vanilla@sha256:57db14ca8a50c992d9213f9c2ce6cca5de63e31f958227383bca17fe7f668b7e",
+  "macos": "14.4",
+  "tone_call_rms_dbfs": "",
+  "silent_call_rms_dbfs": "",
+  "verdict": "fail",
+  "reason": "the VM runs macOS 14.4, not 14.3"
+}
