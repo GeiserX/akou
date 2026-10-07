@@ -513,17 +513,76 @@ function installWindows(work: string): { launcher: string; detail: string } {
   const dir = join(work, "setup");
   mkdirSync(dir);
   const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-  spawnSync(tar, ["-x", "-f", join(RELEASE_DIR, name), "-C", dir]);
+  const untar = spawnSync(tar, ["-x", "-f", join(RELEASE_DIR, name), "-C", dir], {
+    encoding: "utf8",
+  });
+  // A stale install from an earlier run would otherwise pass for this one.
+  if (untar.status !== 0)
+    return {
+      launcher: "",
+      detail: `${name} does not unpack: ${(untar.stderr || untar.error?.message || "").trim()}`,
+    };
+  // The installer starts the installed app when it is done, and that app inherits the
+  // installer's output. Into a file, not a pipe: a pipe stays open while the app runs, and the
+  // wait would last until the timeout.
+  const logFile = join(work, "setup.log");
+  const log = openSync(logFile, "w");
   const r = spawnSync(join(dir, "akou-Setup.exe"), [], {
     cwd: dir,
     env: { ...process.env, ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1" },
-    encoding: "utf8",
+    stdio: ["ignore", log, log],
     timeout: 300_000,
   });
+  closeSync(log);
+  let out = "";
+  try {
+    out = readFileSync(logFile, "utf8");
+  } catch {}
   const root = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), BUNDLE_ID);
   return {
     launcher: join(root, "stable", "app", "bin", "launcher.exe"),
-    detail: `${name}: akou-Setup.exe exit ${r.status}${r.error ? ` (${r.error.message})` : ""}; ${(r.stdout + r.stderr).trim().slice(-400)}`,
+    detail: `${name}: akou-Setup.exe exit ${r.status}${r.error ? ` (${r.error.message})` : ""}; ${out.trim().slice(-400)}`,
+  };
+}
+
+/**
+ * Windows: ends the app the installer started when it finished. It runs with the user's own
+ * home, outside the gate's scratch one, and while it runs a second start exits at once. First
+ * `akou quit` against that home, then, for what still shows, the process tree ended.
+ */
+async function endInstallerStart(
+  machine: Machine,
+  cliPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Record<string, unknown>> {
+  const realEnv = { ...env };
+  delete realEnv.AKOU_HOME;
+  delete realEnv.AKOU_MODELS_DIR;
+  const pids = () =>
+    new Set([
+      ...machine.windows().map((w) => w.pid),
+      ...machine.tray(0).items.flatMap((t) => (t.pid === null ? [] : [t.pid])),
+    ]);
+  const found = [...pids()];
+  if (found.length === 0) return { found };
+  const quit = spawnSync(cliPath, ["quit", "--json"], {
+    env: realEnv,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  const quitGone = await waitFor(() => pids().size === 0, 30_000, 1000);
+  const killed: number[] = [];
+  if (!quitGone)
+    for (const pid of pids()) {
+      spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)]);
+      killed.push(pid);
+    }
+  const gone = quitGone || (await waitFor(() => pids().size === 0, 15_000, 1000));
+  return {
+    found,
+    quit: `exit ${quit.status}: ${((quit.stdout ?? "") + (quit.stderr ?? "")).trim().slice(-300)}`,
+    killed,
+    gone,
   };
 }
 
@@ -607,6 +666,11 @@ async function main(): Promise<void> {
   try {
     const setUp = await machine.setUp();
     if (setUp) throw new Error(setUp);
+    if (installed) {
+      const ended = await endInstallerStart(machine, cliPath, env);
+      phases.install = { ...installed, installerStart: ended };
+      if (ended.gone === false) throw new Error("the app the installer started does not end");
+    }
 
     // Controls before any start: nothing of akou's exists, and no call is live.
     const before = {
@@ -617,7 +681,9 @@ async function main(): Promise<void> {
     phases.before = before;
     if (before.windows.length > 0) fail("control: an akou window exists before the first start");
     if (before.tray.length > 0) fail("control: a tray item exists before the first start");
-    if (before.loginItem.present) fail("control: a login item exists before the first start");
+    // The login item lives in the user's real home: a run that went on would remove it.
+    if (before.loginItem.present)
+      throw new Error("control: a login item exists before the first start; remove it first");
 
     // 1. Normal start: window, tray, hotkey; the login item off.
     {

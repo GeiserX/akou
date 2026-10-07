@@ -41,6 +41,8 @@ on:
       - scripts/gates/g2-probe.ts
       - scripts/gates/g1-shell.ts
       - scripts/gates/g1-sni-watcher.py
+      - src/main/window/login-item.ts
+      - src/main/window/main.ts
       - scripts/clip.ts
       - scripts/check-feed.ts
       - scripts/locate-helper-probe.ts
