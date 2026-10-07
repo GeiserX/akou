@@ -17,6 +17,7 @@ import { startReceiver, tamperedRefused } from "../scripts/server-roundtrip.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
+import { overflowRoute } from "../src/main/server/jobs.ts";
 import { checkRemotes, parseRemote, RemoteError, Remotes } from "../src/main/server/remotes.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -428,6 +429,94 @@ describe("[SV-X6] a job the primary can run stays here, unless its remote entry 
     } finally {
       await worker.close();
     }
+  });
+});
+
+describe("[SV-X8] server.remotes_overflow: a named job runs here while every remote is busy", () => {
+  // A remote that offers `fast`, takes jobs and never finishes them, so it stays busy with the two
+  // a remote holds at once (REMOTE_IN_FLIGHT).
+  const FAKE_KEY = "ak_busyworkerkey0123456789";
+  let posts = 0;
+  let fake: ReturnType<typeof Bun.serve>;
+
+  beforeAll(() => {
+    fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (req) => {
+        const u = new URL(req.url);
+        if (u.pathname === "/v1/server") {
+          return Response.json({
+            name: "akou",
+            version: "9.9.9",
+            mode: "server",
+            presets: [{ name: "fast", available: true }],
+            engines: [{ id: RECOGNIZER, installed: true }],
+            capabilities: { jobs: true, events: true, webhooks: true },
+          });
+        }
+        if (req.headers.get("authorization") !== `Bearer ${FAKE_KEY}`)
+          return Response.json({ error: "unauthorized", message: "no" }, { status: 401 });
+        if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+        if (u.pathname === "/v1/jobs" && req.method === "POST") {
+          await req.formData();
+          posts++;
+          return Response.json({ id: `job_HELD${posts}`, status: "queued" }, { status: 202 });
+        }
+        if (u.pathname.startsWith("/v1/jobs/job_HELD")) {
+          if (req.method === "DELETE") return Response.json({ ok: true });
+          await Bun.sleep(200);
+          return Response.json({ id: u.pathname.split("/").pop(), status: "running" });
+        }
+        return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+      },
+    });
+  });
+  afterAll(() => fake.stop(true));
+
+  test("overflowRoute: here only with overflow on, and never for a job only a remote can run", () => {
+    expect(overflowRoute(null, true)).toEqual({ where: "local" });
+    expect(overflowRoute(null, false)).toEqual({ where: "wait" });
+    expect(overflowRoute("remote", true)).toEqual({ where: "wait" });
+    expect(overflowRoute("remote", false)).toEqual({ where: "wait" });
+  });
+
+  const third = async (overflow: boolean): Promise<string> => {
+    posts = 0;
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({
+      home: pdir,
+      installed: true,
+      keyName: "archive",
+      settings: {
+        "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)} fast`],
+        "server.remotes_overflow": overflow,
+      },
+    });
+    try {
+      await remoteState(primary, "up");
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const r = await submit(primary, { preset: "fast" });
+        expect(r.status).toBe(202);
+        ids.push(r.body.id as string);
+      }
+      await until(async () => posts === 2, 10_000, "the busy remote to hold two jobs");
+      const last = (await get(primary, `/v1/jobs/${ids[2]}?wait=5`)).body.status as string;
+      // The remote never takes more than two, whatever the setting.
+      expect(posts).toBe(2);
+      return last;
+    } finally {
+      await primary.close();
+    }
+  };
+
+  test("off (the default): the third job waits for the busy remote", async () => {
+    expect(await third(false)).toBe("queued");
+  });
+
+  test("on: the third job runs here and is done while the remote still holds two", async () => {
+    expect(await third(true)).toBe("done");
   });
 });
 

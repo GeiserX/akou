@@ -205,6 +205,8 @@ On the sending server, save the printed `ak_` key in a file only the server's us
 
 Restart the server. `GET /v1/server` then lists the remote under `remotes` with its state (`up`, `down` or `refused`) and the presets it offers, and a preset a remote offers shows as available. A job for a preset this server cannot run goes to a remote that offers it; one for a preset the entry names goes there first and runs here while the remote is down; everything else runs here. A remote that goes down leaves its jobs queued, never failed, until it or another remote that offers them is back.
 
+A remote holds two of this server's jobs at a time: the one it runs and the next. When every remote an entry names is busy, a job for that preset waits for one by default, which is right when this server is too slow to run it. When this server is a good worker itself, set `{ "server.remotes_overflow": true }`: the job then runs here instead, so this server and all its remotes work through a backlog at once. A job this server cannot run still waits for a remote.
+
 ## The command line against a server
 
 The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key comes from `AKOU_API_KEY`, or from a file named by `AKOU_API_KEY_FILE`, never from a flag:

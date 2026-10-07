@@ -349,6 +349,11 @@ export const SETTINGS = {
     check: (v) => checkRemotes(v as readonly string[]),
     doc: "Other akou servers this one sends jobs to, one entry each: `<url> <key file> [names]`, the key file holding a `jobs` key of that server. A job goes to a remote when this server cannot run it, or first when `names` (presets or model ids, comma-separated, `*` for all) lists it; the client still sees only this server.",
   },
+  "server.remotes_overflow": {
+    type: "boolean",
+    default: false,
+    doc: "What a job a `server.remotes` entry names does when every remote that offers it is busy. Off (the default): it waits for one, so a primary too slow for that preset never runs it. On: it runs here, so a primary that is a good worker itself and its remotes all take a backlog at once. A job this server cannot run waits for a remote either way.",
+  },
   "server.admin_password_hash": {
     type: "string",
     max: 512,

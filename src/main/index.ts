@@ -3840,6 +3840,7 @@ export class AkouApp implements ApiApp {
         retainDays: () => s()["server.retain_days"],
         maxAudioMinutes: () => s()["server.max_audio_minutes"],
         remotes: () => (server ? s()["server.remotes"] : []),
+        remotesOverflow: () => (server ? s()["server.remotes_overflow"] : false),
         env: this.o.env ?? process.env,
         concurrency: () => s()["server.concurrency"],
         modelIdleMinutes: () => s()["server.model_idle_minutes"],

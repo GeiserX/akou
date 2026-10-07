@@ -182,6 +182,8 @@ export interface JobServiceOptions {
   maxAudioMinutes(): number;
   /** `server.remotes` as the settings hold it now (section 14). */
   remotes?(): readonly string[];
+  /** `server.remotes_overflow`: a job a remote entry names runs here while every such remote is busy. */
+  remotesOverflow?(): boolean;
   /** Where a remote key file's `~/` points. */
   env?: Record<string, string | undefined>;
   /** Test seams: how often the remotes are probed, and their network. */
@@ -367,7 +369,15 @@ function failedData(job: Job, error: JobError): Record<string, unknown> {
 type Waiter = (j: { id: string; status: JobStatus }) => void;
 
 /** Where a queued job runs now: here, on a remote, or nowhere yet. */
-type Route = { where: "local" } | { where: "wait" } | { where: "remote"; url: string };
+export type Route = { where: "local" } | { where: "wait" } | { where: "remote"; url: string };
+
+/**
+ * Where a job goes when every remote that would take it is busy: here when overflow is on and this
+ * server can run it, else it waits. A job only a remote can run (`route` `remote`) always waits.
+ */
+export function overflowRoute(route: Job["route"], overflow: boolean): Route {
+  return overflow && route !== "remote" ? { where: "local" } : { where: "wait" };
+}
 
 /** A job only a remote can run: the names sent to it (section 14). */
 export interface RemoteChoice {
@@ -1334,7 +1344,8 @@ export class JobService {
   /**
    * Where a queued job runs now. A job only a remote can run waits for one that is up and offers
    * it; a job a remote entry names goes there first while it is up and offers it, and runs here
-   * otherwise; every other job runs here.
+   * otherwise; every other job runs here. With `server.remotes_overflow` on, a job a remote entry
+   * names also runs here while every remote that would take it is busy, instead of waiting.
    */
   private routeOf(j: Job): Route {
     if (j.route === "local" || !this.remotes.configured()) return { where: "local" };
@@ -1342,7 +1353,7 @@ export class JobService {
     // Back to the remote that already has it, so a returning remote's copy is followed, not redone.
     if (j.remote && this.remotes.up(j.remote, names)) return { where: "remote", url: j.remote };
     const url = this.remotes.pick(names, j.route !== "remote");
-    if (url === "busy") return { where: "wait" };
+    if (url === "busy") return overflowRoute(j.route, this.o.remotesOverflow?.() ?? false);
     if (url !== null) return { where: "remote", url };
     return j.route === "remote" ? { where: "wait" } : { where: "local" };
   }
