@@ -55,12 +55,13 @@ changes ─┬─ lint ───────────────────
 Scheduled once a day on `main`, plus dispatch. Today `nightly.yml` holds `models-nightly` and the accelerated `soak` (TS-24); the WebKit window leg (TS-14) runs in `ci.yml`'s `ui` job under `ci-ok`. `models-nightly` scores the default recognizer, and Qwen3-ASR on macOS and Linux (ASR-5); the five-engine floor, language id, streaming and the vocabulary evaluation are still missing, and wait on their engines and set.
 
 - `models-nightly` on three OSes: every engine in the registry with the five-engine floor, the evaluation sets, WER, diarization error, language id, streaming numbers, latency percentiles, the replay recall floor, the vocabulary evaluation with its positive control ([TESTING §4.5](TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization)). Speed budgets gate the default engines only.
-- `clock-shift`: the unit and e2e suites a year in the future and in two unusual time zones.
+- `clock-shift`: the unit and e2e suites a year in the future and in two unusual time zones. The zone runs are held to check's Linux floor; the year-ahead run to that floor moved by the tests a shifted clock skips.
 - `soak`: the fake helper at 10x speed for one runner hour.
+- `report`: nothing in the nightly is a required check, so a red night on `main` opens one standing issue, `nightly is red`, or comments on it with the night's red jobs, and the next green night closes it. A dispatch of a few stages, or on a branch, files nothing.
 - `macos-floor`: unit and helper-load legs on `macos-14` (CI-9).
 - `audit`: `bun audit` and `cargo audit`.
 
-A red night shows in the job summary, and GitHub emails the person who last changed the schedule when a scheduled run fails. That is enough at our size; no bot opens issues. GitHub turns off scheduled workflows after 60 days without repository activity, so the release checklist confirms the schedule is still on.
+A red night shows in the job summary and in the `nightly is red` issue the `report` job keeps. GitHub turns off scheduled workflows after 60 days without repository activity, so the release checklist confirms the schedule is still on.
 
 ### 2.3 Release: `release.yml`
 
@@ -132,7 +133,7 @@ These are specified in [TESTING.md](TESTING.md); this is where each runs.
 - A self-hosted runner for this repository. Pull-request code from anyone would run on our hardware, and GitHub-hosted runners cost nothing here.
 - Automatic retries or a quarantine list ([TESTING §5](TESTING.md#5-flake-policy)).
 - A second CI system, a release bot, or a changelog generator. The version-bump PR and the tag are enough at our size.
-- A bot that opens issues for red nights, and a nightly job on `-latest` images. Pinned labels plus the scheduled-run email cover both until an image rotation actually bites.
+- A nightly job on `-latest` images. Pinned labels cover it until an image rotation actually bites.
 - A cosign key next to the attestations (CI-21).
 - A `CODEOWNERS` file. With one maintainer it routes every review to the same person.
 - Gating on a pixel diff before the DOM assertions miss something real.

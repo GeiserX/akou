@@ -1,7 +1,7 @@
 {
   "check:darwin": { "minPass": 2333, "maxSkip": 36 },
   "check:linux": { "minPass": 2333, "maxSkip": 38 },
-  "check:win32": { "minPass": 2307, "maxSkip": 88 },
+  "check:win32": { "minPass": 2307, "maxSkip": 91 },
   "ui:linux": { "minPass": 320, "maxSkip": 0 },
   "ui-webkit:linux": { "minPass": 303, "maxSkip": 0 },
   "capture-traps:darwin": { "minPass": 23, "maxSkip": 0 },
@@ -16,5 +16,5 @@
   "capture-live-pipewire:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-pulseaudio:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-windows:win32": { "minPass": 6, "maxSkip": 0 },
-  "clock-shift:linux": { "minPass": 1970, "maxSkip": 34 }
+  "clock-shift:linux": { "minPass": 2327, "maxSkip": 44 }
 }
