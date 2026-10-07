@@ -350,6 +350,13 @@ export const QWEN_GATE = {
   longSeconds: 300,
   /** The WER the long unit stays under, and the uncut control must pass. */
   longWer: 15,
+  /**
+   * One FLEURS clip's request limit. The app's 120 s is a wait a person sits through; here it only
+   * cut off a slow runner. On GitHub's macOS runner (3 cores, 7 GB, a paravirtual GPU) a clip of
+   * 13 to 27 s took up to 94 s in a passing night, and on three nights one request crossed 120 s
+   * twice in a row, which ended the whole night with no summary.
+   */
+  requestMs: 600_000,
 } as const;
 
 /**
@@ -486,12 +493,23 @@ async function qwenServers(
   };
 }
 
+/** A restart or a request given up, with the time, so a red night says which request and why. */
+const qwenLog = (level: string, msg: string) => {
+  if (level !== "info") console.error(`${new Date().toISOString()} ${msg}`);
+};
+
 /** Decodes each clip on `server`, one request each, and reads its memory after every request. */
 async function qwenRun(
   server: LlamaServer,
   clips: readonly { samples: Float32Array; lang: string }[],
 ): Promise<{ texts: string[]; ms: number[]; mem: number[] }> {
-  const engine = new QwenEngine({ id: QWEN_ASR, server, allowed: ["en", "es"] });
+  const engine = new QwenEngine({
+    id: QWEN_ASR,
+    server,
+    allowed: ["en", "es"],
+    timeoutMs: QWEN_GATE.requestMs,
+    log: qwenLog,
+  });
   const out = { texts: [] as string[], ms: [] as number[], mem: [] as number[] };
   try {
     for (const c of clips) {
@@ -613,6 +631,7 @@ async function qwenStage(
       allowed: ["en", "es"],
       timeoutMs: 1_800_000,
       ...(uncut ? { maxSeconds: Number.POSITIVE_INFINITY } : {}),
+      log: qwenLog,
     });
     try {
       const h = await engine.decode({ samples: long.samples, lang: "en", glossary: [] });
@@ -1054,6 +1073,65 @@ export function platformKey(): string {
   return `${process.platform}-${process.arch}`;
 }
 
+/** The default recognizer on FLEURS en and es: WER, latency percentiles and the real-time factor. */
+async function fleursStage(
+  models: SherpaModels,
+  dataDir: string,
+  platform: string,
+  measures: Measure[],
+  notes: string[],
+): Promise<void> {
+  const prepared = models.prepare({ model: RECOGNIZER, entries: [], dropped: [], warnings: [] });
+  for (const lang of ["en", "es"] as const) {
+    const utts = await fleurs(lang, dataDir);
+    const pairs: { ref: string; hyp: string }[] = [];
+    const ms: number[] = [];
+    let audio = 0;
+    let busy = 0;
+    for (const u of utts) {
+      const x = readWav(new Uint8Array(readFileSync(u.wav)));
+      const t0 = performance.now();
+      const { text } = prepared.recognizer.decode(x, prepared.arg);
+      const t = performance.now() - t0;
+      ms.push(t);
+      busy += t / 1000;
+      audio += x.length / ASR_RATE;
+      pairs.push({ ref: u.ref, hyp: text });
+    }
+    const engine = RECOGNIZER;
+    measures.push(
+      {
+        key: `wer.fleurs_${lang}.${engine}`,
+        value: wer(pairs),
+        unit: "%",
+        better: "lower",
+        gate: "baseline",
+      },
+      ...([50, 90, 99] as const).map(
+        (p): Measure => ({
+          key: `latency.fleurs_${lang}.${engine}.p${p}`,
+          value: percentile(ms, p),
+          unit: "ms",
+          better: "lower",
+          gate: "record",
+        }),
+      ),
+      {
+        key: `rtf.fleurs_${lang}.${engine}`,
+        value: busy / audio,
+        unit: "",
+        better: "lower",
+        gate: "record",
+        // The budget gates the default engine on the 4-core x64 Linux runner only.
+        ...(platform === "linux-x64" ? { bound: RTF_BUDGET_LINUX_X64 } : {}),
+      },
+    );
+    notes.push(
+      `FLEURS ${FLEURS.sets[lang].config}: ${utts.length} utterances, ${(audio / 60).toFixed(1)} min`,
+    );
+  }
+}
+
 async function main(argv: string[]): Promise<number> {
   const flag = (n: string) => {
     const i = argv.indexOf(n);
@@ -1079,55 +1157,14 @@ async function main(argv: string[]): Promise<number> {
     // The download guard is off only here: `env` replaces the process environment, which has CI set.
     await downloadModels(modelsDir, [RECOGNIZER], { env: {} });
     const models = new SherpaModels({ dir: modelsDir, cacheDir: join(dataDir, "sherpa-cache") });
-    const prepared = models.prepare({ model: RECOGNIZER, entries: [], dropped: [], warnings: [] });
-    for (const lang of ["en", "es"] as const) {
-      const utts = await fleurs(lang, dataDir);
-      const pairs: { ref: string; hyp: string }[] = [];
-      const ms: number[] = [];
-      let audio = 0;
-      let busy = 0;
-      for (const u of utts) {
-        const x = readWav(new Uint8Array(readFileSync(u.wav)));
-        const t0 = performance.now();
-        const { text } = prepared.recognizer.decode(x, prepared.arg);
-        const t = performance.now() - t0;
-        ms.push(t);
-        busy += t / 1000;
-        audio += x.length / ASR_RATE;
-        pairs.push({ ref: u.ref, hyp: text });
-      }
-      const engine = RECOGNIZER;
-      measures.push(
-        {
-          key: `wer.fleurs_${lang}.${engine}`,
-          value: wer(pairs),
-          unit: "%",
-          better: "lower",
-          gate: "baseline",
-        },
-        ...([50, 90, 99] as const).map(
-          (p): Measure => ({
-            key: `latency.fleurs_${lang}.${engine}.p${p}`,
-            value: percentile(ms, p),
-            unit: "ms",
-            better: "lower",
-            gate: "record",
-          }),
-        ),
-        {
-          key: `rtf.fleurs_${lang}.${engine}`,
-          value: busy / audio,
-          unit: "",
-          better: "lower",
-          gate: "record",
-          // The budget gates the default engine on the 4-core x64 Linux runner only.
-          ...(platform === "linux-x64" ? { bound: RTF_BUDGET_LINUX_X64 } : {}),
-        },
-      );
-      notes.push(
-        `FLEURS ${FLEURS.sets[lang].config}: ${utts.length} utterances, ${(audio / 60).toFixed(1)} min`,
-      );
-    }
+    await fleursStage(models, dataDir, platform, measures, notes);
+    // The fp32 recognizer is about 2.5 GB. Kept, it sat in swap through the Qwen stage on the 7 GB
+    // macOS runner, which then had a few hundred MB of swap left under the default-cache control.
+    const before = memoryMb(process.pid);
+    await models.release();
+    notes.push(
+      `${RECOGNIZER} let go before the next stage: this process at ${Math.round(before)} MB, then ${Math.round(memoryMb(process.pid))} MB`,
+    );
     notes.push(FLEURS.licence);
   }
 
