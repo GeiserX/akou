@@ -6,37 +6,213 @@
   "phases": {
     "install": {
       "launcher": "C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\launcher.exe",
-      "detail": "akou-0.6.2-windows-x64-setup.zip: akou-Setup.exe exit 0 (spawnSync C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-lJ4R4k\\setup\\akou-Setup.exe ETIMEDOUT); ortcuts and integration...\nCreated Windows shortcut: C:\\Users\\runneradmin\\Desktop\\akou.lnk\nCreated Windows shortcut: C:\\Users\\runneradmin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\akou.lnk\nRegistered Windows uninstaller: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\io.github.geiserx.akou.stable\n Done!\nInstallation completed successfully!\nInstallation completed successfully."
+      "detail": "akou-0.6.3-windows-x64-setup.zip: akou-Setup.exe exit 0; ortcuts and integration...\nCreated Windows shortcut: C:\\Users\\runneradmin\\Desktop\\akou.lnk\nCreated Windows shortcut: C:\\Users\\runneradmin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\akou.lnk\nRegistered Windows uninstaller: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\io.github.geiserx.akou.stable\n Done!\nInstallation completed successfully!\nInstallation completed successfully.",
+      "installerStart": {
+        "found": [3792],
+        "quit": "exit 0: {\"ok\":true,\"running\":false}",
+        "killed": [],
+        "gone": true
+      }
     },
     "before": {
-      "windows": [
-        {
-          "pid": 9512,
-          "title": "akou"
-        }
-      ],
-      "tray": [
-        {
-          "pid": 9512,
-          "props": {
-            "iconIds": "1"
-          }
-        }
-      ],
+      "windows": [],
+      "tray": [],
       "loginItem": {
         "present": false,
         "command": null
       }
     },
     "normal": {
-      "status": null
+      "status": {
+        "version": "0.6.3",
+        "platform": "win32",
+        "pid": 1264,
+        "port": 8476,
+        "headless": false,
+        "hotkey": "Control+Shift+F9",
+        "window": "open",
+        "page": null,
+        "startedAt": 1791377768064,
+        "uptimeMs": 1006,
+        "quitting": false,
+        "configDir": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\.config\\akou",
+        "recordingsRoot": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\Recordings\\akou"
+      },
+      "windows": [
+        {
+          "pid": 1264,
+          "title": "akou"
+        }
+      ],
+      "tray": [
+        {
+          "pid": 1264,
+          "props": {
+            "iconIds": "1"
+          }
+        }
+      ],
+      "hotkeyRegistered": "Control+Shift+F9",
+      "screenshot": "1-normal.png",
+      "liveWithNoKeySent": false,
+      "liveAfterFirstPress": true,
+      "screenshotRecording": "2-recording.png",
+      "liveAfterSecondPress": false,
+      "loginItem": {
+        "present": false,
+        "command": null
+      },
+      "loginItemRightAfterConfigSet": false,
+      "appLog": [
+        "2026-10-07 12:56:08.291 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-07 12:56:08.356 +00:00 info akou 0.6.3 started (pid 1264, app, with the window, API on port 8476)",
+        "2026-10-07 12:56:17.239 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: started",
+        "2026-10-07 12:56:17.352 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part started",
+        "2026-10-07 12:56:17.419 +00:00 info asr: call 01M4B6Z8J7X4GKYSK3S9RJSWRZ runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:56:21.820 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part ended",
+        "2026-10-07 12:56:22.356 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: ended",
+        "2026-10-07 12:56:22.371 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: final pass failed",
+        ""
+      ]
+    },
+    "headless": {
+      "status": {
+        "version": "0.6.3",
+        "platform": "win32",
+        "pid": 1308,
+        "port": 8476,
+        "headless": true,
+        "hotkey": null,
+        "window": "none (headless)",
+        "page": null,
+        "startedAt": 1791377784313,
+        "uptimeMs": 1018,
+        "quitting": false,
+        "configDir": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\.config\\akou",
+        "recordingsRoot": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\Recordings\\akou"
+      },
+      "tray": [
+        {
+          "pid": 1308,
+          "props": {
+            "iconIds": "1"
+          }
+        }
+      ],
+      "windows": [],
+      "screenshot": "3-headless.png",
+      "liveAfterFirstPress": true,
+      "liveAfterSecondPress": false,
+      "loginItem": {
+        "present": true,
+        "command": "cmd /c \"set AKOU_HEADLESS=1&& start \"\" \"C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\launcher.exe\"\""
+      },
+      "appLog": [
+        "2026-10-07 12:56:08.291 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-07 12:56:08.356 +00:00 info akou 0.6.3 started (pid 1264, app, with the window, API on port 8476)",
+        "2026-10-07 12:56:17.239 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: started",
+        "2026-10-07 12:56:17.352 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part started",
+        "2026-10-07 12:56:17.419 +00:00 info asr: call 01M4B6Z8J7X4GKYSK3S9RJSWRZ runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:56:21.820 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part ended",
+        "2026-10-07 12:56:22.356 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: ended",
+        "2026-10-07 12:56:22.371 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: final pass failed",
+        "2026-10-07 12:56:22.490 +00:00 info quitting",
+        "2026-10-07 12:56:22.638 +00:00 info akou 0.6.3 quit (pid 1264)",
+        "2026-10-07 12:56:24.344 +00:00 info akou 0.6.3 started (pid 1308, app, headless, API on port 8476)",
+        "2026-10-07 12:56:24.447 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-07 12:56:36.892 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: started",
+        "2026-10-07 12:56:37.007 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: a part started",
+        "2026-10-07 12:56:37.054 +00:00 info asr: call 01M4B6ZVRD6GQ87DH1Y520NA1H runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:56:40.812 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: a part ended",
+        ""
+      ]
+    },
+    "loginCommand": {
+      "command": "cmd /c \"set AKOU_HEADLESS=1&& start \"\" \"C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\launcher.exe\"\"",
+      "status": {
+        "version": "0.6.3",
+        "platform": "win32",
+        "pid": 8224,
+        "port": 8476,
+        "headless": true,
+        "hotkey": null,
+        "window": "none (headless)",
+        "page": null,
+        "startedAt": 1791377803046,
+        "uptimeMs": 1017,
+        "quitting": false,
+        "configDir": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\.config\\akou",
+        "recordingsRoot": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\Recordings\\akou"
+      },
+      "tray": [
+        {
+          "pid": 8224,
+          "props": {
+            "iconIds": "1"
+          }
+        }
+      ],
+      "windows": [],
+      "screenshot": "4-login-item.png",
+      "liveAfterFirstPress": true,
+      "liveAfterSecondPress": false,
+      "appLog": [
+        "2026-10-07 12:56:08.356 +00:00 info akou 0.6.3 started (pid 1264, app, with the window, API on port 8476)",
+        "2026-10-07 12:56:17.239 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: started",
+        "2026-10-07 12:56:17.352 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part started",
+        "2026-10-07 12:56:17.419 +00:00 info asr: call 01M4B6Z8J7X4GKYSK3S9RJSWRZ runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:56:21.820 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: a part ended",
+        "2026-10-07 12:56:22.356 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: ended",
+        "2026-10-07 12:56:22.371 +00:00 info call 01M4B6Z8J7X4GKYSK3S9RJSWRZ: final pass failed",
+        "2026-10-07 12:56:22.490 +00:00 info quitting",
+        "2026-10-07 12:56:22.638 +00:00 info akou 0.6.3 quit (pid 1264)",
+        "2026-10-07 12:56:24.344 +00:00 info akou 0.6.3 started (pid 1308, app, headless, API on port 8476)",
+        "2026-10-07 12:56:24.447 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-07 12:56:36.892 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: started",
+        "2026-10-07 12:56:37.007 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: a part started",
+        "2026-10-07 12:56:37.054 +00:00 info asr: call 01M4B6ZVRD6GQ87DH1Y520NA1H runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:56:40.812 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: a part ended",
+        "2026-10-07 12:56:41.315 +00:00 info quitting",
+        "2026-10-07 12:56:41.343 +00:00 info call 01M4B6ZVRD6GQ87DH1Y520NA1H: ended",
+        "2026-10-07 12:56:41.347 +00:00 info akou 0.6.3 quit (pid 1308)",
+        "2026-10-07 12:56:43.077 +00:00 info akou 0.6.3 started (pid 8224, app, headless, API on port 8476)",
+        "2026-10-07 12:56:43.184 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-07 12:56:58.063 +00:00 info call 01M4B70GDW32PJGW2MCN9BP6NA: started",
+        "2026-10-07 12:56:58.176 +00:00 info call 01M4B70GDW32PJGW2MCN9BP6NA: a part started",
+        "2026-10-07 12:56:58.227 +00:00 info asr: call 01M4B70GDW32PJGW2MCN9BP6NA runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-07 12:57:01.979 +00:00 info call 01M4B70GDW32PJGW2MCN9BP6NA: a part ended",
+        ""
+      ]
+    },
+    "loginOff": {
+      "status": {
+        "version": "0.6.3",
+        "platform": "win32",
+        "pid": 7604,
+        "port": 8476,
+        "headless": false,
+        "hotkey": "Control+Shift+F9",
+        "window": "open",
+        "page": null,
+        "startedAt": 1791377823933,
+        "uptimeMs": 1004,
+        "quitting": false,
+        "configDir": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\.config\\akou",
+        "recordingsRoot": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\akou-g1-5W2iYa\\home\\Recordings\\akou"
+      },
+      "setOffBy": "akou config set",
+      "windows": [
+        {
+          "pid": 7604,
+          "title": "akou"
+        }
+      ],
+      "loginItem": {
+        "present": false,
+        "command": null
+      }
     }
   },
-  "verdict": "fail",
-  "problems": [
-    "control: an akou window exists before the first start",
-    "control: a tray item exists before the first start",
-    "normal start: the API never answered; launcher output: Launcher starting on windows...\nCurrent directory: C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\nSpawning: C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\bun.exe C:\\Users\\runneradmin\\AppData\\Local\\io.github.geiserx.akou\\stable\\app\\bin\\..\\Resources\\main.js\nChild process spawned with PID 1164\nChild process exited with code: 0\n",
-    "the run stopped: the app did not start"
-  ]
+  "verdict": "pass",
+  "problems": []
 }

@@ -176,7 +176,7 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
           "docs/providers.md: the terms table has no dated row",
         );
         expect(r.out).toContain("docs/gates/M0-results.md: G2 has no row in the summary table");
-        // G1 passed on Linux only; Windows and macOS have no result.
+        // G1 passed on Linux and Windows only; macOS has no result.
         for (const g of ["G1", "G3", "G4", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
         // G6 passed on M-series Macs only; the 4-core x64 half is unmeasured.
