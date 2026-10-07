@@ -18,7 +18,7 @@ import { systemSecrets } from "../config/secrets.ts";
 import { type AkouApp, AlreadyRunningError, startApp } from "../index.ts";
 import { Bridge } from "./bridge.ts";
 import { BUNDLED_CLI, installCli, nodeOps } from "./install-cli.ts";
-import { setLoginItem } from "./login-item.ts";
+import { loginProgram, setLoginItem } from "./login-item.ts";
 import { electrobunUi } from "./native.ts";
 import { appForShell, Shell } from "./shell.ts";
 import { fileState } from "./state.ts";
@@ -34,7 +34,8 @@ async function ensureShell(app: AkouApp): Promise<Shell> {
       setLoginItem(enabled, {
         platform: process.platform,
         home: homedir(),
-        program: process.execPath,
+        // The launcher, not the bundled Bun `process.execPath` names (G1).
+        program: loginProgram(process.execPath),
       }),
     onLog: (level, msg) => app.logLine(level, `window: ${msg}`),
     state: fileState(loadConfig(process.env).paths.configDir),
