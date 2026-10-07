@@ -1,0 +1,12 @@
+# TCC daemon log evidence for the G3 first half: the signed 0.6.2 on a Mac with SIP on (macOS 27.0.1), under a scratch AKOU_HOME
+# Prompts shown (AUTHREQ_PROMPTING) for io.github.geiserx.akou, whole session:
+  2026-10-07 21:39:49.736 kTCCServiceMicrophone
+  2026-10-07 23:37:24.548 kTCCServiceAudioCapture
+# Grants recorded (TCCDEvent Create) for io.github.geiserx.akou:
+  2026-10-07 21:42:26.580 kTCCServiceMicrophone
+  2026-10-07 23:37:26.801 kTCCServiceAudioCapture
+# Total AUTHREQ_PROMPTING lines in the whole log (any app): 2
+# After the first restart (silent mic) (log line 404182): prompts=0; akou access results by service:
+    kTCCServiceScreenCapture authValue 2 authReason 4 x 1200
+# After the second restart (the one on record) (log line 419243): prompts=0; akou access results by service:
+    kTCCServiceScreenCapture authValue 2 authReason 4 x 620

@@ -1,0 +1,325 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 120.31725
+  },
+  "wallSeconds": 120.376,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.6.2",
+      "caps": [
+        "tap",
+        "mic",
+        "probe",
+        "exclude-responsible",
+        "app"
+      ]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": [
+        "pid 54130"
+      ],
+      "capture_ns": "610382249577541"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "610382249577541"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "610382249577541"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 120.31725,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -58.8,
+  "leftSeconds": 120.317,
+  "leftGaps": {
+    "scannedSeconds": 118.8,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 120.317,
+  "rightGaps": {
+    "scannedSeconds": 118.8,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "firstWords": [],
+  "levels": {
+    "left_rms_dbfs": -38.1,
+    "left_peak_dbfs": 0,
+    "right_rms_dbfs": -35.6,
+    "right_peak_dbfs": -2.6
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 11,
+      "expected": 16,
+      "missing": [
+        {
+          "k": 0,
+          "at": -2.8
+        },
+        {
+          "k": 11,
+          "at": 107.2
+        },
+        {
+          "k": 13,
+          "at": 127.2
+        },
+        {
+          "k": 14,
+          "at": 137.2
+        },
+        {
+          "k": 15,
+          "at": 147.2
+        }
+      ],
+      "latencyMs": {
+        "n": 11,
+        "min": -24.019,
+        "median": -23.561,
+        "max": -21.089,
+        "spread": 2.9299999999999997
+      },
+      "slopeMsPerHour": 21.42,
+      "minScore": 0.665,
+      "byEnvelope": 10,
+      "minEnvelopeScore": 0.849,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 7.16,
+          "ms": -23.592
+        },
+        {
+          "k": 2,
+          "t": 17.16,
+          "ms": -23.561
+        },
+        {
+          "k": 3,
+          "t": 27.16,
+          "ms": -23.504
+        },
+        {
+          "k": 4,
+          "t": 37.16,
+          "ms": -23.977
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 10,
+          "t": 97.16,
+          "ms": -21.089
+        },
+        {
+          "k": 12,
+          "t": 117.16,
+          "ms": -23.992
+        }
+      ]
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 12,
+      "expected": 16,
+      "missing": [
+        {
+          "k": 0,
+          "at": -2.8
+        },
+        {
+          "k": 13,
+          "at": 127.2
+        },
+        {
+          "k": 14,
+          "at": 137.2
+        },
+        {
+          "k": 15,
+          "at": 147.2
+        }
+      ],
+      "latencyMs": {
+        "n": 12,
+        "min": -10.251,
+        "median": -9.984,
+        "max": -9.981,
+        "spread": 0.2699999999999996
+      },
+      "slopeMsPerHour": -5.36,
+      "minScore": 0.557,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 7.16,
+          "ms": -9.984
+        },
+        {
+          "k": 2,
+          "t": 17.16,
+          "ms": -9.983
+        },
+        {
+          "k": 3,
+          "t": 27.16,
+          "ms": -9.983
+        },
+        {
+          "k": 4,
+          "t": 37.16,
+          "ms": -9.984
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 11,
+          "t": 107.16,
+          "ms": -10.251
+        },
+        {
+          "k": 12,
+          "t": 117.16,
+          "ms": -9.981
+        }
+      ]
+    },
+    "call@right": {
+      "found": 11,
+      "expected": 14,
+      "missing": [
+        {
+          "k": 12,
+          "at": 122.2
+        },
+        {
+          "k": 13,
+          "at": 132.2
+        },
+        {
+          "k": 14,
+          "at": 142.2
+        }
+      ],
+      "latencyMs": {
+        "n": 11,
+        "min": -12.833,
+        "median": -12.829,
+        "max": -12.826,
+        "spread": 0.006999999999999673
+      },
+      "slopeMsPerHour": 0,
+      "minScore": 0.981,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 12.16,
+          "ms": -12.829
+        },
+        {
+          "k": 2,
+          "t": 22.16,
+          "ms": -12.833
+        },
+        {
+          "k": 3,
+          "t": 32.16,
+          "ms": -12.827
+        },
+        {
+          "k": 4,
+          "t": 42.16,
+          "ms": -12.827
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 10,
+          "t": 102.16,
+          "ms": -12.83
+        },
+        {
+          "k": 11,
+          "t": 112.16,
+          "ms": -12.829
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 10,
+    "offsetMs": {
+      "n": 10,
+      "min": 8.259,
+      "median": 10.691,
+      "max": 11.187,
+      "spread": 2.927999999999999
+    },
+    "slopeMsPerHour": -46.41
+  },
+  "bothTrainsInTap": {
+    "pairs": 11,
+    "offsetMs": {
+      "n": 11,
+      "min": -2.849,
+      "median": -2.844,
+      "max": -2.578,
+      "spread": 0.27100000000000035
+    },
+    "slopeMsPerHour": 7.89
+  },
+  "memory": {
+    "helper": {
+      "samples": 4,
+      "firstKb": 20000,
+      "lastKb": 17344,
+      "minKb": 17344,
+      "maxKb": 20000,
+      "slopeKbPerHour": -94464
+    },
+    "helperMuted": null,
+    "app": {
+      "samples": 4,
+      "firstKb": 166256,
+      "lastKb": 119584,
+      "minKb": 119584,
+      "maxKb": 166256,
+      "slopeKbPerHour": -1596096
+    },
+    "appMuted": null
+  }
+}

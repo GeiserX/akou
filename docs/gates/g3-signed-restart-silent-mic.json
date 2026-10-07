@@ -1,0 +1,276 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 120.4763125
+  },
+  "wallSeconds": 120.52,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.6.2",
+      "caps": [
+        "tap",
+        "mic",
+        "probe",
+        "exclude-responsible",
+        "app"
+      ]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "HyperX QuadCast S",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": [
+        "pid 86518"
+      ],
+      "capture_ns": "613824555406958"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "613824555406958"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "613824555406958"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 120.4763125,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -43.7,
+  "leftSeconds": 120.476,
+  "leftGaps": {
+    "scannedSeconds": 119,
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 118976.3,
+    "worst": [
+      {
+        "at": 1,
+        "ms": 118976.3
+      }
+    ]
+  },
+  "rightSeconds": 120.476,
+  "rightGaps": {
+    "scannedSeconds": 119,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "firstWords": [
+    {
+      "at": 3.177,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.94,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.95,
+        0.95,
+        0.97,
+        0.97,
+        0.95,
+        0.95,
+        0.91,
+        0.72,
+        0.71,
+        0.76,
+        0.72,
+        0.64,
+        0.04,
+        0.11,
+        0.18
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -133.7,
+    "left_peak_dbfs": -84.3,
+    "right_rms_dbfs": -22.6,
+    "right_peak_dbfs": -2.1
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 12,
+      "expected": 15,
+      "missing": [
+        {
+          "k": 13,
+          "at": 128.1
+        },
+        {
+          "k": 14,
+          "at": 138.1
+        },
+        {
+          "k": 15,
+          "at": 148.1
+        }
+      ],
+      "latencyMs": {
+        "n": 12,
+        "min": -9.68,
+        "median": -9.678,
+        "max": -9.676,
+        "spread": 0.0039999999999995595
+      },
+      "slopeMsPerHour": -0.05,
+      "minScore": 0.603,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 8.14,
+          "ms": -9.677
+        },
+        {
+          "k": 2,
+          "t": 18.14,
+          "ms": -9.678
+        },
+        {
+          "k": 3,
+          "t": 28.14,
+          "ms": -9.676
+        },
+        {
+          "k": 4,
+          "t": 38.14,
+          "ms": -9.678
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 11,
+          "t": 108.14,
+          "ms": -9.677
+        },
+        {
+          "k": 12,
+          "t": 118.14,
+          "ms": -9.68
+        }
+      ]
+    },
+    "call@right": {
+      "found": 11,
+      "expected": 14,
+      "missing": [
+        {
+          "k": 12,
+          "at": 123.1
+        },
+        {
+          "k": 13,
+          "at": 133.1
+        },
+        {
+          "k": 14,
+          "at": 143.1
+        }
+      ],
+      "latencyMs": {
+        "n": 11,
+        "min": -12.827,
+        "median": -12.822,
+        "max": -12.813,
+        "spread": 0.013999999999999346
+      },
+      "slopeMsPerHour": -0.1,
+      "minScore": 0.561,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 13.14,
+          "ms": -12.826
+        },
+        {
+          "k": 2,
+          "t": 23.14,
+          "ms": -12.813
+        },
+        {
+          "k": 3,
+          "t": 33.14,
+          "ms": -12.822
+        },
+        {
+          "k": 4,
+          "t": 43.14,
+          "ms": -12.82
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 10,
+          "t": 103.14,
+          "ms": -12.817
+        },
+        {
+          "k": 11,
+          "t": 113.14,
+          "ms": -12.826
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "bothTrainsInTap": {
+    "pairs": 11,
+    "offsetMs": {
+      "n": 11,
+      "min": -3.15,
+      "median": -3.144,
+      "max": -3.135,
+      "spread": 0.015000000000000124
+    },
+    "slopeMsPerHour": -0.08
+  },
+  "memory": {
+    "helper": {
+      "samples": 4,
+      "firstKb": 18752,
+      "lastKb": 17024,
+      "minKb": 17024,
+      "maxKb": 18752,
+      "slopeKbPerHour": -64320
+    },
+    "helperMuted": null,
+    "app": {
+      "samples": 4,
+      "firstKb": 154144,
+      "lastKb": 105904,
+      "minKb": 105904,
+      "maxKb": 154144,
+      "slopeKbPerHour": -1716672
+    },
+    "appMuted": null
+  }
+}
