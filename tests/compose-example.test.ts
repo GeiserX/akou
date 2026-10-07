@@ -54,6 +54,13 @@ describe("[SV-T6] the compose example beside Telegram-Archive", () => {
     expect(compose).not.toContain("condition:");
   });
 
+  test("AKOU_VERSION in .env.example is the version being released", () => {
+    // The pin missed 0.6.0 to 0.6.2 while it was bumped by hand; stamp-version.ts now writes it.
+    const pkg = JSON.parse(read("package.json")) as { version: string };
+    const pin = /^AKOU_VERSION=(.*)$/m.exec(read(...DIR, ".env.example"))?.[1];
+    expect(pin).toBe(pkg.version);
+  });
+
   test("the round trip pins Telegram-Archive by a full commit", () => {
     const script = read("scripts", "compose-e2e.sh");
     expect(script).toMatch(/TA_REF=\$\{TA_REF:-[0-9a-f]{40}\}/);
