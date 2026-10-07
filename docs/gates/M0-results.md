@@ -4,6 +4,8 @@ This page records what the M0 gates measured on real hardware, gate by gate: wha
 
 **The machine.** The reference Mac mini: Apple M4, 10 cores, 16 GB, macOS 26.6, with System Integrity Protection (SIP) turned off. It was running other work during every measurement (a virtual machine and compile jobs, load average 5 to 9 on 10 cores). So every speed figure here is a figure under background load.
 
+G2 is the exception: it ran on GitHub-hosted CI runners, inside the app bundles the release workflow built, on all three operating systems. Its section says which runners.
+
 **The setup.** akou at commit `f6cabfc` (the G5 re-run at the later commit that fixed its runner), the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
 
 There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers. The third re-ran G4 at commit `331c7e6`, after the two capture fixes in [#13](https://github.com/GeiserX/akou/pull/13), on the same machine under heavier background load (load average 4 to 20); its numbers sit next to the old ones in [the G4 re-run](#the-re-run-after-the-capture-fixes).
@@ -12,6 +14,7 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 
 | Gate | Verdict | Key numbers |
 |---|---|---|
+| G2 | Pass | Ran inside the packaged bundle on macOS arm64, Windows x64 and Linux x64, on the v0.6.2 release's CI runners. The recognizer in a Worker transcribed the clip on all three, and the main thread's longest wait was 26.7 ms, 3.1 ms and 3.8 ms against the 100 ms limit. The same decode on the main thread, the positive control, blocked it for 11,997 ms, 4,085 ms and 2,585 ms. |
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
 | G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms on the call channel, which held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
 | G5 | Pass | Re-run with a stricter runner. Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 78 ms while the teardown still hung. Crash: new part in 79 ms, 0.13 s of call audio lost. Real device helper SIGKILLed: new part in 81 ms, 1.25 s lost. The API never missed a poll. |
@@ -40,6 +43,26 @@ Five things we learned the hard way, and they belong in [TRAPS.md](../TRAPS.md) 
 - **A missing microphone grant looks exactly like a quiet microphone.** Over SSH the mic stream opened, delivered buffers on time, sent `first_audio`, and every sample was zero. Nothing in the protocol says "denied". This is the mic-side twin of the `permission-suspect` rule in DESIGN 2.5, and akou has no mic-side rule yet.
 
 So on this box, a recording with both a real mic and a real tap needs one of two things. A person answers the system-audio prompt for Terminal at the console, or the Microphone grant exists for whatever runs over SSH. We changed neither, because both are security settings.
+
+## G2: recognition in the packaged app
+
+**What ran.** The release workflow ([`release.yml`](../../.github/workflows/release.yml)) on the v0.6.2 tag push, run [37560614284](https://github.com/GeiserX/akou/actions/runs/37560614284) at commit `39c8ebd`. On each OS the job built the app with `scripts/build-app.ts`, checked it with `scripts/smoke-app.ts`, then ran [`scripts/gates/g2-worker.ts`](../../scripts/gates/g2-worker.ts). That script downloads the pinned recognizer (`parakeet-tdt-0.6b-v3-fp32`, every file checked against its pin) and the upstream English test clip, unpacks the built bundle, and bundles [`g2-probe.ts`](../../scripts/gates/g2-probe.ts) into the app's main folder with sherpa-onnx-node left to the app's own `node_modules`, the way the app's Workers load it. The app's bundled Bun (1.4.0 on all three) then runs the probe twice while the main thread ticks every 1 ms and records the gap between ticks: once with the recognizer loading and decoding the clip in a Bun Worker (the gate), and once with the same load and decode on the main thread (the positive control, which must leave a gap of 100 ms or more, or the measure could not see a blocked thread). The raw outputs are [g2-macos.json](g2-macos.json), [g2-windows.json](g2-windows.json) and [g2-linux.json](g2-linux.json), copied unchanged from the run's artifacts `gate-g2-macOS`, `gate-g2-Windows` and `gate-g2-Linux`.
+
+**The machines.** GitHub-hosted runners, not the reference Mac mini. macOS arm64 ran on `macos-latest` in the `app` job, against the signed bundle that the release published. Windows x64 and Linux x64 ran on `windows-latest` and `ubuntu-24.04` in the `app-desktop` job, against bundles that are built and checked but not published yet. The criterion names the packaged bundle on all three OSes and no particular machine, so runners meet it. They are shared machines, so the tick figures include whatever else the runner was doing.
+
+**Numbers.** Load and decode are the probe's own timings of the recognizer. The tick columns are the main thread's gaps between 1 ms ticks while the recognizer loaded and decoded.
+
+| OS | Load | Decode | Ticks | Worker run: tick p50 / p99 / longest | Control: longest tick |
+|---|---|---|---|---|---|
+| macOS arm64 | 12,142 ms | 4,213 ms | 10,365 | 1.4 / 4.1 / 26.7 ms | 11,997.2 ms |
+| Windows x64 | 3,486 ms | 631 ms | 2,691 | 1.6 / 1.6 / 3.1 ms | 4,085.1 ms |
+| Linux x64 | 2,169 ms | 827 ms | 2,772 | 1.1 / 1.1 / 3.8 ms | 2,584.7 ms |
+
+All six runs, Worker and control on each OS, returned the clip's words: "Ask not what your country can do for you. Ask what you can do for your country." In each control the longest tick matches its own load plus decode (10,221 + 1,773 ms on macOS, 3,501 + 583 ms on Windows, 2,116 + 468 ms on Linux): the main thread waited the whole time, which is what a blocked thread looks like to this measure. Before the recognizer started, the idle tick p50 was 1.9 ms on macOS, 1.5 ms on Windows and 1.1 ms on Linux.
+
+**Verdict: pass on all three.** Each file reads `"verdict": "pass"` with no problems: the Worker heard the clip, its longest tick stayed under the 100 ms limit (26.7 ms at worst, on macOS), and the control proved the measure sees a blocked thread.
+
+**Still open.** Nothing for the criterion. Every tag push re-runs the gate. On Windows and Linux a failed gate fails the job. On macOS the step is `continue-on-error`, because prereleases never wait on a gate, so there the job's colour says nothing about G2 and only the `gate-g2-macOS` file does.
 
 ## G3 (lite): the app-spawned helper captures real audio
 

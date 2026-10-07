@@ -172,12 +172,12 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
           "docs/providers.md: the terms table has no dated row",
         );
-        for (const g of ["G1", "G2", "G7"])
+        for (const g of ["G1", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} has no row in the summary table`);
         expect(r.out).toContain("docs/gates/M0-results.md: G3 is Partial, not Pass");
         expect(r.out).toContain("docs/gates/M0-results.md: G4 is Partial, not Pass");
-        // G5, G6 and G8 are on record as passed.
-        for (const g of ["G5", "G6", "G8"]) expect(r.out).not.toContain(`: ${g} `);
+        // G2, G5, G6 and G8 are on record as passed.
+        for (const g of ["G2", "G5", "G6", "G8"]) expect(r.out).not.toContain(`: ${g} `);
         // Outside a checkout it also says it could not read the tags, and still lists the rest.
         expect(r.out).toContain("cannot list the tags");
       } finally {

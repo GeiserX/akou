@@ -19,13 +19,14 @@ Each gate ends in a measured yes or no. The gates block the stable release, not 
 
 Results so far, on the reference Mac mini (M4, macOS 26.6, SIP off), are in [gates/M0-results.md](gates/M0-results.md):
 
+- G2: pass, on the v0.6.2 release's GitHub-hosted runners rather than the reference Mac mini. Inside the packaged bundle on macOS arm64, Windows x64 and Linux x64, the recognizer in a Worker transcribed the clip while the main thread's longest wait was 26.7 ms, 3.1 ms and 3.8 ms, under the 100 ms limit; the same decode on the main thread blocked it for 2.6 to 12 s.
 - G3: partial. The app-spawned helper records the tap on the right channel (10 minutes, every call chirp found). Over SSH the mic is silent for lack of a Microphone grant. The criterion above, on the signed 0.6.1 and then the signed update after it, has not been run.
 - G4: failed as run. The call channel held the host clock within 0.16 ms for an hour, and positive controls show the analysis catches a 75 ms per hour drift. But one tap death cost 10.5 s before the dead-call rule rebuilt it, and in a run with a really quiet tap the first start lost 20 ms of speech: the rule rebuilt a tap that had just started. Mic frames flow while the tap is silent, and helper memory stayed flat through a 10-minute mute. Left-right drift between two clocks was not measured: it needs a Mac with a real input device, because a BlackHole mic runs on the host clock.
 - G5: pass, re-run with a runner that measures call audio by content. Hang, crash and a real SIGKILL each lose at most 1.25 s, and a new call starts in 78 ms while a teardown still hangs.
 - G6: pass on the M-series half. Real-time factor 0.081 for both channels, committed line 1.02 s median and 1.14 s worst after the utterance ends. The 4-core x64 half is open.
 - G8: pass. Cold p95 193 ms over 20 separate app launches, warm p95 159 ms. The first tap after a reboot is not measured.
 
-Status on main: the summary table in [gates/M0-results.md](gates/M0-results.md) is the current verdict. G5, G6 (M-series half) and G8 pass; G3 is partial; G4 is partial since its re-run after the capture fixes; G1, G2 and G7 have no recorded result. Every release so far is a 0.x prerelease, which the gates do not block.
+Status on main: the summary table in [gates/M0-results.md](gates/M0-results.md) is the current verdict. G2 (on all three OSes), G5, G6 (M-series half) and G8 pass; G3 is partial; G4 is partial since its re-run after the capture fixes; G1 and G7 have no recorded result. Every release so far is a 0.x prerelease, which the gates do not block.
 
 Also in M0: pin ElectroBun 2.0.1 with its bundled Bun 1.4.0 for the app runtime, and pin Hutch to the version whose `hutch --version` produced the working signed build; re-run the soak ([TESTING.md](TESTING.md) TS-24, not built yet) on Bun and Cottontail and keep the output; verify the `Info.plist` patch and re-sign; verify both sherpa dylibs land in the bundle; confirm the WebKit GPU helper exclusion removes the window's audio from the call channel.
 
