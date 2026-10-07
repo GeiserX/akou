@@ -1,0 +1,140 @@
+{
+  "at": "2026-10-07T08:58:00.662Z",
+  "positiveControl": {
+    "intact": 0,
+    "hole": 1.5,
+    "silent": 6
+  },
+  "killReal": {
+    "killedAt": 1791363511419,
+    "helperOfThisCall": true,
+    "start": {
+      "code": 0,
+      "ms": 695
+    },
+    "stop": {
+      "code": 0,
+      "ms": 868
+    },
+    "nextStart": {
+      "code": 0,
+      "ms": 165,
+      "body": {
+        "call": "01M4ASCCMN71Z8V5XYNCR9XB9Z",
+        "folder": "2026-10-07_105847_g5-after-kill",
+        "part": 1,
+        "firstAudioMs": 135,
+        "url": null
+      }
+    },
+    "partEnded": [
+      {
+        "seq": 3,
+        "t": 1791363511421,
+        "type": "part.ended",
+        "part": 1,
+        "reason": "helper-exit",
+        "fileSeconds": 19.96
+      },
+      {
+        "seq": 5,
+        "t": 1791363526516,
+        "type": "part.ended",
+        "part": 2,
+        "reason": "stop",
+        "fileSeconds": 14.8368125
+      }
+    ],
+    "events": [
+      {
+        "seq": 2,
+        "t": 1791363491355,
+        "type": "part.started",
+        "part": 1,
+        "file": "audio/part-001.opus",
+        "wallStart": 1791363491354,
+        "monoStart": 273322013.852291,
+        "mic": "BlackHole 2ch",
+        "call": {
+          "mode": "system",
+          "exclude": ["pid 30862"]
+        },
+        "capture": "akou-capture 0.6.2"
+      },
+      {
+        "seq": 3,
+        "t": 1791363511421,
+        "type": "part.ended",
+        "part": 1,
+        "reason": "helper-exit",
+        "fileSeconds": 19.96
+      },
+      {
+        "seq": 4,
+        "t": 1791363511633,
+        "type": "part.started",
+        "part": 2,
+        "file": "audio/part-002.opus",
+        "wallStart": 1791363511632,
+        "monoStart": 273342292.985708,
+        "mic": "BlackHole 2ch",
+        "call": {
+          "mode": "system",
+          "exclude": ["pid 31780"]
+        },
+        "capture": "akou-capture 0.6.2"
+      },
+      {
+        "seq": 5,
+        "t": 1791363526516,
+        "type": "part.ended",
+        "part": 2,
+        "reason": "stop",
+        "fileSeconds": 14.8368125
+      },
+      {
+        "seq": 6,
+        "t": 1791363527285,
+        "type": "call.ended",
+        "reason": "stop"
+      }
+    ],
+    "audio": {
+      "parts": [
+        {
+          "part": 1,
+          "wallStart": 1791363491354,
+          "endReason": "helper-exit",
+          "loggedFileSeconds": 19.96,
+          "slices": 949,
+          "tonedSlices": 949
+        },
+        {
+          "part": 2,
+          "wallStart": 1791363511632,
+          "endReason": "stop",
+          "loggedFileSeconds": 14.8368125,
+          "slices": 741,
+          "tonedSlices": 741
+        }
+      ],
+      "wallSeconds": 35.068,
+      "capturedSeconds": 33.77,
+      "lostSeconds": 1.298
+    },
+    "apiDuring": {
+      "requests": 359,
+      "failed": 0,
+      "p50Ms": 0.8,
+      "p99Ms": 8.1,
+      "maxMs": 10.7
+    },
+    "verdict": {
+      "everyPartEnded": true,
+      "nextStart201Within3s": true,
+      "lostUnder2s": true,
+      "apiNeverFailed": true,
+      "pass": true
+    }
+  }
+}

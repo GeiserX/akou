@@ -337,15 +337,17 @@ export class Remotes {
   /**
    * Where a job for these names goes. `first`: only remotes whose entry lists a name, as a job
    * this server could run itself. `null`: no remote that is up offers them; `busy`: every one
-   * that does holds `REMOTE_IN_FLIGHT` jobs already, or a listed one is not probed yet, so the job
-   * waits for it.
+   * that does holds `REMOTE_IN_FLIGHT` jobs already; `pending`: none has room, and a listed one is
+   * not probed yet, so whether it has room is not known. The job waits for it either way, unless
+   * `server.remotes_overflow` runs a `busy` one here.
    */
-  pick(names: readonly string[], first: boolean): string | "busy" | null {
+  pick(names: readonly string[], first: boolean): string | "busy" | "pending" | null {
     let busy = false;
+    let pending = false;
     for (const r of this.current()) {
       if (first && !r.entry.takes.some((t) => t === "*" || names.includes(t))) continue;
       if (first && r.state === "unknown") {
-        busy = true;
+        pending = true;
         continue;
       }
       if (r.state !== "up" || !names.some((n) => r.offers.has(n))) continue;
@@ -355,7 +357,7 @@ export class Remotes {
       }
       return r.entry.url;
     }
-    return busy ? "busy" : null;
+    return pending ? "pending" : busy ? "busy" : null;
   }
 
   /** Is this remote up, and offering one of the names? */

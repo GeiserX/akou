@@ -31,6 +31,7 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "skills/akou-vocab/SKILL.md",
     ".claude-plugin/plugin.json",
     "docs/api/openapi.json",
+    "examples/compose/telegram-archive/.env.example",
     PROVIDERS,
     GATES,
   ]) {
@@ -140,11 +141,13 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
 
   test("every gate G1 to G8 needs a row whose verdict is Pass, in the summary table only", () => {
     expect(gateProblems(gates(ALL_PASS))).toEqual([]);
-    // A qualified pass is a pass; the verdict's first word decides.
+    // Only a plain Pass counts: a qualified one passed part of its gate, so it is not a Pass.
     const qualified = ALL_PASS.map(([g, v]): [string, string] =>
-      g === "G6" ? ["G6", "Pass (M-series half)"] : [g, v],
+      g === "G6" ? ["G6", "Pass (M-series half)"] : g === "G8" ? ["G8", " Pass "] : [g, v],
     );
-    expect(gateProblems(gates(qualified))).toEqual([]);
+    expect(gateProblems(gates(qualified))).toEqual([
+      "docs/gates/M0-results.md: G6 is Pass (M-series half), a qualified Pass; only a plain Pass counts",
+    ]);
     const some = ALL_PASS.filter(([g]) => g !== "G2").map(([g, v]): [string, string] =>
       g === "G3" ? ["G3 (lite)", "Partial"] : g === "G4" ? ["G4", "Passable"] : [g, v],
     );
@@ -172,12 +175,16 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
           "docs/providers.md: the terms table has no dated row",
         );
-        for (const g of ["G1", "G2", "G7"])
+        for (const g of ["G1", "G2"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} has no row in the summary table`);
-        expect(r.out).toContain("docs/gates/M0-results.md: G3 is Partial, not Pass");
-        expect(r.out).toContain("docs/gates/M0-results.md: G4 is Partial, not Pass");
-        // G5, G6 and G8 are on record as passed.
-        for (const g of ["G5", "G6", "G8"]) expect(r.out).not.toContain(`: ${g} `);
+        for (const g of ["G3", "G4", "G7"])
+          expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
+        // G6 passed on M-series Macs only; the 4-core x64 half is unmeasured.
+        expect(r.out).toContain(
+          "docs/gates/M0-results.md: G6 is Pass (M-series half), a qualified Pass; only a plain Pass counts",
+        );
+        // G5 and G8 are on record as passed.
+        for (const g of ["G5", "G8"]) expect(r.out).not.toContain(`: ${g} `);
         // Outside a checkout it also says it could not read the tags, and still lists the rest.
         expect(r.out).toContain("cannot list the tags");
       } finally {
