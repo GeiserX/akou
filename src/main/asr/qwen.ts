@@ -340,14 +340,19 @@ export class QwenEngine implements FinalEngine {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const base = attempt === 0 ? await this.o.server.url() : await this.o.server.restart();
-        answer = await fetch(`${base}/v1/chat/completions`, {
+        // `timeout: false` turns off Bun's own limit on a response that sends nothing (about 360 s
+        // on Bun 1.4.2), which fired before `timeoutMs` on a request llama-server took longer than
+        // that to decode, with the same "The operation timed out." The signal is the only clock.
+        const init: BunFetchRequestInit & { timeout: false } = {
           method: "POST",
           headers: { "content-type": "application/json" },
           body,
           signal: this.o.signal
             ? AbortSignal.any([this.o.signal, AbortSignal.timeout(this.o.timeoutMs ?? 120_000)])
             : AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
-        });
+          timeout: false,
+        };
+        answer = await fetch(`${base}/v1/chat/completions`, init);
         if (answer.status < 500) break;
         why = `HTTP ${answer.status}: ${(await answer.text()).slice(0, 200)}`;
       } catch (err) {
