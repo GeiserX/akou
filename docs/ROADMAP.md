@@ -4,7 +4,7 @@ Each milestone has exit criteria you can check. A milestone is done when every c
 
 ## M0: gates (1 to 2 weeks)
 
-Each gate ends in a measured yes or no. The gates block the stable release, not development: a release without a prerelease part (1.0.0 or later) fails unless the summary table of [gates/M0-results.md](gates/M0-results.md) records a Pass for every gate from G1 to G8 (`scripts/stamp-version.ts`, [CI-28](CI-CD.md)). Prereleases never wait on a gate. G3 and G4 stay blockers, because their results can change where capture runs.
+Each gate ends in a measured yes or no. The gates block the stable release, not development: a release without a prerelease part (1.0.0 or later) fails unless the summary table of [gates/M0-results.md](gates/M0-results.md) records a plain Pass for every gate from G1 to G8 (`scripts/stamp-version.ts`, [CI-28](CI-CD.md)); a qualified one such as "Pass (M-series half)" does not count. Prereleases never wait on a gate. G3 and G4 stay blockers, because their results can change where capture runs.
 
 | # | Gate | Pass criterion | If it fails |
 |---|---|---|---|
