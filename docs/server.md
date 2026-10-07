@@ -8,7 +8,7 @@ The steps below cover the image, the models, the first start and the keys. [GPUs
 
 ## Running the image
 
-[ux/SERVER.md](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md) has the design. The image is `drumsergio/akou`, tagged with each release (`drumsergio/akou:0.6.2` today; use the current release in the commands below), built from the [Dockerfile](https://github.com/GeiserX/akou/blob/main/Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](server-hardware.md#a-gpu)). There is no `latest` tag: name the version you want.
+[ux/SERVER.md](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md) has the design. The image is `drumsergio/akou`, tagged with each release (`drumsergio/akou:0.6.3` today; use the current release in the commands below), built from the [Dockerfile](https://github.com/GeiserX/akou/blob/main/Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](server-hardware.md#a-gpu)). There is no `latest` tag: name the version you want.
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`. Both must be writable by uid 1000, `/models` too even when every model is already in it: the pull and the server write downloads and the models' `usage.json` there. Named volumes, as below, already are. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host), and a read-only mount (`:ro`) does not work: the pull stops with exit 70 and the server with exit 77, both naming the folder and `EROFS`.
 
@@ -17,14 +17,14 @@ Pull the models into their volume first, so the first start is not a 3.0 GB down
 The speaker model is Nemotron by default, and that needs no step. Only to use pyannote (`asr.diarizer` `embeddings`) instead, set it on the data volume before the pull; without it the pull fetches Nemotron. Skip this on a volume whose models are already pulled for Nemotron: with it the pull fetches pyannote too.
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:0.6.2 -c \
+docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:0.6.3 -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
 ```
 
 Then pull. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
 
 ```sh
-docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:0.6.2 models pull fast
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:0.6.3 models pull fast
 ```
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
@@ -35,7 +35,7 @@ Inside a container akou listens on every address, and it refuses to start that w
 
 ```sh
 docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
-  -v akou-data:/data -v akou-models:/models drumsergio/akou:0.6.2
+  -v akou-data:/data -v akou-models:/models drumsergio/akou:0.6.3
 ```
 
 `curl -s http://127.0.0.1:8476/healthz` answers `{"ok":true,…,"models_ready":true}` once the pulled models are found. The server decodes any audio file with the ffmpeg inside the image, and `docker stop` ends it cleanly.
@@ -59,7 +59,7 @@ Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That i
 
 ## A reverse proxy in front
 
-akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. The live door (`GET /v1/live`, below) is a WebSocket, so the proxy must pass the upgrade and keep a quiet socket open; akou pings an idle socket and closes it after two minutes without an answer. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits.
+akou has no TLS of its own, so a reverse proxy terminates it. Three things matter, and the blocks below set all three. Uploads are large: the proxy's body limit must be at least `server.max_upload_mb` (512 MiB by default). The event feed (`GET /v1/events` with `Accept: text/event-stream`) and the streaming answers are Server-Sent Events, so the proxy must pass each event on at once instead of filling a buffer first. And a long-poll (`?wait=60`) holds a request for up to 60 seconds with no bytes, so the proxy's read timeout must be longer. The live door (`GET /v1/live`, below) is a WebSocket, so the proxy must pass the upgrade and keep a quiet socket open; akou pings an idle socket and closes it after two minutes without an answer. In akou's settings, set `server.behind_proxy` to `true`, `server.public_host` to the name clients use, and `server.trusted_proxies` to the proxy's address, so the client's own address reaches the audit lines and the rate limits. Once `server.public_host` is set, akou answers `403 bad_host` to any other name, so containers that reach it by its service name (`http://akou:8476`, as the compose example does) must go through the public name instead, or leave `server.public_host` empty.
 
 Caddy passes events on, holds long requests and passes WebSockets through by default; it only needs the body limit:
 
@@ -138,7 +138,7 @@ There is no resume. A new socket is a new session: send `hello`, the OpusHead an
 Docker on a Mac has no Metal, so on a Mac the server runs natively, from a source checkout at the release tag. The single-file `akou` CLI cannot transcribe, as above. You need [Bun](https://bun.sh) at the version in `.bun-version`, and ffmpeg for anything but a 16 kHz WAV (`brew install ffmpeg`):
 
 ```sh
-git clone --branch v0.6.2 https://github.com/GeiserX/akou.git && cd akou
+git clone --branch v0.6.3 https://github.com/GeiserX/akou.git && cd akou
 bun install --frozen-lockfile
 bun src/main/cli/cli.ts models pull fast
 bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-server, for the best preset
@@ -204,6 +204,8 @@ On the sending server, save the printed `ak_` key in a file only the server's us
 ```
 
 Restart the server. `GET /v1/server` then lists the remote under `remotes` with its state (`up`, `down` or `refused`) and the presets it offers, and a preset a remote offers shows as available. A job for a preset this server cannot run goes to a remote that offers it; one for a preset the entry names goes there first and runs here while the remote is down; everything else runs here. A remote that goes down leaves its jobs queued, never failed, until it or another remote that offers them is back.
+
+A remote holds two of this server's jobs at a time: the one it runs and the next. When every remote an entry names is busy, a job for that preset waits for one by default, which is right when this server is too slow to run it. When this server is a good worker itself, set `{ "server.remotes_overflow": true }`: the job then runs here instead, so this server and all its remotes work through a backlog at once. A job this server cannot run still waits for a remote, and right after a start a job waits until every remote it names has answered its first probe, since one that has not may have room. Changing the setting over the API routes the waiting jobs at once.
 
 ## The command line against a server
 

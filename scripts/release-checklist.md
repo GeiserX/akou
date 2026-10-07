@@ -15,10 +15,10 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
    bun run check
    ```
 
-   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, `skills/akou-vocab/SKILL.md`, and the helper's `Cargo.toml` and `Cargo.lock`. Write the version's section in [CHANGELOG.md](../CHANGELOG.md), headed `## 0.1.0`; `--check` fails without it, and the release notes start with it (CI-20). Commit both (`chore(release): 0.1.0`) and merge it to `main`.
+   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, `skills/akou-vocab/SKILL.md`, the compose example's `AKOU_VERSION`, and the helper's `Cargo.toml` and `Cargo.lock`. Write the version's section in [CHANGELOG.md](../CHANGELOG.md), headed `## 0.1.0`; `--check` fails without it, and the release notes start with it (CI-20). Commit both (`chore(release): 0.1.0`) and merge it to `main`.
    For a stable version (1.0.0 or later, no prerelease part), `--check` also fails until the evidence is on record ([CI-CD](../docs/CI-CD.md) CI-28). Prereleases skip both lines:
    - The terms check in [docs/providers.md](../docs/providers.md): read the current Anthropic and OpenAI terms and add a row dated after the previous stable release.
-   - The gates in [docs/gates/M0-results.md](../docs/gates/M0-results.md): every gate G1 to G8 has a Pass verdict in the summary table.
+   - The gates in [docs/gates/M0-results.md](../docs/gates/M0-results.md): every gate G1 to G8 has a plain Pass verdict in the summary table; a qualified one such as "Pass (M-series half)" does not count.
 5. Dry run the workflow on `main` and read every check line:
 
    ```sh
