@@ -8,9 +8,9 @@ The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many
 
 | GPU | Image | Add to `docker run` |
 |---|---|---|
-| None | `drumsergio/akou:0.6.2` | Nothing |
-| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.6.2-vulkan` | `--device /dev/dri/renderD128 --group-add $(stat -c %g /dev/dri/renderD128)`, with the GPU's own render node |
-| NVIDIA | `drumsergio/akou:0.6.2-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
+| None | `drumsergio/akou:0.6.3` | Nothing |
+| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.6.3-vulkan` | `--device /dev/dri/renderD128 --group-add $(stat -c %g /dev/dri/renderD128)`, with the GPU's own render node |
+| NVIDIA | `drumsergio/akou:0.6.3-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
 | Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself ([A Mac as the server](server.md#a-mac-as-the-server)); it uses Metal |
 
 Pass one render node, the GPU's own, not the whole `/dev/dri`. llama-server picks among the render nodes it can open by its own device order, not by path. An iGPU with SR-IOV virtual functions shows several nodes (`ls /dev/dri`): on an Intel UHD 770 with two virtual functions, llama-server opened a virtual function instead of the GPU akou had detected, and the GPU hung. Mesa could pin llama-server to the detected GPU by its PCI bus address, which a virtual function does not share, but akou does not do that yet: it needs a run on a box with virtual functions. When akou can open more than one node, `accelerator.reason` lists them and names the one to pass.
