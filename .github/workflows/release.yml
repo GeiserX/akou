@@ -39,6 +39,8 @@ on:
       - scripts/smoke-app.ts
       - scripts/gates/g2-worker.ts
       - scripts/gates/g2-probe.ts
+      - scripts/gates/g1-shell.ts
+      - scripts/gates/g1-sni-watcher.py
       - scripts/clip.ts
       - scripts/check-feed.ts
       - scripts/locate-helper-probe.ts
@@ -316,6 +318,35 @@ jobs:
         with:
           name: gate-g2-${{ runner.os }}
           path: gate-g2-*.json
+          if-no-files-found: warn
+          retention-days: 90
+      # G1, the shell (ROADMAP): the packaged app's window, tray item, global hotkey, login item
+      # and headless start. Linux runs on an X display (Xvfb with Openbox) and a session bus with a
+      # StatusNotifierWatcher, so Wayland is not covered. It records and never blocks: the verdict
+      # is in the JSON, which docs/gates/M0-results.md carries.
+      - name: G1 tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xvfb xauth openbox wmctrl xdotool \
+            imagemagick dbus dbus-x11 python3-gi gir1.2-glib-2.0 libgtk-3-0t64 \
+            libwebkit2gtk-4.1-0 libayatana-appindicator3-1
+      - name: G1, the shell of the packaged app (ROADMAP)
+        continue-on-error: true
+        run: |
+          gate=(bun scripts/gates/g1-shell.ts --models eval-models --out "gate-g1-$RUNNER_OS.json" --shots gate-g1-shots)
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- "${gate[@]}"
+          else
+            "${gate[@]}"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gate-g1-${{ runner.os }}
+          path: |
+            gate-g1-*.json
+            gate-g1-shots/
           if-no-files-found: warn
           retention-days: 90
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
