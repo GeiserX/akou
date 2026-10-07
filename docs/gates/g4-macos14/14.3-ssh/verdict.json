@@ -1,0 +1,9 @@
+{
+  "gate": "G4, macOS 14.3",
+  "image": "akou-sonoma-14.3",
+  "macos": "14.3",
+  "tone_call_rms_dbfs": "-190.286288",
+  "silent_call_rms_dbfs": "-190.429642",
+  "verdict": "fail",
+  "reason": "tone above -60 dBFS and silence under -90 dBFS on the call channel"
+}
