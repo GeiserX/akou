@@ -16,6 +16,7 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 | G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms on the call channel, which held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
 | G5 | Pass | Re-run at `36a2237` (2026-10-07). Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 154 ms while the teardown still hung. Crash: new part in 79 ms, 0.14 s of call audio lost. Real device helper SIGKILLed: new part in 212 ms, 1.30 s lost. The API never missed a poll. At `f6cabfc`: 78 ms; 79 ms and 0.13 s; 81 ms and 1.25 s. |
 | G6 | Pass (M-series half) | Real-time factor 0.081 for both channels, worst case. Committed line 1.02 s after the utterance ends (median), 1.14 s at worst. |
+| G7 | Partial | Fake run 5 of 5 against the signed 0.6.2 app: control `missing`, recorded streams answer (first token 113 ms claude, 62 ms codex), usage limits give excerpts only with `exhausted`. Real run: the app found both harnesses through the login shell with no harness on its `PATH`, but neither had a live sign-in on the machine (`errorKind: auth`; claude: OAuth session expired and not refreshable; codex: HTTP 401), so no real token and no time to first token. |
 | G8 | Pass | Re-run at `36a2237` (2026-10-07), on a quiet machine: cold `akou start` p95 578 ms (20 runs, 20 separate app processes), warm p95 319 ms; `f6cabfc` measured 193 ms and 159 ms. The app now takes about 180 ms longer to answer its API. Under heavy background load (load average 16 to 65) the cold p95 went over 3 s in two of four runs, and warm starts failed on both commits when the helper took over 3 s to open the devices (see below). |
 
 ## Recording from SSH versus the console session
@@ -263,6 +264,44 @@ The live latency includes the 0.7 s of silence that closes a segment (`asr.segme
 **Verdict: pass on the M-series half**, with room to spare, on a machine under background load.
 
 **Still open.** The 4-core x64 laptop half, whose target is under 0.5. And a vocabulary note for M1: in the live run, 10 of the 12 listed words came out right every time they were said. "pyannote" was right once and heard once as "pyanode" (utterance s08, [g6-live.json](g6-live.json); the offline pass got both right). "akou" was never right: it was heard as "ACA" and "Aka", even with the word in the decode list at boost 3.
+
+## G7: harness provider
+
+**What ran.** [`scripts/gates/g7-harness.ts`](../../scripts/gates/g7-harness.ts) on 2026-10-07, on a Mac mini M4 (macOS 26.6.1), against the released 0.6.2 and not a source build. The v0.6.2 assets `akou-0.6.2-macos-arm64.zip` and `akou-cli-0.6.2-darwin-arm64.tar.gz` matched `SHA256SUMS` (a copy with one byte appended failed the same check). The app was unpacked with `ditto -x -k` into `/Applications`, and `spctl -a -vv` read `accepted, source=Notarized Developer ID` both before and after its first launch. The runner drove the compiled `akou` from the CLI archive, which starts `/Applications/akou.app` through `open`, with a scratch `AKOU_HOME` holding `dictation.enabled: false`, `capture.mic: none` and `capture.call: none`, so the app opened no microphone and no tap. The first case imports a fixture call; every case quits the app, writes the provider settings and lets the next command start it again.
+
+**Which app answered.** A watcher logged the executable of every pid that `runtime.json` named during the runs: all 10 app processes (6 in the fake run, 4 in the real one) were `/Applications/akou.app/Contents/MacOS/bun`, each a child of the bundle's own `launcher`. `open` hands the caller's environment to the app it starts, so `AKOU_HOME` and, in the real run, the cut `PATH` reached it. We checked that with a stand-in app before the runs.
+
+**Fake run** ([g7-fake.json](g7-fake.json)), no subscription spent: 5 of 5 cases passed.
+
+| Case | Expected | Got | First token | Answer |
+|---|---|---|---|---|
+| Control: `provider.harnessPath` pinned to a file that does not exist | Excerpts only, `errorKind: missing` | `missing`, the fixture's line in the excerpts, no token | none | 31 ms |
+| claude, recorded `ok` stream | Streams and answers | Answered, 1 token | 113 ms | 126 ms |
+| claude, recorded usage-limit stream, exit 1 | Excerpts only, `errorKind: exhausted` | `exhausted`, no token | none | 82 ms |
+| codex, recorded `ok` stream | Streams and answers | Answered, 2 tokens | 62 ms | 73 ms |
+| codex, recorded usage-limit stream, exit 1 | Excerpts only, `errorKind: exhausted` | `exhausted`, no token | none | 300 ms |
+
+**Real run** ([g7-real.json](g7-real.json)), one question per harness ("When is the release?"), with `provider.harnessPath` empty and the CLI, and so the app, run with `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. The only way the app could find a harness was the login shell.
+
+| Case | Harness the app found | Got | First token | Answer |
+|---|---|---|---|---|
+| Control, as above | none | `missing`, excerpts only | none | 41 ms |
+| claude | `claude-code/2.1.226` at `~/.local/bin/claude` | Not answered: `errorKind: auth`, "Claude Code is not logged in". Excerpts only | none | 1,213 ms |
+| codex | `codex/0.147.0` at `~/.local/bin/codex` | Not answered: `errorKind: auth`, "Codex is not logged in" (HTTP 401). Excerpts only | none | 15,723 ms |
+
+The login-shell lookup worked: with no harness on the app's `PATH` and no pinned path, the app found both. It found the copies in `~/.local/bin`, which comes first on that machine's login-shell `PATH`, and not the newer Homebrew ones (`claude --version` 2.1.283, `codex --version` 0.158.0 in `/opt/homebrew/bin`). Neither copy it found had a live sign-in (claude: "OAuth session expired and could not be refreshed"; codex: HTTP 401 with no credentials sent), so neither answered, and the app fell back to excerpts with the right `errorKind`, as designed. We did not check or change the sign-in state on the machine. The raw outputs are as printed, except that temporary folders read `<tmp>`, the home folder reads `~`, the machine's timezone in the call context reads `<zone>`, and the OpenAI request and ray ids are redacted.
+
+**Time to first token.** Not measured: no real token arrived. Once it is, the figure counts from the request and includes the harness's own global context on that machine (user-level instructions, memory, skills), which loads on every spawn. The fake figures above only time the app's own path.
+
+**Permission prompts.** None that we saw. The TCC log for the run window shows no Microphone or system-audio request from akou, only checks with no prompt. Nobody watched the console.
+
+**Verdict: partial.** The packaged, notarized app streams a harness answer and maps a usage limit to excerpts only, and the control shows the runner really reached the harness setting. It finds a harness through the login shell when `PATH` has none. The real answer, the half that needs a signed-in harness, did not come, so G7 is not a pass.
+
+**Still open.**
+
+- Refresh or redo the sign-in of the harness that comes first on the login-shell `PATH` (claude's OAuth session there expired and could not refresh itself; codex sent no credentials), or put a signed-in one first, then re-run `--real` once per harness and record time to first token. That is an owner step: we do not touch sign-in state.
+- The runner cannot run twice on one `AKOU_HOME`: the second run's import is refused as "already imported", so the real run used a second scratch home.
+- First launch after install, seen once: the zip's app extracts itself on first launch and relaunches, which took about 5 s, longer than the CLI's 3 s launch budget, so the first `akou` command after install failed with "akou did not answer within 3 s". The first launcher process then stayed alive, idle, with its bundle already replaced. While it ran, every later `open -a akou.app` treated it as the running app, did not start a new one, and `launch.log` said "Application /Applications/akou.app was already running and so the additional environment variables could not be set". The CLI could not start the app until that process was stopped.
 
 ## G8: cold start
 
