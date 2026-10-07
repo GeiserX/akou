@@ -64,6 +64,7 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "skills/akou-vocab/SKILL.md",
     ".claude-plugin/plugin.json",
     "docs/api/openapi.json",
+    "examples/compose/telegram-archive/.env.example",
   ]) {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));

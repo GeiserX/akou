@@ -73,7 +73,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `server.enabled` (file only) | `false` | Server mode: per-key access instead of the one token, bound to `api.bind`, for other programs to call over the network. |
 | `server.behind_proxy` (file only) | `false` | A reverse proxy in front of akou terminates TLS. Required for any bind that is not loopback; with no `server.public_host`, any Host header is accepted. |
-| `server.public_host` (file only) | `""` | The host name clients use (`akou.example`, or with a port). Set: server mode accepts that Host header and loopback only. |
+| `server.public_host` (file only) | `""` | The host name clients use (`akou.example`, or with a port). Set: server mode accepts that Host header and loopback only, so a container calling `http://akou:8476` gets `403 bad_host`; leave it empty for that. |
 | `server.trusted_proxies` (file only) | `[]` | Addresses or CIDR blocks of the proxies whose X-Forwarded-For is believed for rate limits and audit. From any other peer the TCP address is the source. |
 | `server.max_upload_mb` | `512` | Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap. |
 | `server.max_audio_minutes` | `240` | Longest audio a file job transcribes, in minutes. A longer file fails as `too_long` before it is held in memory. |
