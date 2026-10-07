@@ -3,8 +3,9 @@
  * T0.16). It reads one recorded call and the schedule the signal source wrote
  * (`native/akou-capture/examples/drift-signal.rs`), and reports:
  *
- * - **Offsets.** Every chirp is found in the recording by cross-correlation with its template and
- *   compared with where its host time says it should be. Per channel that gives the channel's
+ * - **Offsets.** Every chirp is found in the recording by cross-correlation with its template (or,
+ *   when the codec has kept only its band energy, by that energy's envelope; the result says which)
+ *   and compared with where its host time says it should be. Per channel that gives the channel's
  *   latency against the host clock over the hour; the mic chirp and the call chirp of the same
  *   period give the left-right offset. Drift is the change over the run, as a fitted slope in
  *   ms per hour and as the max-min spread.
@@ -43,6 +44,20 @@ const CHIRP_S = 0.05;
 const SEARCH_S = 1.0;
 /** A match needs this normalized correlation. */
 const MIN_SCORE = 0.5;
+/**
+ * Below MIN_SCORE the chirp is looked for by its band energy instead (`envelopeChirp`): the call
+ * file is 48 kbps stereo Opus, and with both channels active the codec keeps a 50 ms sweep's energy
+ * in its band but not its waveform, so the waveform correlation can fall to 0.3 on a chirp that is
+ * plainly there. The envelope match needs this Pearson correlation with the template's energy
+ * envelope, and the burst this far above the window's median band energy.
+ */
+const MIN_ENVELOPE_SCORE = 0.8;
+const MIN_ENVELOPE_SNR_DB = 10;
+/** The envelope runs at RATE / ENV_HOP with a 2.5 ms energy window. */
+const ENV_HOP = DECIM;
+const ENV_WIN = Math.round(0.0025 * RATE);
+/** Zeros around the template before filtering, so its filter tail is part of the reference. */
+const ENV_PAD = Math.round(0.02 * RATE);
 /** A sample this close to zero (16-bit units, about -60 dBFS) counts toward a gap. */
 const ZERO = 30;
 
@@ -154,6 +169,117 @@ interface Found {
   /** Seconds in the file. */
   at: number;
   score: number;
+  /** How it was found: the waveform correlation, or the band-energy envelope when that failed. */
+  method: "waveform" | "envelope";
+}
+
+/** RBJ band-pass biquad over the side's chirp band (0 dB at the centre), run forward once. */
+function bandpass(x: ArrayLike<number>, from: number, to: number, ch: "mic" | "call"): Float64Array {
+  const [f0, f1] = ch === "mic" ? [3000, 4500] : [1500, 2500];
+  const fc = Math.sqrt(f0 * f1);
+  const q = fc / (f1 - f0);
+  const w0 = (2 * Math.PI * fc) / RATE;
+  const alpha = Math.sin(w0) / (2 * q);
+  const a0 = 1 + alpha;
+  const a1 = -2 * Math.cos(w0);
+  const a2 = 1 - alpha;
+  const out = new Float64Array(Math.max(0, to - from));
+  let x1 = 0;
+  let x2 = 0;
+  let y1 = 0;
+  let y2 = 0;
+  for (let i = 0; i < out.length; i++) {
+    const v = x[from + i] ?? 0;
+    const y = (alpha * v - alpha * x2 - a1 * y1 - a2 * y2) / a0;
+    x2 = x1;
+    x1 = v;
+    y2 = y1;
+    y1 = y;
+    out[i] = y;
+  }
+  return out;
+}
+
+/** Mean energy in a sliding ENV_WIN window, one value per ENV_HOP samples. */
+function envelope(x: Float64Array): Float64Array {
+  const n = Math.max(0, Math.floor((x.length - ENV_WIN) / ENV_HOP));
+  const out = new Float64Array(n);
+  let s = 0;
+  for (let i = 0; i < ENV_WIN && i < x.length; i++) s += (x[i] ?? 0) ** 2;
+  for (let k = 0; k < n; k++) {
+    out[k] = s / ENV_WIN;
+    const left = k * ENV_HOP;
+    for (let j = 0; j < ENV_HOP; j++) s += (x[left + ENV_WIN + j] ?? 0) ** 2 - (x[left + j] ?? 0) ** 2;
+  }
+  return out;
+}
+
+/** Pearson correlation of `t` (mean `tMean`, centred norm `tNorm`) against `x` at offset `o`. */
+function pearson(x: Float64Array, o: number, t: Float64Array, tMean: number, tNorm: number): number {
+  let m = 0;
+  for (let j = 0; j < t.length; j++) m += x[o + j] ?? 0;
+  m /= t.length;
+  let dot = 0;
+  let e = 0;
+  for (let j = 0; j < t.length; j++) {
+    const v = (x[o + j] ?? 0) - m;
+    dot += v * ((t[j] ?? 0) - tMean);
+    e += v * v;
+  }
+  return e > 0 && tNorm > 0 ? dot / (Math.sqrt(e) * tNorm) : 0;
+}
+
+function median(x: Float64Array): number {
+  const s = Float64Array.from(x).sort();
+  return s.length ? (s[s.length >> 1] ?? 0) : 0;
+}
+
+/**
+ * Finds a chirp near `expect` seconds by its band energy, phase-blind: the signal and the template
+ * go through the same band-pass filter (so its delay cancels), then the 2.5 ms energy envelopes
+ * are compared by Pearson correlation. A flat floor correlates near 0 with the template's bell, so
+ * silence or noise is not found; a burst in the band at the right time is.
+ */
+function envelopeChirp(x: Int16Array, ch: "mic" | "call", expect: number): Found | null {
+  const t = chirpTemplate(ch, RATE);
+  const padded = new Float64Array(t.length + 2 * ENV_PAD);
+  padded.set(t, ENV_PAD);
+  const ref = envelope(bandpass(padded, 0, padded.length, ch));
+  let tMean = 0;
+  for (const v of ref) tMean += v;
+  tMean /= ref.length;
+  let tNorm = 0;
+  for (const v of ref) tNorm += (v - tMean) ** 2;
+  tNorm = Math.sqrt(tNorm);
+  const from = Math.max(0, Math.round((expect - SEARCH_S) * RATE) - ENV_PAD);
+  const to = Math.min(x.length, Math.round((expect + SEARCH_S + CHIRP_S) * RATE) + ENV_PAD);
+  const env = envelope(bandpass(x, from, to, ch));
+  const scores = new Float64Array(Math.max(0, env.length - ref.length + 1));
+  let best = -1;
+  let bestAt = 0;
+  for (let o = 0; o < scores.length; o++) {
+    const s = pearson(env, o, ref, tMean, tNorm);
+    scores[o] = s;
+    if (s > best) {
+      best = s;
+      bestAt = o;
+    }
+  }
+  if (best < MIN_ENVELOPE_SCORE) return null;
+  // The burst itself against the window's floor, in the band.
+  const burstFrom = bestAt + Math.floor(ENV_PAD / ENV_HOP);
+  const burstLen = Math.floor(t.length / ENV_HOP);
+  let burst = 0;
+  for (let j = 0; j < burstLen; j++) burst += env[burstFrom + j] ?? 0;
+  burst /= burstLen;
+  const floor = median(env);
+  const snrDb = 10 * Math.log10(burst / Math.max(floor, 1e-9));
+  if (!(snrDb >= MIN_ENVELOPE_SNR_DB)) return null;
+  const l = scores[bestAt - 1] ?? best;
+  const r = scores[bestAt + 1] ?? best;
+  const den = l - 2 * best + r;
+  const frac = den !== 0 ? (0.5 * (l - r)) / den : 0;
+  return { at: (from + (bestAt + frac) * ENV_HOP + ENV_PAD) / RATE, score: best, method: "envelope" };
 }
 
 /** Finds a chirp near `expect` seconds. */
@@ -173,7 +299,7 @@ function findChirp(x: Int16Array, ch: "mic" | "call", expect: number): Found | n
       bestAt = o;
     }
   }
-  if (best < MIN_SCORE * 0.8) return null;
+  if (best < MIN_SCORE * 0.8) return envelopeChirp(x, ch, expect);
   const coarse = Math.max(0, from) + bestAt * DECIM;
   const fn = norm(tFine);
   const scores = new Map<number, number>();
@@ -187,13 +313,13 @@ function findChirp(x: Int16Array, ch: "mic" | "call", expect: number): Found | n
       fAt = o;
     }
   }
-  if (fBest < MIN_SCORE) return null;
+  if (fBest < MIN_SCORE) return envelopeChirp(x, ch, expect);
   // Parabolic interpolation of the peak, for a sub-sample position.
   const l = scores.get(fAt - 1) ?? ncc(x, fAt - 1, tFine, fn);
   const r = scores.get(fAt + 1) ?? ncc(x, fAt + 1, tFine, fn);
   const den = l - 2 * fBest + r;
   const frac = den !== 0 ? (0.5 * (l - r)) / den : 0;
-  return { at: (fAt + frac) / RATE, score: fBest };
+  return { at: (fAt + frac) / RATE, score: fBest, method: "waveform" };
 }
 
 interface Gap {
@@ -359,7 +485,10 @@ async function main(): Promise<void> {
   }
 
   // Latency of each chirp against its host time, per side and per channel it was found in.
-  const latency: Record<string, Array<{ k: number; t: number; ms: number; score: number }>> = {};
+  const latency: Record<
+    string,
+    Array<{ k: number; t: number; ms: number; score: number; method: Found["method"] }>
+  > = {};
   const levels: Record<string, number> = {};
   for (const [chan, name] of [
     [0, "left"],
@@ -376,7 +505,9 @@ async function main(): Promise<void> {
         const e = expectAt(c.host_ns);
         if (e < SEARCH_S || e > x.length / RATE - SEARCH_S) continue;
         const f = findChirp(x, side, e);
-        if (f) latency[key]?.push({ k: c.k, t: e, ms: (f.at - e) * 1000, score: f.score });
+        if (f) {
+          latency[key]?.push({ k: c.k, t: e, ms: (f.at - e) * 1000, score: f.score, method: f.method });
+        }
       }
     }
     // Gaps. With a mic side, from the first second to the end of the source: the mic pilot plays
@@ -481,7 +612,13 @@ async function main(): Promise<void> {
         .map((c) => ({ k: c.k, at: round(expectAt(c.host_ns), 1) })),
       latencyMs: stats(rows.map((r) => round(r.ms, 3))),
       slopeMsPerHour: round(f.slope * 3600, 2),
-      minScore: round(Math.min(...rows.map((r) => r.score)), 3),
+      // The waveform matches' lowest correlation; the chirps the envelope found, and their lowest.
+      minScore: round(Math.min(...rows.filter((r) => r.method === "waveform").map((r) => r.score)), 3),
+      byEnvelope: rows.filter((r) => r.method === "envelope").length,
+      minEnvelopeScore: round(
+        Math.min(...rows.filter((r) => r.method === "envelope").map((r) => r.score)),
+        3,
+      ),
       // The first and last few, so a step at a start or a rebuild is visible, not only the fit.
       firstRows: rows.slice(0, 4).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
       lastRows: rows.slice(-2).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
