@@ -152,6 +152,13 @@ export interface RemoteJob {
 // biome-ignore lint/suspicious/noExplicitAny: a remote's JSON is read field by field.
 type Body = any;
 
+/** What a probe found a remote offering. */
+interface Offer {
+  offers: Set<string>;
+  presets: string[];
+  version: string | null;
+}
+
 export class Remotes {
   private readonly remotes = new Map<string, Remote>();
   private readonly fetch: typeof fetch;
@@ -256,40 +263,29 @@ export class Remotes {
   private async probe(r: Remote): Promise<void> {
     if (r.probing) return;
     r.probing = true;
-    const before = JSON.stringify([r.state, [...r.offers]]);
+    let found: Offer | RemoteError;
     try {
-      const s = await this.request(r, "/server", { keyed: false });
-      if (s.status !== 200 || s.body?.name !== "akou" || s.body?.capabilities?.jobs !== true) {
-        throw new RemoteError(
-          "down",
-          `${r.entry.url} is not an akou server with jobs (GET /v1/server answered ${s.status})`,
-        );
-      }
-      const me = await this.request(r, "/keys/me");
-      if (me.status === 401 || me.status === 403) {
-        throw new RemoteError("refused", `${r.entry.url} refused the key (${me.status})`);
-      }
-      if (me.status !== 200) {
-        throw new RemoteError("down", `${r.entry.url} answered ${me.status} to GET /v1/keys/me`);
-      }
-      const presets: string[] = (Array.isArray(s.body.presets) ? s.body.presets : [])
-        .filter((p: Body) => p?.available === true && typeof p.name === "string")
-        .map((p: Body) => p.name as string);
-      const engines: string[] = (Array.isArray(s.body.engines) ? s.body.engines : [])
-        .filter((e: Body) => e?.installed === true && typeof e.id === "string")
-        .map((e: Body) => e.id as string);
-      r.offers = new Set([...presets, ...engines]);
-      r.presets = presets;
-      r.version = typeof s.body.version === "string" ? s.body.version : null;
+      found = await this.ask(r);
+    } catch (err) {
+      found = err instanceof RemoteError ? err : new RemoteError("down", (err as Error).message);
+    } finally {
+      r.probing = false;
+    }
+    // Compared with the state as it is now, not as it was when the probe began: a job's request
+    // that failed while the probe was out marked the remote down (`failed`), and a probe that
+    // ends `up` must say so, or the queue is never told the remote came back and a job routed to
+    // it is never sent.
+    const before = JSON.stringify([r.state, [...r.offers]]);
+    if (found instanceof RemoteError) {
+      r.state = found.kind === "refused" ? "refused" : "down";
+      r.error = found.message;
+    } else {
+      r.offers = found.offers;
+      r.presets = found.presets;
+      r.version = found.version;
       r.state = "up";
       r.seen = true;
       r.error = null;
-    } catch (err) {
-      const e = err instanceof RemoteError ? err : new RemoteError("down", (err as Error).message);
-      r.state = e.kind === "refused" ? "refused" : "down";
-      r.error = e.message;
-    } finally {
-      r.probing = false;
     }
     r.checkedAt = this.now();
     if (JSON.stringify([r.state, [...r.offers]]) !== before) {
@@ -301,6 +297,35 @@ export class Remotes {
       );
       this.o.onChange?.();
     }
+  }
+
+  /** What a remote offers, from its two probe requests; throws the `RemoteError` it answers with. */
+  private async ask(r: Remote): Promise<Offer> {
+    const s = await this.request(r, "/server", { keyed: false });
+    if (s.status !== 200 || s.body?.name !== "akou" || s.body?.capabilities?.jobs !== true) {
+      throw new RemoteError(
+        "down",
+        `${r.entry.url} is not an akou server with jobs (GET /v1/server answered ${s.status})`,
+      );
+    }
+    const me = await this.request(r, "/keys/me");
+    if (me.status === 401 || me.status === 403) {
+      throw new RemoteError("refused", `${r.entry.url} refused the key (${me.status})`);
+    }
+    if (me.status !== 200) {
+      throw new RemoteError("down", `${r.entry.url} answered ${me.status} to GET /v1/keys/me`);
+    }
+    const presets: string[] = (Array.isArray(s.body.presets) ? s.body.presets : [])
+      .filter((p: Body) => p?.available === true && typeof p.name === "string")
+      .map((p: Body) => p.name as string);
+    const engines: string[] = (Array.isArray(s.body.engines) ? s.body.engines : [])
+      .filter((e: Body) => e?.installed === true && typeof e.id === "string")
+      .map((e: Body) => e.id as string);
+    return {
+      offers: new Set([...presets, ...engines]),
+      presets,
+      version: typeof s.body.version === "string" ? s.body.version : null,
+    };
   }
 
   /** Marks a remote down after a failed request and probes it again at the next period. */

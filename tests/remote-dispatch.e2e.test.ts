@@ -826,3 +826,204 @@ describe("a remote that forgot a job", () => {
     expect((other as RemoteError).kind).toBe("rejected");
   });
 });
+
+describe("[SV-X5] a remote that went down while a probe was in flight is seen coming back", () => {
+  // The stall of 2026-10-07: every remote's long-poll timed out while the periodic probe was in
+  // flight. The probe ended `up`, as it began, so it logged nothing and told the queue nothing,
+  // and with every queued job routed to a remote nothing called dispatch again.
+  test("Remotes: a `failed` during the probe's requests still ends in remote.up and onChange", async () => {
+    const dir = tempDir("akou-probe-race-").dir;
+    const url = "http://remote.example";
+    let gate = Promise.resolve();
+    let open: () => void = () => {};
+    const lines: string[] = [];
+    let changes = 0;
+    const remotes = new Remotes({
+      entries: () => [`${url} ${keyFile(dir, "ak_x")} fast`],
+      fetch: (async (input: string | URL | Request) => {
+        const u = String(input);
+        if (u.endsWith("/v1/server")) {
+          await gate;
+          return Response.json({
+            name: "akou",
+            presets: [{ name: "fast", available: true }],
+            engines: [],
+            capabilities: { jobs: true },
+          });
+        }
+        if (u.endsWith("/v1/keys/me")) return Response.json({ id: "k1" });
+        return Response.json({ error: "not_found" }, { status: 404 });
+      }) as unknown as typeof fetch,
+      onChange: () => changes++,
+      log: (_level, msg) => lines.push(msg),
+    });
+    await remotes.probeAll();
+    expect(remotes.view()[0]?.state).toBe("up");
+    expect(changes).toBe(1);
+    gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const probing = remotes.probeAll();
+    // While the probe waits on GET /v1/server, a job's request fails: the remote is down.
+    remotes.failed(url, new RemoteError("down", `no answer from ${url}: The operation timed out.`));
+    expect(remotes.view()[0]?.state).toBe("down");
+    open();
+    await probing;
+    expect(remotes.view()[0]?.state).toBe("up");
+    expect(lines.filter((l) => l.startsWith("remote.up")).length).toBe(2);
+    expect(changes).toBe(2);
+  });
+
+  // Two stand-in remotes that offer `fast` and hold their jobs as running; while `failing`, every
+  // long-poll answers 503, and once `finished`, done. Their GET /v1/server waits on `probeGate`
+  // while it is closed, so a probe of each is in flight when the test makes them fail.
+  const FAKE_KEY = "ak_droppingworkerkey0123456789";
+  let posts = 0;
+  let probesHeld = 0;
+  let failing = false;
+  let finished = false;
+  let probeGate = Promise.resolve();
+  let openProbes: () => void = () => {};
+  const fakes: ReturnType<typeof Bun.serve>[] = [];
+
+  beforeAll(() => {
+    for (let i = 0; i < 2; i++) {
+      fakes.push(
+        Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: async (req) => {
+            const u = new URL(req.url);
+            if (u.pathname === "/v1/server") {
+              probesHeld++;
+              try {
+                await probeGate;
+              } finally {
+                probesHeld--;
+              }
+              return Response.json({
+                name: "akou",
+                version: "9.9.9",
+                mode: "server",
+                presets: [{ name: "fast", available: true }],
+                engines: [{ id: RECOGNIZER, installed: true }],
+                capabilities: { jobs: true, events: true, webhooks: true },
+              });
+            }
+            if (req.headers.get("authorization") !== `Bearer ${FAKE_KEY}`)
+              return Response.json({ error: "unauthorized", message: "no" }, { status: 401 });
+            if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+            if (u.pathname === "/v1/jobs" && req.method === "POST") {
+              await req.formData();
+              posts++;
+              return Response.json({ id: `job_DROP${posts}`, status: "queued" }, { status: 202 });
+            }
+            if (u.pathname.startsWith("/v1/jobs/job_DROP")) {
+              if (req.method === "DELETE") return Response.json({ ok: true });
+              const id = u.pathname.split("/")[3];
+              if (u.pathname.endsWith("/result")) {
+                return Response.json({
+                  job_id: id,
+                  status: "done",
+                  text: "hello world",
+                  language: "en",
+                  language_confidence: null,
+                  duration_s: 3,
+                  words: [],
+                  segments: [{ s: 0.4, e: 1.2, text: "hello world", speaker: null }],
+                  engine: { name: "akou", version: "9.9.9", preset: "fast", models: [RECOGNIZER] },
+                  confidence: null,
+                  metadata: null,
+                });
+              }
+              if (failing)
+                return Response.json({ error: "unavailable", message: "no" }, { status: 503 });
+              if (finished) return Response.json({ id, status: "done" });
+              await Bun.sleep(200);
+              return Response.json({ id, status: "running" });
+            }
+            return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+          },
+        }),
+      );
+    }
+  });
+  afterAll(() => {
+    openProbes();
+    for (const f of fakes) f.stop(true);
+  });
+
+  const states = async (p: Server): Promise<string[]> =>
+    ((await get(p, "/v1/server")).body?.remotes ?? []).map((r: Body) => r.state as string);
+
+  test("every remote drops in one tick while the local Worker is mid-job: the queue resumes when they return", async () => {
+    posts = 0;
+    failing = false;
+    finished = false;
+    let decodes = 0;
+    let openLocal: () => void = () => {};
+    const localGate = new Promise<void>((r) => {
+      openLocal = r;
+    });
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({
+      home: pdir,
+      installed: true,
+      keyName: "archive",
+      settings: {
+        "server.remotes": fakes.map(
+          (f) => `http://127.0.0.1:${f.port} ${keyFile(pdir, FAKE_KEY)} fast`,
+        ),
+        "server.remotes_overflow": true,
+        "server.concurrency": 1,
+      },
+      decode: async (p, s) => {
+        decodes++;
+        await localGate;
+        return readUploadAudio(p, { signal: s });
+      },
+    });
+    try {
+      await until(async () => (await states(primary)).join() === "up,up", 10_000, "both up");
+      const ids: string[] = [];
+      for (let i = 0; i < 6; i++)
+        ids.push((await submit(primary, { preset: "fast" })).body.id as string);
+      // Two on each remote, one running here through overflow, one queued behind them all.
+      await until(
+        async () => posts === 4 && decodes === 1,
+        10_000,
+        "four sent and one running here",
+      );
+      expect((await get(primary, `/v1/jobs/${ids[5]}`)).body.status).toBe("queued");
+      // A probe of each remote is in flight...
+      probeGate = new Promise<void>((r) => {
+        openProbes = r;
+      });
+      await until(async () => probesHeld === 2, 10_000, "a probe of each remote in flight");
+      // ...when every long-poll fails in the same tick: both down, their four jobs queued again.
+      failing = true;
+      await until(async () => (await states(primary)).join() === "down,down", 10_000, "both down");
+      // ...and all four are queued again, none still followed, before either answers again.
+      const queued = async (id: string) =>
+        (await get(primary, `/v1/jobs/${id}`)).body.status === "queued";
+      await until(
+        async () => (await Promise.all(ids.slice(0, 4).map(queued))).every(Boolean),
+        10_000,
+        "the four sent jobs back in the queue",
+      );
+      // Then both answer again, and the probes end `up`, as they began.
+      failing = false;
+      finished = true;
+      openProbes();
+      await until(async () => (await states(primary)).join() === "up,up", 10_000, "both up again");
+      // The job running here ends: from now on nothing else happens on this server by itself.
+      openLocal();
+      // On 0.6.3 the five waiting jobs never started again: remotes up, queued 5, running 0.
+      for (const id of ids)
+        expect((await get(primary, `/v1/jobs/${id}?wait=5`)).body.status).toBe("done");
+      expect(posts).toBe(5);
+    } finally {
+      await primary.close();
+    }
+  });
+});
