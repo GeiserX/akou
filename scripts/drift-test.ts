@@ -49,10 +49,13 @@ const MIN_SCORE = 0.5;
  * file is 48 kbps stereo Opus, and with both channels active the codec keeps a 50 ms sweep's energy
  * in its band but not its waveform, so the waveform correlation can fall to 0.3 on a chirp that is
  * plainly there. The envelope match needs this Pearson correlation with the template's energy
- * envelope, and the burst this far above the window's median band energy.
+ * envelope, and the burst this far above the window's median band energy. Measured on the hour run
+ * of 2026-10-08: real chirps the waveform missed scored 0.53 to 0.93 with 43 to 49 dB; chirp-free
+ * windows 0.33 or less with 0 dB. The energy guard is what separates them; the correlation only
+ * asks for the bell shape.
  */
-const MIN_ENVELOPE_SCORE = 0.8;
-const MIN_ENVELOPE_SNR_DB = 10;
+const MIN_ENVELOPE_SCORE = 0.5;
+const MIN_ENVELOPE_SNR_DB = 20;
 /** The envelope runs at RATE / ENV_HOP with a 2.5 ms energy window. */
 const ENV_HOP = DECIM;
 const ENV_WIN = Math.round(0.0025 * RATE);
@@ -624,10 +627,11 @@ async function main(): Promise<void> {
     }
     // Timing comes from the waveform matches: an envelope match sits a few ms off the waveform's
     // position (the codec smears the burst's onset), so it counts as found but does not enter the
-    // latency, the slope or the first and last rows unless no waveform match exists at all.
+    // latency, the slope or the first and last rows while two or more waveform matches exist (one
+    // cannot give a slope).
     const wave = rows.filter((r) => r.method === "waveform");
     const env = rows.filter((r) => r.method === "envelope");
-    const timed = wave.length > 0 ? wave : env;
+    const timed = wave.length >= 2 ? wave : env;
     const f = fit(
       timed.map((r) => r.t),
       timed.map((r) => r.ms),
@@ -639,7 +643,7 @@ async function main(): Promise<void> {
       missing: chirps
         .filter((c) => c.ch === key.split("@")[0] && !rows.some((r) => r.k === c.k))
         .map((c) => ({ k: c.k, at: round(expectAt(c.host_ns), 1) })),
-      timingFrom: wave.length > 0 ? "waveform" : "envelope",
+      timingFrom: wave.length >= 2 ? "waveform" : "envelope",
       timed: timed.length,
       latencyMs: stats(timed.map((r) => round(r.ms, 3))),
       slopeMsPerHour: round(f.slope * 3600, 2),
@@ -686,21 +690,29 @@ async function main(): Promise<void> {
       : { pairs: lr.length, note: "no mic chirps on the left channel to pair with" };
 
   // Both trains as the tap heard them (the global tap also hears the source's mic-side output).
-  const tapPairs: number[] = [];
-  const tapT: number[] = [];
-  const micTap = new Map((latency["mic@right"] ?? []).map((r) => [r.k, r]));
-  for (const c of latency["call@right"] ?? []) {
-    const m = micTap.get(c.k);
-    if (m) {
-      tapPairs.push(c.ms - m.ms);
-      tapT.push(c.t);
+  // Same rule as leftRight: waveform matches on both sides, or every match when fewer than two.
+  const tapPairs = (keep: (r: { method: Found["method"] }) => boolean) => {
+    const ms: number[] = [];
+    const t: number[] = [];
+    const micTap = new Map((latency["mic@right"] ?? []).filter(keep).map((r) => [r.k, r]));
+    for (const c of (latency["call@right"] ?? []).filter(keep)) {
+      const m = micTap.get(c.k);
+      if (m) {
+        ms.push(c.ms - m.ms);
+        t.push(c.t);
+      }
     }
-  }
-  if (tapPairs.length > 1) {
+    return { ms, t };
+  };
+  const tapWave = tapPairs((r) => r.method === "waveform");
+  const tapFrom = tapWave.ms.length > 1 ? "waveform" : "mixed";
+  const tap = tapFrom === "waveform" ? tapWave : tapPairs(() => true);
+  if (tap.ms.length > 1) {
     result.bothTrainsInTap = {
-      pairs: tapPairs.length,
-      offsetMs: stats(tapPairs.map((v) => round(v, 3))),
-      slopeMsPerHour: round(fit(tapT, tapPairs).slope * 3600, 2),
+      pairs: tap.ms.length,
+      pairsFrom: tapFrom,
+      offsetMs: stats(tap.ms.map((v) => round(v, 3))),
+      slopeMsPerHour: round(fit(tap.t, tap.ms).slope * 3600, 2),
     };
   }
 

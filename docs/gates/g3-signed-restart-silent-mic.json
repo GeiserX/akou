@@ -10,13 +10,7 @@
       "type": "hello",
       "protocol": "akou-capture/1",
       "version": "0.6.2",
-      "caps": [
-        "tap",
-        "mic",
-        "probe",
-        "exclude-responsible",
-        "app"
-      ]
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
     },
     {
       "type": "capturing",
@@ -29,9 +23,7 @@
         "mode": "system",
         "rate": 48000
       },
-      "exclude": [
-        "pid 86518"
-      ],
+      "exclude": ["pid 86518"],
       "capture_ns": "613824555406958"
     },
     {
@@ -80,21 +72,7 @@
       "headScore": 0.94,
       "lostMs": 0,
       "scoresPer20msFromOnset": [
-        0.95,
-        0.95,
-        0.97,
-        0.97,
-        0.95,
-        0.95,
-        0.91,
-        0.72,
-        0.71,
-        0.76,
-        0.72,
-        0.64,
-        0.04,
-        0.11,
-        0.18
+        0.95, 0.95, 0.97, 0.97, 0.95, 0.95, 0.91, 0.72, 0.71, 0.76, 0.72, 0.64, 0.04, 0.11, 0.18
       ]
     }
   ],
@@ -250,6 +228,7 @@
   },
   "bothTrainsInTap": {
     "pairs": 11,
+    "pairsFrom": "waveform",
     "offsetMs": {
       "n": 11,
       "min": -3.15,

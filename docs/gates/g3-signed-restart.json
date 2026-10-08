@@ -10,13 +10,7 @@
       "type": "hello",
       "protocol": "akou-capture/1",
       "version": "0.6.2",
-      "caps": [
-        "tap",
-        "mic",
-        "probe",
-        "exclude-responsible",
-        "app"
-      ]
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
     },
     {
       "type": "capturing",
@@ -29,9 +23,7 @@
         "mode": "system",
         "rate": 48000
       },
-      "exclude": [
-        "pid 97961"
-      ],
+      "exclude": ["pid 97961"],
       "capture_ns": "614130494471541"
     },
     {
@@ -116,21 +108,7 @@
       "headScore": 0.829,
       "lostMs": 0,
       "scoresPer20msFromOnset": [
-        0.86,
-        0.94,
-        0.92,
-        0.92,
-        0.91,
-        0.9,
-        0.75,
-        0.39,
-        0.34,
-        0.36,
-        0.32,
-        0.26,
-        0.07,
-        0.17,
-        0.12
+        0.86, 0.94, 0.92, 0.92, 0.91, 0.9, 0.75, 0.39, 0.34, 0.36, 0.32, 0.26, 0.07, 0.17, 0.12
       ]
     }
   ],
@@ -219,12 +197,32 @@
       "found": 0
     },
     "mic@right": {
-      "found": 11,
+      "found": 6,
       "expected": 16,
       "missing": [
         {
           "k": 0,
           "at": -0.5
+        },
+        {
+          "k": 1,
+          "at": 9.5
+        },
+        {
+          "k": 2,
+          "at": 19.5
+        },
+        {
+          "k": 4,
+          "at": 39.5
+        },
+        {
+          "k": 6,
+          "at": 59.5
+        },
+        {
+          "k": 8,
+          "at": 79.5
         },
         {
           "k": 12,
@@ -254,15 +252,9 @@
       },
       "slopeMsPerHour": -1.91,
       "minScore": 0.503,
-      "byEnvelope": 5,
-      "minEnvelopeScore": 0.868,
-      "envelopeLatencyMs": {
-        "n": 5,
-        "min": -17.157,
-        "median": -14.223,
-        "max": -13.209,
-        "spread": 3.9480000000000004
-      },
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
       "firstRows": [
         {
           "k": 3,
@@ -378,15 +370,16 @@
     "slopeMsPerHour": -62.65
   },
   "bothTrainsInTap": {
-    "pairs": 11,
+    "pairs": 6,
+    "pairsFrom": "waveform",
     "offsetMs": {
-      "n": 11,
-      "min": -16.595,
-      "median": -2.696,
-      "max": 1.442,
-      "spread": 18.037
+      "n": 6,
+      "min": -3.402,
+      "median": -3.042,
+      "max": 1.189,
+      "spread": 4.591
     },
-    "slopeMsPerHour": -90.29
+    "slopeMsPerHour": 10.02
   },
   "memory": {
     "helper": {

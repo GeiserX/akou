@@ -1,0 +1,15 @@
+{
+  "start": {
+    "code": 0,
+    "ms": 4522,
+    "firstAudioMs": 2445,
+    "appWasRunning": false
+  },
+  "stop": {
+    "code": 0,
+    "ms": 372
+  },
+  "partEnded": true,
+  "recordedSeconds": 3690,
+  "folder": "2026-10-08_014533_g4hour"
+}
