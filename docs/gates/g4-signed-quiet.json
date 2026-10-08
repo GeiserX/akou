@@ -1,0 +1,224 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 795.4126875
+  },
+  "wallSeconds": 795.494,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.6.2",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 60796"],
+      "capture_ns": "621743365743875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "621743365743875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "621743385743875"
+    },
+    {
+      "type": "warn",
+      "code": "permission-suspect",
+      "msg": "open System Settings > Privacy & Security > Screen & System Audio Recording"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 795.4126875,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -81.3,
+  "leftSeconds": 795.413,
+  "leftGaps": {
+    "scannedSeconds": 0,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 795.413,
+  "rightGaps": {
+    "scannedSeconds": 166,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "quietWindows": [
+    {
+      "from": 0.5,
+      "to": 27.9,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    },
+    {
+      "from": 148.8,
+      "to": 747.9,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    }
+  ],
+  "firstWords": [
+    {
+      "at": 28.365,
+      "speechOnsetMs": 140,
+      "lagMs": -0.08,
+      "headScore": 0.976,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.98, 0.99, 0.99, 0.99, 0.99, 0.99, 0.97, 0.91, 0.52, 0.52, 0.4, 0.47, 0.04, 0.55, 0.58
+      ]
+    },
+    {
+      "at": 748.364,
+      "speechOnsetMs": 140,
+      "lagMs": 0.02,
+      "headScore": 0.963,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.97, 0.98, 0.97, 0.97, 0.95, 0.93, 0.9, 0.86, 0.83, 0.83, 0.82, 0.09, 0.57, 0.66
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -106.5,
+    "left_peak_dbfs": -63.1,
+    "right_rms_dbfs": -40.4,
+    "right_peak_dbfs": -1.4
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 0
+    },
+    "call@right": {
+      "found": 17,
+      "expected": 20,
+      "missing": [
+        {
+          "k": 80,
+          "at": 803.3
+        },
+        {
+          "k": 81,
+          "at": 813.3
+        },
+        {
+          "k": 82,
+          "at": 823.3
+        }
+      ],
+      "timingFrom": "waveform",
+      "timed": 17,
+      "latencyMs": {
+        "n": 17,
+        "min": -12.822,
+        "median": -12.819,
+        "max": -12.803,
+        "spread": 0.01899999999999835
+      },
+      "slopeMsPerHour": 0.07,
+      "minScore": 0.986,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
+      "firstRows": [
+        {
+          "k": 3,
+          "t": 33.33,
+          "ms": -12.82
+        },
+        {
+          "k": 4,
+          "t": 43.33,
+          "ms": -12.819
+        },
+        {
+          "k": 5,
+          "t": 53.33,
+          "ms": -12.821
+        },
+        {
+          "k": 6,
+          "t": 63.33,
+          "ms": -12.819
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 78,
+          "t": 783.33,
+          "ms": -12.805
+        },
+        {
+          "k": 79,
+          "t": 793.33,
+          "ms": -12.803
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "memory": {
+    "helper": {
+      "samples": 27,
+      "firstKb": 19152,
+      "lastKb": 17808,
+      "minKb": 17552,
+      "maxKb": 19472,
+      "slopeKbPerHour": 1468
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 17568,
+      "lastKb": 19280,
+      "minKb": 17568,
+      "maxKb": 19472,
+      "slopeKbPerHour": 2038
+    },
+    "app": {
+      "samples": 27,
+      "firstKb": 152048,
+      "lastKb": 125248,
+      "minKb": 110784,
+      "maxKb": 240272,
+      "slopeKbPerHour": 65371
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 122880,
+      "lastKb": 123072,
+      "minKb": 110784,
+      "maxKb": 240272,
+      "slopeKbPerHour": 183210
+    }
+  }
+}

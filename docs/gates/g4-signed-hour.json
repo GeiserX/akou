@@ -1,0 +1,367 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 3690.5220625
+  },
+  "wallSeconds": 3690.641,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.6.2",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 76361"],
+      "capture_ns": "618017477577875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "618017477577875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "618017477577875"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 3690.5220625,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -118.9,
+  "leftSeconds": 3690.522,
+  "leftGaps": {
+    "scannedSeconds": 3689,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 3690.522,
+  "rightGaps": {
+    "scannedSeconds": 3689,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "firstWords": [
+    {
+      "at": 31.666,
+      "speechOnsetMs": 140,
+      "lagMs": -0.02,
+      "headScore": 0.96,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.98, 0.99, 0.98, 0.98, 0.97, 0.96, 0.84, 0.39, 0.28, 0.22, 0.43, 0, 0.43, 0.44
+      ]
+    },
+    {
+      "at": 2696.655,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.963,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.97, 0.98, 0.99, 0.98, 0.96, 0.96, 0.88, 0.65, 0.66, 0.54, 0.38, 0.07, 0.37, 0.37
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -39.1,
+    "left_peak_dbfs": -2.9,
+    "right_rms_dbfs": -35.3,
+    "right_peak_dbfs": 0
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 369,
+      "expected": 372,
+      "missing": [
+        {
+          "k": 370,
+          "at": 3696.6
+        },
+        {
+          "k": 371,
+          "at": 3706.6
+        },
+        {
+          "k": 372,
+          "at": 3716.6
+        }
+      ],
+      "timingFrom": "waveform",
+      "timed": 345,
+      "latencyMs": {
+        "n": 345,
+        "min": -21.094,
+        "median": -21.084,
+        "max": -21.081,
+        "spread": 0.013000000000001677
+      },
+      "slopeMsPerHour": 0,
+      "minScore": 0.555,
+      "byEnvelope": 24,
+      "minEnvelopeScore": 0.505,
+      "envelopeLatencyMs": {
+        "n": 24,
+        "min": -20.994,
+        "median": -20.356,
+        "max": -19.163,
+        "spread": 1.8309999999999995
+      },
+      "firstRows": [
+        {
+          "k": 15,
+          "t": 146.61,
+          "ms": -21.082
+        },
+        {
+          "k": 16,
+          "t": 156.61,
+          "ms": -21.083
+        },
+        {
+          "k": 17,
+          "t": 166.61,
+          "ms": -21.082
+        },
+        {
+          "k": 18,
+          "t": 176.61,
+          "ms": -21.082
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 368,
+          "t": 3676.61,
+          "ms": -21.084
+        },
+        {
+          "k": 369,
+          "t": 3686.61,
+          "ms": -21.084
+        }
+      ]
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 368,
+      "expected": 372,
+      "missing": [
+        {
+          "k": 270,
+          "at": 2696.6
+        },
+        {
+          "k": 370,
+          "at": 3696.6
+        },
+        {
+          "k": 371,
+          "at": 3706.6
+        },
+        {
+          "k": 372,
+          "at": 3716.6
+        }
+      ],
+      "timingFrom": "envelope",
+      "timed": 367,
+      "latencyMs": {
+        "n": 367,
+        "min": -16.457,
+        "median": -15.727,
+        "max": -11.738,
+        "spread": 4.719000000000001
+      },
+      "slopeMsPerHour": 0.29,
+      "minScore": 0.761,
+      "byEnvelope": 367,
+      "minEnvelopeScore": 0.533,
+      "envelopeLatencyMs": {
+        "n": 367,
+        "min": -16.457,
+        "median": -15.727,
+        "max": -11.738,
+        "spread": 4.719000000000001
+      },
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 6.61,
+          "ms": -16.11
+        },
+        {
+          "k": 2,
+          "t": 16.61,
+          "ms": -16.111
+        },
+        {
+          "k": 3,
+          "t": 26.61,
+          "ms": -16.11
+        },
+        {
+          "k": 4,
+          "t": 36.61,
+          "ms": -15.504
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 368,
+          "t": 3676.61,
+          "ms": -15.616
+        },
+        {
+          "k": 369,
+          "t": 3686.61,
+          "ms": -15.716
+        }
+      ]
+    },
+    "call@right": {
+      "found": 305,
+      "expected": 308,
+      "missing": [
+        {
+          "k": 369,
+          "at": 3691.6
+        },
+        {
+          "k": 370,
+          "at": 3701.6
+        },
+        {
+          "k": 371,
+          "at": 3711.6
+        }
+      ],
+      "timingFrom": "waveform",
+      "timed": 305,
+      "latencyMs": {
+        "n": 305,
+        "min": -12.823,
+        "median": -12.818,
+        "max": -12.81,
+        "spread": 0.0129999999999999
+      },
+      "slopeMsPerHour": 0.01,
+      "minScore": 0.976,
+      "byEnvelope": 0,
+      "minEnvelopeScore": null,
+      "envelopeLatencyMs": null,
+      "firstRows": [
+        {
+          "k": 4,
+          "t": 41.61,
+          "ms": -12.816
+        },
+        {
+          "k": 5,
+          "t": 51.61,
+          "ms": -12.815
+        },
+        {
+          "k": 6,
+          "t": 61.61,
+          "ms": -12.822
+        },
+        {
+          "k": 7,
+          "t": 71.61,
+          "ms": -12.82
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 367,
+          "t": 3671.61,
+          "ms": -12.813
+        },
+        {
+          "k": 368,
+          "t": 3681.61,
+          "ms": -12.812
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 284,
+    "pairsFrom": "waveform",
+    "offsetMs": {
+      "n": 284,
+      "min": 8.261,
+      "median": 8.266,
+      "max": 8.283,
+      "spread": 0.02200000000000024
+    },
+    "slopeMsPerHour": 0.01
+  },
+  "bothTrainsInTap": {
+    "pairs": 304,
+    "pairsFrom": "mixed",
+    "offsetMs": {
+      "n": 304,
+      "min": -1.074,
+      "median": 2.905,
+      "max": 3.644,
+      "spread": 4.718
+    },
+    "slopeMsPerHour": -0.12
+  },
+  "memory": {
+    "helper": {
+      "samples": 123,
+      "firstKb": 19056,
+      "lastKb": 16272,
+      "minKb": 15824,
+      "maxKb": 19056,
+      "slopeKbPerHour": -377
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 16256,
+      "lastKb": 16048,
+      "minKb": 16048,
+      "maxKb": 16272,
+      "slopeKbPerHour": -133
+    },
+    "app": {
+      "samples": 123,
+      "firstKb": 151936,
+      "lastKb": 70592,
+      "minKb": 46480,
+      "maxKb": 338784,
+      "slopeKbPerHour": 8920
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 68288,
+      "lastKb": 51376,
+      "minKb": 51376,
+      "maxKb": 160144,
+      "slopeKbPerHour": 56132
+    }
+  }
+}

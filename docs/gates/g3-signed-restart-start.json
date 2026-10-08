@@ -1,0 +1,15 @@
+{
+  "start": {
+    "code": 0,
+    "ms": 1564,
+    "firstAudioMs": 371,
+    "appWasRunning": false
+  },
+  "stop": {
+    "code": 0,
+    "ms": 336
+  },
+  "partEnded": true,
+  "recordedSeconds": 120,
+  "folder": "2026-10-08_004048_g3b2"
+}

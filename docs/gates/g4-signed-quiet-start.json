@@ -1,0 +1,15 @@
+{
+  "start": {
+    "code": 0,
+    "ms": 2834,
+    "firstAudioMs": 1418,
+    "appWasRunning": false
+  },
+  "stop": {
+    "code": 0,
+    "ms": 320
+  },
+  "partEnded": true,
+  "recordedSeconds": 795,
+  "folder": "2026-10-08_024740_g4quiet"
+}
