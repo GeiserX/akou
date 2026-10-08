@@ -50,9 +50,13 @@ const MIN_SCORE = 0.5;
  * in its band but not its waveform, so the waveform correlation can fall to 0.3 on a chirp that is
  * plainly there. The envelope match needs this Pearson correlation with the template's energy
  * envelope, and the burst this far above the window's median band energy. Measured on the hour run
- * of 2026-10-08: real chirps the waveform missed scored 0.53 to 0.93 with 43 to 49 dB; chirp-free
- * windows 0.33 or less with 0 dB. The energy guard is what separates them; the correlation only
- * asks for the bell shape.
+ * of 2026-10-08 (g4-signed-hour.json for the lowest score; the rest a check by hand on the same
+ * recording, not on record): real chirps the waveform missed scored 0.505 to 0.93 with 42.6 to
+ * 50.2 dB. With the expected time shifted 2.5 s so no window holds a chirp, the worst of 1348
+ * windows scored 0.736 at 19.7 dB (the first-words clip in the tap), four more 0.40 to 0.42 at
+ * 0 dB, and under music chirp-free windows reach 0.84. The correlation does not separate the two;
+ * the 20 dB energy guard does, with 23 dB of room to the weakest real chirp and 0.3 dB to the
+ * worst chirp-free window. The correlation only asks for the bell shape.
  */
 const MIN_ENVELOPE_SCORE = 0.5;
 const MIN_ENVELOPE_SNR_DB = 20;
