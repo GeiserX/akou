@@ -2,6 +2,22 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.6.4 — a server whose remotes all drop at once dispatches again when they return
+
+On 0.6.3 a primary with `server.remotes` could stop dispatching for good. When every remote timed out in the same moment while the 30-second probe was in flight, the probe compared the remotes against the state it had seen before its requests, saw no change, announced nothing, and the queue sat with hundreds of jobs queued, none running and every remote reported up, until a restart. In 0.6.4 the probe compares against the state after its requests, so a remote marked down mid-probe is announced up and the queue runs again.
+
+### Server
+- **Dispatch resumes after every remote drops at once.** The probe takes its change snapshot after its two requests, so a `remote.down` written while they were in flight ends in `remote.up` and a dispatch, with the local worker's own jobs untouched (#353).
+
+### Behind the scenes
+- The macOS nightly no longer dies when Bun's hidden 6-minute fetch limit cuts a slow Qwen request; the night's requests pass `timeout: false` and the macOS leg has 200 minutes (#352).
+- G6 is recorded as Partial on fp32 with both machines measured: speed passes, the committed line misses 1.5 s on the call channel while the diarizer holds that line for its speaker (#350).
+
+### Known limitations
+- A stalled queue still reports as healthy over the API (queued N, running 0, every remote up); a signal for it is a follow-up.
+- A job only a remote can run that was refused with 409 waits for the next submit, probe change or remote job end before it is offered again.
+- Every item under 0.6.3's Known limitations still applies.
+
 ## 0.6.3 — a server that hands work to other akou servers keeps working itself while they are busy
 
 On 0.6.2 a job that a `server.remotes` entry names waited whenever every remote that offers it was busy, even when the primary could run it and sat idle. A primary that is a good worker itself could not share a backlog with its remotes: it either kept every job or watched them queue behind its slower helpers. In 0.6.3 one setting lets it run those jobs itself while its remotes are full.
