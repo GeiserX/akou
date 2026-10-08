@@ -11,3 +11,17 @@
     kTCCServiceScreenCapture authValue 2 authReason 4 x 1200
 # After the second restart (the one on record) (log line 419243): prompts=0; akou access results by service:
     kTCCServiceScreenCapture authValue 2 authReason 4 x 620
+# Second half, 2026-10-08: the signed 0.6.4 copied over the 0.6.2 bundle (app quit, no TCC reset), same scratch AKOU_HOME, same daemon log stream (restarted at 10:42 after a 20-minute hole in the morning, before the install)
+# From the log line before the install (1642648, 11:55) to the end of the 120 s recording (12:01): AUTHREQ_PROMPTING lines (any app)=0; TCCDEvent Create (any identifier)=0
+# akou's own checks in that window, all answered from the existing grants (AUTHREQ_CTX preflight/query, no prompt):
+  2026-10-08 11:55:49.876 kTCCServiceMicrophone
+  2026-10-08 11:55:53.216 kTCCServiceMicrophone
+  2026-10-08 11:55:53.225 kTCCServiceAudioCapture
+  2026-10-08 11:55:58.700 kTCCServiceMicrophone
+  2026-10-08 11:55:58.712 kTCCServiceAudioCapture
+# Total AUTHREQ_PROMPTING lines in the whole log at that point (any app): still 2, the two of the first half
+# Positive control: tccutil reset Microphone io.github.geiserx.akou at 12:04:44, then akou start; prompts after the reset:
+  2026-10-08 12:04:46.098 kTCCServiceMicrophone  Sub:{io.github.geiserx.akou}
+# The grant given back by a click on Allow (TCCDEvent Create):
+  2026-10-08 12:04:49.514 kTCCServiceMicrophone  identifier=io.github.geiserx.akou
+# Prompts after the reset, whole log tail: exactly 1
