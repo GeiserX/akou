@@ -174,7 +174,12 @@ interface Found {
 }
 
 /** RBJ band-pass biquad over the side's chirp band (0 dB at the centre), run forward once. */
-function bandpass(x: ArrayLike<number>, from: number, to: number, ch: "mic" | "call"): Float64Array {
+function bandpass(
+  x: ArrayLike<number>,
+  from: number,
+  to: number,
+  ch: "mic" | "call",
+): Float64Array {
   const [f0, f1] = ch === "mic" ? [3000, 4500] : [1500, 2500];
   const fc = Math.sqrt(f0 * f1);
   const q = fc / (f1 - f0);
@@ -209,13 +214,20 @@ function envelope(x: Float64Array): Float64Array {
   for (let k = 0; k < n; k++) {
     out[k] = s / ENV_WIN;
     const left = k * ENV_HOP;
-    for (let j = 0; j < ENV_HOP; j++) s += (x[left + ENV_WIN + j] ?? 0) ** 2 - (x[left + j] ?? 0) ** 2;
+    for (let j = 0; j < ENV_HOP; j++)
+      s += (x[left + ENV_WIN + j] ?? 0) ** 2 - (x[left + j] ?? 0) ** 2;
   }
   return out;
 }
 
 /** Pearson correlation of `t` (mean `tMean`, centred norm `tNorm`) against `x` at offset `o`. */
-function pearson(x: Float64Array, o: number, t: Float64Array, tMean: number, tNorm: number): number {
+function pearson(
+  x: Float64Array,
+  o: number,
+  t: Float64Array,
+  tMean: number,
+  tNorm: number,
+): number {
   let m = 0;
   for (let j = 0; j < t.length; j++) m += x[o + j] ?? 0;
   m /= t.length;
@@ -279,7 +291,11 @@ function envelopeChirp(x: Int16Array, ch: "mic" | "call", expect: number): Found
   const r = scores[bestAt + 1] ?? best;
   const den = l - 2 * best + r;
   const frac = den !== 0 ? (0.5 * (l - r)) / den : 0;
-  return { at: (from + (bestAt + frac) * ENV_HOP + ENV_PAD) / RATE, score: best, method: "envelope" };
+  return {
+    at: (from + (bestAt + frac) * ENV_HOP + ENV_PAD) / RATE,
+    score: best,
+    method: "envelope",
+  };
 }
 
 /** Finds a chirp near `expect` seconds. */
@@ -506,7 +522,13 @@ async function main(): Promise<void> {
         if (e < SEARCH_S || e > x.length / RATE - SEARCH_S) continue;
         const f = findChirp(x, side, e);
         if (f) {
-          latency[key]?.push({ k: c.k, t: e, ms: (f.at - e) * 1000, score: f.score, method: f.method });
+          latency[key]?.push({
+            k: c.k,
+            t: e,
+            ms: (f.at - e) * 1000,
+            score: f.score,
+            method: f.method,
+          });
         }
       }
     }
