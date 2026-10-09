@@ -57,27 +57,27 @@
       "status": {
         "version": "0.6.4",
         "platform": "darwin",
-        "pid": 23718,
-        "port": 49378,
+        "pid": 11343,
+        "port": 49367,
         "headless": false,
         "hotkey": "Alt+Command+R",
         "window": "open",
         "page": null,
-        "startedAt": 1791539391005,
-        "uptimeMs": 2035,
+        "startedAt": 1791559729780,
+        "uptimeMs": 2962,
         "quitting": false,
-        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/.config/akou",
-        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/Recordings/akou"
+        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/.config/akou",
+        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/Recordings/akou"
       },
       "windows": [
         {
-          "pid": 23718,
+          "pid": 11343,
           "title": "akou"
         }
       ],
       "tray": [
         {
-          "pid": 23718,
+          "pid": 11343,
           "props": {
             "items": "1",
             "role": "AXMenuBarItem"
@@ -96,12 +96,12 @@
       },
       "loginItemRightAfterConfigSet": false,
       "appLog": [
-        "2026-10-09 09:49:52.328 +00:00 info akou 0.6.4 started (pid 23718, app, with the window, API on port 49378)",
-        "2026-10-09 09:49:52.348 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:00.879 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: started",
-        "2026-10-09 09:50:01.146 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part started",
-        "2026-10-09 09:50:01.555 +00:00 info asr: call 01M4G13M37PX12MCF63JGRBNYF runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:08.164 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part ended",
+        "2026-10-09 15:28:50.807 +00:00 info akou 0.6.4 started (pid 11343, app, with the window, API on port 49367)",
+        "2026-10-09 15:28:50.836 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:00.802 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: started",
+        "2026-10-09 15:29:00.994 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part started",
+        "2026-10-09 15:29:01.175 +00:00 info asr: call 01M4GMGBBWTYK3NKQQ808EZ3Z4 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:29:07.544 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part ended",
         ""
       ]
     },
@@ -109,21 +109,21 @@
       "status": {
         "version": "0.6.4",
         "platform": "darwin",
-        "pid": 24515,
-        "port": 49378,
+        "pid": 11750,
+        "port": 49367,
         "headless": true,
         "hotkey": null,
         "window": "none (headless)",
         "page": null,
-        "startedAt": 1791539413372,
-        "uptimeMs": 869,
+        "startedAt": 1791559755350,
+        "uptimeMs": 1006,
         "quitting": false,
-        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/.config/akou",
-        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/Recordings/akou"
+        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/.config/akou",
+        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/Recordings/akou"
       },
       "tray": [
         {
-          "pid": 24515,
+          "pid": 11750,
           "props": {
             "items": "1",
             "role": "AXMenuBarItem"
@@ -136,48 +136,48 @@
       "liveAfterSecondPress": false,
       "loginItem": {
         "present": true,
-        "command": "env AKOU_HEADLESS=1 \"/private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/unpacked/akou.app/Contents/MacOS/launcher\""
+        "command": "env AKOU_HEADLESS=1 \"/private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/unpacked/akou.app/Contents/MacOS/launcher\""
       },
       "appLog": [
-        "2026-10-09 09:49:52.328 +00:00 info akou 0.6.4 started (pid 23718, app, with the window, API on port 49378)",
-        "2026-10-09 09:49:52.348 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:00.879 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: started",
-        "2026-10-09 09:50:01.146 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part started",
-        "2026-10-09 09:50:01.555 +00:00 info asr: call 01M4G13M37PX12MCF63JGRBNYF runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:08.164 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part ended",
-        "2026-10-09 09:50:11.105 +00:00 info quitting",
-        "2026-10-09 09:50:11.157 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: ended",
-        "2026-10-09 09:50:11.207 +00:00 info akou 0.6.4 quit (pid 23718)",
-        "2026-10-09 09:50:13.426 +00:00 info akou 0.6.4 started (pid 24515, app, headless, API on port 49378)",
-        "2026-10-09 09:50:13.490 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:26.511 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: started",
-        "2026-10-09 09:50:26.691 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: a part started",
-        "2026-10-09 09:50:27.006 +00:00 info asr: call 01M4G14D6925MTKFQ534EDK8T2 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:32.433 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: a part ended",
+        "2026-10-09 15:28:50.807 +00:00 info akou 0.6.4 started (pid 11343, app, with the window, API on port 49367)",
+        "2026-10-09 15:28:50.836 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:00.802 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: started",
+        "2026-10-09 15:29:00.994 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part started",
+        "2026-10-09 15:29:01.175 +00:00 info asr: call 01M4GMGBBWTYK3NKQQ808EZ3Z4 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:29:07.544 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part ended",
+        "2026-10-09 15:29:10.345 +00:00 info quitting",
+        "2026-10-09 15:29:12.560 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: ended",
+        "2026-10-09 15:29:12.583 +00:00 info akou 0.6.4 quit (pid 11343)",
+        "2026-10-09 15:29:15.423 +00:00 info akou 0.6.4 started (pid 11750, app, headless, API on port 49367)",
+        "2026-10-09 15:29:16.348 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:28.641 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: started",
+        "2026-10-09 15:29:28.738 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: a part started",
+        "2026-10-09 15:29:28.963 +00:00 info asr: call 01M4GMH6HW25RS3FPK24R8PQW9 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:29:34.188 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: a part ended",
         ""
       ]
     },
     "loginCommand": {
-      "command": "env AKOU_HEADLESS=1 \"/private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/unpacked/akou.app/Contents/MacOS/launcher\"",
+      "command": "env AKOU_HEADLESS=1 \"/private/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/unpacked/akou.app/Contents/MacOS/launcher\"",
       "via": "launchctl bootstrap gui/<uid>: exit 0 ",
       "status": {
         "version": "0.6.4",
         "platform": "darwin",
-        "pid": 25225,
-        "port": 49378,
+        "pid": 12682,
+        "port": 49367,
         "headless": true,
         "hotkey": null,
         "window": "none (headless)",
         "page": null,
-        "startedAt": 1791539439087,
-        "uptimeMs": 940,
+        "startedAt": 1791559781273,
+        "uptimeMs": 980,
         "quitting": false,
-        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/.config/akou",
-        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/Recordings/akou"
+        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/.config/akou",
+        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/Recordings/akou"
       },
       "tray": [
         {
-          "pid": 25225,
+          "pid": 12682,
           "props": {
             "items": "1",
             "role": "AXMenuBarItem"
@@ -189,30 +189,30 @@
       "liveAfterFirstPress": true,
       "liveAfterSecondPress": false,
       "appLog": [
-        "2026-10-09 09:49:52.328 +00:00 info akou 0.6.4 started (pid 23718, app, with the window, API on port 49378)",
-        "2026-10-09 09:49:52.348 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:00.879 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: started",
-        "2026-10-09 09:50:01.146 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part started",
-        "2026-10-09 09:50:01.555 +00:00 info asr: call 01M4G13M37PX12MCF63JGRBNYF runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:08.164 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: a part ended",
-        "2026-10-09 09:50:11.105 +00:00 info quitting",
-        "2026-10-09 09:50:11.157 +00:00 info call 01M4G13M37PX12MCF63JGRBNYF: ended",
-        "2026-10-09 09:50:11.207 +00:00 info akou 0.6.4 quit (pid 23718)",
-        "2026-10-09 09:50:13.426 +00:00 info akou 0.6.4 started (pid 24515, app, headless, API on port 49378)",
-        "2026-10-09 09:50:13.490 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:26.511 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: started",
-        "2026-10-09 09:50:26.691 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: a part started",
-        "2026-10-09 09:50:27.006 +00:00 info asr: call 01M4G14D6925MTKFQ534EDK8T2 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:32.433 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: a part ended",
-        "2026-10-09 09:50:36.816 +00:00 info quitting",
-        "2026-10-09 09:50:36.856 +00:00 info call 01M4G14D6925MTKFQ534EDK8T2: ended",
-        "2026-10-09 09:50:36.861 +00:00 info akou 0.6.4 quit (pid 24515)",
-        "2026-10-09 09:50:39.202 +00:00 info akou 0.6.4 started (pid 25225, app, headless, API on port 49378)",
-        "2026-10-09 09:50:39.376 +00:00 info asr: the live recognizer loaded its models",
-        "2026-10-09 09:50:52.379 +00:00 info call 01M4G156EQ7EM3E4RRZWGWRPG1: started",
-        "2026-10-09 09:50:52.587 +00:00 info call 01M4G156EQ7EM3E4RRZWGWRPG1: a part started",
-        "2026-10-09 09:50:52.955 +00:00 info asr: call 01M4G156EQ7EM3E4RRZWGWRPG1 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
-        "2026-10-09 09:50:58.838 +00:00 info call 01M4G156EQ7EM3E4RRZWGWRPG1: a part ended",
+        "2026-10-09 15:28:50.807 +00:00 info akou 0.6.4 started (pid 11343, app, with the window, API on port 49367)",
+        "2026-10-09 15:28:50.836 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:00.802 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: started",
+        "2026-10-09 15:29:00.994 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part started",
+        "2026-10-09 15:29:01.175 +00:00 info asr: call 01M4GMGBBWTYK3NKQQ808EZ3Z4 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:29:07.544 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: a part ended",
+        "2026-10-09 15:29:10.345 +00:00 info quitting",
+        "2026-10-09 15:29:12.560 +00:00 info call 01M4GMGBBWTYK3NKQQ808EZ3Z4: ended",
+        "2026-10-09 15:29:12.583 +00:00 info akou 0.6.4 quit (pid 11343)",
+        "2026-10-09 15:29:15.423 +00:00 info akou 0.6.4 started (pid 11750, app, headless, API on port 49367)",
+        "2026-10-09 15:29:16.348 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:28.641 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: started",
+        "2026-10-09 15:29:28.738 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: a part started",
+        "2026-10-09 15:29:28.963 +00:00 info asr: call 01M4GMH6HW25RS3FPK24R8PQW9 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:29:34.188 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: a part ended",
+        "2026-10-09 15:29:35.623 +00:00 info quitting",
+        "2026-10-09 15:29:39.196 +00:00 info call 01M4GMH6HW25RS3FPK24R8PQW9: ended",
+        "2026-10-09 15:29:39.210 +00:00 info akou 0.6.4 quit (pid 11750)",
+        "2026-10-09 15:29:41.315 +00:00 info akou 0.6.4 started (pid 12682, app, headless, API on port 49367)",
+        "2026-10-09 15:29:41.624 +00:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 15:29:54.516 +00:00 info call 01M4GMHZTGZCQF6P0XRNTBZ344: started",
+        "2026-10-09 15:29:54.626 +00:00 info call 01M4GMHZTGZCQF6P0XRNTBZ344: a part started",
+        "2026-10-09 15:29:54.881 +00:00 info asr: call 01M4GMHZTGZCQF6P0XRNTBZ344 runs the parakeet live model: the live model nemotron-3.5-560 is not downloaded (`akou models pull nemotron-3.5-560`); live lines come from Parakeet",
+        "2026-10-09 15:30:00.161 +00:00 info call 01M4GMHZTGZCQF6P0XRNTBZ344: a part ended",
         ""
       ]
     },
@@ -220,22 +220,22 @@
       "status": {
         "version": "0.6.4",
         "platform": "darwin",
-        "pid": 25923,
-        "port": 49378,
+        "pid": 13618,
+        "port": 49367,
         "headless": false,
         "hotkey": "Alt+Command+R",
         "window": "open",
         "page": null,
-        "startedAt": 1791539465909,
-        "uptimeMs": 811,
+        "startedAt": 1791559806921,
+        "uptimeMs": 773,
         "quitting": false,
-        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/.config/akou",
-        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-EJRS1J/home/Recordings/akou"
+        "configDir": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/.config/akou",
+        "recordingsRoot": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/akou-g1-F1EmRi/home/Recordings/akou"
       },
       "setOffBy": "akou config set",
       "windows": [
         {
-          "pid": 25923,
+          "pid": 13618,
           "title": "akou"
         }
       ],
@@ -245,6 +245,7 @@
       }
     }
   },
+  "quitFailures": [],
   "verdict": "pass",
   "problems": []
 }
