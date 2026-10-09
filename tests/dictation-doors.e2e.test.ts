@@ -304,14 +304,31 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
   // A spoken dictation runs the fake helper in real time: past bun's 5 s default on a slow runner.
   const SPOKEN_MS = 30_000;
 
-  /** A spoken dictation through the API's start and stop, inserted by the fake. */
+  /**
+   * Waits for a dictation's audio to be on disk. The app writes it off the dictation's thread, so
+   * it can land after the insert (akou-9uk); `GET /dictations/:id/audio` answers once that write
+   * has ended, the way a user's request does. Throws with the API's error when none was kept.
+   */
+  async function audioWritten(r: Rig, id: string): Promise<void> {
+    const res = await fetch(`http://127.0.0.1:${r.port}/v1/dictations/${id}/audio`, {
+      headers: { authorization: `Bearer ${r.token}` },
+    });
+    if (res.status === 200) return void (await res.body?.cancel());
+    throw new Error(
+      `no audio written for ${id}: ${res.status} ${((await res.json()) as { error?: string }).error}`,
+    );
+  }
+
+  /** A spoken dictation through the API's start and stop, inserted by the fake, its audio written. */
   async function spoken(r: Rig): Promise<string> {
     expect((await r.api("POST", "/dictation/start")).status).toBe(200);
     // The fake's mic runs in real time from the start: let "hello" be spoken before the stop.
     await Bun.sleep(1000);
     expect((await r.api("POST", "/dictation/stop")).status).toBe(200);
     await until(async () => (await items(r))[0]?.state === "inserted", 10_000, "the insert");
-    return (await items(r))[0].id;
+    const id = (await items(r))[0].id;
+    await audioWritten(r, id);
+    return id;
   }
 
   test(
@@ -411,6 +428,31 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
     },
     SPOKEN_MS,
   );
+
+  test(
+    "[akou-9uk] the audio is on disk once spoken() returns, even when it lands seconds after the insert",
+    async () => {
+      // The fake helper's encode fails after 3 s, so the WAV is written well after the insert.
+      const r = await rig({}, ["--encode-delay", "3000"]);
+      const id = await spoken(r);
+      expect(audioFiles(r)).toEqual([`${id}.wav`]);
+      expect((await r.api("DELETE", "/dictations")).body).toEqual({ deleted: 1 });
+      expect(audioFiles(r)).toEqual([]);
+    },
+    SPOKEN_MS,
+  );
+
+  test("positive control: the wait for the audio fails for a dictation with none written", async () => {
+    const r = await rig();
+    // A clip sent to the app: akou keeps no copy of it.
+    const path = join(scratch(), "clip.wav");
+    writeFileSync(path, monoWav(concat(silence(0.6), speak(["thanks"]), silence(1))));
+    const clip = (await rigCli(r)(["dictate", path, "--json"])).json.id;
+    await expect(audioWritten(r, clip)).rejects.toThrow(
+      `no audio written for ${clip}: 404 no_audio`,
+    );
+    expect(audioFiles(r)).toEqual([]);
+  });
 
   test(
     "turning dictation.keepAudio off deletes the audio of finished dictations at once",

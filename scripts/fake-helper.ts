@@ -132,6 +132,10 @@
  * `AKOU_CAPTURE_FILE_ONLY=1` refuses it as the real helper does. `run` reads the same list: a
  * `--mic` id names its input in `capturing` (an unknown one falls back to the default, as the real
  * helper does), and `--call app:<id>` with no app of that id exits 66 `no running app matches`.
+ *
+ * `encode` has no Opus codec here: it exits 74 with a warn line, as the helper does for a file it
+ * cannot write, so the app keeps a dictation's audio as WAV (DC-H2). `--encode-delay MS` holds it
+ * that long first, so the WAV lands well after the dictation is inserted.
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -168,6 +172,14 @@ const num = (name: string): number | undefined => {
   const v = opt(name);
   return v === undefined ? undefined : Number(v);
 };
+
+if (argv.includes("encode")) {
+  await Bun.sleep(num("--encode-delay") ?? 0);
+  process.stderr.write(
+    `${JSON.stringify({ type: "warn", msg: "the fake helper has no Opus encoder" })}\n`,
+  );
+  process.exit(EXIT.io);
+}
 
 const dialect = opt("--dialect") ?? "akou-capture/1";
 const speed = num("--speed") ?? 1;
