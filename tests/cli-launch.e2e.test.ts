@@ -244,6 +244,7 @@ describe("[T3.6] Minutes to start: a first launch slower than the 3 s target (#3
         expect(processAlive(rt.pid)).toBe(true);
         expect(processAlive(p.launcher as number)).toBe(true);
         expect(processAlive(p.wrapper as number)).toBe(false);
+        expect(p.app).toBe(rt.pid);
       } finally {
         killAll([], pids);
         t.cleanup();

@@ -12,7 +12,8 @@
  * - `launcher`: the real launcher. Runs the slow app (`slow-app.ts --delay MS`) as its child and
  *   exits when it does.
  *
- * Every role but `open` and `relaunch` appends `ROLE PID` to `--pids FILE`.
+ * Every role but `open` and `relaunch` appends `ROLE PID` to `--pids FILE`, and the launcher
+ * appends `app PID` for the slow app, so a test can end every process the bundle started.
  */
 
 import { spawn } from "node:child_process";
@@ -47,5 +48,6 @@ if (role === "open") {
     stdio: "ignore",
     env: process.env,
   });
+  appendFileSync(pids, `app ${app.pid}\n`);
   app.on("exit", () => process.exit(0));
 }
