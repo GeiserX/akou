@@ -4,7 +4,8 @@
 //   trust                  what this process may do: Accessibility, Screen Recording, posting events
 //   apps <bundle id>       the running apps with that bundle id: pid, bundle path, active
 //   windows                every on-screen window: id, owner pid, layer, owner name, title (null when
-//                          macOS hides it, which it does for other apps without Screen Recording)
+//                          macOS hides it, which it does for other apps without Screen Recording),
+//                          and its bounds in screen points
 //   extras <pid> [pid...]  each app's status items and where they sit, read from its Accessibility tree
 //                          (AXExtrasMenuBar). On macOS 26 the item windows belong to Control Center,
 //                          not to the app, so the window list cannot tell whose an item is
@@ -77,6 +78,12 @@ case "windows":
         "layer": $0[kCGWindowLayer as String] as? Int ?? -1,
         "owner": $0[kCGWindowOwnerName as String] as? String ?? NSNull(),
         "title": $0[kCGWindowName as String] as? String ?? NSNull(),
+        "bounds": ($0[kCGWindowBounds as String] as? [String: Any]).map {
+          [
+            "x": $0["X"] as? Int ?? 0, "y": $0["Y"] as? Int ?? 0,
+            "w": $0["Width"] as? Int ?? 0, "h": $0["Height"] as? Int ?? 0,
+          ]
+        } ?? NSNull(),
       ] as [String: Any]
     })
 
