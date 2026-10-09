@@ -7,6 +7,8 @@
 export const APP_VERSION = "0.6.4";
 /** `runtime.json` in the config folder: pid, port and version of the running app, mode 0600. */
 export const RUNTIME_FILE = "runtime.json";
+/** `akou.lock` in the config folder: the pid of the one app, taken early in its start. */
+export const APP_LOCK = "akou.lock";
 /**
  * The macOS bundle id, stable across updates (DESIGN section 9). With the Developer ID signature
  * releases carry since 0.6.1, that keeps the microphone and system-audio grants across updates; an

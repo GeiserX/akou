@@ -19,6 +19,7 @@ import {
   recordingOut,
   stopAll,
   stopList,
+  strayLaunchers,
 } from "../src/main/cli/heal.ts";
 import { FAKE_HELPER, writeSettings } from "./api-helpers.ts";
 import { cliChild } from "./cli-helpers.ts";
@@ -336,6 +337,30 @@ describe("[DK-M8] the process tree the CLI reads without the API", () => {
     // Positive control: run from outside the app, the same tree is stopped whole.
     expect(stopList(rows, 501, 999)).toEqual([500, 501, 502, 503, 700, 504, 701, 702, 703]);
     expect(ancestry(rows, 702)).toEqual([702, 701, 700, 501, 500]);
+  });
+
+  test("[T3.6] the stray launchers of a first open: the idle wrapper only (#356)", () => {
+    const rows = parsePs(
+      [
+        ...ps.map((r) => `${r.pid} ${r.ppid} ${r.args}`),
+        // The wrapper that unpacked the app over itself, opened it again and stayed.
+        "  499     1 /Applications/akou.app/Contents/MacOS/launcher",
+        // Another app's launcher, childless too.
+        "  800     1 /Applications/Other.app/Contents/MacOS/launcher",
+        // A launcher above the process asking, with a harness and akou below it.
+        "  900     1 /Applications/akou.app/Contents/MacOS/launcher",
+        "  901   900 /usr/local/bin/akou start",
+      ].join("\n"),
+    );
+    expect(strayLaunchers(rows, "/Applications/akou.app", 501, 999)).toEqual([499]);
+    // A trailing slash on the bundle names the same launchers.
+    expect(strayLaunchers(rows, "/Applications/akou.app/", 501, 999)).toEqual([499]);
+    // Positive control: once the app's process is gone, its launcher has no child either.
+    const gone = rows.filter((r) => r.ppid !== 500);
+    expect(strayLaunchers(gone, "/Applications/akou.app", 600, 999).sort()).toEqual([499, 500]);
+    // Never the asking process or anything above it, even with no child of its own left.
+    const asking = rows.filter((r) => r.pid !== 901);
+    expect(strayLaunchers(asking, "/Applications/akou.app", 501, 900)).toEqual([499]);
   });
 
   test.skipIf(!POSIX)(
