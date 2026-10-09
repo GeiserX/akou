@@ -123,6 +123,30 @@ export function launcherOf(rows: readonly ProcRow[], pid: number): number | null
   return parent && /\/Contents\/MacOS\/launcher$/.test(parent.args.trim()) ? parent.pid : null;
 }
 
+/**
+ * The launchers of `bundle` with no process below them, other than the one above `appPid`. The
+ * first open of a newly installed macOS bundle runs its stable wrapper, which unpacks the app in
+ * place, opens it again and then stays, idle (docs/gates/M0-results.md, G7). While it runs,
+ * `open -a` takes it for the running app and starts nothing, so the next launch fails (#356).
+ * Never `self` or a process above it.
+ */
+export function strayLaunchers(
+  rows: readonly ProcRow[],
+  bundle: string,
+  appPid: number,
+  self: number = process.pid,
+): number[] {
+  const path = `${bundle.replace(/\/+$/, "")}/Contents/MacOS/launcher`;
+  const keep = new Set([...ancestry(rows, self), launcherOf(rows, appPid)]);
+  return rows
+    .filter((r) => {
+      const args = r.args.trim();
+      return args === path || args.startsWith(`${path} `);
+    })
+    .filter((r) => !keep.has(r.pid) && !rows.some((c) => c.ppid === r.pid))
+    .map((r) => r.pid);
+}
+
 /** `pid` and every process above it, nearest first. */
 export function ancestry(rows: readonly ProcRow[], pid: number): number[] {
   const out: number[] = [];

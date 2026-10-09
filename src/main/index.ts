@@ -67,7 +67,7 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { editFile, targetPath } from "./api/routes/vocab.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
-import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
+import { APP_LOCK, APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import { APP_LOG, AppLog, HANGS_DIR } from "./app-log.ts";
 import {
   type AcceleratorSetting,
@@ -258,8 +258,7 @@ import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
 import { MAC_PANES, PageServer, type SettingsPane } from "./window/page-server.ts";
 
-export { APP_VERSION, RUNTIME_FILE };
-export const APP_LOCK = "akou.lock";
+export { APP_LOCK, APP_VERSION, RUNTIME_FILE };
 
 /** The events after which the watchdog reads the live state again at once (DK-M8). */
 const LIVE_CHANGES: ReadonlySet<string> = new Set([
