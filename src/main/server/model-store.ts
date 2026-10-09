@@ -87,6 +87,12 @@ export function isRecognizer(m: ModelSpecEntry): boolean {
   return serves ? serves.includes("final") : !HELPER_MODELS.has(m.id);
 }
 
+/** A model only the live transcript runs, which a file job never loads. */
+function liveOnly(m: ModelSpecEntry): boolean {
+  const serves = (m as { serves?: readonly string[] }).serves;
+  return !!serves && serves.length > 0 && serves.every((r) => r === "live");
+}
+
 /**
  * A recognizer a file job can run alone. transcribe-cpp's engines (Whisper, Canary) run only as
  * engines of a fused list (the `fusion` preset, ASR-6), so a job that names one alone is refused
@@ -654,15 +660,20 @@ export class ModelStore {
 
   /**
    * The model ids a job on `recognizer` loads: it, the runtime it runs on, and the helpers the
-   * machine needs.
+   * machine needs. Given the `job`, only what a file job runs (SV-M1): never a live-only model, and
+   * the speaker models only when it asks for speaker labels.
    */
-  needs(recognizer: string): string[] {
+  needs(recognizer: string, job?: { diarize: boolean }): string[] {
     const machine = this.o.machine();
     if (machine === null) return [];
     // A fused list needs each of its engines and what each runs on, the helpers once.
     const fused = fusionParts(recognizer);
-    if (fused) return [...new Set(fused.engines.flatMap((id) => this.needs(id)))];
-    const out = machine.filter((m) => m.id === recognizer || !isRecognizer(m)).map((m) => m.id);
+    if (fused) return [...new Set(fused.engines.flatMap((id) => this.needs(id, job)))];
+    const runs = (m: ModelSpecEntry) =>
+      !job || (!liveOnly(m) && (job.diarize || kindOf(m) !== "speakers"));
+    const out = machine
+      .filter((m) => m.id === recognizer || (!isRecognizer(m) && runs(m)))
+      .map((m) => m.id);
     if (!out.includes(recognizer) && this.entry(recognizer)) out.unshift(recognizer);
     for (const id of this.o.requires?.(recognizer) ?? []) {
       if (!out.includes(id) && this.entry(id)) out.splice(1, 0, id);

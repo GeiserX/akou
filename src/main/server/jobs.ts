@@ -645,10 +645,11 @@ export class JobService {
 
   /**
    * Whether a job on `model` can be had: its files on disk, downloading, or allowed to start (SV-M1,
-   * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept.
+   * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept. Given the `job`,
+   * only the models it runs count: no live-only model, the speaker models only with diarize.
    */
-  admit(model: string): void {
-    this.o.shelf.admit(this.o.shelf.needs(model));
+  admit(model: string, job?: { diarize: boolean }): void {
+    this.o.shelf.admit(this.o.shelf.needs(model, job));
   }
 
   private modelOf(j: Job): string {
@@ -657,7 +658,7 @@ export class JobService {
 
   /** The models a job needs on this server's disk: none for one only a remote can run. */
   private localNeeds(j: Job): string[] {
-    return j.route === "remote" ? [] : this.o.shelf.needs(this.modelOf(j));
+    return j.route === "remote" ? [] : this.o.shelf.needs(this.modelOf(j), j);
   }
 
   /** The job as a client sees it, with its download's progress while it waits. */
@@ -1192,7 +1193,7 @@ export class JobService {
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError };
     const model = this.modelOf(job);
-    const needs = this.o.shelf.needs(model);
+    const needs = this.o.shelf.needs(model, job);
     // A model is used when a job on it starts and when it ends (SV-M4).
     this.o.shelf.touch(needs);
     // The GPU line's turn, once taken (`gpuTurn`); given back however the run ends.

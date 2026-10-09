@@ -68,14 +68,15 @@ async function serverRig(
   settings: Record<string, unknown> = {},
   jobs: { decode?: (p: string, s: AbortSignal) => Promise<Float32Array> } = {},
   fake: Record<string, unknown> = {},
+  registry: ModelSpecEntry[] = catalog,
 ): Promise<Rig> {
   const t = tempDir("akou-models-e2e-");
   const models = join(t.dir, "models");
   mkdirSync(models, { recursive: true });
-  for (const id of installed) reg.install(models, entry(id));
+  for (const id of installed) reg.install(models, registry.find((m) => m.id === id) ?? entry(id));
   const clock = { t: T };
   const rig = await appRig({
-    modelRegistry: catalog,
+    modelRegistry: registry,
     models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: fake },
     settings: {
       "server.enabled": true,
@@ -347,6 +348,77 @@ describe("[SV-M1, SV-M2, SV-M3] a missing model is downloaded while its jobs wai
       expect((await ended(rig, again.body.id)).status).toBe("done");
     } finally {
       reg.failNext("c.onnx", 0);
+    }
+  });
+});
+
+describe("[SV-M1] a file job fetches the models it runs and no other", () => {
+  const LIVE = "test-live-only";
+  let wide: ModelSpecEntry[];
+  beforeAll(() => {
+    wide = [
+      ...catalog,
+      reg.entry("titanet-small", ["titanet.onnx"]),
+      { ...reg.entry(LIVE, ["live.onnx"]), serves: ["live"] } as ModelSpecEntry,
+    ];
+  });
+
+  for (const mode of ["server", "app"] as const) {
+    test(`${mode} mode: no speaker model without diarize, the speaker model with it, never the live model`, async () => {
+      const rig = await serverRig(
+        [RECOGNIZER, "silero-vad", NEMOTRON],
+        { "server.enabled": mode === "server" },
+        {},
+        {},
+        wide,
+      );
+      // The app answers its one local token; a server, the archive's key.
+      if (mode === "app") rig.key = rig.token;
+      try {
+        const titanet = hits("titanet.onnx");
+        const live = hits("live.onnx");
+        const plain = await submit(rig, { model: RECOGNIZER, diarize: "false" });
+        expect(plain.status).toBe(202);
+        expect((await ended(rig, plain.body.id)).status).toBe("done");
+        expect([hits("titanet.onnx") - titanet, hits("live.onnx") - live]).toEqual([0, 0]);
+        expect(existsSync(join(rig.models, "titanet-small"))).toBe(false);
+
+        // The positive control: the same job with speaker labels fetches the speaker model.
+        const labelled = await submit(rig, { model: RECOGNIZER, diarize: "true" });
+        expect(labelled.status).toBe(202);
+        expect((await ended(rig, labelled.body.id)).status).toBe("done");
+        expect([hits("titanet.onnx") - titanet, hits("live.onnx") - live]).toEqual([1, 0]);
+        expect(existsSync(join(rig.models, "titanet-small"))).toBe(true);
+      } finally {
+        await rig.done();
+      }
+    });
+  }
+
+  test("admission counts only what the job runs: without diarize a missing speaker or live model refuses nothing", async () => {
+    const rig = await serverRig([RECOGNIZER, "silero-vad", NEMOTRON], {}, {}, {}, wide);
+    try {
+      // Nothing may be fetched: only a job that needs no missing model is taken.
+      await setting(rig, "server.auto_download", false);
+      const plain = await submit(rig, { model: RECOGNIZER, diarize: "false" });
+      expect(plain.status).toBe(202);
+      expect((await ended(rig, plain.body.id)).status).toBe("done");
+      // The control: with speaker labels the missing speaker model still refuses the job.
+      const labelled = await submit(rig, { model: RECOGNIZER, diarize: "true" });
+      expect(labelled.status).toBe(409);
+      expect(labelled.body).toMatchObject({ error: "preset_unavailable", model: "titanet-small" });
+      await setting(rig, "server.auto_download", true);
+
+      // No room for any download: the same two answers, by the size cap.
+      await setting(rig, "server.models_max_gb", 1e-9);
+      const small = await submit(rig, { model: RECOGNIZER, diarize: "false" });
+      expect(small.status).toBe(202);
+      expect((await ended(rig, small.body.id)).status).toBe("done");
+      const over = await submit(rig, { model: RECOGNIZER, diarize: "true" });
+      expect(over.status).toBe(409);
+      expect(over.body).toMatchObject({ error: "preset_unavailable", reason: "models_max_gb" });
+    } finally {
+      await rig.done();
     }
   });
 });
