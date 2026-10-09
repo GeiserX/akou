@@ -566,6 +566,8 @@ class Machine {
 
   screenshot(path: string): boolean {
     try {
+      // A shot left by an earlier run must not pass for this one.
+      rmSync(path, { force: true });
       if (WIN) this.ps("shot", path);
       else if (MAC) {
         // akou's own pixels only, never the rest of a person's desktop: its window when it has
@@ -577,11 +579,13 @@ class Machine {
         const item = pids.length
           ? this.mac<MacExtras[]>("extras", ...pids.map(String)).flatMap((r) => r.items ?? [])[0]
           : undefined;
-        if (win) spawnSync("screencapture", ["-x", "-o", "-l", String(win.id), path]);
-        else if (item?.frame) {
-          const f = item.frame;
-          spawnSync("screencapture", ["-x", "-R", `${f.x},${f.y},${f.w},${f.h}`, path]);
-        } else return false;
+        const f = item?.frame;
+        const args = win
+          ? ["-x", "-o", "-l", String(win.id), path]
+          : f
+            ? ["-x", "-R", `${f.x},${f.y},${f.w},${f.h}`, path]
+            : null;
+        if (!args || spawnSync("screencapture", args).status !== 0) return false;
       } else spawnSync("import", ["-window", "root", path]);
       return existsSync(path);
     } catch {

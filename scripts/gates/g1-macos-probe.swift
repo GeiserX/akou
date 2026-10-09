@@ -90,7 +90,14 @@ case "extras":
       AXUIElementCreateApplication(pid), "AXExtrasMenuBar" as CFString, &bar)
     if err == .success, let bar {
       var kids: CFTypeRef?
-      AXUIElementCopyAttributeValue(bar as! AXUIElement, kAXChildrenAttribute as CFString, &kids)
+      let kidsErr = AXUIElementCopyAttributeValue(
+        bar as! AXUIElement, kAXChildrenAttribute as CFString, &kids)
+      if kidsErr != .success {
+        // An unreadable item list is an error, never "no status item".
+        row["error"] = "AXError \(kidsErr.rawValue) reading the status items"
+        out.append(row)
+        continue
+      }
       row["items"] = ((kids as? [AXUIElement]) ?? []).map {
         [
           "role": axString($0, kAXRoleAttribute) ?? NSNull(),
