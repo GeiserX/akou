@@ -59,7 +59,9 @@ case "apps":
       .map {
         [
           "pid": Int($0.processIdentifier),
-          "path": $0.bundleURL?.resolvingSymlinksInPath().path ?? NSNull(),
+          // As LaunchServices has it; resolvingSymlinksInPath would drop /private from
+          // /private/var/folders, so the gate canonicalizes both sides itself.
+          "path": $0.bundleURL?.path ?? NSNull(),
           "active": $0.isActive,
         ] as [String: Any]
       })

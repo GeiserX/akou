@@ -416,9 +416,16 @@ class Machine {
 
   /** macOS: the running apps with akou's bundle id, and whether each is the gate's copy. */
   akouApps(): { pid: number; path: string | null; ours: boolean }[] {
+    const real = (path: string | null) => {
+      try {
+        return path ? realpathSync(path) : null;
+      } catch {
+        return path;
+      }
+    };
     return this.mac<{ pid: number; path: string | null }[]>("apps", BUNDLE_ID).map((a) => ({
       ...a,
-      ours: a.path === this.bundle,
+      ours: real(a.path) === this.bundle,
     }));
   }
 
