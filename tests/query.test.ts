@@ -699,6 +699,21 @@ describe("the pack (DESIGN 5.4 step 3)", () => {
     expect(hits[0]?.lines.map((l) => l.id)).toContain("l000099");
     expect(hits[0]?.citation).toMatch(/^\[\d\d:\d\d .+\]$/);
   });
+
+  test("a search hit cites the speaker who said the matched word, not the chunk's first line", () => {
+    const b = call(50);
+    b.add({ type: "speaker.name", spk: "c1", name: "Ann", by: "user" });
+    b.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" });
+    b.seg({ id: "l000098", spk: "c1", w0: T0 + 51 * 6 * S, text: "what did they send us" });
+    b.seg({ id: "l000099", spk: "c2", w0: T0 + 52 * 6 * S, text: "the vendor quoted forty two" });
+    const q = new CallQuery(fold(b.events));
+    const hit = q.search("vendor")[0];
+    const ids = hit?.lines.map((l) => l.id) ?? [];
+    // The chunk opens on another line, so the first line alone would credit someone else.
+    expect(ids).toContain("l000099");
+    expect(ids[0]).not.toBe("l000099");
+    expect(hit?.citation).toMatch(/^\[\d\d:\d\d Ben\]$/);
+  });
 });
 
 describe("resolving the call (DESIGN 5.4 step 0, 6.2)", () => {

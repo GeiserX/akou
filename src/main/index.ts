@@ -67,7 +67,7 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { editFile, targetPath } from "./api/routes/vocab.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
-import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
+import { APP_LOCK, APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import { APP_LOG, AppLog, HANGS_DIR } from "./app-log.ts";
 import {
   type AcceleratorSetting,
@@ -258,8 +258,7 @@ import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
 import { MAC_PANES, PageServer, type SettingsPane } from "./window/page-server.ts";
 
-export { APP_VERSION, RUNTIME_FILE };
-export const APP_LOCK = "akou.lock";
+export { APP_LOCK, APP_VERSION, RUNTIME_FILE };
 
 /** The events after which the watchdog reads the live state again at once (DK-M8). */
 const LIVE_CHANGES: ReadonlySet<string> = new Set([
@@ -283,6 +282,13 @@ const LOGGED_EVENTS: Partial<Record<LogEvent["type"], string>> = {
 };
 /** A final pass still running at quit gets this long, then is left for the next start. */
 export const QUIT_FINAL_GRACE_MS = 5_000;
+/**
+ * One step of the quit's teardown may take this long; past it the step is named in `app.log` and
+ * the quit goes on without it, so `runtime.json` always goes and the app always ends (#351).
+ */
+export const QUIT_STEP_MS = 3_000;
+/** Stopping the live call: the stop budget, the kill grace and the live recognizer's flush. */
+const QUIT_CALLS_MS = 15_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
 /** A running final pass pushes the status to the window at most this often, so its note moves. */
@@ -438,6 +444,8 @@ export interface AppOptions {
    * it; tests and `akou serve` do not.
    */
   supervise?: boolean;
+  /** How long one step of the quit may take before the quit goes on without it (#351). */
+  quitStepMs?: number;
 }
 
 export { NotWritable };
@@ -4023,53 +4031,80 @@ export class AkouApp implements ApiApp {
     );
   }
 
-  /** The one quit path. Safe to call twice; the second call waits for the first. */
+  /**
+   * One step of the quit, which never stops it: an error is logged with the step's name, and a
+   * step still running after `ms` is logged and left behind (#351). Inside ElectroBun an unhandled
+   * rejection is only printed, so a step that threw used to leave the app running, unlogged.
+   */
+  private async quitStep(
+    name: string,
+    run: () => unknown,
+    ms: number = this.o.quitStepMs ?? QUIT_STEP_MS,
+  ): Promise<void> {
+    let failed: unknown = null;
+    const step = (async () => {
+      try {
+        await run();
+      } catch (err) {
+        failed = err ?? new Error("failed");
+      }
+    })();
+    const r = await withDeadline(realClock, step, ms);
+    if (failed !== null) {
+      this.log("warn", `quit: ${name} failed: ${(failed as Error).message ?? String(failed)}`);
+    } else if (!r.ok) {
+      this.log("warn", `quit: ${name} did not finish within ${ms / 1000} s; quitting without it`);
+    }
+  }
+
+  /**
+   * The one quit path. Safe to call twice; the second call waits for the first. Every step runs
+   * through `quitStep`: one that throws or outlives its budget is named in `app.log` and the quit
+   * goes on, so it always removes `runtime.json` and resolves `closed` (#351).
+   */
   quit(): Promise<void> {
     this.quitting ??= (async () => {
       this.appLog?.line("info", "quitting");
       // Let the answer to `POST /quit` go out first.
       // clock: lets the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
-      try {
-        await this.window?.close();
-      } catch (err) {
-        this.log("warn", `window close: ${(err as Error).message}`);
-      }
-      await this.sharing.stopAll();
+      await this.quitStep("the window", () => this.window?.close());
+      await this.quitStep("sharing", () => this.sharing.stopAll());
       for (const t of this.reexports.values()) clearTimeout(t);
       this.reexports.clear();
-      await this.manager.quit();
+      // A call still stopping (its live lines flushing) ends here, before the recognizer closes.
+      await this.quitStep("the live call", () => this.manager.quit(), QUIT_CALLS_MS);
       const running = [...this.finals.values()];
       if (running.length > 0) {
         const r = await withDeadline(realClock, Promise.allSettled(running), QUIT_FINAL_GRACE_MS);
         if (!r.ok) {
           // Its Worker and llama-server stop now: a Worker dies with the app, its child does not.
           this.finalStop.abort();
-          await Promise.allSettled(running);
+          await this.quitStep("the stopped final pass", () => Promise.allSettled(running));
           this.log("info", "a final pass was stopped; it runs again at the next start");
         }
       }
-      await this.dictationSvc?.close();
-      this.cuePlayer?.close();
-      this.remoteDictation?.close();
+      await this.quitStep("dictation", () => this.dictationSvc?.close());
+      await this.quitStep("the dictation cues", () => this.cuePlayer?.close());
+      await this.quitStep("remote dictation", () => this.remoteDictation?.close());
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
-      await this.bestDictation?.stop();
+      await this.quitStep("the best dictation engine", () => this.bestDictation?.stop());
       const liveQwen = this.liveQwen;
       this.liveQwen = null;
-      await liveQwen?.server.stop();
-      await this.asr?.close();
-      await this.page?.stop();
-      await this.server?.stop();
+      await this.quitStep("the live Qwen server", () => liveQwen?.server.stop());
+      await this.quitStep("the live recognizer", () => this.asr?.close());
+      await this.quitStep("the page server", () => this.page?.stop());
+      await this.quitStep("the API server", () => this.server?.stop());
       // After the API: no request is left holding the store. A running job is queued again at start.
-      this.jobService?.close();
+      await this.quitStep("the job service", () => this.jobService?.close());
       if (this.modelSweep) clearInterval(this.modelSweep);
-      this.shelf?.close();
+      await this.quitStep("the model store", () => this.shelf?.close());
       try {
         const rt = JSON.parse(readFileSync(this.runtimeFile, "utf8")) as { pid?: number };
         if (rt.pid === process.pid) unlinkSync(this.runtimeFile);
       } catch {}
-      releaseLock(this.lockPath);
-      this.watchdog?.stop();
+      await this.quitStep("the app lock", () => releaseLock(this.lockPath));
+      await this.quitStep("the watchdog", () => this.watchdog?.stop());
       this.appLog?.line("info", `akou ${this.version} quit (pid ${process.pid})`);
       this.resolveClosed();
     })();

@@ -363,16 +363,20 @@ export class CallQuery {
   search(query: string, k = SEARCH_K): SearchHit[] {
     this.index.sync();
     const terms = this.index.terms(query).map((term) => ({ term, weight: 1 }));
-    return this.pickHits(this.expand(terms, query), [], k, () => true).map(({ chunk, score }) => {
+    const expanded = this.expand(terms, query);
+    const asked = new Set(expanded.map((t) => t.term));
+    return this.pickHits(expanded, [], k, () => true).map(({ chunk, score }) => {
       const lines = chunk.ids
         .map((id) => this.lineById(id))
         .filter((l): l is Line => l !== undefined);
-      const first = lines[0];
+      // The citation names who said the matched word: the first line holding a query term.
+      const cited =
+        lines.find((l) => this.index.terms(l.text).some((t) => asked.has(t))) ?? lines[0];
       return {
         score,
         w0: chunk.w0,
         w1: chunk.w1,
-        citation: first ? formatCitation(first.w0, first.speaker, this.tz) : "",
+        citation: cited ? formatCitation(cited.w0, cited.speaker, this.tz) : "",
         lines,
         rendered: lines.map((l) => renderLine(l, { tz: this.tz })),
       };

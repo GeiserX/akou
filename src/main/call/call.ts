@@ -307,10 +307,18 @@ export class CallController {
     return this.live || this.holds > 0 || this.pending.size > 0 || this.background.size > 0;
   }
 
-  /** Settles when every stop and automatic restart this call started has finished. For tests. */
+  /**
+   * Settles when every stop and automatic restart this call started has finished, a stop still
+   * flushing its live lines included: the quit waits on it, so the call ends before the recognizer
+   * closes, not in the middle of the teardown (#351).
+   */
   async idle(): Promise<void> {
-    while (this.pending.size > 0 || this.background.size > 0) {
-      await Promise.allSettled([...this.pending, ...this.background]);
+    while (this.stopping || this.pending.size > 0 || this.background.size > 0) {
+      await Promise.allSettled([
+        ...(this.stopping ? [this.stopping] : []),
+        ...this.pending,
+        ...this.background,
+      ]);
     }
   }
 
