@@ -145,7 +145,7 @@ example: akou status --json
 ## open
 
 ```text
-akou open: Show the window on a call; headless, print the address of the window in a browser
+akou open: Show the window on a call, opening it if akou runs headless; with no desktop shell (Linux tarball, source checkout), print its address for a browser
 
 usage: akou open [CALL | -c CALL] [--json]
 

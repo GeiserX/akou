@@ -616,6 +616,9 @@ export function createMcpServer(o: McpOptions): McpServer {
       // Idempotent for an agent: a call already recording is handed back, never a dead end.
       const r = await req("POST", "/calls", { body: { ...a, attach: true } });
       void refreshAsk();
+      // The app's text names the CLI's flag; this door's own argument is `withoutModels` (CLI-17).
+      if (r.body?.error === "models_missing" && typeof r.body.message === "string")
+        r.body.message = r.body.message.replace("--without-models", "withoutModels: true");
       return asResult(r, (b) => ({
         text: b.attached
           ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}${typeof b.callMode === "string" ? `; ${callModeWords(b.callMode)}` : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder}`

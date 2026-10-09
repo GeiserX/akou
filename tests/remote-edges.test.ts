@@ -178,6 +178,23 @@ describe("SIGTERM", () => {
   }, 20_000);
 });
 
+describe("[CLI-17] akou status with an AKOU_URL that does not answer", () => {
+  test("prints what the remote did, never `akou open`, which cannot start a remote akou", async () => {
+    const closed = createServer();
+    await listen(closed);
+    const base = `http://127.0.0.1:${portOf(closed)}`;
+    closed.close();
+    const r = await cli(env({ AKOU_URL: base, AKOU_API_KEY: "k" }), ["status"]);
+    expect(r.code).toBe(EXIT.unavailable);
+    expect(r.err).toContain(`${base} (AKOU_URL)`);
+    expect(r.err).not.toContain("akou open");
+    // Positive control: with AKOU_URL unset and no app, status still says how to start it.
+    const local = await cli(env({}), ["status"]);
+    expect(local.code).toBe(EXIT.unavailable);
+    expect(local.err).toContain("`akou open`");
+  });
+});
+
 describe("local-only commands with AKOU_URL set", () => {
   test("akou quit refuses and sends nothing: it never stops a remote server", async () => {
     const before = fakeSeen.length;
