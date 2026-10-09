@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { LogEvent, Seg } from "../src/core/log/events.ts";
+import { fold } from "../src/core/log/fold.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import {
   type CallAccess,
@@ -17,7 +18,15 @@ import {
 } from "../src/main/asr/live-worker.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { ManualClock, ofType, ScriptedEngine } from "./capture-helpers.ts";
-import { concat, FakeModels, type FakeOptions, RATE, silence, speak } from "./fixtures/asr-fake.ts";
+import {
+  concat,
+  FakeModels,
+  type FakeOptions,
+  labelled,
+  RATE,
+  silence,
+  speak,
+} from "./fixtures/asr-fake.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 const FAKE = join(import.meta.dir, "fixtures", "asr-fake.ts");
@@ -29,6 +38,7 @@ afterEach(async () => {
 });
 
 type SegOut = Extract<LiveOut, { type: "seg" }>;
+type LabelOut = Extract<LiveOut, { type: "label" }>;
 
 function pipeline(o: FakeOptions = NEMO) {
   const models = new FakeModels(o);
@@ -39,7 +49,8 @@ function pipeline(o: FakeOptions = NEMO) {
     (x) => out.push(x),
     () => 0,
   );
-  const segs = () => out.filter((x): x is SegOut => x.type === "seg");
+  // Each line with the speaker the log ends up with: its own, or the label decided after it.
+  const segs = () => labelled(out);
   return { models, out, p, segs, spk: () => segs().map((s) => `${s.ch}:${s.spk}`) };
 }
 
@@ -66,16 +77,75 @@ describe("labels from the stream", () => {
     expect(models.streams[0]?.resets).toBe(0);
   });
 
-  test("a call line waits until the model has decided all of it, then lands in order", async () => {
+  test("[G6] a call line lands as c? when it closes; its speaker follows as a label, in order", async () => {
     // A slow step (4 s): the second line closes long before the model reaches its end.
-    const { p, segs } = pipeline({ ...NEMO, streamStep: 4, streamLookahead: 0.5 });
+    const { p, out, segs } = pipeline({ ...NEMO, streamStep: 4, streamLookahead: 0.5 });
     feed(p, 1, "call", concat(silence(0.3), says(1), says(5)));
-    // Positive control for the wait: both lines are closed, so without it both would be out.
-    const early = segs().length;
-    expect(early).toBeLessThan(2);
+    // Both lines are closed, so both are out, undecided and marked as waiting for their speaker.
+    const early = out.filter((x): x is SegOut => x.type === "seg");
+    expect(early.map((s) => [s.spk, s.held])).toEqual([
+      ["c?", true],
+      ["c?", true],
+    ]);
+    // Positive control for the labels: the model has not decided the second line yet.
+    expect(out.filter((x) => x.type === "label").length).toBeLessThan(2);
     await p.endPart(1);
+    const labels = out.filter((x): x is LabelOut => x.type === "label");
+    expect(labels.map((l) => [l.key, l.spk])).toEqual([
+      [early[0]?.key as number, "c1"],
+      [early[1]?.key as number, "c2"],
+    ]);
+    // A label never adds a line.
     expect(segs().map((s) => s.spk)).toEqual(["c1", "c2"]);
     expect(segs().map((s) => s.a0)).toEqual([...segs().map((s) => s.a0)].sort((a, b) => a - b));
+  });
+
+  test("[G6] a call line commits within 1.5 s of its end while a slow diarizer decides its speaker", async () => {
+    // A diarizer that decides 4 s steps with 0.5 s of look-ahead: about 2.7 s after the first
+    // line ends, past the 1.5 s the committed line has (ROADMAP G6).
+    const models = new FakeModels({ ...NEMO, streamStep: 4, streamLookahead: 0.5 });
+    const at: { x: LiveOut; fed: number }[] = [];
+    let fed = 0;
+    const p = new LivePipeline(
+      models,
+      {},
+      (x) => at.push({ x, fed }),
+      () => 0,
+    );
+    const words = ["we", "should", "move", "the"];
+    const a = speak(words, { voice: 1 });
+    const b = speak(words, { voice: 5 });
+    const lead = silence(0.3);
+    const gap = silence(1);
+    const audio = concat(lead, a, gap, b, silence(4));
+    // Where each utterance's speech ends (its last sample above -40 dBFS), in samples of the part.
+    const sound = (x: Float32Array) => {
+      for (let i = x.length - 1; i >= 0; i--) if (Math.abs(x[i] ?? 0) > 0.01) return i + 1;
+      return 0;
+    };
+    const ends = [lead.length + sound(a), lead.length + a.length + gap.length + sound(b)];
+    for (let i = 0; i < audio.length; i += 320) {
+      fed = Math.min(audio.length, i + 320);
+      p.audio(1, "call", i, audio.subarray(i, fed));
+    }
+    await p.endPart(1);
+    const lines = at.filter((o) => o.x.type === "seg");
+    expect(lines.length).toBe(2);
+    // Committed: when the line's `seg` came out, seconds after its speech ended.
+    const committed = lines.map((o, i) => (o.fed - (ends[i] as number)) / RATE);
+    // Decided: when the line first had a speaker other than c?, as its own `spk` or a label.
+    const decided = lines.map((o, i) => {
+      const s = o.x as SegOut;
+      const d =
+        s.spk !== "c?"
+          ? o
+          : at.find((l) => l.x.type === "label" && l.x.key === s.key && l.x.spk !== "c?");
+      return d ? (d.fed - (ends[i] as number)) / RATE : null;
+    });
+    // Positive control: the diarizer really is slow, so a line held for it would miss 1.5 s.
+    expect(decided[0]).toBeGreaterThan(1.5);
+    for (const c of committed) expect(c).toBeLessThanOrEqual(1.5);
+    expect(labelled(at.map((o) => o.x)).map((s) => s.spk)).toEqual(["c1", "c2"]);
   });
 
   test("a line longer than one model step is labelled by all of it, not by its last seconds", async () => {
@@ -169,16 +239,15 @@ describe("labels from the stream", () => {
   });
 
   test("a new call resets the stream and waits for the last call's labels first", async () => {
-    const { p, out, models } = pipeline({ ...NEMO, streamStep: 4, streamLookahead: 0.5 });
+    const { p, segs, models } = pipeline({ ...NEMO, streamStep: 4, streamLookahead: 0.5 });
     feed(p, 1, "call", concat(silence(0.3), says(1), says(5)));
     await p.beginCall({ centroids: [], ids: [] });
-    const labelled = out.filter((o): o is SegOut => o.type === "seg").map((s) => s.spk);
-    expect(labelled).toEqual(["c1", "c2"]);
+    expect(segs().map((s) => s.spk)).toEqual(["c1", "c2"]);
     expect(models.streams[0]?.resets).toBe(1);
     feed(p, 1, "call", concat(silence(0.3), says(5)));
     await p.endPart(1);
     // Numbered afresh in the new call.
-    expect(out.filter((o): o is SegOut => o.type === "seg").at(-1)?.spk).toBe("c1");
+    expect(segs().at(-1)?.spk).toBe("c1");
   });
 });
 
@@ -196,10 +265,10 @@ describe("a diarizer that fails costs labels, never lines", () => {
     expect(segs().at(-1)?.spk).toBe("c?");
   });
 
-  test("a diarizer that never answers: the part end waits a bounded time, then the lines land as c?", async () => {
+  test("a diarizer that never answers: the line lands at once, the part end waits a bounded time for its speaker, then it stays c?", async () => {
     const { p, segs, out } = pipeline({ ...NEMO, streamStuck: true });
     feed(p, 1, "call", concat(silence(0.3), says(1)));
-    expect(segs().length).toBe(0);
+    expect(segs().map((s) => s.spk)).toEqual(["c?"]);
     const t0 = performance.now();
     await p.endPart(1);
     const took = performance.now() - t0;
@@ -210,11 +279,14 @@ describe("a diarizer that fails costs labels, never lines", () => {
   }, 10_000);
 
   test("without a stream diarizer (embeddings) nothing waits and clusters label the call", () => {
-    const { p, segs } = pipeline({});
+    const { p, segs, out } = pipeline({});
     feed(p, 1, "call", concat(silence(0.3), says(1), says(5)));
     // Synchronous: no stream, so the part end needs no await.
     void p.endPart(1);
     expect(segs().map((s) => s.spk)).toEqual(["c1", "c2"]);
+    // Labelled as they land: nothing waits for a speaker.
+    expect(out.some((x) => x.type === "label")).toBe(false);
+    expect(out.some((x) => x.type === "seg" && x.held)).toBe(false);
   });
 });
 
@@ -253,7 +325,7 @@ describe("through the host into the log", () => {
     return { engine, mgr, asr: a, events };
   }
 
-  test("every call line is in the log before call.ended, labelled by the stream", async () => {
+  test("[G6] every call line is in the log before call.ended, written as c? and labelled by its next revision", async () => {
     const r = rig(NEMO);
     await r.asr.ready;
     r.engine.onStart = (s) => s.capturing();
@@ -263,7 +335,26 @@ describe("through the host into the log", () => {
     r.engine.last.play(silence(call.length / RATE), call);
     await r.mgr.stop();
     const segs = ofType(r.events, "seg") as Seg[];
-    expect(segs.map((s) => s.spk)).toEqual(["c1", "c2"]);
+    const firsts = segs.filter((s) => s.rev === 1);
+    expect(firsts.map((s) => s.spk)).toEqual(["c?", "c?"]);
+    // The decided speaker is the same line's next revision, carrying the speaker alone.
+    const later = segs.filter((s) => s.rev > 1);
+    expect(later.map((s) => [s.id, s.rev, s.spk])).toEqual([
+      [firsts[0]?.id, 2, "c1"],
+      [firsts[1]?.id, 2, "c2"],
+    ]);
+    expect(
+      later.every((s) => s.text === undefined && s.a0 === undefined && s.by === undefined),
+    ).toBe(true);
+    // Two utterances, two lines: the revision relabels a line, never adds one.
+    expect(
+      fold(r.events)
+        .lines("live")
+        .map((l) => [l.text, l.spk]),
+    ).toEqual([
+      ["we should move the", "c1"],
+      ["we should move the", "c2"],
+    ]);
     const ended = r.events.findIndex((e) => e.type === "call.ended");
     const lastSeg = r.events.findLastIndex((e) => e.type === "seg");
     expect(lastSeg).toBeLessThan(ended);
@@ -273,5 +364,53 @@ describe("through the host into the log", () => {
         .sort(),
     ).toEqual(["c1", "c2"]);
     expect(ofType(r.events, "speaker.merge")).toEqual([]);
+  });
+
+  test("[G6] a speaker a person gave a line before the diarizer decided it is kept", async () => {
+    const r = rig(NEMO);
+    await r.asr.ready;
+    r.engine.onStart = (s) => s.capturing();
+    const res = await r.mgr.start({ workspace: "work", title: "Sync" });
+    if (!res.ok) throw new Error(res.error);
+    // Audio makes the host take the call; silence gives the Worker nothing to write.
+    r.engine.last.play(silence(0.5), silence(0.5));
+    const host = r.asr as unknown as { onWorker(m: unknown): void };
+    const line = (key: number, a0: number) =>
+      host.onWorker({
+        type: "seg",
+        call: res.call,
+        part: 1,
+        ch: "call",
+        a0,
+        a1: a0 + 1,
+        text: `line ${key}`,
+        spk: "c?",
+        model: "fake-parakeet",
+        key,
+        held: true,
+      });
+    line(9001, 1);
+    line(9002, 3);
+    line(9003, 5);
+    const ids = (ofType(r.events, "seg") as Seg[]).map((s) => s.id);
+    expect(ids.length).toBe(3);
+    // A person says who spoke the first line while the diarizer is still deciding.
+    r.mgr.live()?.record({ type: "seg", id: ids[0] as string, rev: 2, spk: "c7", by: "user" });
+    host.onWorker({ type: "label", call: res.call, key: 9001, spk: "c1" });
+    // Positive control: the same label on a line nobody touched is written.
+    host.onWorker({ type: "label", call: res.call, key: 9002, spk: "c1" });
+    // Undecided stays c?, with nothing written; a key the host never gave a line writes nothing.
+    host.onWorker({ type: "label", call: res.call, key: 9003, spk: "c?" });
+    host.onWorker({ type: "label", call: res.call, key: 9999, spk: "c3" });
+    const view = r.mgr.controller(res.call)?.view;
+    expect(ids.map((id) => view?.segment(id)?.spk)).toEqual(["c7", "c1", "c?"]);
+    const revisions = (ofType(r.events, "seg") as Seg[])
+      .filter((s) => s.rev > 1)
+      .map((s) => [s.id, s.spk, s.by]);
+    expect(revisions).toEqual([
+      [ids[0], "c7", "user"],
+      [ids[1], "c1", undefined],
+    ]);
+    await r.mgr.stop();
   });
 });

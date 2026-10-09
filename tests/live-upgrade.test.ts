@@ -39,7 +39,7 @@ import { CallManager } from "../src/main/call/manager.ts";
 import { CallQuery } from "../src/main/query/context.ts";
 import { buildDecodeList } from "../src/main/vocab/decode-list.ts";
 import { ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
-import { concat, FakeModels, RATE, silence, speak } from "./fixtures/asr-fake.ts";
+import { concat, FakeModels, labelled, RATE, silence, speak } from "./fixtures/asr-fake.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 const FAKE = join(import.meta.dir, "fixtures", "asr-fake.ts");
@@ -228,15 +228,17 @@ describe("[ASR-7] the Worker hands each closed utterance to Qwen", () => {
     expect(trail(windows.out).every((x) => x.startsWith("seg "))).toBe(true);
   });
 
-  test("an utterance whose last line waits for its speaker label is sent right after it, never before", async () => {
-    // A diarizer that decides 6 s behind the audio: each line waits for its label.
+  test("[G6] an utterance whose speaker the diarizer has not decided is sent after its lines, without waiting for the labels", async () => {
+    // A diarizer that decides 6 s behind the audio: each line's speaker comes after it.
     const { p, out } = pipeline({ diarizer: "nemotron", streamStep: 4, streamLookahead: 2 });
     await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
     feed(p, "call", twoLines());
+    // The utterance has gone, and its last line's speaker is not decided yet: it did not wait.
+    expect(out.findIndex((x) => x.type === "upgrade")).toBeGreaterThan(-1);
+    expect(out.findIndex((x) => x.type === "label" && x.key === 2)).toBe(-1);
     await p.endPart(1);
     expect(trail(out)).toEqual(["seg 1 fake-nemotron", "seg 2 fake-nemotron", "upgrade 1,2"]);
-    const segs = out.filter((x) => x.type === "seg");
-    expect(segs.map((s) => s.spk)).toEqual(["c1", "c2"]);
+    expect(labelled(out).map((s) => s.spk)).toEqual(["c1", "c2"]);
   });
 });
 
