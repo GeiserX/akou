@@ -139,11 +139,12 @@ function bad(field: string, message: string): HttpError {
 export function chooseModel(
   jobs: JobService,
   ask: { model?: string; preset?: string },
+  job: { diarize: boolean },
   unknownIsAuto = false,
 ): ModelChoice {
   try {
     const choice = jobs.choose(ask, unknownIsAuto);
-    jobs.admit(choice.model);
+    jobs.admit(choice.model, job);
     return choice;
   } catch (err) {
     if (err instanceof ModelRefused) {
@@ -420,7 +421,7 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       : { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
     try {
-      const choice = chooseModel(jobs, ask);
+      const choice = chooseModel(jobs, ask, job);
       job.preset = choice.preset;
       job.model = choice.model;
       job.model_source = choice.source;

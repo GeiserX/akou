@@ -394,6 +394,33 @@ describe("[SV-M1] a file job fetches the models it runs and no other", () => {
       }
     });
   }
+
+  test("admission counts only what the job runs: without diarize a missing speaker or live model refuses nothing", async () => {
+    const rig = await serverRig([RECOGNIZER, "silero-vad", NEMOTRON], {}, {}, {}, wide);
+    try {
+      // Nothing may be fetched: only a job that needs no missing model is taken.
+      await setting(rig, "server.auto_download", false);
+      const plain = await submit(rig, { model: RECOGNIZER, diarize: "false" });
+      expect(plain.status).toBe(202);
+      expect((await ended(rig, plain.body.id)).status).toBe("done");
+      // The control: with speaker labels the missing speaker model still refuses the job.
+      const labelled = await submit(rig, { model: RECOGNIZER, diarize: "true" });
+      expect(labelled.status).toBe(409);
+      expect(labelled.body).toMatchObject({ error: "preset_unavailable", model: "titanet-small" });
+      await setting(rig, "server.auto_download", true);
+
+      // No room for any download: the same two answers, by the size cap.
+      await setting(rig, "server.models_max_gb", 1e-9);
+      const small = await submit(rig, { model: RECOGNIZER, diarize: "false" });
+      expect(small.status).toBe(202);
+      expect((await ended(rig, small.body.id)).status).toBe("done");
+      const over = await submit(rig, { model: RECOGNIZER, diarize: "true" });
+      expect(over.status).toBe(409);
+      expect(over.body).toMatchObject({ error: "preset_unavailable", reason: "models_max_gb" });
+    } finally {
+      await rig.done();
+    }
+  });
 });
 
 describe("[SV-M4, SV-M5] the ledger, the worker that lets go, and the sweep", () => {

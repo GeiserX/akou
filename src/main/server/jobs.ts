@@ -645,10 +645,11 @@ export class JobService {
 
   /**
    * Whether a job on `model` can be had: its files on disk, downloading, or allowed to start (SV-M1,
-   * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept.
+   * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept. Given the `job`,
+   * only the models it runs count: no live-only model, the speaker models only with diarize.
    */
-  admit(model: string): void {
-    this.o.shelf.admit(this.o.shelf.needs(model));
+  admit(model: string, job?: { diarize: boolean }): void {
+    this.o.shelf.admit(this.o.shelf.needs(model, job));
   }
 
   private modelOf(j: Job): string {

@@ -367,6 +367,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     const choice = chooseModel(
       jobs,
       interactive && !namesModel(jobs, asked.model) ? laneAsk(jobs, {}) : asked,
+      { diarize: format === "diarized_json" },
       true,
     );
     const submitted = jobs.submit({
