@@ -617,6 +617,8 @@ class Machine {
 
 class App {
   private child: ChildProcess | null = null;
+  /** What was there when a quit did not finish (#351): the CLI's answer, the processes, the log. */
+  readonly quitFailures: Record<string, unknown>[] = [];
 
   constructor(
     private readonly cli: string,
@@ -684,8 +686,21 @@ class App {
 
   /** `akou quit`, then waits for the app's `runtime.json` to go. */
   async quit(configDir: string): Promise<boolean> {
-    this.akou("quit");
+    const asked = this.akou("quit");
     const gone = await waitFor(() => !existsSync(join(configDir, "runtime.json")), 30_000);
+    if (!gone) {
+      const ps = WIN
+        ? null
+        : spawnSync("ps", ["-eo", "pid,ppid,stat,etime,args"], { encoding: "utf8" })
+            .stdout.split("\n")
+            .filter((l) => /akou|launcher|bun|webkit/i.test(l));
+      this.quitFailures.push({
+        quit: asked.out,
+        launcherRunning: this.child?.exitCode === null && this.child?.signalCode === null,
+        processes: ps,
+        launcherTail: this.tail(),
+      });
+    }
     // The launcher that started it ends with it; one that does not is ended here.
     await waitFor(() => this.child?.exitCode !== null || this.child?.signalCode !== null, 10_000);
     if (this.child && this.child.exitCode === null) this.child.kill();
@@ -1141,6 +1156,7 @@ async function main(): Promise<void> {
     hotkey: HOTKEY,
     ...(MAC ? { macos: { ...macos, presses: machine.presses } } : {}),
     phases,
+    quitFailures: app.quitFailures,
     verdict: problems.length === 0 ? "pass" : "fail",
     problems,
   };

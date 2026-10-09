@@ -176,7 +176,9 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
           "docs/providers.md: the terms table has no dated row",
         );
         // G1 passed on Linux and Windows only; macOS has no result.
-        // G6: speed passes on both halves, the committed line misses 1.5 s on the call channel.
+        // G6: speed passes on both halves; the committed line is within 1.5 s in five of eight Mac
+        // runs (the other three miss on their first lines after a cold start) and misses on four
+        // x64 cores.
         for (const g of ["G1", "G4", "G6", "G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
         // G2, G3, G5 and G8 are on record as passed.
