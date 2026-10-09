@@ -193,7 +193,7 @@ export interface Frame {
 
 /**
  * The window that draws a status item: a status-bar window (layer 25) holding the item's centre
- * and no wider than twice the item. On macOS 26 it belongs to Control Center, not to the app, so
+ * and of the item's size within 4 points (a runner's 34x32 item sits in a 32x30 window). On macOS 26 it belongs to Control Center, not to the app, so
  * it is found by place, never by owner. None found is null: the caller takes no shot rather than a
  * screen rectangle, which would hold whatever covers the item.
  */
@@ -210,7 +210,8 @@ export function statusItemWindow(rows: MacWindow[], item: Frame): MacWindow | nu
         cx <= w.bounds.x + w.bounds.w &&
         cy >= w.bounds.y &&
         cy <= w.bounds.y + w.bounds.h &&
-        w.bounds.w <= item.w * 2,
+        Math.abs(w.bounds.w - item.w) <= 4 &&
+        Math.abs(w.bounds.h - item.h) <= 4,
     ) ?? null
   );
 }

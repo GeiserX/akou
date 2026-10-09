@@ -128,6 +128,15 @@ describe("G1 gate readers", () => {
 
   test("macOS status item: its own status-bar window by place; none found is no shot", () => {
     const rows = [
+      // A wider status-bar window over the same spot is not the item's own.
+      {
+        id: 6,
+        pid: 509,
+        layer: 25,
+        owner: "Control Center",
+        title: "Item-0",
+        bounds: { x: 1480, y: 0, w: 68, h: 30 },
+      },
       {
         id: 7,
         pid: 509,
