@@ -31,7 +31,7 @@ akou is a desktop app for macOS that records your calls on your own computer, tr
 ## Quick start
 
 ```sh
-# Download akou-0.6.4-macos-arm64.dmg from https://github.com/GeiserX/akou/releases and drag akou into Applications.
+# Download akou-0.6.5-macos-arm64.dmg from https://github.com/GeiserX/akou/releases and drag akou into Applications.
 open -a akou
 ```
 
