@@ -32,10 +32,11 @@
  * 4. **Provisional line.** While a segment is open it is re-decoded every second (bounded by the
  *    window) and published with a 3 s expiry. It is never written to the log.
  * 5. **Speakers.** The mic is `you`. On the call channel, with a stream diarizer (`asr.diarizer`
- *    nemotron), the channel's audio also goes to Nemotron as one stream for the whole call, and a
- *    call segment is held until the model has decided all of it, then labelled with the speaker
- *    active longest inside it (`StreamSpeakers`). Without one, call segments of 1 s or more are
- *    embedded and clustered (`LiveSpeakers`).
+ *    nemotron), the channel's audio also goes to Nemotron as one stream for the whole call. A call
+ *    segment is written as `c?` when it closes, so it commits as fast as a mic line (ROADMAP G6),
+ *    and once the model has decided all of it, the speaker active longest inside it
+ *    (`StreamSpeakers`) is written as the line's next revision. Without one, call segments of 1 s
+ *    or more are embedded and clustered (`LiveSpeakers`).
  *
  * On the main thread (`LiveAsr`):
  * - It pulls audio from the part's bounded ingest queues (10 minutes) and keeps only a few seconds
@@ -43,7 +44,8 @@
  *   never affected by the recognizer.
  * - It assigns `seq` (through the call's one writer), the segment id and the wall times (from the
  *   part's anchors), and writes `seg`, `vocab.used`, `speaker.centroid`, `speaker.merge` and
- *   `asr.lag` (when the backlog crosses 10 s or 30 s, and when it recovers).
+ *   `asr.lag` (when the backlog crosses 10 s or 30 s, and when it recovers). A call line's
+ *   decided speaker is a `seg` revision carrying `spk` alone, unless a person gave it one first.
  * - Before `call.ended` it asks the Worker to close what is open (`flush`), within the call's
  *   flush budget. A result that arrives after `call.ended` is dropped, never written after it.
  * - The Worker transcribes one call at a time. A call started while the last one is still
@@ -142,7 +144,11 @@ export type LiveOut =
       lang?: string;
       /** The line's key within the Worker, for the upgrade's revisions of it. */
       key?: number;
+      /** Its speaker is `c?` until the stream diarizer decides it: a `label` with its key follows. */
+      held?: true;
     }
+  /** The stream diarizer decided the speaker of the held line `key` (`c?` when it could not). */
+  | { type: "label"; key: number; spk: string }
   | UpgradeOut
   | { type: "provisional"; part: number; ch: Channel; pseq: number; a0: number; text: string }
   | { type: "progress"; part: number; ch: Channel; pos: number }
@@ -272,11 +278,9 @@ interface StreamState {
   dead: boolean;
 }
 
-type SegOut = Extract<LiveOut, { type: "seg" }>;
-
-/** A call segment waiting for the diarizer to decide `[s0, s1)` of `stream`. */
+/** A written call line (`key`) whose speaker waits for the diarizer to decide `[s0, s1)` of `stream`. */
 interface Pending {
-  seg: Omit<SegOut, "spk">;
+  key: number;
   stream: StreamState | null;
   s0: number;
   s1: number;
@@ -340,8 +344,6 @@ export class LivePipeline {
   private upgrade = false;
   /** The last line key given out; keys never repeat within a Worker. */
   private lineKey = 0;
-  /** Upgrades whose last line still waits for its speaker label, sent right after that `seg`. */
-  private readonly heldUpgrades = new Map<number, UpgradeOut>();
 
   constructor(
     private readonly models: ModelSet,
@@ -762,28 +764,23 @@ export class LivePipeline {
     st.inSpeech = st.live?.open() != null;
   }
 
-  /**
-   * The closed utterance's lines and audio, for Qwen, sent right after its last line's `seg` (held
-   * with it while the stream diarizer decides that line's speaker).
-   */
+  /** The closed utterance's lines and audio, for Qwen, sent right after its last line's `seg`. */
   private upgradeUtterance(st: ChannelState): void {
     const utt = st.utt;
     st.utt = null;
     if (!utt || utt.keys.length === 0) return;
-    const last = utt.keys.at(-1) as number;
-    const u: UpgradeOut = {
+    this.emit({
       type: "upgrade",
       keys: utt.keys,
       lines: utt.lines,
       samples: prepareSpan(st.audio.slice(utt.from, utt.to)),
-    };
-    if (this.pending.some((p) => p.seg.key === last)) this.heldUpgrades.set(last, u);
-    else this.emit(u);
+    });
   }
 
   /**
-   * One closed line: labelled, or held for the stream diarizer's decision on its audio. Answers
-   * the line's key, or null when it has no text and nothing is written.
+   * One closed line, written at once: labelled, or `c?` with its speaker to follow once the
+   * stream diarizer has decided its audio. Answers the line's key, or null when it has no text and
+   * nothing is written.
    */
   private emitLine(
     st: ChannelState,
@@ -798,17 +795,19 @@ export class LivePipeline {
     const a1 = to / ASR_RATE;
     const key = ++this.lineKey;
     if (st.ch === "call" && this.labels === "stream") {
-      const seg = {
-        type: "seg" as const,
+      this.emit({
+        type: "seg",
         part,
         ch: st.ch,
         a0,
         a1,
         text: r.text,
+        spk: "c?",
         model: r.model,
         key,
+        held: true,
         ...(r.lang ? { lang: r.lang } : {}),
-      };
+      });
       const s = this.stream && !this.stream.dead ? this.stream : null;
       const range = s ? streamRange(s, part, from, to) : null;
       let emb: Float32Array | null = null;
@@ -817,7 +816,7 @@ export class LivePipeline {
         emb = this.embedder.embed(samples);
       }
       this.pending.push({
-        seg,
+        key,
         stream: range ? s : null,
         s0: range?.[0] ?? 0,
         s1: range?.[1] ?? 0,
@@ -952,8 +951,8 @@ export class LivePipeline {
   }
 
   /**
-   * Emits waiting call segments, oldest first, as their audio is decided. `force` labels the rest
-   * with what is decided, else `c?`. A segment the stream has left `STREAM_WAIT_SECONDS` behind
+   * Labels waiting call lines, oldest first, as their audio is decided. `force` labels the rest
+   * with what is decided, else `c?`. A line the stream has left `STREAM_WAIT_SECONDS` behind
    * undecided is `c?` too.
    */
   private drain(force: boolean): void {
@@ -977,12 +976,7 @@ export class LivePipeline {
       if (spk === null) break;
       this.pending.shift();
       if (p.emb && spk !== "c?") this.speakers.addTo(spk, p.emb);
-      this.emit({ ...p.seg, spk });
-      const u = p.seg.key === undefined ? undefined : this.heldUpgrades.get(p.seg.key);
-      if (u && p.seg.key !== undefined) {
-        this.heldUpgrades.delete(p.seg.key);
-        this.emit(u);
-      }
+      this.emit({ type: "label", key: p.key, spk });
       for (const c of this.speakers.centroids(this.now())) this.emit(c);
     }
     const s = this.stream;
@@ -1727,6 +1721,8 @@ interface HostCall {
   id: string;
   access: CallAccess;
   nextLive: number;
+  /** The id of each written call line whose speaker the Worker has still to send, by its key. */
+  held: Map<number, string>;
   version: number;
   listKey: string;
   parts: Map<
@@ -2231,6 +2227,7 @@ export class LiveAsr {
       id: callId,
       access,
       nextLive,
+      held: new Map(),
       version: 0,
       listKey: "",
       parts: new Map(),
@@ -2246,6 +2243,8 @@ export class LiveAsr {
 
   /** Tells the Worker which call it transcribes, with the call's speakers and decode list. */
   private beginCall(c: HostCall): void {
+    // A new Worker numbers its lines from 1 again, and the lines the last one held stay c?.
+    c.held.clear();
     const view = c.access.view;
     const spks = view
       .lines("live", { includeEcho: true, includeRetracted: true })
@@ -2452,6 +2451,9 @@ export class LiveAsr {
       case "upgrade":
         if (c) this.upgradeLine(c, m);
         return;
+      case "label":
+        if (c) this.labelLine(c, m);
+        return;
       case "seg":
         if (c) this.writeSeg(c, m);
         else {
@@ -2515,6 +2517,21 @@ export class LiveAsr {
     c.nextLive++;
     c.access.view.provisional.commit(m.ch, w1);
     if (c.upgrade && m.key !== undefined) c.upgrade.keys.set(m.key, id);
+    if (m.held && m.key !== undefined) c.held.set(m.key, id);
+  }
+
+  /**
+   * The stream diarizer decided a held line's speaker: the line's next revision, carrying `spk`
+   * alone. A line that already has that speaker, or whose speaker a person gave, is left as it is.
+   */
+  private labelLine(c: HostCall, m: Extract<LiveOut, { type: "label" }>): void {
+    const id = c.held.get(m.key);
+    if (id === undefined) return;
+    c.held.delete(m.key);
+    const seg = c.access.view.segment(id);
+    if (!seg || seg.spk === m.spk) return;
+    if (seg.revisions.some((r) => r.by !== undefined && r.spk !== undefined)) return;
+    c.access.record({ type: "seg", id, rev: seg.rev + 1, spk: m.spk });
   }
 
   // --- the second pass -----------------------------------------------------------------------

@@ -35,6 +35,7 @@ import type {
   WordHyp,
 } from "../../src/main/asr/engine.ts";
 import type { FinalAudio } from "../../src/main/asr/finalize-worker.ts";
+import type { LiveOut } from "../../src/main/asr/live-worker.ts";
 import { GREEDY_NO_HOTWORDS } from "../../src/main/asr/sherpa.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../../src/main/vocab/decode-list.ts";
 
@@ -392,6 +393,24 @@ export class FakeDiarizer implements Diarizer {
     }
     return spans;
   }
+}
+
+type SegOut = Extract<LiveOut, { type: "seg" }>;
+
+/**
+ * The pipeline's lines as the log ends up with them: each `seg` with the speaker of the latest
+ * `label` for its key (a stream diarizer's decision, which the host writes as the line's next
+ * revision).
+ */
+export function labelled(out: readonly LiveOut[]): SegOut[] {
+  const spk = new Map<number, string>();
+  for (const x of out) if (x.type === "label") spk.set(x.key, x.spk);
+  return out
+    .filter((x): x is SegOut => x.type === "seg")
+    .map((s) => {
+      const label = s.key === undefined ? undefined : spk.get(s.key);
+      return label === undefined ? s : { ...s, spk: label };
+    });
 }
 
 /**
