@@ -1,0 +1,35 @@
+G7 real run on 0.6.4, 2026-10-09: raw output of the checks behind the claims in M0-results.md.
+The checksum, tamper, spctl and CDHash lines were printed during the run and re-run after it
+against the same files, with the same result. The watcher lines are from the log it wrote
+during the run.
+
+== Release assets against SHA256SUMS (shasum -a 256 -c, on the two lines of SHA256SUMS below)
+e1efc35d28460134317adb27c622a26c9b77096c25ed212a209e9ea17c360977  akou-0.6.4-macos-arm64.zip
+215bc437b1459d0c8e25f4a4c75664bf2f5c4a9448d6e43d391bdd5940e65cc4  akou-cli-0.6.4-darwin-arm64.tar.gz
+akou-0.6.4-macos-arm64.zip: OK
+akou-cli-0.6.4-darwin-arm64.tar.gz: OK
+
+== Tamper control: a copy of the CLI archive with one byte appended, same check
+0eb3586dd2e8215993362bc201d660e88c9dec282d5c75f860e6a47343b311d5  akou-cli-0.6.4-darwin-arm64.tar.gz
+akou-cli-0.6.4-darwin-arm64.tar.gz: FAILED
+
+== The 0.6.4 app unpacked with ditto -x -k (spctl -a -vv, codesign -dvvv)
+/Applications/akou.app: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Sergio Fernández Rubio (624WUVM8B4)
+CFBundleShortVersionString=0.6.4
+CDHash=eeeccf4d3fb68b3b07c12c9aa818932595e268d1
+
+== The 0.6.2 app before it was moved aside, and after it went back
+before: CFBundleShortVersionString=0.6.2 CDHash=f465dc9b8961d1e5f5b957a95ae69ccf7fddef5c
+after:  CFBundleShortVersionString=0.6.2 CDHash=f465dc9b8961d1e5f5b957a95ae69ccf7fddef5c
+/Applications/akou.app: accepted
+source=Notarized Developer ID
+
+== Watcher: every pid runtime.json named during the run, with its version, executable and parent
+== (the first line was read before the parent was looked up)
+31244 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=
+31244 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+31406 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+31432 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+31665 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
