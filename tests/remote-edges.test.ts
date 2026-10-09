@@ -188,10 +188,42 @@ describe("[CLI-17] akou status with an AKOU_URL that does not answer", () => {
     expect(r.code).toBe(EXIT.unavailable);
     expect(r.err).toContain(`${base} (AKOU_URL)`);
     expect(r.err).not.toContain("akou open");
+    // `--json` is the error every other command prints, not `{"running":false}`.
+    const j = await cli(env({ AKOU_URL: base, AKOU_API_KEY: "k" }), ["status", "--json"]);
+    expect(j.code).toBe(EXIT.unavailable);
+    expect(j.json).toMatchObject({ error: "unavailable" });
+    expect(j.json.message).toContain(`${base} (AKOU_URL)`);
     // Positive control: with AKOU_URL unset and no app, status still says how to start it.
     const local = await cli(env({}), ["status"]);
     expect(local.code).toBe(EXIT.unavailable);
     expect(local.err).toContain("`akou open`");
+    expect((await cli(env({}), ["status", "--json"])).json).toEqual({ running: false });
+  });
+
+  test("akou dictate start, stop, toggle and cancel do the same: the remote's error, never `akou open`", async () => {
+    const closed = createServer();
+    await listen(closed);
+    const base = `http://127.0.0.1:${portOf(closed)}`;
+    closed.close();
+    const remote = env({ AKOU_URL: base, AKOU_API_KEY: "k" });
+    for (const word of ["start", "stop", "toggle", "cancel"]) {
+      const r = await cli(remote, ["dictate", word]);
+      expect([word, r.code]).toEqual([word, EXIT.unavailable]);
+      expect(r.err).toContain(`${base} (AKOU_URL)`);
+      expect(r.err).not.toContain("akou open");
+      const j = await cli(remote, ["dictate", word, "--json"]);
+      expect([word, j.code]).toEqual([word, EXIT.unavailable]);
+      expect(j.json).toMatchObject({ error: "unavailable" });
+      expect(j.json.message).toContain(`${base} (AKOU_URL)`);
+      expect(j.out).not.toContain("akou open");
+    }
+    // Positive control: with AKOU_URL unset and no app, the session commands still say how to start it.
+    const local = await cli(env({}), ["dictate", "start"]);
+    expect(local.code).toBe(EXIT.unavailable);
+    expect(local.err).toContain("`akou open`");
+    expect((await cli(env({}), ["dictate", "start", "--json"])).json).toMatchObject({
+      error: "not_running",
+    });
   });
 });
 

@@ -47,7 +47,9 @@ async function session(ctx: Ctx, word: string, language: string | undefined): Pr
     }
     return finish(ctx, r, (b: Body) => `dictation ${b.state}`);
   } catch (err) {
-    if (!(err instanceof Unreachable) || err instanceof Hung) throw err;
+    // `akou open` cannot start a remote akou: the CLI's own message says what it found (CLI-17).
+    if (!(err instanceof Unreachable) || err instanceof Hung || ctx.io.env.AKOU_URL?.trim())
+      throw err;
     const message = "akou is not running (`akou open` starts it)";
     if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_running", message }));
     else ctx.io.err(`akou: ${message}`);
