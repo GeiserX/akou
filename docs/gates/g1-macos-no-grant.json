@@ -1,0 +1,227 @@
+{
+  "gate": "G1",
+  "platform": "darwin-arm64",
+  "display": "macOS 26.6.1 desktop session",
+  "hotkey": "Alt+Command+R",
+  "macos": {
+    "probe": {
+      "accessibility": true,
+      "postEvent": true,
+      "screenRecording": true
+    },
+    "akouAccessibility": "denied",
+    "presses": [
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      },
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      },
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      },
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      },
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      },
+      {
+        "front": "com.apple.finder",
+        "posted": true,
+        "postEvent": true
+      }
+    ]
+  },
+  "phases": {
+    "install": null,
+    "before": {
+      "windows": [],
+      "tray": [],
+      "loginItem": {
+        "present": false,
+        "command": null
+      }
+    },
+    "normal": {
+      "status": {
+        "version": "0.6.4",
+        "platform": "darwin",
+        "pid": 67316,
+        "port": 56784,
+        "headless": false,
+        "hotkey": "Alt+Command+R",
+        "window": "open",
+        "page": null,
+        "startedAt": 1791535848806,
+        "uptimeMs": 1315,
+        "quitting": false,
+        "configDir": "$TMPDIR/akou-g1-YJzKt4/home/.config/akou",
+        "recordingsRoot": "$TMPDIR/akou-g1-YJzKt4/home/Recordings/akou"
+      },
+      "windows": [
+        {
+          "pid": 67316,
+          "title": "akou"
+        }
+      ],
+      "tray": [
+        {
+          "pid": 67316,
+          "props": {
+            "items": "1",
+            "role": "AXMenuBarItem"
+          }
+        }
+      ],
+      "hotkeyRegistered": "Alt+Command+R",
+      "screenshot": null,
+      "liveWithNoKeySent": false,
+      "liveAfterFirstPress": false,
+      "screenshotRecording": null,
+      "liveAfterSecondPress": false,
+      "loginItem": {
+        "present": false,
+        "command": null
+      },
+      "loginItemRightAfterConfigSet": false,
+      "appLog": [
+        "2026-10-09 10:50:49.944 +02:00 info akou 0.6.4 started (pid 67316, app, with the window, API on port 56784)",
+        "2026-10-09 10:50:50.033 +02:00 info asr: the live recognizer loaded its models",
+        ""
+      ]
+    },
+    "headless": {
+      "status": {
+        "version": "0.6.4",
+        "platform": "darwin",
+        "pid": 75731,
+        "port": 56784,
+        "headless": true,
+        "hotkey": null,
+        "window": "none (headless)",
+        "page": null,
+        "startedAt": 1791535897165,
+        "uptimeMs": 657,
+        "quitting": false,
+        "configDir": "$TMPDIR/akou-g1-YJzKt4/home/.config/akou",
+        "recordingsRoot": "$TMPDIR/akou-g1-YJzKt4/home/Recordings/akou"
+      },
+      "tray": [
+        {
+          "pid": 75731,
+          "props": {
+            "items": "1",
+            "role": "AXMenuBarItem"
+          }
+        }
+      ],
+      "windows": [],
+      "screenshot": null,
+      "liveAfterFirstPress": false,
+      "liveAfterSecondPress": false,
+      "loginItem": {
+        "present": true,
+        "command": "env AKOU_HEADLESS=1 \"$TMPDIR/akou-g1-YJzKt4/unpacked/akou.app/Contents/MacOS/launcher\""
+      },
+      "appLog": [
+        "2026-10-09 10:50:49.944 +02:00 info akou 0.6.4 started (pid 67316, app, with the window, API on port 56784)",
+        "2026-10-09 10:50:50.033 +02:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 10:51:34.503 +02:00 info quitting",
+        "2026-10-09 10:51:34.844 +02:00 info akou 0.6.4 quit (pid 67316)",
+        "2026-10-09 10:51:37.461 +02:00 info akou 0.6.4 started (pid 75731, app, headless, API on port 56784)",
+        "2026-10-09 10:51:37.737 +02:00 info asr: the live recognizer loaded its models",
+        ""
+      ]
+    },
+    "loginCommand": {
+      "command": "env AKOU_HEADLESS=1 \"$TMPDIR/akou-g1-YJzKt4/unpacked/akou.app/Contents/MacOS/launcher\"",
+      "via": "launchctl bootstrap gui/<uid>: exit 0 ",
+      "status": {
+        "version": "0.6.4",
+        "platform": "darwin",
+        "pid": 82802,
+        "port": 56784,
+        "headless": true,
+        "hotkey": null,
+        "window": "none (headless)",
+        "page": null,
+        "startedAt": 1791535948732,
+        "uptimeMs": 550,
+        "quitting": false,
+        "configDir": "$TMPDIR/akou-g1-YJzKt4/home/.config/akou",
+        "recordingsRoot": "$TMPDIR/akou-g1-YJzKt4/home/Recordings/akou"
+      },
+      "tray": [
+        {
+          "pid": 82802,
+          "props": {
+            "items": "1",
+            "role": "AXMenuBarItem"
+          }
+        }
+      ],
+      "windows": [],
+      "screenshot": null,
+      "liveAfterFirstPress": false,
+      "liveAfterSecondPress": false,
+      "appLog": [
+        "2026-10-09 10:50:49.944 +02:00 info akou 0.6.4 started (pid 67316, app, with the window, API on port 56784)",
+        "2026-10-09 10:50:50.033 +02:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 10:51:34.503 +02:00 info quitting",
+        "2026-10-09 10:51:34.844 +02:00 info akou 0.6.4 quit (pid 67316)",
+        "2026-10-09 10:51:37.461 +02:00 info akou 0.6.4 started (pid 75731, app, headless, API on port 56784)",
+        "2026-10-09 10:51:37.737 +02:00 info asr: the live recognizer loaded its models",
+        "2026-10-09 10:52:26.064 +02:00 info quitting",
+        "2026-10-09 10:52:26.276 +02:00 info akou 0.6.4 quit (pid 75731)",
+        "2026-10-09 10:52:28.874 +02:00 info akou 0.6.4 started (pid 82802, app, headless, API on port 56784)",
+        "2026-10-09 10:52:29.542 +02:00 info asr: the live recognizer loaded its models",
+        ""
+      ]
+    },
+    "loginOff": {
+      "status": {
+        "version": "0.6.4",
+        "platform": "darwin",
+        "pid": 86108,
+        "port": 56784,
+        "headless": false,
+        "hotkey": "Alt+Command+R",
+        "window": "open",
+        "page": null,
+        "startedAt": 1791536162728,
+        "uptimeMs": 43418,
+        "quitting": false,
+        "configDir": "$TMPDIR/akou-g1-YJzKt4/home/.config/akou",
+        "recordingsRoot": "$TMPDIR/akou-g1-YJzKt4/home/Recordings/akou"
+      },
+      "setOffBy": "akou config set",
+      "windows": [
+        {
+          "pid": 86108,
+          "title": "akou"
+        }
+      ],
+      "loginItem": {
+        "present": false,
+        "command": null
+      }
+    }
+  },
+  "verdict": "fail",
+  "problems": [
+    "hotkey: the first Alt+Command+R started no call within 30 s (akou's Accessibility grant: denied; the macOS hotkey needs it, docs/ux/DESKTOP.md DK-K1)",
+    "headless hotkey: the first Alt+Command+R started no call within 30 s (akou's Accessibility grant: denied; the macOS hotkey needs it, docs/ux/DESKTOP.md DK-K1)",
+    "login item hotkey: the first Alt+Command+R started no call within 30 s (akou's Accessibility grant: denied; the macOS hotkey needs it, docs/ux/DESKTOP.md DK-K1)"
+  ]
+}
