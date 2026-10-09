@@ -2,6 +2,39 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.6.5 — a call's lines no longer wait for their speaker, and `akou start` and `akou quit` finish
+
+On 0.6.4, with the Nemotron diarizer on, every line of the call channel waited until the diarizer had decided who spoke it. Nemotron decides about 2 s behind the audio, so the other side's words reached the transcript late: 2.42 s after the speech ended at worst on a Mac mini M4, while your own lines stayed within 1.25 s. In 0.6.5 a call line is written when its segment closes and its speaker follows on the same line a moment later. Two commands also stop failing at the edges: the first `akou start` after an install waits for a slow first launch, and `akou quit` on Linux always finishes.
+
+### Calls
+- **A call line lands when it is said, and its speaker follows.** The line is written as soon as its segment closes, as "Unknown speaker", and the diarizer's decision arrives as a correction to that same line, so nothing is duplicated in the window, the API, `akou watch` or a shared link. A speaker you set by hand before the decision is kept. On a Mac mini M4 the call channel now commits within 1.5 s of the end of the speech, 1.18 s at worst with Nemotron in the runs that started clean, and the speaker lands about when the whole line used to (#359).
+- **A search hit names the speaker who said the word.** `akou search` cited the first line of the matched passage, which can span several speakers, so a word one person said could come back under another's name. The citation now names the first line that contains a search term (#365).
+
+### Starting and quitting
+- **`akou start` waits out a slow first launch.** The first start after installing a new build failed with "akou did not answer within 3 s of launching" while the app came up a moment later, and the launcher left behind then blocked every later start. The command now waits up to 20 s while the launch is still in progress, fails at once when nothing is starting, and stops the idle launcher once the app answers (#360).
+- **`akou quit` always finishes on Linux.** After a call, a quit could log `quitting` and then never end, leaving the app running. A call that is still stopping is now allowed to end before anything closes, and every step of the quit has a deadline. A step that fails or takes too long is named in `app.log` and the quit goes on (#367).
+- **Three messages no longer point at a command that cannot help.** `akou status` and the `akou dictate` session commands against an `AKOU_URL` that does not answer say `nothing answers at <url>` and exit 69, instead of telling you to run `akou open`. The help of `akou open` says an address is printed only by an app with no desktop shell. The `models_missing` error of `akou_start` names the tool's own `withoutModels` argument, not the CLI flag (#366).
+
+### Server
+- **A file job without speaker labels fetches only the models it runs.** With speaker labels off, a job still downloaded the speaker models and the live model first, about 1.1 GB it never used, and a server with `server.auto_download` off or a small `server.models_max_gb` refused the job with 409 for those models. Both the download and the admission now count the recognizer alone unless the job asks for speaker labels (#364).
+
+### Behind the scenes
+- G1 and G3 pass. G1 now runs on macOS as well as Linux and Windows, and Linux passed four runs in a row after the quit fix. G3 passed with the signed 0.6.4 installed over the signed 0.6.2: no new permission prompt, and a reset prompted again (#354, #357, #362, #371).
+- G4, G6 and G7 stay Partial. G4 needs a USB input device to measure two real clocks, G6 needs the four-core x64 lines inside 1.5 s, and G7 needs a Codex with a working sign-in. Claude answered in the packaged app on two Macs (#354, #358, #363, #372).
+- The dictation audio tests wait for the audio write instead of reading the folder too early on a loaded runner (#361).
+- The repository carries a `glama.json`, so the MCP server can be listed on Glama (#373).
+
+### Known limitations
+- **The first lines after a cold start can be late.** In three of eight runs on a Mac mini M4 the first one to three lines, in the first 9 s of the call, took 1.5 to 5.8 s. The rest stayed within 1.5 s.
+- **On four x64 cores a line still takes longer than 1.5 s.** At worst it took 1.85 s on the microphone and 2.27 s on the call.
+- A line the diarizer cannot decide stays "Unknown speaker".
+- A launcher left behind by an earlier failed launch still blocks `akou start`, which now waits 20 s before it fails. Quit that akou process and start again.
+- `akou quit` waits up to 20 s without printing anything while a call ends. A live Qwen server that ignores the stop signal can outlive the app when you quit from the window. `akou quit` from the command line stops it.
+- A search for one word of a term akou corrected from several heard words, or for several words spoken on different lines, can still cite another line of the passage than the one you meant.
+- A stalled queue still reports as healthy over the API (queued N, running 0, every remote up); a signal for it is a follow-up.
+- A job only a remote can run that was refused with 409 waits for the next submit, probe change or remote job end before it is offered again.
+- Every item under 0.6.3's Known limitations still applies.
+
 ## 0.6.4 — a server whose remotes all drop at once dispatches again when they return
 
 On 0.6.3 a primary with `server.remotes` could stop dispatching for good. When every remote timed out in the same moment while the 30-second probe was in flight, the probe compared the remotes against the state it had seen before its requests, saw no change, announced nothing, and the queue sat with hundreds of jobs queued, none running and every remote reported up, until a restart. In 0.6.4 the probe compares against the state after its requests, so a remote marked down mid-probe is announced up and the queue runs again.
