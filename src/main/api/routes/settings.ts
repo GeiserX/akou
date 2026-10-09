@@ -318,7 +318,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     "/window",
     {
       id: "window.open",
-      doc: "Show the window, on a call if one is named. With no window (headless) the answer is the address of the window in a browser, with a one-time code.",
+      doc: "Show the window, on a call if one is named, opening it if the app runs headless. With no desktop shell (the Linux tarball, a source checkout) the answer is the address of the window in a browser, with a one-time code.",
       access: "admin",
       modes: ["app"],
       body: { "call?": "string" },

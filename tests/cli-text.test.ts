@@ -191,6 +191,17 @@ describe("[CLI-17] Honest text", () => {
   });
 });
 
+describe("[CLI-17] akou open says what it does", () => {
+  test("a headless app with the desktop shell opens the window; only one without it prints an address", () => {
+    const open = COMMANDS.find((c) => c.name === "open");
+    // On macOS the CLI launches the app headless and `akou open` then opens a real window
+    // (openWindow in src/main/index.ts), so "headless" alone never means an address.
+    expect(open?.summary).not.toMatch(/headless, print/);
+    expect(open?.summary).toMatch(/opening it if akou runs headless/);
+    expect(open?.summary).toMatch(/no desktop shell/);
+  });
+});
+
 /** The registry commands that CLI.md's command tree (section 4) does not name in backticks. */
 function untabled(doc: string, names: readonly string[]): string[] {
   const start = doc.indexOf("## 4. The command tree");

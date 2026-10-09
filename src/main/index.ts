@@ -1862,9 +1862,10 @@ export class AkouApp implements ApiApp {
 
   /**
    * `POST /window`, `akou open [CALL]`: brings the window forward on a call, opening it if the app
-   * started headless under the desktop shell. An app with no window at all (the CLI's headless
-   * launch, the Linux tarball) answers with the address of the window in a browser instead: the
-   * page server, started the first time, with a one-time code in the fragment.
+   * started headless under the desktop shell (the login item, or the CLI's launch of the macOS
+   * app). An app with no desktop shell (the Linux tarball, a source checkout) answers with the
+   * address of the window in a browser instead: the page server, started the first time, with a
+   * one-time code in the fragment.
    */
   async openWindow(call?: string): Promise<{ shown: true } | { url: string }> {
     if (this.quitting) throw new HttpError(503, "quitting", "akou is quitting");

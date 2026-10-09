@@ -205,8 +205,10 @@ const status: Command = {
       // A probe never launches the app.
       r = await api(ctx, "GET", "/status", { launch: false });
     } catch (err) {
-      // A hung app is not "not running": the CLI's own message says what it found (DK-M8).
-      if (!(err instanceof Unreachable) || err instanceof Hung) throw err;
+      // A hung app is not "not running", and `akou open` cannot start a remote akou: the CLI's own
+      // message says what it found (DK-M8, CLI-17).
+      if (!(err instanceof Unreachable) || err instanceof Hung || ctx.io.env.AKOU_URL?.trim())
+        throw err;
       if (ctx.json) ctx.io.out(JSON.stringify({ running: false }));
       else ctx.io.err("akou is not running (`akou open` starts it and shows the window)");
       return EXIT.unavailable;
@@ -217,7 +219,8 @@ const status: Command = {
 
 const open: Command = {
   name: "open",
-  summary: "Show the window on a call; headless, print the address of the window in a browser",
+  summary:
+    "Show the window on a call, opening it if akou runs headless; with no desktop shell (Linux tarball, source checkout), print its address for a browser",
   usage: "akou open [CALL | -c CALL] [--json]",
   flags: { call: callFlag("the window's own choice") },
   examples: ["akou open", "akou open last"],

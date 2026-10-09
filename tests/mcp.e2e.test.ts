@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
+import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { ApiClient, type ApiResponse } from "../src/main/cli/client.ts";
 import { askListed, createMcpServer, harnessOf } from "../src/main/mcp/server.ts";
 import { CALL_TEXT_CLOSE, CALL_TEXT_OPEN } from "../src/main/query/render.ts";
@@ -452,6 +453,45 @@ describe("an attach names what the live call records", () => {
     },
     LONG,
   );
+});
+
+describe("[CLI-17] akou_start without the speech models", () => {
+  test("the models_missing error names the tool's own withoutModels, never the CLI's --without-models", async () => {
+    const home = tempDir("akou-mcp-models-");
+    const tiny: ModelSpecEntry = {
+      id: "tiny-recognizer",
+      job: "test",
+      licence: "MIT",
+      source: "test",
+      files: [
+        { name: "m.onnx", url: "http://127.0.0.1:9/m.onnx", sha256: "0".repeat(64), size: 1 },
+      ],
+    };
+    const bare = await appRig({
+      home: home.dir,
+      modelRegistry: [tiny],
+      settings: { "asr.modelsDir": join(home.dir, "models") },
+    });
+    try {
+      // Positive control: the app's own answer names the CLI's flag, for the CLI.
+      const direct = await bare.api("POST", "/calls", {});
+      expect(direct.body.error).toBe("models_missing");
+      expect(direct.body.message).toContain("--without-models");
+      const c = await connect(
+        "claude-code",
+        new ApiClient({ env: { ...process.env, ...bare.env }, client: "mcp", launch: null }),
+      );
+      const r = await c.call("akou_start", { title: "No models" });
+      await c.close();
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("models_missing");
+      expect(r.text).toContain("withoutModels: true");
+      expect(r.text).not.toContain("--without-models");
+    } finally {
+      await bare.close();
+      home.cleanup();
+    }
+  });
 });
 
 describe("over stdio", () => {
