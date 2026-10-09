@@ -180,6 +180,39 @@ export interface MacWindow {
   layer: number;
   owner: string | null;
   title: string | null;
+  bounds?: Frame | null;
+}
+
+/** A rectangle in screen points, top-left origin. */
+export interface Frame {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The window that draws a status item: a status-bar window (layer 25) holding the item's centre
+ * and no wider than twice the item. On macOS 26 it belongs to Control Center, not to the app, so
+ * it is found by place, never by owner. None found is null: the caller takes no shot rather than a
+ * screen rectangle, which would hold whatever covers the item.
+ */
+export function statusItemWindow(rows: MacWindow[], item: Frame): MacWindow | null {
+  const cx = item.x + item.w / 2;
+  const cy = item.y + item.h / 2;
+  return (
+    rows.find(
+      (w) =>
+        w.layer === 25 &&
+        w.id !== undefined &&
+        !!w.bounds &&
+        cx >= w.bounds.x &&
+        cx <= w.bounds.x + w.bounds.w &&
+        cy >= w.bounds.y &&
+        cy <= w.bounds.y + w.bounds.h &&
+        w.bounds.w <= item.w * 2,
+    ) ?? null
+  );
 }
 
 /**
@@ -201,7 +234,7 @@ export interface MacExtras {
     role: string | null;
     title: string | null;
     description: string | null;
-    frame?: { x: number; y: number; w: number; h: number } | null;
+    frame?: Frame | null;
   }[];
   error?: string;
 }
@@ -572,20 +605,20 @@ class Machine {
       else if (MAC) {
         // akou's own pixels only, never the rest of a person's desktop: its window when it has
         // one, else its status item in the menu bar.
+        // Each by its own window (`-l`), so nothing drawn over it can land in the shot.
         const pids = this.ours();
-        const win = this.mac<MacWindow[]>("windows").find(
-          (w) => w.layer === 0 && pids.includes(w.pid) && w.id !== undefined,
-        );
+        const all = this.mac<MacWindow[]>("windows");
         const item = pids.length
           ? this.mac<MacExtras[]>("extras", ...pids.map(String)).flatMap((r) => r.items ?? [])[0]
           : undefined;
-        const f = item?.frame;
-        const args = win
-          ? ["-x", "-o", "-l", String(win.id), path]
-          : f
-            ? ["-x", "-R", `${f.x},${f.y},${f.w},${f.h}`, path]
-            : null;
-        if (!args || spawnSync("screencapture", args).status !== 0) return false;
+        const win =
+          all.find((w) => w.layer === 0 && pids.includes(w.pid) && w.id !== undefined) ??
+          (item?.frame ? statusItemWindow(all, item.frame) : null);
+        if (
+          !win ||
+          spawnSync("screencapture", ["-x", "-o", "-l", String(win.id), path]).status !== 0
+        )
+          return false;
       } else spawnSync("import", ["-window", "root", path]);
       return existsSync(path);
     } catch {
