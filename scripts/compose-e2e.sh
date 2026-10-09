@@ -64,7 +64,15 @@ finish() {
 }
 trap finish EXIT
 
-dc build telegram-backup telegram-viewer
+# Docker Hub limits anonymous pulls per address, and a shared runner is over the limit through no
+# doing of its own (docs/CI-CD.md CI-30): compose.e2e.yml takes the archive's base image from
+# mirror.gcr.io, and a build that still asks Docker Hub for one stops here.
+dc build telegram-backup telegram-viewer 2>&1 | tee build.log
+if grep -E 'load metadata for (docker\.io|registry-1\.docker\.io|index\.docker\.io)/' build.log; then
+  echo "the build above pulled a base image from Docker Hub; name it in additional_contexts of scripts/ci/compose-e2e/compose.e2e.yml" >&2
+  exit 1
+fi
+grep -q 'load metadata for mirror\.gcr\.io/library/python:' build.log
 
 # SERVER.md 12.5, "Set it up once".
 mkdir -p akou/data akou/models data
