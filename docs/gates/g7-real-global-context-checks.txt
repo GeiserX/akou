@@ -1,0 +1,72 @@
+G7 real run with a daily-use user context, 2026-10-09, on an Apple silicon Mac with SIP on, macOS 27:
+raw output of the checks behind the claims in M0-results.md. The home folder reads ~.
+
+== CLI archive against SHA256SUMS
+215bc437b1459d0c8e25f4a4c75664bf2f5c4a9448d6e43d391bdd5940e65cc4  akou-cli-0.6.4-darwin-arm64.tar.gz
+akou-cli-0.6.4-darwin-arm64.tar.gz: OK
+== Tamper control: one byte appended
+0eb3586dd2e8215993362bc201d660e88c9dec282d5c75f860e6a47343b311d5  akou-cli-0.6.4-darwin-arm64.tar.gz
+akou-cli-0.6.4-darwin-arm64.tar.gz: FAILED
+== The akou in use is the one in the archive
+f8bc557a7b22192ceb13a360432b7152a877425e3b6f70138d3ba696dbac05f5  akou
+f8bc557a7b22192ceb13a360432b7152a877425e3b6f70138d3ba696dbac05f5  akou
+== DMG the app was installed from
+93f0da4472f06faf4ec2f57a364c36651ecb10c947d7afa211c339c4549072d0  akou-0.6.4-macos-arm64.dmg
+akou-0.6.4-macos-arm64.dmg: OK
+== Installed app
+/Applications/akou.app: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Sergio Fernández Rubio (624WUVM8B4)
+CFBundleShortVersionString=0.6.4
+CDHash=7f800de5f7b85e9ce373e6a73686587c8862fcd6
+
+== Watcher: every pid runtime.json named during the run, with its version, executable and parent
+69740 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+69830 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+69886 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+70394 v0.6.4 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+
+== The scratch home's app.log: every start and quit
+2026-10-09 18:43:50.573 +02:00 info akou 0.6.4 started (pid 69740, app, headless, API on port 60294)
+2026-10-09 18:43:51.028 +02:00 info akou 0.6.4 quit (pid 69740)
+2026-10-09 18:43:51.572 +02:00 info akou 0.6.4 started (pid 69830, app, headless, API on port 60306)
+2026-10-09 18:43:51.939 +02:00 info akou 0.6.4 quit (pid 69830)
+2026-10-09 18:43:52.404 +02:00 info akou 0.6.4 started (pid 69886, app, headless, API on port 60318)
+2026-10-09 18:44:00.532 +02:00 info akou 0.6.4 quit (pid 69886)
+2026-10-09 18:44:00.857 +02:00 info akou 0.6.4 started (pid 70394, app, headless, API on port 60416)
+2026-10-09 18:44:38.065 +02:00 info akou 0.6.4 quit (pid 70394)
+
+== The scratch home's launch.log: lines saying the app was already running
+0
+
+== The Mac (sw_vers -productVersion, csrutil status)
+27.0.1
+System Integrity Protection status: enabled.
+
+== User context the harness loads (counts only, read from the config folder claude ran with)
+user-level instruction file: present, 0 bytes
+skills: 35
+commands: 6
+plugins listed: 4, switched on: 0
+hook events with a hook: 3, hook commands: 8
+user-scope MCP servers: 2 (not loaded: the app passes --strict-mcp-config)
+project memory: none (the app runs the harness in a new temporary folder)
+
+== Codex on this Mac, as printed on 2026-10-09 around the run (18:44 to 18:45 local)
+== codex login status
+Logged in using ChatGPT
+== one real request (codex exec --skip-git-repo-check --sandbox read-only, a one-line prompt), exit code 1
+2026-10-09T16:45:05.163616Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again.
+ERROR: workspace routing discovery unauthorized (401)
+== the sign-in file's last-written date, read at 18:45
+Sep 28 03:20:04 2026
+
+== The reference Mac mini, as printed on 2026-10-09 at 19:06 local
+== pgrep -x Finder, pgrep -x WindowServer, owner of /dev/console
+Finder: none  WindowServer: 2913  console user: root
+== one real request (codex exec --json --skip-git-repo-check --sandbox read-only -, a one-line prompt), exit code 1
+error  Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.
+2026-10-09T17:06:52.664165Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {
+  "error": {
+    "message": "Invalid refresh token.",
+== (the error's JSON is cut here on purpose: the lines above are all that the claim needs)
