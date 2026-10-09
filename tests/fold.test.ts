@@ -42,6 +42,37 @@ describe("the fold: segments and revisions (DESIGN 4.2, 4.6)", () => {
     expect(seg?.revisions.map((r) => r.rev)).toEqual([1, 2]);
   });
 
+  test("[G6] a later revision with the decided speaker relabels the provisional c? line in place", () => {
+    const b = basicCall();
+    b.seg({ id: "l000004", spk: "c?", w0: T0 + 4 * S, text: "to the new box" });
+    const v = fold(b.events);
+    expect(v.resolve("l000004")?.spk).toBe("c?");
+    v.apply(b.add({ type: "seg", id: "l000004", rev: 2, spk: "c1" }));
+    const line = v.resolve("l000004");
+    expect(line?.spk).toBe("c1");
+    expect(line?.text).toBe("to the new box");
+    // A speaker decided by the model is not a person's edit.
+    expect(line?.edited).toBe(false);
+    expect(v.segment("l000004")?.recognized).toBe("to the new box");
+    // One line, not two: the same id, in its place.
+    expect(
+      v
+        .lines()
+        .filter((l) => l.text === "to the new box")
+        .map((l) => l.id),
+    ).toEqual(["l000004"]);
+    expect(fold(b.events).lines()).toEqual(v.lines());
+  });
+
+  test("[G6] a lower revision of the speaker never replaces the decided one", () => {
+    const b = basicCall();
+    b.seg({ id: "l000004", spk: "c?", w0: T0 + 4 * S, text: "to the new box" });
+    b.add({ type: "seg", id: "l000004", rev: 3, spk: "c2" });
+    // Positive control: the rule is the rev, not the order: rev 2 arrives last and loses.
+    b.add({ type: "seg", id: "l000004", rev: 2, spk: "c1" });
+    expect(fold(b.events).resolve("l000004")?.spk).toBe("c2");
+  });
+
   test("a stale revision never replaces a newer one", () => {
     const b = basicCall();
     b.add({ type: "seg", id: "l000002", rev: 3, text: "third" });

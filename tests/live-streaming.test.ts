@@ -28,7 +28,7 @@ import { MAX_GAIN, TARGET_PEAK } from "../src/main/asr/pad.ts";
 import { onlineConfig, SherpaLiveEngine } from "../src/main/asr/sherpa.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { ManualClock, ofType, ScriptedEngine } from "./capture-helpers.ts";
-import { concat, FakeModels, RATE, silence, speak } from "./fixtures/asr-fake.ts";
+import { concat, FakeModels, labelled, RATE, silence, speak } from "./fixtures/asr-fake.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 const FAKE = join(import.meta.dir, "fixtures", "asr-fake.ts");
@@ -458,7 +458,8 @@ function pipeline(o: ConstructorParameters<typeof FakeModels>[0] = {}) {
     (x) => out.push(x),
     () => 0,
   );
-  const segs = () => out.filter((x): x is Extract<LiveOut, { type: "seg" }> => x.type === "seg");
+  // Each line with the speaker the log ends up with: its own, or the label decided after it.
+  const segs = () => labelled(out);
   const shown = () =>
     out.filter((x): x is Extract<LiveOut, { type: "provisional" }> => x.type === "provisional");
   return { models, out, p, segs, shown };
