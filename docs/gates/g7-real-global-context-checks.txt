@@ -69,3 +69,4 @@ error  Your access token could not be refreshed because you have since logged ou
 2026-10-09T17:06:52.664165Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {
   "error": {
     "message": "Invalid refresh token.",
+== (the error's JSON is cut here on purpose: the lines above are all that the claim needs)
