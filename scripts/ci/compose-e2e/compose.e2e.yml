@@ -12,6 +12,11 @@ services:
     image: telegram-archive:e2e
     build:
       context: https://github.com/GeiserX/Telegram-Archive.git#${TA_REF}
+      # Both of the archive's Dockerfiles start `FROM python:3.14-slim`, which is Docker Hub. This
+      # names the same image on mirror.gcr.io instead (docs/CI-CD.md CI-30); compose-e2e.sh fails
+      # if the build still asks Docker Hub, as it would after a TA_REF whose base has another name.
+      additional_contexts:
+        "python:3.14-slim": docker-image://mirror.gcr.io/library/python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
     restart: "no"
     command: ["python", "/e2e/archive-note.py", "/e2e/note.ogg"]
     environment:
@@ -25,4 +30,6 @@ services:
     build:
       context: https://github.com/GeiserX/Telegram-Archive.git#${TA_REF}
       dockerfile: Dockerfile.viewer
+      additional_contexts:
+        "python:3.14-slim": docker-image://mirror.gcr.io/library/python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
     restart: "no"

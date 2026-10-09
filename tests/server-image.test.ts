@@ -30,6 +30,18 @@ export function instructions(dockerfile: string): Instruction[] {
     });
 }
 
+/**
+ * Whether an image reference is pulled from Docker Hub: Docker reads a first part without a dot,
+ * a colon or `localhost` as a Docker Hub repository, and `docker.io` is its name.
+ */
+export function fromDockerHub(ref: string): boolean {
+  const name = ref.split("@")[0] ?? "";
+  const first = name.split("/")[0] ?? "";
+  if (!name.includes("/")) return true;
+  if (!/[.:]/.test(first) && first !== "localhost") return true;
+  return /^((index|registry-1)\.)?docker\.io$/.test(first);
+}
+
 /** The instructions of the last stage: what the shipped image is made of. */
 function finalStage(dockerfile: string): Instruction[] {
   const all = instructions(dockerfile);
@@ -53,6 +65,55 @@ describe("[SV-P1] the server image", () => {
     for (const a of args) expect(a.args).toMatch(/:\d+\.\d+\.\d+[\w.-]*@sha256:[0-9a-f]{64}$/);
     // The runtime's Bun is the repository's Bun.
     expect(dockerfile).toContain(`oven/bun:${read(".bun-version").trim()}-slim@sha256:`);
+  });
+
+  test("[CI-30] no base image is pulled from Docker Hub, which limits anonymous pulls", () => {
+    const all = instructions(dockerfile);
+    const args = all.filter((x) => x.op === "ARG" && /_IMAGE=/.test(x.args));
+    const refs = args.map((a) => a.args.slice(a.args.indexOf("=") + 1));
+    expect(refs.filter(fromDockerHub)).toEqual([]);
+    expect(refs.map((r) => r.split(":")[0]).sort()).toEqual([
+      "mirror.gcr.io/library/rust",
+      "mirror.gcr.io/oven/bun",
+    ]);
+    // Every stage starts from one of those two arguments or from an earlier stage, never from
+    // a reference written into the FROM line.
+    const names = args.map((a) => `\${${a.args.split("=")[0]}}`);
+    const froms = all.filter((x) => x.op === "FROM").map((x) => x.args.split(/\s+/)[0] ?? "");
+    expect(froms.length).toBeGreaterThan(0);
+    expect(froms.filter((f) => !names.includes(f))).toEqual([]);
+    // The release's builder is a container too, and buildx takes its image from Docker Hub
+    // unless told otherwise.
+    for (const f of ["release.yml", "ci.yml"]) {
+      const creates = read(".github", "workflows", f)
+        .split("\n")
+        .filter((l) => /^\s*docker buildx create\b/.test(l));
+      const hub = creates.filter((l) => {
+        const image = /--driver-opt image=(\S+)/.exec(l)?.[1];
+        return image === undefined || fromDockerHub(image);
+      });
+      expect({ f, hub }).toEqual({ f, hub: [] });
+    }
+    expect(read(".github", "workflows", "release.yml")).toContain("docker buildx create ");
+    // Positive control: every spelling of a Docker Hub reference is seen, and a mirror is not.
+    const digest = `@sha256:${"0".repeat(64)}`;
+    for (const hub of [
+      `rust:1.97.1-slim-trixie${digest}`,
+      `oven/bun:1.4.2-slim${digest}`,
+      `docker.io/library/rust:1.97.1-slim-trixie${digest}`,
+      `registry-1.docker.io/oven/bun:1.4.2-slim${digest}`,
+      "index.docker.io/oven/bun:1.4.2-slim",
+    ]) {
+      expect({ hub, seen: fromDockerHub(hub) }).toEqual({ hub, seen: true });
+    }
+    for (const other of [
+      `mirror.gcr.io/oven/bun:1.4.2-slim${digest}`,
+      `public.ecr.aws/docker/library/rust:1.97.1-slim-trixie${digest}`,
+      "localhost:5000/rust:1",
+      "localhost/rust:1",
+    ]) {
+      expect({ other, seen: fromDockerHub(other) }).toEqual({ other, seen: false });
+    }
   });
 
   test("runs as a non-root user, with AKOU_HOME=/data and AKOU_MODELS_DIR=/models as volumes, and starts akou serve", () => {

@@ -23,8 +23,13 @@
 #                                              the NVIDIA Container Toolkit; the host needs only the driver
 #   docker build --build-arg ACCELERATOR=vulkan -t drumsergio/akou:<version>-vulkan .
 
-ARG BUN_IMAGE=oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
-ARG RUST_IMAGE=rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c
+# Both come from Google's public copy of Docker Hub (mirror.gcr.io), not from Docker Hub itself:
+# Docker Hub limits anonymous pulls per address, and a shared build machine is over the limit
+# through no doing of its own (CI-30). The digest names the content, so these are the same bytes
+# Docker Hub serves. To build from Docker Hub instead:
+#   --build-arg BUN_IMAGE=oven/bun:<the tag and digest below> --build-arg RUST_IMAGE=rust:<the same>
+ARG BUN_IMAGE=mirror.gcr.io/oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61
+ARG RUST_IMAGE=mirror.gcr.io/library/rust:1.97.1-slim-trixie@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c
 
 # akou-diarize, for jobs that ask for speakers: built on the same Debian as the runtime image.
 FROM ${RUST_IMAGE} AS diarize
