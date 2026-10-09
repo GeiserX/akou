@@ -92,6 +92,10 @@ export interface RigOptions {
   memoryGb?: number;
   /** `app.log` and the watchdog, as the entry points run the app (DK-M8). */
   supervise?: boolean;
+  /** The window the app opens on `openWindow`; none by default (the rig is headless). */
+  window?: AppOptions["window"];
+  /** How long one step of the quit may take before the quit goes on without it (#351). */
+  quitStepMs?: number;
   /**
    * The real models in `asr.modelsDir` and this machine's own GPU, as an install runs them: no fake
    * recognizer and no stand-in for the accelerator probe. Only model-gated tests set it.
@@ -165,6 +169,8 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
     ...(o.memoryGb ? { memoryGb: o.memoryGb } : {}),
     ...(o.supervise ? { supervise: true } : {}),
+    ...(o.window ? { window: o.window } : {}),
+    ...(o.quitStepMs ? { quitStepMs: o.quitStepMs } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;
