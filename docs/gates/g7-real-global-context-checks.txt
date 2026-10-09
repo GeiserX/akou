@@ -1,4 +1,4 @@
-G7 real run with a full global context, 2026-10-09, on an Apple silicon Mac with SIP on, macOS 27:
+G7 real run with a daily-use user context, 2026-10-09, on an Apple silicon Mac with SIP on, macOS 27:
 raw output of the checks behind the claims in M0-results.md. The home folder reads ~.
 
 == CLI archive against SHA256SUMS
@@ -11,6 +11,7 @@ akou-cli-0.6.4-darwin-arm64.tar.gz: FAILED
 f8bc557a7b22192ceb13a360432b7152a877425e3b6f70138d3ba696dbac05f5  akou
 f8bc557a7b22192ceb13a360432b7152a877425e3b6f70138d3ba696dbac05f5  akou
 == DMG the app was installed from
+93f0da4472f06faf4ec2f57a364c36651ecb10c947d7afa211c339c4549072d0  akou-0.6.4-macos-arm64.dmg
 akou-0.6.4-macos-arm64.dmg: OK
 == Installed app
 /Applications/akou.app: accepted
@@ -37,3 +38,34 @@ CDHash=7f800de5f7b85e9ce373e6a73686587c8862fcd6
 
 == The scratch home's launch.log: lines saying the app was already running
 0
+
+== The Mac (sw_vers -productVersion, csrutil status)
+27.0.1
+System Integrity Protection status: enabled.
+
+== User context the harness loads (counts only, read from the config folder claude ran with)
+user-level instruction file: present, 0 bytes
+skills: 35
+commands: 6
+plugins listed: 4, switched on: 0
+hook events with a hook: 3, hook commands: 8
+user-scope MCP servers: 2 (not loaded: the app passes --strict-mcp-config)
+project memory: none (the app runs the harness in a new temporary folder)
+
+== Codex on this Mac, as printed on 2026-10-09 around the run (18:44 to 18:45 local)
+== codex login status
+Logged in using ChatGPT
+== one real request (codex exec --skip-git-repo-check --sandbox read-only, a one-line prompt), exit code 1
+2026-10-09T16:45:05.163616Z ERROR codex_login::auth::manager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again.
+ERROR: workspace routing discovery unauthorized (401)
+== the sign-in file's last-written date, read at 18:45
+Sep 28 03:20:04 2026
+
+== The reference Mac mini, as printed on 2026-10-09 at 19:06 local
+== pgrep -x Finder, pgrep -x WindowServer, owner of /dev/console
+Finder: none  WindowServer: 2913  console user: root
+== one real request (codex exec --json --skip-git-repo-check --sandbox read-only -, a one-line prompt), exit code 1
+error  Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.
+2026-10-09T17:06:52.664165Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {
+  "error": {
+    "message": "Invalid refresh token.",
