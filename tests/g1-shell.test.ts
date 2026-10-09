@@ -1,18 +1,22 @@
 /**
  * The G1 gate's readers (scripts/gates/g1-shell.ts): what `wmctrl`, the PowerShell probe, `gdbus`,
- * an autostart file and `reg query` print, read the way the gate judges it. The gate itself runs on
- * the release workflow's Windows and Linux runners; these hold its readers to real output shapes.
+ * an autostart file, `reg query`, the macOS probe and a LaunchAgent print, read the way the gate
+ * judges it. The gate itself runs on the release workflow's Windows and Linux runners and on a Mac;
+ * these hold its readers to real output shapes.
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   desktopExec,
   gvariantStrings,
+  launchAgentCommand,
+  macTray,
+  macWindows,
   parseWinWindows,
   parseWmctrl,
   regValue,
 } from "../scripts/gates/g1-shell.ts";
-import { autostartDesktop } from "../src/main/window/login-item.ts";
+import { autostartDesktop, LOGIN_LABEL } from "../src/main/window/login-item.ts";
 
 describe("G1 gate readers", () => {
   test("wmctrl -lp: pid and a title with spaces; a line that is not a window is left out", () => {
@@ -74,5 +78,50 @@ describe("G1 gate readers", () => {
     expect(
       regValue("ERROR: The system was unable to find the specified registry key or value."),
     ).toBeNull();
+  });
+
+  test("macOS windows: a layer-0 window of the app's process titled akou; a hidden title counts", () => {
+    const rows = [
+      { pid: 30567, layer: 0, owner: "akou", title: "akou" },
+      { pid: 30567, layer: 3, owner: "akou", title: "akou" },
+      { pid: 511, layer: 0, owner: "Finder", title: "akou" },
+      { pid: 30567, layer: 0, owner: "akou", title: "Settings" },
+      { pid: 40001, layer: 0, owner: "akou", title: null },
+    ];
+    expect(macWindows(rows, [30567, 40001])).toEqual([
+      { pid: 30567, title: "akou" },
+      { pid: 40001, title: "(title hidden: no Screen Recording)" },
+    ]);
+    // Control: the app's pid gone, nothing of it shows.
+    expect(macWindows(rows, [])).toEqual([]);
+  });
+
+  test("macOS tray: an app with a status item; no item is none; a probe refused is an error", () => {
+    const out = macTray([
+      { pid: 30567, items: [{ role: "AXMenuBarItem", title: "", description: null }] },
+      { pid: 511, items: [] },
+      { pid: 77, error: "AXError -25211" },
+    ]);
+    expect(out.items).toEqual([{ pid: 30567, props: { items: "1", role: "AXMenuBarItem" } }]);
+    expect(out.errors).toEqual(["pid 77: AXError -25211"]);
+    expect(macTray([{ pid: 511, items: [] }])).toEqual({ items: [], errors: [] });
+  });
+
+  test("the LaunchAgent the app writes, as plutil reads it: its command sets AKOU_HEADLESS=1", () => {
+    const plist = {
+      Label: LOGIN_LABEL,
+      ProgramArguments: ["/Applications/akou app.app/Contents/MacOS/launcher"],
+      EnvironmentVariables: { AKOU_HEADLESS: "1" },
+      RunAtLoad: true,
+      ProcessType: "Interactive",
+    };
+    expect(launchAgentCommand(plist)).toBe(
+      'env AKOU_HEADLESS=1 "/Applications/akou app.app/Contents/MacOS/launcher"',
+    );
+    expect(launchAgentCommand({ ...plist, EnvironmentVariables: undefined })).toBe(
+      'env "/Applications/akou app.app/Contents/MacOS/launcher"',
+    );
+    expect(launchAgentCommand({ Label: LOGIN_LABEL })).toBeNull();
+    expect(launchAgentCommand(null)).toBeNull();
   });
 });

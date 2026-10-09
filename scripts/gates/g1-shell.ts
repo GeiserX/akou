@@ -1,13 +1,21 @@
 /**
- * ROADMAP G1, the shell, on Windows x64 and Linux x64: the packaged app shows a window, a tray
- * item, a global hotkey, registers a login item, and starts headless with `AKOU_HEADLESS=1`. Run
- * on the machine that built the app, after `scripts/build-app.ts`:
+ * ROADMAP G1, the shell, on Windows x64, Linux x64 and macOS arm64: the packaged app shows a
+ * window, a tray item, a global hotkey, registers a login item, and starts headless with
+ * `AKOU_HEADLESS=1`. Run on the machine that built the app, after `scripts/build-app.ts`:
  *
  *   bun scripts/gates/g1-shell.ts --models <models dir> [--out result.json] [--shots <dir>]
  *
  * On Linux it needs an X display and a session bus, and the tools named below:
  *
  *   xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- bun scripts/gates/g1-shell.ts ...
+ *
+ * On macOS it runs in the logged-in user's desktop session (a local Terminal, or ssh as that user
+ * while they are logged in), needs `swiftc` (the Command Line Tools) for its probe, and takes a
+ * wrapper `akou.app` other than the built one with `--app`, such as a release's copied out of its
+ * DMG. Its probe process (the Terminal, or sshd for ssh) needs Accessibility to read the tray and
+ * Screen Recording to read window titles; it says in the result what it was allowed to see. The
+ * hotkey fires only when the akou bundle itself holds Accessibility (docs/ux/DESKTOP.md DK-K1),
+ * which the result records too. No other akou may run: it would answer the same hotkey.
  *
  * What runs:
  *
@@ -18,24 +26,36 @@
  *   `build/stable-<platform>/akou/bin`, started the way a person starts it. The gate talks to it
  *   only through the `akou` command the bundle carries, which never launches an app off macOS.
  * - **Window**: a visible top-level window titled akou. Linux: `wmctrl -lp` under Openbox.
- *   Windows: `EnumWindows` through PowerShell. A screenshot of the screen for each start.
+ *   Windows: `EnumWindows` through PowerShell. macOS: `CGWindowListCopyWindowInfo`, a layer-0
+ *   window of the app's process. A screenshot of the screen for each start; on macOS of akou's
+ *   window, or of its status item when it has none (`screencapture`), never of the rest of the
+ *   desktop.
  * - **Tray**: Linux: the Ayatana AppIndicator ElectroBun uses registers a StatusNotifierItem with
  *   the watcher this gate runs on the session bus (`g1-sni-watcher.py`), and the item answers with
  *   ElectroBun's id and status Active. Windows: the notification-area icon of ElectroBun's
  *   `TrayWindowClass` window exists for the shell (`Shell_NotifyIcon(NIM_MODIFY)` with no flags,
- *   which changes nothing and fails for an icon that is not there).
- * - **Hotkey**: the default `Control+Shift+F9` sent as real key events (`xdotool`, `keybd_event`):
- *   the first press starts a call, the second stops it, read from `akou status`.
+ *   which changes nothing and fails for an icon that is not there). macOS: the app's status item in
+ *   its Accessibility tree (`AXExtrasMenuBar`); on macOS 26 the item's window belongs to Control
+ *   Center, so the window list cannot say whose it is.
+ * - **Hotkey**: the default (`Control+Shift+F9`; `Option+Command+R` on macOS) sent as real key
+ *   events (`xdotool`, `keybd_event`, `CGEventPost`): the first press starts a call, the second
+ *   stops it, read from `akou status`. On macOS Finder is brought to the front first: ElectroBun's
+ *   monitor is global only, so it never sees a key sent to akou itself.
  * - **Login item**: `app.openAtLogin` set through `akou config set`, applied at the next start
  *   (the tray applies it at once; `config set` does not yet, docs/ux/DESKTOP.md DK-L2): the
- *   autostart file or the `Run` value holds `AKOU_HEADLESS=1`; set off, the next start removes it.
+ *   autostart file, the `Run` value or the LaunchAgent holds `AKOU_HEADLESS=1`; set off, the next
+ *   start removes it.
  * - **Headless**: the launcher with `AKOU_HEADLESS=1`, and the login item's own command: the API
- *   answers, `akou status` says headless, the tray is there, and no window shows.
+ *   answers, `akou status` says headless, the tray is there, and no window shows. On macOS the
+ *   app starts through LaunchServices (`open`), as a person starts it, so the bundle is the
+ *   process macOS checks grants for; the login item runs as launchd runs it at login, a copy of
+ *   the LaunchAgent bootstrapped into the session with the scratch `AKOU_HOME` added.
  *
  * Positive controls, each a check that must come out the other way: no window, tray item, login
  * item or call exists before the first start; a headless start shows no window while the normal
  * start shows one; with no key sent no call starts; a tray probe of an id the app never used
- * fails; the login item is gone once turned off.
+ * (Windows), or of Finder, which has no status item (macOS), fails; the login item is gone once
+ * turned off.
  *
  * Prints one JSON object with every phase and the verdict; exits 1 unless the gate passes.
  */
@@ -43,15 +63,18 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BUNDLE_ID } from "../../src/main/app-info.ts";
@@ -62,15 +85,20 @@ import {
   modelsFor,
   RECOGNIZER,
 } from "../../src/main/asr/models.ts";
-import { DEFAULT_HOTKEY } from "../../src/main/window/hotkey.ts";
-import { loginItemPath } from "../../src/main/window/login-item.ts";
+import { hotkeyFor } from "../../src/main/window/hotkey.ts";
+import { LOGIN_LABEL, loginItemPath } from "../../src/main/window/login-item.ts";
 import { APP_DIR, RELEASE_DIR, releaseName } from "../build-app.ts";
 import { unpackApp } from "../smoke-app.ts";
 import { sourceVersion } from "../stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const WIN = process.platform === "win32";
+const MAC = process.platform === "darwin";
 const EXE = WIN ? ".exe" : "";
+/** The hotkey a fresh config registers on this system. */
+const HOTKEY = hotkeyFor("", process.platform);
+/** What a window title reads as when macOS hides it from a probe without Screen Recording. */
+const HIDDEN_TITLE = "(title hidden: no Screen Recording)";
 /** The window's title (`src/main/window/shell.ts` `show`). */
 const TITLE = /^akou$/i;
 /** ElectroBun's tray indicator id on Linux: `electrobun-tray-<id>`. */
@@ -143,6 +171,72 @@ export function desktopExec(text: string): string | null {
 export function regValue(out: string): string | null {
   const m = /^\s*akou\s+REG_(?:EXPAND_)?SZ\s+(.*)$/m.exec(out);
   return m ? (m[1] as string).trim() : null;
+}
+
+/** A window as the macOS probe lists it; `title` is null when macOS hides it. */
+export interface MacWindow {
+  id?: number;
+  pid: number;
+  layer: number;
+  owner: string | null;
+  title: string | null;
+}
+
+/**
+ * The app's windows a person sees on macOS: layer 0 (a normal window), owned by one of `pids`,
+ * titled akou. A title macOS hides from the probe counts, and says it was hidden.
+ */
+export function macWindows(rows: MacWindow[], pids: number[]): ShownWindow[] {
+  return rows
+    .filter(
+      (w) => w.layer === 0 && pids.includes(w.pid) && (w.title === null || TITLE.test(w.title)),
+    )
+    .map((w) => ({ pid: w.pid, title: w.title ?? HIDDEN_TITLE }));
+}
+
+/** One app's status items as the macOS probe reads them, or why it could not. */
+export interface MacExtras {
+  pid: number;
+  items?: {
+    role: string | null;
+    title: string | null;
+    description: string | null;
+    frame?: { x: number; y: number; w: number; h: number } | null;
+  }[];
+  error?: string;
+}
+
+/** The apps with a status item, and the probe's errors (no Accessibility reads as an error). */
+export function macTray(rows: MacExtras[]): { items: TrayItem[]; errors: string[] } {
+  const items: TrayItem[] = [];
+  const errors: string[] = [];
+  for (const r of rows) {
+    if (r.error) errors.push(`pid ${r.pid}: ${r.error}`);
+    else if (r.items && r.items.length > 0)
+      items.push({
+        pid: r.pid,
+        props: { items: String(r.items.length), role: r.items[0]?.role ?? "" },
+      });
+  }
+  return { items, errors };
+}
+
+/**
+ * A LaunchAgent (as `plutil -convert json` prints it) as the command launchd runs: its program and
+ * its environment, written the way the Linux autostart line is, `env AKOU_HEADLESS=1 "<program>"`.
+ */
+export function launchAgentCommand(plist: unknown): string | null {
+  const p = plist as { ProgramArguments?: unknown; EnvironmentVariables?: unknown } | null;
+  if (!Array.isArray(p?.ProgramArguments) || p.ProgramArguments.length === 0) return null;
+  const quote = (v: string) => (/^[\w./=-]+$/.test(v) ? v : `"${v.replace(/(["`$\\])/g, "\\$1")}"`);
+  const env = Object.entries((p.EnvironmentVariables ?? {}) as Record<string, unknown>).map(
+    ([k, v]) => `${k}=${quote(String(v))}`,
+  );
+  return [
+    "env",
+    ...env,
+    ...p.ProgramArguments.map((a) => `"${String(a).replace(/(["`$\\])/g, "\\$1")}"`),
+  ].join(" ");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -252,17 +346,38 @@ class Machine {
   private wm: ChildProcess | null = null;
   private readonly ps1: string;
   private readonly sniLog: string;
+  private readonly probe: string;
+  /** macOS: what was frontmost at each hotkey press, which decides who receives the key. */
+  readonly presses: unknown[] = [];
 
-  constructor(work: string) {
+  /** `bundle` is, on macOS, the akou.app the gate starts: its processes are the ones probed. */
+  constructor(
+    work: string,
+    private readonly bundle = "",
+  ) {
     this.ps1 = join(work, "g1.ps1");
     this.sniLog = join(work, "sni.jsonl");
+    this.probe = join(work, "g1-macos-probe");
   }
 
-  /** Linux: a window manager and the StatusNotifierWatcher. Windows: the probe script. */
+  /**
+   * Linux: a window manager and the StatusNotifierWatcher. Windows: the probe script. macOS: the
+   * probe, built from its Swift source.
+   */
   async setUp(): Promise<string | null> {
     if (WIN) {
       writeFileSync(this.ps1, PS1);
       return null;
+    }
+    if (MAC) {
+      const r = spawnSync(
+        "xcrun",
+        ["swiftc", "-O", "-o", this.probe, join(import.meta.dir, "g1-macos-probe.swift")],
+        { encoding: "utf8", timeout: 300_000 },
+      );
+      return r.status === 0
+        ? null
+        : `swiftc could not build the probe (install the Command Line Tools): ${(r.stderr || r.error?.message || "").trim().slice(-400)}`;
     }
     if (!process.env.DISPLAY) return "no DISPLAY: run under xvfb-run";
     if (!process.env.DBUS_SESSION_BUS_ADDRESS) return "no session bus: run under dbus-run-session";
@@ -291,6 +406,28 @@ class Machine {
     this.wm?.kill();
   }
 
+  /** macOS: one probe subcommand, its JSON answer. */
+  mac<T>(...args: string[]): T {
+    const r = spawnSync(this.probe, args, { encoding: "utf8", timeout: 60_000 });
+    if (r.status !== 0)
+      throw new Error(`g1-macos-probe ${args[0]}: ${(r.stderr || r.stdout).trim()}`);
+    return JSON.parse(r.stdout) as T;
+  }
+
+  /** macOS: the running apps with akou's bundle id, and whether each is the gate's copy. */
+  akouApps(): { pid: number; path: string | null; ours: boolean }[] {
+    return this.mac<{ pid: number; path: string | null }[]>("apps", BUNDLE_ID).map((a) => ({
+      ...a,
+      ours: a.path === this.bundle,
+    }));
+  }
+
+  private ours(): number[] {
+    return this.akouApps()
+      .filter((a) => a.ours)
+      .map((a) => a.pid);
+  }
+
   private ps(what: string, arg = ""): string {
     const r = spawnSync(
       "powershell.exe",
@@ -303,6 +440,7 @@ class Machine {
 
   /** Visible top-level windows titled akou. */
   windows(): ShownWindow[] {
+    if (MAC) return macWindows(this.mac<MacWindow[]>("windows"), this.ours());
     const all = WIN
       ? parseWinWindows(this.ps("windows"))
       : parseWmctrl(spawnSync("wmctrl", ["-lp"], { encoding: "utf8" }).stdout ?? "");
@@ -326,7 +464,26 @@ class Machine {
    * The tray items present now. Linux: items registered since `mark` that still answer with
    * ElectroBun's id. Windows: the tray windows with an icon that answers, and the control id.
    */
-  tray(mark: number): { items: TrayItem[]; control?: string[] } {
+  tray(mark: number): { items: TrayItem[]; control?: string[]; errors?: string[] } {
+    if (MAC) {
+      const pids = this.ours();
+      const { items, errors } = pids.length
+        ? macTray(this.mac<MacExtras[]>("extras", ...pids.map(String)))
+        : { items: [], errors: [] };
+      // Finder has no status item: the probe must come back with none for it, and no error.
+      const finder = this.mac<{ pid: number }[]>("apps", "com.apple.finder")[0];
+      const ctl = finder ? this.mac<MacExtras[]>("extras", String(finder.pid))[0] : undefined;
+      const control = [
+        !ctl
+          ? "no Finder"
+          : ctl.error
+            ? ctl.error
+            : ctl.items?.length
+              ? "control-answered"
+              : "control-refused",
+      ];
+      return { items, control, errors };
+    }
     if (WIN) {
       const items: TrayItem[] = [];
       const control: string[] = [];
@@ -385,6 +542,14 @@ class Machine {
   }
 
   hotkey(): void {
+    if (MAC) {
+      // ElectroBun's macOS monitor is global only: it sees keys sent to other apps, never to akou.
+      spawnSync("open", ["-a", "Finder"]);
+      Bun.sleepSync(1500);
+      const front = this.mac<{ pid: number; bundleId: string | null }>("front");
+      this.presses.push({ front: front.bundleId, ...this.mac<object>("hotkey") });
+      return;
+    }
     if (WIN) this.ps("hotkey");
     else {
       const r = spawnSync("xdotool", ["key", "--clearmodifiers", "ctrl+shift+F9"]);
@@ -395,15 +560,40 @@ class Machine {
   screenshot(path: string): boolean {
     try {
       if (WIN) this.ps("shot", path);
-      else spawnSync("import", ["-window", "root", path]);
+      else if (MAC) {
+        // akou's own pixels only, never the rest of a person's desktop: its window when it has
+        // one, else its status item in the menu bar.
+        const pids = this.ours();
+        const win = this.mac<MacWindow[]>("windows").find(
+          (w) => w.layer === 0 && pids.includes(w.pid) && w.id !== undefined,
+        );
+        const item = pids.length
+          ? this.mac<MacExtras[]>("extras", ...pids.map(String)).flatMap((r) => r.items ?? [])[0]
+          : undefined;
+        if (win) spawnSync("screencapture", ["-x", "-o", "-l", String(win.id), path]);
+        else if (item?.frame) {
+          const f = item.frame;
+          spawnSync("screencapture", ["-x", "-R", `${f.x},${f.y},${f.w},${f.h}`, path]);
+        } else return false;
+      } else spawnSync("import", ["-window", "root", path]);
       return existsSync(path);
     } catch {
       return false;
     }
   }
 
-  /** The login item now: the autostart file's command, or the `Run` value. */
+  /** The login item now: the autostart file's command, the `Run` value, or the LaunchAgent's. */
   loginItem(): { present: boolean; command: string | null } {
+    if (MAC) {
+      const path = loginItemPath(process.platform, homedir()) as string;
+      if (!existsSync(path)) return { present: false, command: null };
+      const r = spawnSync("plutil", ["-convert", "json", "-o", "-", path], { encoding: "utf8" });
+      let json: unknown = null;
+      try {
+        json = JSON.parse(r.stdout);
+      } catch {}
+      return { present: true, command: launchAgentCommand(json) };
+    }
     if (WIN) {
       const r = spawnSync("reg", ["query", RUN_KEY, "/v", "akou"], { encoding: "utf8" });
       const v = r.status === 0 ? regValue(r.stdout) : null;
@@ -454,7 +644,14 @@ class App {
     } else {
       if (how.headless) env.AKOU_HEADLESS = "1";
       else delete env.AKOU_HEADLESS;
-      this.child = spawn(how.launcher, [], { env, stdio: ["ignore", out, out] });
+      if (MAC) {
+        // macOS: the bundle through LaunchServices, as a person opens it. `open` hands the app
+        // only the variables named with `--env`; `-W` keeps it running until the app quits.
+        const args = ["-n", "-W", "-a", how.launcher];
+        for (const [k, v] of Object.entries(env))
+          if (k.startsWith("AKOU_") && v !== undefined) args.push("--env", `${k}=${v}`);
+        this.child = spawn("open", args, { env, stdio: ["ignore", out, out] });
+      } else this.child = spawn(how.launcher, [], { env, stdio: ["ignore", out, out] });
     }
     // The child holds its own copy; this one would keep the file locked on Windows.
     closeSync(out);
@@ -472,8 +669,10 @@ class App {
     );
   }
 
-  live(): boolean {
-    return !!this.akou("status").json?.live;
+  /** Whether a call is live; null when the app does not answer, which is neither. */
+  live(): boolean | null {
+    const r = this.akou("status");
+    return r.code === 0 && r.json ? !!r.json.live : null;
   }
 
   /** `akou quit`, then waits for the app's `runtime.json` to go. */
@@ -586,11 +785,44 @@ async function endInstallerStart(
   };
 }
 
+/** A loopback port nothing listens on now, for the scratch app's API. */
+function freePort(): Promise<number> {
+  return new Promise((done, failed) => {
+    const srv = createServer();
+    srv.on("error", failed);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => done(port));
+    });
+  });
+}
+
+/**
+ * macOS: akou's own Accessibility grant, read from the system TCC database: `granted`, `denied`,
+ * `no row`, or `unreadable` (reading it needs Full Disk Access for the probe's process).
+ */
+function akouAccessibility(): string {
+  const r = spawnSync(
+    "sqlite3",
+    [
+      "/Library/Application Support/com.apple.TCC/TCC.db",
+      `select auth_value from access where service = 'kTCCServiceAccessibility' and client = '${BUNDLE_ID}'`,
+    ],
+    { encoding: "utf8" },
+  );
+  if (r.status !== 0) return "unreadable";
+  const v = r.stdout.trim();
+  return v === "2" ? "granted" : v === "" ? "no row" : v === "0" ? "denied" : `auth_value ${v}`;
+}
+
 async function main(): Promise<void> {
   const models = opt("--models");
   if (!models)
     throw new Error("usage: bun scripts/gates/g1-shell.ts --models <dir> [--out f] [--shots d]");
   const modelsDir = resolve(models);
+  const appOpt = opt("--app");
+  if (appOpt && !MAC)
+    throw new Error("--app takes a macOS wrapper akou.app; elsewhere the built app runs");
   const shots = resolve(opt("--shots") ?? "g1-shots");
   mkdirSync(shots, { recursive: true });
 
@@ -605,9 +837,16 @@ async function main(): Promise<void> {
 
   const work = mkdtempSync(join(tmpdir(), "akou-g1-"));
   const installed = WIN ? installWindows(work) : null;
+  mkdirSync(join(work, "unpacked"));
+  const unpacked = unpackApp(join(work, "unpacked"), appOpt ? resolve(appOpt) : undefined);
+  if (typeof unpacked === "string") throw new Error(unpacked);
   // Linux: the built launcher, which unpacks the app into ~/.local/share on its first start, as
-  // the installed one does. Windows: the launcher the installer put in %LOCALAPPDATA%.
-  const launcher = installed?.launcher ?? join(APP_DIR, "bin", `launcher${EXE}`);
+  // the installed one does. Windows: the launcher the installer put in %LOCALAPPDATA%. macOS: the
+  // inner akou.app, which the wrapper unpacks in place on its first start; starting it from here
+  // leaves the records an installed akou keeps in ~/Library/Application Support alone.
+  const launcher = MAC
+    ? join(unpacked.app, "..")
+    : (installed?.launcher ?? join(APP_DIR, "bin", `launcher${EXE}`));
   if (!existsSync(launcher))
     throw new Error(
       `no launcher at ${launcher}; ${installed?.detail ?? "run scripts/build-app.ts"}`,
@@ -615,9 +854,6 @@ async function main(): Promise<void> {
   const home = join(work, "home");
   const configDir = join(home, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
-  mkdirSync(join(work, "unpacked"));
-  const unpacked = unpackApp(join(work, "unpacked"));
-  if (typeof unpacked === "string") throw new Error(unpacked);
   const cliPath = join(unpacked.main, `akou${EXE}`);
   writeFileSync(
     join(configDir, "config.json"),
@@ -626,6 +862,8 @@ async function main(): Promise<void> {
         "asr.diarizer": "embeddings",
         "capture.helper": [process.execPath, join(ROOT, "scripts", "fake-helper.ts")],
         "app.openAtLogin": false,
+        // Its own port: an akou server already on the default one would stop the app starting.
+        "api.port": await freePort(),
       },
       null,
       2,
@@ -634,10 +872,18 @@ async function main(): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env, AKOU_HOME: home, AKOU_MODELS_DIR: modelsDir };
   delete env.AKOU_HEADLESS;
   const app = new App(cliPath, env, join(work, "app-stdout.log"));
-  const machine = new Machine(work);
+  /** macOS: this user's GUI launchd domain, where login items run. */
+  const gui = `gui/${process.getuid?.() ?? 0}`;
+  const machine = new Machine(work, MAC ? realpathSync(launcher) : "");
   const problems: string[] = [];
   const fail = (what: string) => problems.push(what);
   const phases: Record<string, unknown> = { install: installed };
+  /** macOS: what the probe may see, and akou's own grant, which the hotkey depends on. */
+  const macos: Record<string, unknown> = {};
+  const axHint = () =>
+    MAC && macos.akouAccessibility !== "granted"
+      ? ` (akou's Accessibility grant: ${macos.akouAccessibility}; the macOS hotkey needs it, docs/ux/DESKTOP.md DK-K1)`
+      : "";
   const appLog = () => {
     try {
       return readFileSync(join(configDir, "app.log"), "utf8").split("\n").slice(-25);
@@ -649,16 +895,19 @@ async function main(): Promise<void> {
   /** Two presses of the hotkey: the first starts a call, the second stops it. */
   const hotkeyToggles = async (p: Record<string, unknown>, label: string) => {
     machine.hotkey();
-    const started = await waitFor(() => app.live(), 30_000);
+    const started = await waitFor(() => app.live() === true, 30_000);
     p.liveAfterFirstPress = started;
-    if (!started) fail(`${label}: the first ${DEFAULT_HOTKEY} started no call within 30 s`);
+    if (!started) fail(`${label}: the first ${HOTKEY} started no call within 30 s${axHint()}`);
     await sleep(3000);
     return () => {
       machine.hotkey();
-      return waitFor(() => !app.live(), 30_000).then((stopped) => {
-        p.liveAfterSecondPress = !stopped;
-        if (!stopped)
-          fail(`${label}: the second ${DEFAULT_HOTKEY} did not stop the call within 30 s`);
+      return waitFor(() => app.live() === false, 30_000).then((stopped) => {
+        const after = stopped ? false : app.live();
+        p.liveAfterSecondPress = after;
+        if (after === null)
+          fail(`${label}: after the second ${HOTKEY} the app stopped answering \`akou status\``);
+        else if (after)
+          fail(`${label}: the second ${HOTKEY} did not stop the call within 30 s${axHint()}`);
       });
     };
   };
@@ -666,6 +915,16 @@ async function main(): Promise<void> {
   try {
     const setUp = await machine.setUp();
     if (setUp) throw new Error(setUp);
+    if (MAC) {
+      macos.probe = machine.mac<object>("trust");
+      macos.akouAccessibility = akouAccessibility();
+      // Another akou would answer the same hotkey, and its tray item would read as this one's.
+      const others = machine.akouApps().filter((a) => !a.ours);
+      if (others.length > 0)
+        throw new Error(
+          `control: another akou is running (pid ${others.map((a) => a.pid).join(", ")}); quit it first`,
+        );
+    }
     if (installed) {
       const ended = await endInstallerStart(machine, cliPath, env);
       phases.install = { ...installed, installerStart: ended };
@@ -702,17 +961,24 @@ async function main(): Promise<void> {
       const tray = await waitFor(() => machine.tray(mark).items, 30_000);
       p.tray = tray;
       if (tray.length === 0) fail("normal start: no tray item");
-      if (WIN && machine.tray(mark).control?.some((c) => c !== "control-refused"))
-        fail("control: the tray probe answered for an icon id the app never used");
+      const t = machine.tray(mark);
+      if ((WIN || MAC) && t.control?.some((c) => c !== "control-refused"))
+        fail(
+          `control: the tray probe answered for ${MAC ? "Finder, which has no status item" : "an icon id the app never used"}: ${t.control}`,
+        );
+      if (t.errors?.length) p.trayErrors = t.errors;
       p.hotkeyRegistered = (status.app as { hotkey?: unknown }).hotkey ?? null;
-      if (p.hotkeyRegistered !== DEFAULT_HOTKEY)
-        fail(`normal start: the registered hotkey is ${p.hotkeyRegistered}, not ${DEFAULT_HOTKEY}`);
+      if (p.hotkeyRegistered !== HOTKEY)
+        fail(`normal start: the registered hotkey is ${p.hotkeyRegistered}, not ${HOTKEY}`);
       // Control, and time for the page to draw before the screenshot: no key sent, no call.
       await sleep(5000);
       p.screenshot = machine.screenshot(join(shots, "1-normal.png")) ? "1-normal.png" : null;
       const unsent = app.live();
       p.liveWithNoKeySent = unsent;
-      if (unsent) fail("control: a call is live with no key sent");
+      if (unsent !== false)
+        fail(
+          `control: with no key sent, akou status says ${unsent === null ? "nothing" : "a call is live"}`,
+        );
       const stop = await hotkeyToggles(p, "hotkey");
       p.screenshotRecording = machine.screenshot(join(shots, "2-recording.png"))
         ? "2-recording.png"
@@ -769,7 +1035,22 @@ async function main(): Promise<void> {
       phases.loginCommand = p;
       if (item.command) {
         const mark = machine.trayMark();
-        app.start({ command: item.command });
+        if (MAC) {
+          // As launchd runs it at login: a copy of the LaunchAgent, its label and the scratch
+          // AKOU_HOME and AKOU_MODELS_DIR added, bootstrapped into this user's session.
+          const copy = join(work, `${LOGIN_LABEL}.g1.plist`);
+          copyFileSync(loginItemPath(process.platform, homedir()) as string, copy);
+          const edits = [
+            ["Label", `${LOGIN_LABEL}.g1`],
+            ["EnvironmentVariables.AKOU_HOME", home],
+            ["EnvironmentVariables.AKOU_MODELS_DIR", modelsDir],
+          ];
+          for (const [key, value] of edits)
+            spawnSync("plutil", ["-replace", key as string, "-string", value as string, copy]);
+          const boot = spawnSync("launchctl", ["bootstrap", gui, copy], { encoding: "utf8" });
+          p.via = `launchctl bootstrap ${gui.replace(/\d+$/, "<uid>")}: exit ${boot.status} ${(boot.stderr ?? "").trim()}`;
+          if (boot.status !== 0) fail(`login item: launchd did not load its copy: ${boot.stderr}`);
+        } else app.start({ command: item.command });
         const status = await app.answering(120_000);
         p.status = status?.app ?? null;
         if (!status)
@@ -794,6 +1075,7 @@ async function main(): Promise<void> {
         }
         if (!(await app.quit(configDir)))
           fail("login item start: the app did not quit within 30 s");
+        if (MAC) spawnSync("launchctl", ["bootout", `${gui}/${LOGIN_LABEL}.g1`]);
       }
     }
 
@@ -824,6 +1106,16 @@ async function main(): Promise<void> {
     await app.quit(configDir).catch(() => false);
   } finally {
     machine.tearDown();
+    if (MAC) {
+      spawnSync("launchctl", ["bootout", `${gui}/${LOGIN_LABEL}.g1`]);
+      // A run that stopped early must not leave a LaunchAgent that starts this scratch app at the
+      // next login; one that names anything else is not the gate's to remove.
+      const agent = loginItemPath(process.platform, homedir()) as string;
+      if (existsSync(agent) && readFileSync(agent, "utf8").includes(work)) {
+        rmSync(agent);
+        phases.cleanup = "removed the LaunchAgent this run left";
+      }
+    }
     // Windows keeps a file open a moment after its process ends; a leftover temp folder is no
     // finding.
     try {
@@ -834,8 +1126,13 @@ async function main(): Promise<void> {
   const result = {
     gate: "G1",
     platform: hostPlatform(),
-    display: WIN ? "Windows desktop session" : "X11: Xvfb with Openbox (Wayland not covered)",
-    hotkey: DEFAULT_HOTKEY,
+    display: WIN
+      ? "Windows desktop session"
+      : MAC
+        ? `macOS ${spawnSync("sw_vers", ["-productVersion"], { encoding: "utf8" }).stdout.trim()} desktop session`
+        : "X11: Xvfb with Openbox (Wayland not covered)",
+    hotkey: HOTKEY,
+    ...(MAC ? { macos: { ...macos, presses: machine.presses } } : {}),
     phases,
     verdict: problems.length === 0 ? "pass" : "fail",
     problems,
