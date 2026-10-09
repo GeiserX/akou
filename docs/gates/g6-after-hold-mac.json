@@ -1,0 +1,2340 @@
+{
+  "date": "2026-10-09",
+  "commit": "origin/main 34a27777 (#359 merged: a call line commits as c? and its speaker is a later seg revision)",
+  "bun": "1.4.2",
+  "clips": "scripts/gates/g6-clips.sh (macOS say, voice Samantha), the same 24 sentences and 56 s stereo timeline as the 2026-10-07 run",
+  "words": [
+    "akou",
+    "Parakeet",
+    "Datadog",
+    "Grafana",
+    "Silero",
+    "Terraform",
+    "Kubernetes",
+    "Zendesk",
+    "TitaNet",
+    "pyannote",
+    "ElectroBun",
+    "Opus"
+  ],
+  "command": "AKOU_HOME=<scratch> AKOU_HEADLESS=1 AKOU_CAPTURE_FILE_ONLY=1 bun scripts/gates/g6-live-latency.ts --cli src/main/cli/cli.ts --clips <48k> --wav <timeline.wav> --words <the 12 words> --out <file>",
+  "config": {
+    "asr.live": "parakeet",
+    "asr.parakeet.decoding": "beam",
+    "asr.threads": 2,
+    "asr.review.model": "none",
+    "asr.final.model": "parakeet",
+    "asr.diarizer": "nemotron or embeddings, per run",
+    "capture.helper": "a wrapper that runs akou-capture with --from-wav <timeline> --realtime"
+  },
+  "reading": "latencyMs is the committed line (seg revision 1) minus the wall time the utterance's speech ended; speakerMs is when the line first carried a speaker other than c? (the same as latencyMs where revision 1 carries it). byChannel holds the median (p50) and the worst (max) per channel. The final pass fails in file mode (the wrapper adds --from-wav to the decode command); it is not part of G6.",
+  "machine": "a Mac mini M4, 10 cores, 16 GB, macOS 26.6.1",
+  "helpers": "akou-capture built from 36a2237d (the 2026-10-07 build; since then only its version number changed), akou-diarize from the 0.6.2 release",
+  "conditions": "runs back to back, alternating diarizers, each under the machine's one-heavy-job lock and started only with no bun test process running; a VM and other lanes' light work shared the machine. loadAtStart is the 1-minute load average on 10 cores",
+  "runs": [
+    {
+      "run": "nemotron-1",
+      "diarizer": "nemotron",
+      "startedUtc": "2026-10-09T09:37:33Z",
+      "loadAtStart": 5.63,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_113733_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 999.916748046875,
+          "p50": 1054.520751953125,
+          "p90": 1155.020751953125,
+          "max": 2602.520751953125
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1054.291748046875,
+              "max": 2602.520751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1054.291748046875,
+              "max": 2602.520751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1061.208251953125,
+              "max": 2006.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1575.479248046875,
+              "max": 2409.375,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538658754,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 2602.520751953125,
+            "speakerMs": 2602.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 2006.625,
+            "speakerMs": 2315.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1052.520751953125,
+            "speakerMs": 1052.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1036.666748046875,
+            "speakerMs": 1156.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1054.520751953125,
+            "speakerMs": 1054.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1061.208251953125,
+            "speakerMs": 2020.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1054.291748046875,
+            "speakerMs": 1054.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1009.583251953125,
+            "speakerMs": 1114.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1155.020751953125,
+            "speakerMs": 1155.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1021.416748046875,
+            "speakerMs": 1947.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1043.416748046875,
+            "speakerMs": 1043.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1031.375,
+            "speakerMs": 2409.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1029.020751953125,
+            "speakerMs": 1029.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1062.479248046875,
+            "speakerMs": 1575.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1077.895751953125,
+            "speakerMs": 1077.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1122.6875,
+            "speakerMs": 1171.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1069.541748046875,
+            "speakerMs": 1069.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1176.145751953125,
+            "speakerMs": 2035.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1109.333251953125,
+            "speakerMs": 1109.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1097.229248046875,
+            "speakerMs": 1409.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 999.916748046875,
+            "speakerMs": 999.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1027.583251953125,
+            "speakerMs": 2189.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1039.645751953125,
+            "speakerMs": 1039.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1152.833251953125,
+            "speakerMs": 1471.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "embeddings-1",
+      "diarizer": "embeddings",
+      "startedUtc": "2026-10-09T09:38:38Z",
+      "loadAtStart": 7.64,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_113838_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 1009.520751953125,
+          "p50": 1053.541748046875,
+          "p90": 1148.625,
+          "max": 1248.229248046875
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1033.645751953125,
+              "max": 1157.020751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1033.645751953125,
+              "max": 1157.020751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1064.375,
+              "max": 1248.229248046875,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1064.375,
+              "max": 1248.229248046875,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538723464,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1009.520751953125,
+            "speakerMs": 1009.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1148.625,
+            "speakerMs": 1148.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1069.520751953125,
+            "speakerMs": 1069.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1039.666748046875,
+            "speakerMs": 1039.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1062.520751953125,
+            "speakerMs": 1062.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1070.208251953125,
+            "speakerMs": 1070.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1056.291748046875,
+            "speakerMs": 1056.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1025.583251953125,
+            "speakerMs": 1025.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1157.020751953125,
+            "speakerMs": 1157.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1032.416748046875,
+            "speakerMs": 1032.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1032.416748046875,
+            "speakerMs": 1032.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1064.375,
+            "speakerMs": 1064.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1029.020751953125,
+            "speakerMs": 1029.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1073.479248046875,
+            "speakerMs": 1073.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1032.895751953125,
+            "speakerMs": 1032.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1054.6875,
+            "speakerMs": 1054.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1053.541748046875,
+            "speakerMs": 1053.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1155.145751953125,
+            "speakerMs": 1155.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1041.333251953125,
+            "speakerMs": 1041.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1248.229248046875,
+            "speakerMs": 1248.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 1009.916748046875,
+            "speakerMs": 1009.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1017.583251953125,
+            "speakerMs": 1017.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1033.645751953125,
+            "speakerMs": 1033.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1104.833251953125,
+            "speakerMs": 1104.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "nemotron-2",
+      "diarizer": "nemotron",
+      "startedUtc": "2026-10-09T09:39:43Z",
+      "loadAtStart": 5.25,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_113943_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 1006.916748046875,
+          "p50": 1052.520751953125,
+          "p90": 1107.520751953125,
+          "max": 1182.625
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1052.520751953125,
+              "max": 1150.020751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1052.520751953125,
+              "max": 1150.020751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1037.229248046875,
+              "max": 1182.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1559.479248046875,
+              "max": 2409.375,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538786300,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1107.520751953125,
+            "speakerMs": 1107.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1182.625,
+            "speakerMs": 2140.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1058.520751953125,
+            "speakerMs": 1058.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1033.666748046875,
+            "speakerMs": 1163.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1052.520751953125,
+            "speakerMs": 1052.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1061.208251953125,
+            "speakerMs": 2013.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1072.291748046875,
+            "speakerMs": 1072.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1010.583251953125,
+            "speakerMs": 1108.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1150.020751953125,
+            "speakerMs": 1150.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1014.416748046875,
+            "speakerMs": 1948.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1040.416748046875,
+            "speakerMs": 1040.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1023.375,
+            "speakerMs": 2409.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1027.020751953125,
+            "speakerMs": 1027.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1062.479248046875,
+            "speakerMs": 1559.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1039.895751953125,
+            "speakerMs": 1039.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1092.6875,
+            "speakerMs": 1151.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1052.541748046875,
+            "speakerMs": 1052.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1143.145751953125,
+            "speakerMs": 2001.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1056.333251953125,
+            "speakerMs": 1056.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1037.229248046875,
+            "speakerMs": 1395.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 1006.916748046875,
+            "speakerMs": 1006.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1008.583251953125,
+            "speakerMs": 2150.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1049.645751953125,
+            "speakerMs": 1049.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1071.833251953125,
+            "speakerMs": 1426.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "embeddings-2",
+      "diarizer": "embeddings",
+      "startedUtc": "2026-10-09T09:40:48Z",
+      "loadAtStart": 4.92,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_114048_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 1003.916748046875,
+          "p50": 1055.541748046875,
+          "p90": 1131.520751953125,
+          "max": 1286.625
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1052.895751953125,
+              "max": 1151.020751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1052.895751953125,
+              "max": 1151.020751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1058.6875,
+              "max": 1286.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1058.6875,
+              "max": 1286.625,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538851659,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1131.520751953125,
+            "speakerMs": 1131.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1286.625,
+            "speakerMs": 1286.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1077.520751953125,
+            "speakerMs": 1077.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1047.666748046875,
+            "speakerMs": 1047.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1063.520751953125,
+            "speakerMs": 1063.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1059.208251953125,
+            "speakerMs": 1059.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1070.291748046875,
+            "speakerMs": 1070.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1031.583251953125,
+            "speakerMs": 1031.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1151.020751953125,
+            "speakerMs": 1151.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1023.416748046875,
+            "speakerMs": 1023.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1045.416748046875,
+            "speakerMs": 1045.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1073.375,
+            "speakerMs": 1073.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1025.020751953125,
+            "speakerMs": 1025.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1065.479248046875,
+            "speakerMs": 1065.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1052.895751953125,
+            "speakerMs": 1052.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1058.6875,
+            "speakerMs": 1058.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1055.541748046875,
+            "speakerMs": 1055.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1160.145751953125,
+            "speakerMs": 1160.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1052.333251953125,
+            "speakerMs": 1052.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1035.229248046875,
+            "speakerMs": 1035.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 1003.916748046875,
+            "speakerMs": 1003.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1007.583251953125,
+            "speakerMs": 1007.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1052.645751953125,
+            "speakerMs": 1052.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1091.833251953125,
+            "speakerMs": 1091.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "nemotron-3",
+      "diarizer": "nemotron",
+      "startedUtc": "2026-10-09T09:41:53Z",
+      "loadAtStart": 3.93,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_114153_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 998.583251953125,
+          "p50": 1047.520751953125,
+          "p90": 1120.520751953125,
+          "max": 1181.625
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1050.416748046875,
+              "max": 1145.020751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1050.416748046875,
+              "max": 1145.020751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1025.666748046875,
+              "max": 1181.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1559.479248046875,
+              "max": 2418.375,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538915126,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1120.520751953125,
+            "speakerMs": 1120.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1181.625,
+            "speakerMs": 2147.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1058.520751953125,
+            "speakerMs": 1058.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1025.666748046875,
+            "speakerMs": 1157.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1047.520751953125,
+            "speakerMs": 1047.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1034.208251953125,
+            "speakerMs": 2017.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1060.291748046875,
+            "speakerMs": 1060.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1006.583251953125,
+            "speakerMs": 1103.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1145.020751953125,
+            "speakerMs": 1145.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1015.416748046875,
+            "speakerMs": 1939.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1050.416748046875,
+            "speakerMs": 1050.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1021.375,
+            "speakerMs": 2418.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1017.020751953125,
+            "speakerMs": 1017.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1049.479248046875,
+            "speakerMs": 1559.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1043.895751953125,
+            "speakerMs": 1043.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1099.6875,
+            "speakerMs": 1139.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1054.541748046875,
+            "speakerMs": 1054.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1173.145751953125,
+            "speakerMs": 2011.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1052.333251953125,
+            "speakerMs": 1052.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1025.229248046875,
+            "speakerMs": 1383.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 1023.916748046875,
+            "speakerMs": 1023.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 998.583251953125,
+            "speakerMs": 2138.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1037.645751953125,
+            "speakerMs": 1037.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1071.833251953125,
+            "speakerMs": 1415.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "embeddings-3",
+      "diarizer": "embeddings",
+      "startedUtc": "2026-10-09T09:42:58Z",
+      "loadAtStart": 3.89,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_114258_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 997.916748046875,
+          "p50": 1049.416748046875,
+          "p90": 1148.020751953125,
+          "max": 1705.520751953125
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1043.895751953125,
+              "max": 1705.520751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1043.895751953125,
+              "max": 1705.520751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1055.208251953125,
+              "max": 1206.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1055.208251953125,
+              "max": 1206.625,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791538983076,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1705.520751953125,
+            "speakerMs": 1705.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1206.625,
+            "speakerMs": 1206.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1070.520751953125,
+            "speakerMs": 1070.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1047.666748046875,
+            "speakerMs": 1047.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1062.520751953125,
+            "speakerMs": 1062.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1055.208251953125,
+            "speakerMs": 1055.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1064.291748046875,
+            "speakerMs": 1064.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1019.583251953125,
+            "speakerMs": 1019.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1148.020751953125,
+            "speakerMs": 1148.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1049.416748046875,
+            "speakerMs": 1049.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1033.416748046875,
+            "speakerMs": 1033.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1058.375,
+            "speakerMs": 1058.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1019.020751953125,
+            "speakerMs": 1019.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1065.479248046875,
+            "speakerMs": 1065.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1043.895751953125,
+            "speakerMs": 1043.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1042.6875,
+            "speakerMs": 1042.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1048.541748046875,
+            "speakerMs": 1048.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1149.145751953125,
+            "speakerMs": 1149.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1035.333251953125,
+            "speakerMs": 1035.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1070.229248046875,
+            "speakerMs": 1070.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 997.916748046875,
+            "speakerMs": 997.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1016.583251953125,
+            "speakerMs": 1016.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1033.645751953125,
+            "speakerMs": 1033.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1078.833251953125,
+            "speakerMs": 1078.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "nemotron-4",
+      "diarizer": "nemotron",
+      "startedUtc": "2026-10-09T09:44:03Z",
+      "loadAtStart": 3.82,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_114403_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 999.916748046875,
+          "p50": 1046.416748046875,
+          "p90": 1134.145751953125,
+          "max": 1182.625
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1057.333251953125,
+              "max": 1147.020751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1057.333251953125,
+              "max": 1147.020751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1028.666748046875,
+              "max": 1182.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1577.479248046875,
+              "max": 2424.375,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791539045485,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 1134.520751953125,
+            "speakerMs": 1134.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 1182.625,
+            "speakerMs": 2149.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1068.520751953125,
+            "speakerMs": 1068.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1028.666748046875,
+            "speakerMs": 1158.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1060.520751953125,
+            "speakerMs": 1060.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1031.208251953125,
+            "speakerMs": 2036.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1071.291748046875,
+            "speakerMs": 1071.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1010.583251953125,
+            "speakerMs": 1105.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1147.020751953125,
+            "speakerMs": 1147.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1010.416748046875,
+            "speakerMs": 1958.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1046.416748046875,
+            "speakerMs": 1046.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1027.375,
+            "speakerMs": 2424.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1031.020751953125,
+            "speakerMs": 1031.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1053.479248046875,
+            "speakerMs": 1577.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1034.895751953125,
+            "speakerMs": 1034.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1094.6875,
+            "speakerMs": 1129.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1057.541748046875,
+            "speakerMs": 1057.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1134.145751953125,
+            "speakerMs": 2007.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1057.333251953125,
+            "speakerMs": 1057.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1027.229248046875,
+            "speakerMs": 1385.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 999.916748046875,
+            "speakerMs": 999.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1006.583251953125,
+            "speakerMs": 2142.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1042.645751953125,
+            "speakerMs": 1042.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1068.833251953125,
+            "speakerMs": 1419.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    },
+    {
+      "run": "embeddings-4",
+      "diarizer": "embeddings",
+      "startedUtc": "2026-10-09T09:45:08Z",
+      "loadAtStart": 4.06,
+      "result": {
+        "folder": "<AKOU_HOME>/Recordings/akou/default/2026-10-09_114509_g6-live",
+        "decoding": "beam",
+        "seconds": 55.7,
+        "utterances": 24,
+        "committed": 24,
+        "latencyMs": {
+          "min": 1003.916748046875,
+          "p50": 1064.541748046875,
+          "p90": 1302.666748046875,
+          "max": 5773.520751953125
+        },
+        "byChannel": {
+          "mic": {
+            "latencyMs": {
+              "p50": 1062.291748046875,
+              "max": 5773.520751953125,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1062.291748046875,
+              "max": 5773.520751953125,
+              "n": 12
+            }
+          },
+          "call": {
+            "latencyMs": {
+              "p50": 1071.208251953125,
+              "max": 5107.625,
+              "n": 12
+            },
+            "speakerMs": {
+              "p50": 1071.208251953125,
+              "max": 5107.625,
+              "n": 12
+            }
+          }
+        },
+        "vocabUsed": [
+          {
+            "seq": 15,
+            "t": 1791539118056,
+            "type": "vocab.used",
+            "entries": [
+              "akou",
+              "Parakeet",
+              "Datadog",
+              "Grafana",
+              "Silero",
+              "Terraform",
+              "Kubernetes",
+              "Zendesk",
+              "TitaNet",
+              "pyannote",
+              "ElectroBun",
+              "Opus"
+            ],
+            "files": [],
+            "sha256": [],
+            "model": "parakeet-tdt-0.6b-v3-fp32"
+          }
+        ],
+        "asrEvents": [],
+        "rows": [
+          {
+            "ch": "mic",
+            "clip": "s01.f32",
+            "end": 3.981,
+            "lines": 1,
+            "latencyMs": 5773.520751953125,
+            "speakerMs": 5773.520751953125,
+            "text": "The ACA recorder keeps the microphone on the left channel."
+          },
+          {
+            "ch": "call",
+            "clip": "s02.f32",
+            "end": 4.943,
+            "lines": 1,
+            "latencyMs": 5107.625,
+            "speakerMs": 5107.625,
+            "text": "Parakeet transcribes both sides of the call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s03.f32",
+            "end": 8.738,
+            "lines": 1,
+            "latencyMs": 1520.520751953125,
+            "speakerMs": 1520.520751953125,
+            "text": "We moved the dashboards from Datadog to Grafana last week."
+          },
+          {
+            "ch": "call",
+            "clip": "s04.f32",
+            "end": 9.304,
+            "lines": 1,
+            "latencyMs": 1302.666748046875,
+            "speakerMs": 1302.666748046875,
+            "text": "Silero decides where each segment starts and ends."
+          },
+          {
+            "ch": "mic",
+            "clip": "s05.f32",
+            "end": 13.165,
+            "lines": 1,
+            "latencyMs": 1062.520751953125,
+            "speakerMs": 1062.520751953125,
+            "text": "The Terraform Plan touched three Kubernetes clusters."
+          },
+          {
+            "ch": "call",
+            "clip": "s06.f32",
+            "end": 13.523,
+            "lines": 1,
+            "latencyMs": 1071.208251953125,
+            "speakerMs": 1071.208251953125,
+            "text": "Please open a Zendesk ticket for the billing question."
+          },
+          {
+            "ch": "mic",
+            "clip": "s07.f32",
+            "end": 16.983,
+            "lines": 1,
+            "latencyMs": 1062.291748046875,
+            "speakerMs": 1062.291748046875,
+            "text": "TitaNet gives every speaker a voice print."
+          },
+          {
+            "ch": "call",
+            "clip": "s08.f32",
+            "end": 17.806,
+            "lines": 1,
+            "latencyMs": 1024.583251953125,
+            "speakerMs": 1024.583251953125,
+            "text": "The final pass runs pianoed over the whole call."
+          },
+          {
+            "ch": "mic",
+            "clip": "s09.f32",
+            "end": 20.963,
+            "lines": 1,
+            "latencyMs": 1172.020751953125,
+            "speakerMs": 1172.020751953125,
+            "text": "ElectroBun hosts the window and the tray item."
+          },
+          {
+            "ch": "call",
+            "clip": "s10.f32",
+            "end": 22.027,
+            "lines": 1,
+            "latencyMs": 1032.416748046875,
+            "speakerMs": 1032.416748046875,
+            "text": "Opus files stay playable while they are being written."
+          },
+          {
+            "ch": "mic",
+            "clip": "s11.f32",
+            "end": 24.729,
+            "lines": 1,
+            "latencyMs": 1041.416748046875,
+            "speakerMs": 1041.416748046875,
+            "text": "Can you share the Grafana link with the team?"
+          },
+          {
+            "ch": "call",
+            "clip": "s12.f32",
+            "end": 26.624,
+            "lines": 1,
+            "latencyMs": 1082.375,
+            "speakerMs": 1082.375,
+            "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s13.f32",
+            "end": 28.654,
+            "lines": 1,
+            "latencyMs": 1048.020751953125,
+            "speakerMs": 1048.020751953125,
+            "text": "I think Datadog was cheaper for us in the end."
+          },
+          {
+            "ch": "call",
+            "clip": "s14.f32",
+            "end": 30.877,
+            "lines": 1,
+            "latencyMs": 1137.479248046875,
+            "speakerMs": 1137.479248046875,
+            "text": "Let us check what Akau heard in the last five minutes."
+          },
+          {
+            "ch": "mic",
+            "clip": "s15.f32",
+            "end": 33.224,
+            "lines": 1,
+            "latencyMs": 1064.895751953125,
+            "speakerMs": 1064.895751953125,
+            "text": "The Parakeet model runs on the CPU with two threads."
+          },
+          {
+            "ch": "call",
+            "clip": "s16.f32",
+            "end": 34.754,
+            "lines": 1,
+            "latencyMs": 1064.6875,
+            "speakerMs": 1064.6875,
+            "text": "Zendesk and Terraform both need a new owner."
+          },
+          {
+            "ch": "mic",
+            "clip": "s17.f32",
+            "end": 37.545,
+            "lines": 1,
+            "latencyMs": 1064.541748046875,
+            "speakerMs": 1064.541748046875,
+            "text": "We should keep ElectroBun pinned until the next release."
+          },
+          {
+            "ch": "call",
+            "clip": "s18.f32",
+            "end": 38.859,
+            "lines": 1,
+            "latencyMs": 1187.145751953125,
+            "speakerMs": 1187.145751953125,
+            "text": "Silero and TitaNet both run in the same worker."
+          },
+          {
+            "ch": "mic",
+            "clip": "s19.f32",
+            "end": 41.529,
+            "lines": 1,
+            "latencyMs": 1046.333251953125,
+            "speakerMs": 1046.333251953125,
+            "text": "Send me the Opus file after the call ends."
+          },
+          {
+            "ch": "call",
+            "clip": "s20.f32",
+            "end": 42.779,
+            "lines": 1,
+            "latencyMs": 1042.229248046875,
+            "speakerMs": 1042.229248046875,
+            "text": "Who owns the Pianode configuration now?"
+          },
+          {
+            "ch": "mic",
+            "clip": "s21.f32",
+            "end": 45.777,
+            "lines": 1,
+            "latencyMs": 1003.916748046875,
+            "speakerMs": 1003.916748046875,
+            "text": "The demo went well and the customer asked for pricing."
+          },
+          {
+            "ch": "call",
+            "clip": "s22.f32",
+            "end": 47.105,
+            "lines": 1,
+            "latencyMs": 1054.583251953125,
+            "speakerMs": 1054.583251953125,
+            "text": "Thanks everyone. See you all next Tuesday."
+          },
+          {
+            "ch": "mic",
+            "clip": "s23.f32",
+            "end": 49.478,
+            "lines": 1,
+            "latencyMs": 1055.645751953125,
+            "speakerMs": 1055.645751953125,
+            "text": "Could you repeat the last number, please?"
+          },
+          {
+            "ch": "call",
+            "clip": "s24.f32",
+            "end": 51.188,
+            "lines": 1,
+            "latencyMs": 1147.833251953125,
+            "speakerMs": 1147.833251953125,
+            "text": "Okay, I will write the action items down."
+          }
+        ]
+      }
+    }
+  ]
+}

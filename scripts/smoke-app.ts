@@ -235,10 +235,14 @@ export interface UnpackedApp {
 
 /**
  * The built app's packed inner app, unpacked into `work` the way the wrapper does on first launch;
- * or what went wrong. Also used by the gate runners that run code inside the app (G2).
+ * or what went wrong. Also used by the gate runners that run code inside the app (G1, G2). `built`
+ * is the built app: on macOS a wrapper `akou.app` (a release's, copied out of its DMG, works too).
  */
-export function unpackApp(work: string): UnpackedApp | string {
-  const res = MAC ? join(WRAPPER_APP, "Contents", "Resources") : join(APP_DIR, "Resources");
+export function unpackApp(
+  work: string,
+  built: string = MAC ? WRAPPER_APP : APP_DIR,
+): UnpackedApp | string {
+  const res = MAC ? join(built, "Contents", "Resources") : join(built, "Resources");
   const packed = existsSync(res) ? readdirSync(res).filter((f) => f.endsWith(".tar.zst")) : [];
   if (packed.length !== 1) return `expected one packed app in ${res}, found ${packed.join(", ")}`;
   const tarFile = join(work, "app.tar");

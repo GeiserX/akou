@@ -4,8 +4,8 @@
  *
  * It finds the app through `runtime.json` (pid, port, version) and the token file, both in the
  * config folder, and sends every request to `127.0.0.1` with the bearer token. If nothing answers,
- * it launches the app headless (`AKOU_HEADLESS=1`, never an argument) and waits up to the launch
- * budget, 3 s, for the API to answer. It never reads a call folder.
+ * it launches the app headless (`AKOU_HEADLESS=1`, never an argument) and waits for the API to
+ * answer while what it launched is still starting, up to 20 s. It never reads a call folder.
  *
  * Loopback requests never go through a proxy (DESIGN 6.3 rule 6): `NO_PROXY` is extended with the
  * loopback names for this process and for the app it launches.
@@ -29,9 +29,9 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { processAlive } from "../../core/log/writer.ts";
+import { processAlive, readLock } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
-import { RUNTIME_FILE } from "../app-info.ts";
+import { APP_LOCK, RUNTIME_FILE } from "../app-info.ts";
 import { APP_LOG } from "../app-log.ts";
 import { resolvePaths } from "../config/schema.ts";
 import {
@@ -47,6 +47,7 @@ import {
   seconds,
   stopAll,
   stopList,
+  strayLaunchers,
 } from "./heal.ts";
 
 /** Exit codes (DESIGN 6.1). */
@@ -67,8 +68,18 @@ export const EXIT = {
   interrupted: 130,
 } as const;
 
-/** The design's wait for a cold app: `201` within 3 s of `akou start`. */
-export const LAUNCH_BUDGET_MS = 3000;
+/**
+ * The most the CLI waits for an app it launched that is still starting. The design's target for a
+ * cold app stays `201` within 3 s of `akou start`, but the first open of a newly installed bundle
+ * takes longer (Gatekeeper's first assessment, the wrapper unpacking the app and opening it again),
+ * and giving up at 3 s failed a launch that was about to work (#356). A launch where nothing is
+ * starting any more fails at once instead (`LAUNCH_GONE_MS`).
+ */
+export const LAUNCH_WAIT_MS = 20_000;
+/** How long nothing the launch started may be running before the CLI stops waiting for it. */
+export const LAUNCH_GONE_MS = 500;
+/** How often a launch handed to a macOS bundle reads the process list, to see it still starting. */
+const BUNDLE_CHECK_MS = 250;
 
 const LOOPBACK = ["127.0.0.1", "localhost"];
 
@@ -214,6 +225,7 @@ export interface ClientOptions {
    * never launches.
    */
   launch?: readonly string[] | null;
+  /** The most a launch still in progress is waited for (`LAUNCH_WAIT_MS`; tests shorten it). */
   launchBudgetMs?: number;
   /** Restart a hung app even for a request that only reads (`--restart`, DK-M8). */
   restart?: boolean;
@@ -275,6 +287,22 @@ export function defaultLaunch(
 
 export const DEFAULT_LAUNCH = defaultLaunch();
 
+/** The bundle a launch command opens (`open -a BUNDLE`), or null for a program run directly. */
+export function launchedBundle(cmd: readonly string[]): string | null {
+  const i = cmd.indexOf("-a");
+  return i >= 0 && cmd[i + 1] ? (cmd[i + 1] as string) : null;
+}
+
+/** A process this user may signal: never another user's app on the same machine. */
+function ours(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class ApiClient {
   readonly configDir: string;
   private readonly launchCmd: readonly string[] | null;
@@ -290,7 +318,7 @@ export class ApiClient {
   constructor(readonly o: ClientOptions) {
     this.configDir = resolvePaths(o.env).configDir;
     this.launchCmd = o.launch === undefined ? DEFAULT_LAUNCH : o.launch;
-    this.budget = o.launchBudgetMs ?? LAUNCH_BUDGET_MS;
+    this.budget = o.launchBudgetMs ?? LAUNCH_WAIT_MS;
   }
 
   /**
@@ -465,8 +493,9 @@ export class ApiClient {
   }
 
   /**
-   * Starts the app headless, detached, with its output in `launch.log`, and waits for its API. Two
-   * clients launching at once are fine: the second app finds the first one's lock and exits.
+   * Starts the app headless, detached, with its output in `launch.log`, and waits for its API for
+   * as long as the launch is still in progress, up to `waitMs`. Two clients launching at once are
+   * fine: the second app finds the first one's lock and exits, and its client waits for the first.
    */
   launch(waitMs: number = this.budget): Promise<Runtime> {
     this.launching ??= this.doLaunch(waitMs).finally(() => {
@@ -484,28 +513,76 @@ export class ApiClient {
     const file = join(this.configDir, LAUNCH_LOG);
     rotate(file, LAUNCH_LOG_MAX_BYTES);
     const log = openSync(file, "a", 0o600);
+    // How the launched program ended, once it has: `open` ends at once, the app run from source
+    // only when it fails or finds another app's lock.
+    let ended: string | null = null;
     try {
       const child = spawn(cmd[0] as string, cmd.slice(1), {
         detached: true,
         stdio: ["ignore", log, log],
         env: { ...withNoProxy(this.o.env), AKOU_HEADLESS: "1" } as NodeJS.ProcessEnv,
       });
-      child.on("error", () => {});
+      child.on("error", (err) => {
+        ended ??= err.message;
+      });
+      child.on("exit", (code, signal) => {
+        ended ??= signal ? `signal ${signal}` : `exit code ${code}`;
+      });
       child.unref();
     } finally {
       closeSync(log);
     }
+    const see = `see ${join(this.configDir, LAUNCH_LOG)} and ${join(this.configDir, APP_LOG)}`;
+    const bundle = launchedBundle(cmd);
     const deadline = performance.now() + waitMs;
+    let startingAt = performance.now();
+    let bundleAt = Number.NEGATIVE_INFINITY;
+    let inBundle = true;
     while (performance.now() < deadline) {
       // A probe never runs past the wait: a slow answer is cut at the deadline.
       const rt = await this.running(Math.min(2000, deadline - performance.now()));
-      if (rt) return rt;
+      if (rt) {
+        if (bundle) await this.stopStrayLaunchers(bundle, rt.pid);
+        return rt;
+      }
+      if (bundle && ended !== null && performance.now() - bundleAt >= BUNDLE_CHECK_MS) {
+        inBundle = await this.bundleRunning(bundle);
+        bundleAt = performance.now();
+      }
+      if (ended === null || this.lockHeld() || (bundle !== null && inBundle)) {
+        startingAt = performance.now();
+      } else if (performance.now() - startingAt > LAUNCH_GONE_MS) {
+        throw new Unreachable(
+          `akou did not answer: what launched it ended (${ended}) and nothing it started is running; ${see}`,
+        );
+      }
       // clock: polling a real app while it starts, bounded by the deadline.
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(
-      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, LAUNCH_LOG)} and ${join(this.configDir, APP_LOG)}`,
+      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; ${see}`,
     );
+  }
+
+  /** Does the app lock name a live process: an app past the start of its start, not answering yet? */
+  private lockHeld(): boolean {
+    const pid = readLock(join(this.configDir, APP_LOCK))?.pid;
+    return pid != null && processAlive(pid);
+  }
+
+  /** Is a process of `bundle` running? A process list that cannot be read counts as yes. */
+  private async bundleRunning(bundle: string): Promise<boolean> {
+    const rows = await processTable();
+    if (!rows) return true;
+    const inside = `${bundle.replace(/\/+$/, "")}/Contents/`;
+    return rows.some((r) => r.args.trim().startsWith(inside) && ours(r.pid));
+  }
+
+  /** Stops the bundle's launchers left with nothing below them once its app answers (#356). */
+  private async stopStrayLaunchers(bundle: string, appPid: number): Promise<void> {
+    const rows = await processTable();
+    if (!rows) return;
+    await stopAll(strayLaunchers(rows, bundle, appPid).filter(ours));
   }
 
   /**

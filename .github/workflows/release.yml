@@ -41,6 +41,7 @@ on:
       - scripts/gates/g2-probe.ts
       - scripts/gates/g1-shell.ts
       - scripts/gates/g1-sni-watcher.py
+      - scripts/gates/g1-macos-probe.swift
       - src/main/window/login-item.ts
       - src/main/window/main.ts
       - scripts/clip.ts
@@ -220,6 +221,34 @@ jobs:
         with:
           name: gate-g2-macOS
           path: gate-g2-macOS.json
+          if-no-files-found: warn
+          retention-days: 90
+      # G1, the shell (ROADMAP), on macOS: the built app's window, tray item, hotkey, login item
+      # and headless start, in the runner's desktop session. The hotkey's global monitor fires only
+      # for a bundle that holds Accessibility (docs/ux/DESKTOP.md DK-K1), so the step first writes
+      # that grant for akou's bundle id, as a person switches akou on in System Settings; the
+      # runner's System Integrity Protection is off and its sudo needs no password. Recorded, not
+      # enforced: the verdict is in the JSON, which docs/gates/M0-results.md carries.
+      - name: G1, the shell of the packaged app on macOS (ROADMAP; recorded, not enforced)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access
+            (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id,
+            indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity,
+            flags, last_modified) VALUES ('kTCCServiceAccessibility', 'io.github.geiserx.akou', 0, 2, 4,
+            1, NULL, NULL, 0, 'UNUSED', NULL, 0, $(date +%s))"
+          sudo killall tccd || true
+          killall tccd || true
+          sleep 2
+          bun scripts/gates/g1-shell.ts --models eval-models --out gate-g1-macOS.json --shots gate-g1-shots
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: gate-g1-macOS
+          path: |
+            gate-g1-macOS.json
+            gate-g1-shots/
           if-no-files-found: warn
           retention-days: 90
       - name: build the CLI (bun build --compile, codesign, --verify --strict, notarized when signed)
