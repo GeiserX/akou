@@ -657,7 +657,7 @@ export class JobService {
 
   /** The models a job needs on this server's disk: none for one only a remote can run. */
   private localNeeds(j: Job): string[] {
-    return j.route === "remote" ? [] : this.o.shelf.needs(this.modelOf(j));
+    return j.route === "remote" ? [] : this.o.shelf.needs(this.modelOf(j), j);
   }
 
   /** The job as a client sees it, with its download's progress while it waits. */
@@ -1192,7 +1192,7 @@ export class JobService {
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError };
     const model = this.modelOf(job);
-    const needs = this.o.shelf.needs(model);
+    const needs = this.o.shelf.needs(model, job);
     // A model is used when a job on it starts and when it ends (SV-M4).
     this.o.shelf.touch(needs);
     // The GPU line's turn, once taken (`gpuTurn`); given back however the run ends.
