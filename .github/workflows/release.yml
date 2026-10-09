@@ -469,7 +469,9 @@ jobs:
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
       - name: build ${{ matrix.variant }} for ${{ matrix.platform }} (and push it by digest on a tag)
         run: |
-          docker buildx create --use --name akou
+          # The builder's own image comes from mirror.gcr.io like the base images (docs/CI-CD.md
+          # CI-30): a dry run is not logged in, and Docker Hub limits anonymous pulls per address.
+          docker buildx create --use --name akou --driver-opt image=mirror.gcr.io/moby/buildkit:buildx-stable-1
           if [ "$PUSH" = true ]; then
             output="type=image,name=docker.io/drumsergio/akou,push-by-digest=true,name-canonical=true,push=true"
           else

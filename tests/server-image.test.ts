@@ -82,6 +82,19 @@ describe("[SV-P1] the server image", () => {
     const froms = all.filter((x) => x.op === "FROM").map((x) => x.args.split(/\s+/)[0] ?? "");
     expect(froms.length).toBeGreaterThan(0);
     expect(froms.filter((f) => !names.includes(f))).toEqual([]);
+    // The release's builder is a container too, and buildx takes its image from Docker Hub
+    // unless told otherwise.
+    for (const f of ["release.yml", "ci.yml"]) {
+      const creates = read(".github", "workflows", f)
+        .split("\n")
+        .filter((l) => /^\s*docker buildx create\b/.test(l));
+      const hub = creates.filter((l) => {
+        const image = /--driver-opt image=(\S+)/.exec(l)?.[1];
+        return image === undefined || fromDockerHub(image);
+      });
+      expect({ f, hub }).toEqual({ f, hub: [] });
+    }
+    expect(read(".github", "workflows", "release.yml")).toContain("docker buildx create ");
     // Positive control: every spelling of a Docker Hub reference is seen, and a mirror is not.
     const digest = `@sha256:${"0".repeat(64)}`;
     for (const hub of [
