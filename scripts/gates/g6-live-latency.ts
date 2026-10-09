@@ -9,7 +9,9 @@
  * utterance ends, starts a call with `--vocab` and waits for the timeline to play. The app must be
  * configured to run akou-capture in file mode on that WAV at real-time speed
  * (`… --from-wav <wav> --realtime`), so file second x is captured at wall time `wallStart + x`.
- * Latency is the committed `seg` event's time minus that wall time of the utterance's last speech.
+ * Latency is the committed `seg` event's time (revision 1) minus that wall time of the utterance's
+ * last speech. With a stream diarizer a call line commits as `c?` and its speaker is a later
+ * revision; `speakerMs` is that revision's time on the same scale.
  *
  *   AKOU_HOME=… bun scripts/gates/g6-live-latency.ts --cli <cli.ts> --clips <dir of *.f32, 48 kHz>
  *     --wav <out.wav> --words w1,… [--gap 1.5] [--out result.json] [--build-only]
@@ -120,29 +122,41 @@ const events = readFileSync(join(folder, "events.jsonl"), "utf8")
 const part = events.find((e) => e.type === "part.started");
 const wallStart = part?.wallStart as number;
 // Part 1 only: when the WAV ends the helper exits and the app restarts it on the same file.
+// Revision 1 is the committed line; later revisions (a speaker, the review) carry no part.
 const segs = events.filter(
-  (e) => e.type === "seg" && (e.layer ?? "live") === "live" && e.part === part?.part,
+  (e) => e.type === "seg" && e.rev === 1 && e.layer === "live" && e.part === part?.part,
 );
+/** When each line got its speaker: revision 1's, else the first later one carrying `spk`. */
+const spokenAt = new Map<string, number>();
+for (const e of events) {
+  if (e.type !== "seg" || typeof e.spk !== "string" || e.spk === "c?") continue;
+  if (!spokenAt.has(e.id as string)) spokenAt.set(e.id as string, e.t as number);
+}
 const rows = utterances.map((u) => {
   // The last live line on that channel that overlaps the utterance commits its end.
   const hits = segs.filter(
     (s) => s.ch === u.ch && (s.a0 as number) < u.end && (s.a1 as number) > u.start,
   );
   const last = hits.sort((a, b) => (a.a1 as number) - (b.a1 as number)).at(-1);
+  const spoken = last ? spokenAt.get(last.id as string) : undefined;
   return {
     ch: u.ch,
     clip: u.clip,
     end: Math.round(u.end * 1000) / 1000,
     lines: hits.length,
     latencyMs: last ? (last.t as number) - (wallStart + u.end * 1000) : null,
+    speakerMs: spoken === undefined ? null : spoken - (wallStart + u.end * 1000),
     text: hits.map((h) => h.text).join(" / "),
   };
 });
-const lat = rows
-  .map((r) => r.latencyMs)
-  .filter((v): v is number => v !== null)
-  .sort((a, b) => a - b);
+const sorted = (xs: (number | null)[]) =>
+  xs.filter((v): v is number => v !== null).sort((a, b) => a - b);
+const lat = sorted(rows.map((r) => r.latencyMs));
 const q = (p: number) => lat[Math.min(lat.length - 1, Math.floor(p * (lat.length - 1)))];
+const summary = (xs: number[]) =>
+  xs.length === 0
+    ? null
+    : { p50: xs[Math.floor(0.5 * (xs.length - 1))], max: xs[xs.length - 1], n: xs.length };
 const result = {
   folder,
   decoding,
@@ -150,6 +164,15 @@ const result = {
   utterances: utterances.length,
   committed: lat.length,
   latencyMs: { min: lat[0], p50: q(0.5), p90: q(0.9), max: lat[lat.length - 1] },
+  byChannel: Object.fromEntries(
+    (["mic", "call"] as const).map((ch) => [
+      ch,
+      {
+        latencyMs: summary(sorted(rows.filter((r) => r.ch === ch).map((r) => r.latencyMs))),
+        speakerMs: summary(sorted(rows.filter((r) => r.ch === ch).map((r) => r.speakerMs))),
+      },
+    ]),
+  ),
   vocabUsed: events.filter((e) => e.type === "vocab.used"),
   asrEvents: events.filter((e) => String(e.type).startsWith("asr.")),
   rows,
