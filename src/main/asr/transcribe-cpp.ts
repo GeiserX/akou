@@ -1,8 +1,11 @@
 /**
  * Whisper large-v3 and Canary-1b-v2 as `FinalEngine`s (docs/research/asr-architecture.md section
- * 2.3, ASR-8), on transcribe.cpp through its npm binding, `transcribe-cpp` 0.2.4 (koffi FFI over the
- * native library its per-platform package ships). Checked with the Q8_0 GGUFs of the catalog
- * (models.ts) under Bun 1.4.2 on an M4 Pro, in one process with sherpa-onnx-node loaded:
+ * 2.3, ASR-8), on transcribe.cpp through its npm binding, `transcribe-cpp` 0.3.1 (koffi FFI over the
+ * native library its per-platform package ships). Measured on 0.2.4 with the Q8_0 GGUFs of the
+ * catalog (models.ts) under Bun 1.4.2 on an M4 Pro, in one process with sherpa-onnx-node loaded.
+ * 0.3.1's typings keep every call and option used here; they add an `OutputRepetition` error, a
+ * subclass of `OutputTruncated`, for a decode stopped because its output began repeating, which
+ * fails one unit as a truncated output does. Nothing below was measured again on 0.3.1:
  *
  * - **The binding loads only when an engine does.** It is imported on the first `load`, so a
  *   machine or a test that never runs these engines never opens the native library.

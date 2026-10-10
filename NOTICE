@@ -75,7 +75,7 @@ its source package at the repository given.
   futures-task v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
   futures-util v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
   hex v0.4.3                     MIT OR Apache-2.0                  https://github.com/KokaKiwi/rust-hex
-  libc v0.2.189                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  libc v0.2.190                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
   linux-raw-sys v0.12.1          Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/sunfishcode/linux-raw-sys
   log v0.4.34                    MIT OR Apache-2.0                  https://github.com/rust-lang/log
   mach2 v0.6.0                   BSD-2-Clause OR MIT OR Apache-2.0  https://github.com/JohnTitor/mach2
@@ -83,7 +83,7 @@ its source package at the repository given.
   mio v1.2.3                     MIT                                https://github.com/tokio-rs/mio
   num-integer v0.1.47            MIT OR Apache-2.0                  https://github.com/rust-num/num-integer
   num-traits v0.2.19             MIT OR Apache-2.0                  https://github.com/rust-num/num-traits
-  objc2 v0.6.4                   MIT                                https://github.com/madsmtm/objc2
+  objc2 v0.6.5                   MIT                                https://github.com/madsmtm/objc2
   objc2-application-services v0.3.2  Zlib OR Apache-2.0 OR MIT      https://github.com/madsmtm/objc2
   objc2-audio-toolbox v0.3.2     Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
   objc2-core-audio v0.3.2        Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
@@ -104,7 +104,7 @@ its source package at the repository given.
   proc-macro2 v1.0.107           MIT OR Apache-2.0                  https://github.com/dtolnay/proc-macro2
   pulseaudio v0.3.1              MIT                                https://github.com/colinmarc/pulseaudio-rs
   quote v1.0.47                  MIT OR Apache-2.0                  https://github.com/dtolnay/quote
-  rubato v5.0.0                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
+  rubato v5.0.1                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
   rustix v1.1.5                  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/bytecodealliance/rustix
   serde v1.0.229                 MIT OR Apache-2.0                  https://github.com/serde-rs/serde
   serde_core v1.0.229            MIT OR Apache-2.0                  https://github.com/serde-rs/serde
@@ -117,7 +117,7 @@ its source package at the repository given.
   tracing-core v0.1.36           MIT                                https://github.com/tokio-rs/tracing
   unicode-ident v1.0.26          (MIT OR Apache-2.0) AND Unicode-3.0  https://github.com/dtolnay/unicode-ident
   uuid v1.26.1                   Apache-2.0 OR MIT                  https://github.com/uuid-rs/uuid
-  wasapi v0.24.0                 MIT                                https://github.com/HEnquist/wasapi-rs
+  wasapi v0.25.0                 MIT                                https://github.com/HEnquist/wasapi-rs
   windowfunctions v0.1.1         MIT                                https://github.com/HEnquist/windowfunctions-rs
   windows v0.62.2                MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
   windows-collections v0.3.2     MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
@@ -184,7 +184,7 @@ is in its source package at the repository given.
   indenter v0.3.4                           MIT OR Apache-2.0                  https://github.com/yaahc/indenter
   itertools v0.14.0                         MIT OR Apache-2.0                  https://github.com/rust-itertools/itertools
   itoa v1.0.18                              MIT OR Apache-2.0                  https://github.com/dtolnay/itoa
-  libc v0.2.189                             MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  libc v0.2.190                             MIT OR Apache-2.0                  https://github.com/rust-lang/libc
   log v0.4.34                               MIT OR Apache-2.0                  https://github.com/rust-lang/log
   macro_rules_attribute v0.2.3              Apache-2.0 OR MIT OR Zlib          https://github.com/danielhenrymantilla/macro_rules_attribute-rs
   matrixmultiply v0.3.11                    MIT/Apache-2.0                     https://github.com/bluss/matrixmultiply/
@@ -261,7 +261,7 @@ double-metaphone 2.0.1 (MIT), https://github.com/words/double-metaphone
   (src/core/dictation/learn.ts). Bundled into the app's main process from npm; its MIT notice is
   in the package.
 
-transcribe-cpp 0.2.4 (MIT), https://github.com/handy-computer/transcribe.cpp
+transcribe-cpp 0.3.1 (MIT), https://github.com/handy-computer/transcribe.cpp
   Copyright (c) 2026 The transcribe.cpp authors.
   Runs Whisper large-v3 and Canary-1b-v2 in the final pass (src/main/asr/transcribe-cpp.ts). The
   npm package and its per-platform native package (@transcribe-cpp/<platform>) ship

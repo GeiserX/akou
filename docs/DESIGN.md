@@ -257,7 +257,7 @@ A running call keeps its setup; a changed setting applies from the next call. `G
 6. **Provisional line.** While a segment is open, re-decode it every second (bounded by the 12 s window). It is published with a 3 s expiry and is never written to the log.
 7. **Echo.** Without headphones the mic hears the call. A mic segment whose text overlaps a call segment within ±1.5 s by at least 70 % of tokens is marked `echo: true` (kept in the log, hidden from views and packs). Real echo cancellation on the recognizer's copy of the mic (`webrtc-audio-processing`, BSD-3) is an M2 option.
 
-Targets, measured in M0: committed line within 1.5 s of the end of an utterance; first provisional words within 1.5 s of speech; both channels together under 25 % of real time on Apple Silicon and under 50 % on a 4-core x64 laptop.
+Targets, measured in M0: committed line within 1.5 s of the end of an utterance on Apple silicon and within 2.5 s on 4-core x64, for lines after the first 10 s of a cold call (ROADMAP G6); first provisional words within 1.5 s of speech; both channels together under 25 % of real time on Apple Silicon and under 50 % on a 4-core x64 laptop.
 
 A lagging recognizer (more than 10 s or 30 s behind) emits `asr.lag` and an amber banner. Audio is never affected.
 
