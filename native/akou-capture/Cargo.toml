@@ -42,7 +42,7 @@ pulseaudio = "0.3"
 zbus = "5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wasapi = "0.24"
+wasapi = "0.25"
 # The same `windows` release wasapi is built on, for the few calls it does not wrap. Dictation
 # (DC-N1, DC-N6 to DC-N9, DC-L2) adds the low-level key and mouse hooks and `SendInput`
 # (UI_WindowsAndMessaging, UI_Input_KeyboardAndMouse, and Graphics_Gdi for a window class), the clipboard's delayed rendering
