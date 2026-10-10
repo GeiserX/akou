@@ -108,6 +108,13 @@ export const STREAM_RESTART_LIMIT = 3;
 export const STREAM_WAIT_SECONDS = 30;
 /** How long a part end, a flush or a new call waits for the stream diarizer's last decisions. */
 export const STREAM_FLUSH_MS = 3000;
+/**
+ * With `AKOU_LINE_TIMING=1` in the environment, the Worker logs one line with this prefix and a
+ * JSON object for every line the recognizer decodes after its segment closes: how long the decode
+ * took and how much audio the Worker had taken in when it started. Off by default; the G6 gate
+ * (scripts/gates/g6-live-latency.ts) reads it from the app log.
+ */
+export const LINE_TIMING = "line timing";
 
 export interface LiveOptions {
   /** Silence that closes a segment, seconds (0.2 to 5). */
@@ -302,6 +309,9 @@ interface ChannelState {
   segStart: number;
   lastSpeech: number;
   lastProvisional: number;
+  /** Provisional re-decodes of the open segment, and their time (ms), for `LINE_TIMING`. */
+  provisionals: number;
+  provisionalMs: number;
   pseq: number;
   /** The streaming engine's stream, when the call runs one (live-stream.ts); else VAD windows. */
   live: StreamChannel | null;
@@ -344,6 +354,8 @@ export class LivePipeline {
   private upgrade = false;
   /** The last line key given out; keys never repeat within a Worker. */
   private lineKey = 0;
+  /** `AKOU_LINE_TIMING=1`: log each decoded line's timing (`LINE_TIMING`). */
+  private readonly timing = process.env.AKOU_LINE_TIMING === "1";
 
   constructor(
     private readonly models: ModelSet,
@@ -368,6 +380,8 @@ export class LivePipeline {
       segStart: 0,
       lastSpeech: 0,
       lastProvisional: 0,
+      provisionals: 0,
+      provisionalMs: 0,
       pseq: 0,
       live: null,
       utt: null,
@@ -688,7 +702,10 @@ export class LivePipeline {
 
   private provisional(st: ChannelState, from: number, to: number): void {
     if (st.part === null) return;
+    const t = performance.now();
     const r = this.decode(st.audio.slice(from, to));
+    st.provisionals++;
+    st.provisionalMs += performance.now() - t;
     if (r.text === "") return;
     st.pseq++;
     this.emit({
@@ -704,7 +721,26 @@ export class LivePipeline {
   private close(st: ChannelState, from: number, to: number): void {
     if (st.part === null || to <= from) return;
     const samples = st.audio.slice(from, to);
+    const startedAt = this.now();
+    const t = performance.now();
     const r = this.decode(samples);
+    if (this.timing) {
+      const timing = {
+        part: st.part,
+        ch: st.ch,
+        a0: round3(from / ASR_RATE),
+        a1: round3(to / ASR_RATE),
+        // How much of the channel's audio the Worker had taken in when the decode started.
+        pos: round3(st.pos / ASR_RATE),
+        startedAt,
+        decodeMs: Math.round(performance.now() - t),
+        provisionals: st.provisionals,
+        provisionalMs: Math.round(st.provisionalMs),
+      };
+      this.emit({ type: "log", level: "info", msg: `${LINE_TIMING} ${JSON.stringify(timing)}` });
+    }
+    st.provisionals = 0;
+    st.provisionalMs = 0;
     this.emitLine(st, st.part, from, to, samples, r);
   }
 
