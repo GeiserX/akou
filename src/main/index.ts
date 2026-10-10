@@ -240,6 +240,7 @@ import {
   type ModelStoreOptions,
   type ModelView,
 } from "./server/model-store.ts";
+import { JOBS_DB, warmForIndexes } from "./server/store.ts";
 import { NotWritable, requireWritable } from "./server/writable.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
@@ -3946,6 +3947,12 @@ export class AkouApp implements ApiApp {
       this.log("warn", "api.bind applies in server mode only; the app listens on 127.0.0.1");
     }
     const keys = this.keyStore;
+    // A jobs.db from before the store's indexes is read once in order before the API listens, so
+    // building them never holds this thread on a cold disk (store.ts `warmForIndexes`).
+    const warmed = await warmForIndexes(join(this.configDir, "jobs", JOBS_DB));
+    if (warmed > 0) {
+      this.log("info", `jobs: read ${Math.round(warmed / 1e6)} MB of jobs.db to index it`);
+    }
     this.server = startApiServer({
       app: this,
       port: s["api.port"],
