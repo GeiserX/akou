@@ -241,6 +241,66 @@ describe("[akou-nby] A store too big to read on the server's thread", () => {
     expect(await warmForIndexes(path)).toBe(0);
   });
 
+  test("a crash's WAL is left for the store to recover: the index check neither copies it back nor fails on it", async () => {
+    const { dir } = folder();
+    const path = join(dir, JOBS_DB);
+    const old = new JobStore(path);
+    old.db.run("DROP INDEX jobs_expiry");
+    old.close();
+    // A process that commits into the WAL and dies before any checkpoint.
+    const die = Bun.spawnSync([
+      process.execPath,
+      "-e",
+      `const { Database } = require("bun:sqlite");
+       const db = new Database(${JSON.stringify(path)});
+       db.run("PRAGMA wal_autocheckpoint = 0");
+       db.run("UPDATE jobs SET title = 'x' WHERE seq % 2 = 0");
+       process.kill(process.pid, "SIGKILL");`,
+    ]);
+    expect(die.exitCode).not.toBe(0);
+    const wal = statSync(`${path}-wal`).size;
+    expect(wal).toBeGreaterThan(1_000_000);
+    expect(await warmForIndexes(path)).toBe(statSync(path).size);
+    expect(statSync(`${path}-wal`).size).toBe(wal);
+    // Positive control: a writable connection that reads anything copies the WAL back at close.
+    const { Database } = await import("bun:sqlite");
+    const rw = new Database(path, { readwrite: true });
+    rw.query("SELECT count(*) FROM sqlite_schema").get();
+    rw.close();
+    expect(statSync(`${path}-wal`).size).toBe(0);
+  });
+
+  test("a retention cleanup that throws is logged and the rest of the go is still cleaned up", () => {
+    const t = tempDir("akou-scale-cleanup-");
+    cleanups.push(t.cleanup);
+    const audio = join(t.dir, "audio");
+    mkdirSync(join(audio, "held", "inside"), { recursive: true });
+    const logs: string[] = [];
+    const svc = service(t.dir, logs);
+    const files = ["held", "a.upload", "b.upload"].map((f) => join(audio, f));
+    for (const f of files.slice(1)) writeFileSync(f, "audio");
+    for (const f of files) {
+      const { job } = svc.store.submit({
+        key_id: "key_a",
+        preset: "fast",
+        language: "auto",
+        keywords: [],
+        diarize: false,
+        callback_url: null,
+        metadata: null,
+        idempotency_key: null,
+        file_sha256: "0".repeat(64),
+        audio: f,
+      });
+      svc.store.db.query("UPDATE jobs SET created_at = ? WHERE id = ?").run(T - 8 * DAY, job.id);
+    }
+    // The first job's upload cannot be deleted (a folder, as a file Windows holds open is).
+    expect(svc.sweep()).toBe(3);
+    expect(expiredLeft(svc.store, T - 7 * DAY)).toBe(0);
+    expect(files.map((f) => existsSync(f))).toEqual([true, false, false]);
+    expect(logs.filter((l) => l.includes("its cleanup failed"))).toHaveLength(1);
+  });
+
   test("a start with thousands of jobs past retention removes one go of them and returns; the rest go in goes that leave the thread free", async () => {
     const { dir, kept, orphan } = folder();
     const logs: string[] = [];

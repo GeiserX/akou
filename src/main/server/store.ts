@@ -26,6 +26,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 export const JOBS_DB = "jobs.db";
 
@@ -287,8 +288,11 @@ export const HOT_INDEXES: Readonly<Record<string, string>> = {
 export async function warmForIndexes(path: string): Promise<number> {
   if (!existsSync(path) || statSync(path).size === 0) return 0;
   try {
-    // Not read-only: a file in WAL mode with no `-shm` beside it opens for no read-only reader.
-    const db = new Database(path, { readwrite: true });
+    // Immutable: no WAL recovery, no `-shm`, and no checkpoint at close, which on a writable
+    // connection copies whatever WAL a crash left into the file on this thread (2 s for 110 MB).
+    // An index built in a WAL that was never copied back reads as missing: the file is read once
+    // for nothing, and never the other way round, since no index is ever dropped.
+    const db = new Database(`${pathToFileURL(path).href}?immutable=1`, { readonly: true });
     try {
       const have = new Set(
         (db.query("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Row[]).map(

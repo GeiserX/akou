@@ -970,7 +970,18 @@ export class JobService {
       }
       return out;
     })();
-    for (const r of removed) this.dropped(r);
+    // The rows are gone, so a cleanup that throws (a file Windows holds open) is logged and the
+    // rest go on; its upload, named by no row now, is deleted at the next start.
+    for (const r of removed) {
+      try {
+        this.dropped(r);
+      } catch (err) {
+        this.o.log(
+          "warn",
+          `jobs: retention removed ${r.job.id}, but its cleanup failed: ${(err as Error).message}`,
+        );
+      }
+    }
     this.swept += removed.length;
     if (removed.length > 0 && (removed.length < ids.length || ids.length === SWEEP_BATCH)) {
       // clock: the next go runs as soon as the requests waiting on this thread have been answered.
