@@ -4,11 +4,12 @@
  * child that stands in for a helper, prints `ready`, then does what the arguments say.
  *
  *   bun tests/fixtures/watchdog-app.ts LOG HANGS --silence MS [--recording] [--no-watchdog]
- *     [--sample] [--window (--reopen MARKER | --open JSON) [--runtime FILE] [--reopen-wait MS]]
+ *     [--sample | --sampler JSON [--sample-cap MS]] [--window (--reopen MARKER | --open JSON) [--runtime FILE] [--reopen-wait MS]]
  *     [--late-helper FILE | --touch-recording] [--ps-fails]
  *     (--block MS | --busy MS)
  *
- * `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
+ * `--sample` takes a real `sample` on macOS; `--sampler JSON` is any command in its place, given at
+ * most `--sample-cap MS`. `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
  * silence, for MS, then exits 0. `--window` says the window is open; `--reopen MARKER` is what
  * opens the app again: a process that writes MARKER, and `--open JSON` is any command instead.
  * `--runtime FILE` is where the opened app says it is up, and `--reopen-wait MS` how long each
@@ -33,7 +34,9 @@ const wd = has("--no-watchdog")
       logFile,
       hangsDir,
       recording: () => live,
-      sample: has("--sample"),
+      sample: has("--sample") || has("--sampler"),
+      ...(has("--sampler") ? { sampler: JSON.parse(str("--sampler")) as string[] } : {}),
+      ...(has("--sample-cap") ? { sampleCapMs: num("--sample-cap") } : {}),
       silenceMs: num("--silence"),
       tickMs: 100,
       beatMs: 100,

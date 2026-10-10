@@ -167,6 +167,8 @@ describe("[DK-M8] the watchdog inside the app", () => {
         // A sample names the process's threads and libraries: the owner's alone.
         expect(statSync(join(r.hangs, files[0] as string)).mode & 0o777).toBe(0o600);
         expect(r.log()).toContain("a sample of the stuck process is in");
+        // Where the main thread was, by name: this process's sits in a wait.
+        expect(r.log()).toMatch(/info watchdog: in the sample the main thread was in \S+ \(/);
       } finally {
         r.cleanup();
       }
@@ -287,6 +289,132 @@ describe("[DK-M8] the watchdog inside the app", () => {
           /error watchdog: could not list the processes below akou \(ps failed\), so nothing was ended/,
         );
         expect(r.log()).not.toContain("ending akou");
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
+});
+
+const FAKE_SAMPLER = join(import.meta.dir, "fixtures", "fake-sampler.ts");
+const sampler = (...mode: string[]) => JSON.stringify([process.execPath, FAKE_SAMPLER, ...mode]);
+
+describe("[DK-M8] a hang always leaves evidence", () => {
+  test(
+    "the hang's line is followed by the machine's load and how late the watchdog's own ticks ran",
+    async () => {
+      const r = await run(["--block", "30000"]);
+      try {
+        expect(await r.exitWithin(SILENCE + 8000)).not.toBeNull();
+        const lines = r.log().trimEnd().split("\n");
+        expect(lines[0]).toMatch(/error watchdog: the app's thread has not answered for \d+ s/);
+        expect(lines[1]).toMatch(
+          process.platform === "win32"
+            ? /info watchdog: the watchdog's own ticks ran at most \d+ ms late$/
+            : /info watchdog: load average \d+\.\d \d+\.\d \d+\.\d on \d+ cores; the watchdog's own ticks ran at most \d+ ms late$/,
+        );
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a sample that fails is said in the log, with how, and the app is still ended",
+    async () => {
+      const r = await run(["--block", "30000", "--sampler", sampler("fail")]);
+      try {
+        expect(await r.exitWithin(SILENCE + 8000)).not.toBeNull();
+        expect(r.log()).toMatch(
+          /warn watchdog: no sample of the stuck process: .+ exited with 3$/m,
+        );
+        expect(r.log()).not.toContain("a sample of the stuck process is in");
+        expect(readdirSync(r.hangs).filter((f) => f.startsWith("hang-"))).toEqual([]);
+        expect(r.log()).toContain(`warn watchdog: ending akou (pid ${r.proc.pid})`);
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a sample that never ends is cut at its cap and said in the log, and the app is still ended",
+    async () => {
+      const t = tempDir("akou-wd-");
+      const pidFile = join(t.dir, "sampler.pid");
+      const r = await run(
+        ["--block", "30000", "--sampler", sampler("hang", pidFile), "--sample-cap", "1500"],
+        t.dir,
+      );
+      try {
+        expect(await r.exitWithin(SILENCE + 10_000)).not.toBeNull();
+        expect(r.log()).toMatch(
+          /warn watchdog: no sample of the stuck process: .+ did not finish within 1\.5 s$/m,
+        );
+        expect(r.log()).toContain(`warn watchdog: ending akou (pid ${r.proc.pid})`);
+        await Bun.sleep(300);
+        expect(processAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
+      } finally {
+        r.cleanup();
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a sample that takes its time is waited for: its place and the main thread's are in the log before the app is ended",
+    async () => {
+      const r = await run(["--block", "30000", "--sampler", sampler("slow", "1500")]);
+      try {
+        // Not ended while the sample is being taken.
+        expect(await r.exitWithin(SILENCE + 1000)).toBeNull();
+        expect(await r.exitWithin(8000)).not.toBeNull();
+        const log = r.log();
+        const files = readdirSync(r.hangs).filter((f) => f.startsWith("hang-"));
+        expect(files.length).toBe(1);
+        expect(log).toContain(
+          `info watchdog: a sample of the stuck process is in ${join(r.hangs, files[0] as string)}`,
+        );
+        // The heaviest path's named frames, innermost first; the lighter branch and the other
+        // thread are not it.
+        expect(log).toContain(
+          "info watchdog: in the sample the main thread was in mach_msg2_trap (libsystem_kernel.dylib) < mach_msg (libsystem_kernel.dylib) < -[NSApplication run] (AppKit) < start (dyld)\n",
+        );
+        expect(log.indexOf("a sample of the stuck process is in")).toBeLessThan(
+          log.indexOf("ending akou"),
+        );
+        if (process.platform !== "win32") {
+          expect(statSync(join(r.hangs, files[0] as string)).mode & 0o777).toBe(0o600);
+        }
+      } finally {
+        r.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a thread that answers while the sample is taken is not ended: the log says it answered",
+    async () => {
+      // Silent for 3 s: the watchdog fires at 1.5 s, and the sample is done 2.5 s after that.
+      const r = await run([
+        "--block",
+        String(SILENCE + 1500),
+        "--sampler",
+        sampler("slow", "2500"),
+      ]);
+      try {
+        expect(await r.exitWithin(SILENCE + 5500)).toBeNull();
+        expect(processAlive(r.child)).toBe(true);
+        const log = r.log();
+        expect(log).toMatch(/error watchdog: the app's thread has not answered for \d+ s; no call/);
+        expect(log).toMatch(/info watchdog: the app's thread answered again after about \d+ s/);
+        expect(log).toContain("a sample of the stuck process is in");
+        expect(log).not.toContain("ending akou");
       } finally {
         r.cleanup();
       }

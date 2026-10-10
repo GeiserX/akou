@@ -5,8 +5,12 @@
  * is recording. A Worker, which runs on its own thread and needs nothing from the app's, reads the
  * counter every `TICK_MS`. When it has not moved for `SILENCE_MS`, the app's thread is stuck:
  *
- * 1. It writes a line to `app.log` with the time and whether a call is recording, and on macOS
- *    a few seconds of `sample` of the process into `hangs/` beside it.
+ * 1. It writes a line to `app.log` with the time and whether a call is recording, and a second one
+ *    with the machine's load and how late its own ticks ran, which tells a starved machine from a
+ *    stuck thread. On macOS it takes a few seconds of `sample` of the process into `hangs/` beside
+ *    the log, and says in the log where the file is and where the main thread was, or why there is
+ *    no sample: a hang always leaves a line of evidence. The sample runs beside the Worker, which
+ *    keeps watching: when the app's thread answers before the sample is done, nothing is ended.
  * 2. With no call recording, it ends the process and every process below it (the helpers, a
  *    llama-server) with SIGKILL, since SIGTERM is handled on the stuck thread or on the window
  *    toolkit's, which is what stuck it. The ElectroBun launcher exits when its child does. The next
@@ -32,6 +36,12 @@ export const BEAT_MS = 1000;
 export const TICK_MS = 500;
 export const SILENCE_MS = 10_000;
 export const WATCHDOG_SAMPLE_SECONDS = 3;
+/**
+ * The most the watchdog waits for the `sample` before it goes on without one. On a Mac whose load
+ * average was 60 to 100, a cap of 5 s cut every sample short, four hangs out of four, and nothing
+ * said so.
+ */
+export const WATCHDOG_SAMPLE_CAP_MS = 20_000;
 
 export interface WatchdogOptions {
   /** The log the Worker appends its lines to (`app.log`). */
@@ -44,6 +54,12 @@ export interface WatchdogOptions {
   end?: boolean;
   /** Take a `sample` on macOS. Default true. */
   sample?: boolean;
+  /**
+   * The program that samples, run as `… PID SECONDS -file FILE`: `/usr/bin/sample` on macOS and
+   * none elsewhere by default (tests pass one that fails, or never ends).
+   */
+  sampler?: readonly string[] | null;
+  sampleCapMs?: number;
   silenceMs?: number;
   beatMs?: number;
   tickMs?: number;
@@ -206,25 +222,81 @@ async function up() {
 /** The Worker. `workerData`: `{ beats, cfg }`; `beats` is an Int32Array over shared memory. */
 const SOURCE = String.raw`
 const { workerData } = require("node:worker_threads");
-const { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
+const { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { spawn, spawnSync } = require("node:child_process");
+const { cpus, loadavg } = require("node:os");
 const { join } = require("node:path");
 const { beats, cfg } = workerData;
-${LOG_SOURCE}function sample() {
-  if (!cfg.sample || process.platform !== "darwin") return;
+${LOG_SOURCE}// Where the main thread was for most of a sample: the last frames with a name on its heaviest
+// path, innermost first. The call graph lists each thread's frames heaviest child first, so the
+// path is every line that sits deeper than the one before it. Null when the text is not a sample.
+function mainThreadWas(text) {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => /^\s*\d+ Thread_\S+\s+DispatchQueue_1: com\.apple\.main-thread/.test(l));
+  if (at < 0) return null;
+  const path = [];
+  let depth = /^\s*/.exec(lines[at])[0].length;
+  for (let i = at + 1; i < lines.length; i++) {
+    const m = /^([\s+!:|]*)\d+ (.+?)\s+\(in ([^)]+)\)/.exec(lines[i]);
+    if (!m || m[1].length <= depth) break;
+    depth = m[1].length;
+    if (m[2] !== "???") path.push(m[2] + " (" + m[3] + ")");
+  }
+  return path.length ? path.slice(-5).reverse().join(" < ") : null;
+}
+// The machine when the hang was seen. Ticks that ran seconds late mean this whole process was
+// kept from running, as on a machine with a load far above its cores, not one thread stuck.
+function machine(late) {
+  const ticks = "the watchdog's own ticks ran at most " + Math.round(late) + " ms late";
+  if (process.platform === "win32") return ticks;
+  return "load average " + loadavg().map((n) => n.toFixed(1)).join(" ") + " on " + cpus().length + " cores; " + ticks;
+}
+// Samples the process, then calls done. It never blocks this thread and never fails silently:
+// one line says where the sample is, or why there is none.
+function sample(done) {
+  if (!cfg.sampler) return done();
+  let file;
+  let child;
+  let over = false;
+  let timer;
+  const finish = (why) => {
+    if (over) return;
+    over = true;
+    clearTimeout(timer);
+    try {
+      if (why === null) {
+        chmodSync(file, 0o600);
+        line("info", "a sample of the stuck process is in " + file);
+        const was = mainThreadWas(readFileSync(file, "utf8"));
+        if (was) line("info", "in the sample the main thread was in " + was);
+      } else {
+        rmSync(file, { force: true });
+        line("warn", "no sample of the stuck process: " + cfg.sampler[0] + " " + why);
+      }
+      const old = readdirSync(cfg.hangsDir).filter((f) => /^hang-.*\.txt$/.test(f)).sort().reverse().slice(5);
+      for (const f of old) rmSync(join(cfg.hangsDir, f), { force: true });
+    } catch (e) {
+      line("warn", "no sample of the stuck process: " + e.message);
+    }
+    done();
+  };
   try {
     mkdirSync(cfg.hangsDir, { recursive: true, mode: 0o700 });
     // clock: a sample's file is named when it is taken.
-    const file = join(cfg.hangsDir, "hang-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt");
-    const r = spawnSync("/usr/bin/sample", [String(cfg.pid), String(cfg.sampleSeconds), "-file", file],
-      { stdio: "ignore", timeout: (cfg.sampleSeconds + 2) * 1000 });
-    if (r.status === 0) {
-      chmodSync(file, 0o600);
-      line("info", "a sample of the stuck process is in " + file);
-    }
-    const old = readdirSync(cfg.hangsDir).filter((f) => /^hang-.*\.txt$/.test(f)).sort().reverse().slice(5);
-    for (const f of old) rmSync(join(cfg.hangsDir, f), { force: true });
-  } catch {}
+    file = join(cfg.hangsDir, "hang-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt");
+    child = spawn(cfg.sampler[0], cfg.sampler.slice(1).concat([String(cfg.pid), String(cfg.sampleSeconds), "-file", file]),
+      { stdio: "ignore" });
+  } catch (e) {
+    line("warn", "no sample of the stuck process: " + e.message);
+    return done();
+  }
+  // clock: a deadline on a real process that may never end.
+  timer = setTimeout(() => {
+    try { child.kill("SIGKILL"); } catch {}
+    finish("did not finish within " + Math.round(cfg.sampleCapMs / 100) / 10 + " s");
+  }, cfg.sampleCapMs);
+  child.on("error", (e) => finish("could not run: " + e.message));
+  child.on("exit", (code, signal) => finish(code === 0 ? null : signal ? "was ended by " + signal : "exited with " + code));
 }
 // Every process below root, with its arguments; null when ps could not list them.
 function below(root) {
@@ -282,27 +354,12 @@ function reopen() {
 let last = Atomics.load(beats, 0);
 let still = 0;
 let fired = false;
-// clock: the watchdog thread checks the app's heartbeat in real time.
-setInterval(() => {
-  const now = Atomics.load(beats, 0);
-  if (now !== last) {
-    if (fired) line("info", "the app's thread answered again after about " + Math.round(still / 1000) + " s");
-    last = now;
-    still = 0;
-    fired = false;
-    return;
-  }
-  still += cfg.tickMs;
-  if (fired || still < cfg.silenceMs) return;
-  fired = true;
-  const recording = Atomics.load(beats, 1) === 1;
-  line("error", "the app's thread has not answered for " + Math.round(still / 1000) + " s; " +
-    (recording ? "a call is recording" : "no call is recording"));
-  sample();
-  if (recording) {
-    line("warn", "akou keeps running, so the capture helper keeps writing the audio; kill -KILL " + cfg.pid + " restarts it by hand, the audio so far stays");
-    return;
-  }
+// Moves each time the app's thread answers, so what was started for one silence ends with it.
+let answers = 0;
+let tickAt = performance.now();
+let late = 0;
+// With no call recording and the thread still silent, ends akou and everything below it.
+function end() {
   if (!cfg.end) return;
   const rows = process.platform === "win32" ? [] : below(cfg.pid);
   // A tree that cannot be read is not an empty tree: a recording helper may be in it.
@@ -322,6 +379,40 @@ setInterval(() => {
   // After the helpers go and before akou does: the opener must not be among what is ended.
   reopen();
   try { process.kill(cfg.pid, "SIGKILL"); } catch {}
+}
+// clock: the watchdog thread checks the app's heartbeat in real time.
+setInterval(() => {
+  // How late this tick is: reported, never what decides (a Mac asleep stops this thread too).
+  const t = performance.now();
+  late = Math.max(late, t - tickAt - cfg.tickMs);
+  tickAt = t;
+  const now = Atomics.load(beats, 0);
+  if (now !== last) {
+    if (fired) line("info", "the app's thread answered again after about " + Math.round(still / 1000) + " s");
+    last = now;
+    still = 0;
+    fired = false;
+    late = 0;
+    answers++;
+    return;
+  }
+  still += cfg.tickMs;
+  if (fired || still < cfg.silenceMs) return;
+  fired = true;
+  const silence = answers;
+  const recording = Atomics.load(beats, 1) === 1;
+  line("error", "the app's thread has not answered for " + Math.round(still / 1000) + " s; " +
+    (recording ? "a call is recording" : "no call is recording"));
+  line("info", machine(late));
+  sample(() => {
+    // The thread answered while the sample was taken: the line above says so, and akou runs on.
+    if (answers !== silence) return;
+    if (recording) {
+      line("warn", "akou keeps running, so the capture helper keeps writing the audio; kill -KILL " + cfg.pid + " restarts it by hand, the audio so far stays");
+      return;
+    }
+    end();
+  });
 }, workerData.cfg.tickMs);
 `;
 
@@ -350,7 +441,15 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
     logFile: o.logFile,
     hangsDir: o.hangsDir,
     end: o.end ?? true,
-    sample: o.sample ?? true,
+    sampler:
+      (o.sample ?? true) === false
+        ? null
+        : o.sampler !== undefined
+          ? o.sampler
+          : process.platform === "darwin"
+            ? ["/usr/bin/sample"]
+            : null,
+    sampleCapMs: o.sampleCapMs ?? WATCHDOG_SAMPLE_CAP_MS,
     silenceMs: o.silenceMs ?? SILENCE_MS,
     tickMs: o.tickMs ?? TICK_MS,
     sampleSeconds: WATCHDOG_SAMPLE_SECONDS,
