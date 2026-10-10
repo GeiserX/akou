@@ -1,0 +1,70 @@
+G7 real run on 0.6.5, 2026-10-10, on an Apple silicon Mac with SIP on, macOS 27:
+raw output of the checks behind the claims in M0-results.md. The home folder reads ~.
+
+== CLI archive against SHA256SUMS
+5b0ea99d4be8f6fe3c35ad714795247c45c6b63804982de731ca04530ed37138  akou-cli-0.6.5-darwin-arm64.tar.gz
+akou-cli-0.6.5-darwin-arm64.tar.gz: OK
+== Tamper control: one byte appended
+552d109822203bd644d7217778bb47964f40f25f234e4513e4c86ca282e2b238  akou-cli-0.6.5-darwin-arm64.tar.gz
+akou-cli-0.6.5-darwin-arm64.tar.gz: FAILED
+== DMG the app was installed from
+3e67c4e9f66790fdfe527b77ce750c32c404d94a19a124b6beace2a5b71dde91  akou-0.6.5-macos-arm64.dmg
+akou-0.6.5-macos-arm64.dmg: OK
+== Installed app (spctl -a -vv, codesign -dvvv)
+/Applications/akou.app: accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Sergio Fernández Rubio (624WUVM8B4)
+CFBundleShortVersionString=0.6.5
+CDHash=24f6be98e5c49c917efb8419187b733ce8c3259f
+== The Mac (sw_vers -productVersion, csrutil status)
+27.0.1
+System Integrity Protection status: enabled.
+
+== Watcher, the run where both answered: every pid runtime.json named, with its version, executable and parent
+84082 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+84293 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+84482 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+85610 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+
+== The scratch home's app.log for that run: every start and quit
+2026-10-10 09:59:11.903 +02:00 info akou 0.6.5 started (pid 84082, app, headless, API on port 54110)
+2026-10-10 09:59:12.598 +02:00 info akou 0.6.5 quit (pid 84082)
+2026-10-10 09:59:14.062 +02:00 info akou 0.6.5 started (pid 84293, app, headless, API on port 54140)
+2026-10-10 09:59:14.619 +02:00 info akou 0.6.5 quit (pid 84293)
+2026-10-10 09:59:16.437 +02:00 info akou 0.6.5 started (pid 84482, app, headless, API on port 54158)
+2026-10-10 09:59:32.487 +02:00 info akou 0.6.5 quit (pid 84482)
+2026-10-10 09:59:33.222 +02:00 info akou 0.6.5 started (pid 85610, app, headless, API on port 54307)
+2026-10-10 09:59:41.293 +02:00 info akou 0.6.5 quit (pid 85610)
+
+== The scratch home's launch.log for that run: lines saying the app was already running
+0
+
+== Watcher, the usage-limit run 58 s earlier
+80494 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+80840 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+81145 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+82049 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+
+== User context claude loads (counts only, read from the config folder claude ran with)
+user-level instruction file: present, 0 bytes
+skills: 35
+commands: 6
+plugins listed: 4, switched on: 2
+hook events with a hook: 3, hook commands: 8
+user-scope MCP servers: 1 (not loaded: the app passes --strict-mcp-config)
+project memory: none (the app runs the harness in a new temporary folder)
+
+== User context codex loads (counts only, read from the home folder codex ran with)
+instruction file: absent
+config file: present, 14 lines
+skills: 0
+prompts: 0
+MCP servers in the config file: 0
+
+== The script that selects the account, timed alone (it runs a no-op in place of the harness), ms
+claude: 1378, 1146, 1240
+codex: 927, 2337
+
+== Two claude spawns from a shell, same script, same arguments the app passes, outside the app
+sample 1: init event 5125 ms, first text 6271 ms, done 9597 ms, rc 0
+sample 2: init event 8497 ms, first text 9624 ms, done 12354 ms, rc 0
