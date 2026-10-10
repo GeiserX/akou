@@ -267,7 +267,8 @@ describe("[akou-nby] A store too big to read on the server's thread", () => {
     const rw = new Database(path, { readwrite: true });
     rw.query("SELECT count(*) FROM sqlite_schema").get();
     rw.close();
-    expect(statSync(`${path}-wal`).size).toBe(0);
+    // Deleted on Linux and Windows; macOS's own SQLite keeps the file, empty.
+    expect(existsSync(`${path}-wal`) ? statSync(`${path}-wal`).size : 0).toBe(0);
   });
 
   test("a retention cleanup that throws is logged and the rest of the go is still cleaned up", () => {

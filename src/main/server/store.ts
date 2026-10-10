@@ -22,7 +22,7 @@
  * (`HOT_INDEXES`), and the sweep takes its jobs a bounded page at a time (`expired`).
  */
 
-import { Database } from "bun:sqlite";
+import { constants, Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
@@ -292,7 +292,11 @@ export async function warmForIndexes(path: string): Promise<number> {
     // connection copies whatever WAL a crash left into the file on this thread (2 s for 110 MB).
     // An index built in a WAL that was never copied back reads as missing: the file is read once
     // for nothing, and never the other way round, since no index is ever dropped.
-    const db = new Database(`${pathToFileURL(path).href}?immutable=1`, { readonly: true });
+    // The URI flag by number: Bun's own SQLite on Linux and Windows reads a URI only with it.
+    const db = new Database(
+      `${pathToFileURL(path).href}?immutable=1`,
+      constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+    );
     try {
       const have = new Set(
         (db.query("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Row[]).map(
