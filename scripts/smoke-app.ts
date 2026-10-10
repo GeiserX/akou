@@ -469,10 +469,15 @@ async function main(argv: string[]): Promise<void> {
       ) === "1",
       `wrapper Info.plist LSEnvironment ${WRAPPER_AUTOCLOSE} is 1`,
     );
+    const reads = readFileSync(join(WRAPPER_APP, "Contents", "MacOS", "launcher")).includes(
+      WRAPPER_AUTOCLOSE,
+    );
     check(
-      readFileSync(join(WRAPPER_APP, "Contents", "MacOS", "launcher")).includes(WRAPPER_AUTOCLOSE),
+      reads,
       `wrapper launcher reads ${WRAPPER_AUTOCLOSE}`,
-      "this ElectroBun's wrapper no longer has the variable: find how it exits after the first open",
+      reads
+        ? ""
+        : "this ElectroBun's wrapper has no such variable: find how it exits after its first open",
     );
     checkSignature(WRAPPER_APP, "wrapper");
   } else {
