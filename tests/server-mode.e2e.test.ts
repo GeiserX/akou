@@ -636,7 +636,7 @@ describe("SV-K1: GET /v1/server", () => {
   });
 
   test("SV-K1b: the documented retain_days counts from the job's creation, as the sweep does", () => {
-    // The sweep deletes by created_at (jobs.ts `sweep`, store.ts `createdBefore`); a doc that counts
+    // The sweep deletes by created_at (jobs.ts `sweep`, store.ts `expired`); a doc that counts
     // from completion would have a client re-fetch a job akou has already deleted.
     const doc = buildRouter()
       .entries()
