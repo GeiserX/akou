@@ -9,16 +9,24 @@
 # - LSMinimumSystemVersion 14.4 (MIN_MACOS in build-app.ts), so an older Mac refuses the app with its
 #   own "requires macOS 14.4" dialog instead of opening it and failing at the first recording.
 #
+# With "wrapper" as the second argument, for the release wrapper that unpacks the app on its first
+# open, it also writes LSEnvironment ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 (TRAPS "Minutes to start").
+# Without it the wrapper ends on an "Installation complete" panel and waits for a click on Close,
+# for as long as nobody clicks: a launcher with no app below it, which every later `open`, the Dock
+# and Finder take for the running app, so they start nothing. With it the wrapper exits once it has
+# opened the unpacked app. LaunchServices gives the variable to the wrapper however it is opened.
+#
 # The postBuild and postWrap hooks run this before each bundle is signed, so the signature covers the
 # patched file.
 #
-#   scripts/patch-plist.sh path/to/akou.app      (or a path to an Info.plist)
+#   scripts/patch-plist.sh path/to/akou.app [wrapper]      (or a path to an Info.plist)
 #
 # Exit 66 when there is no Info.plist, 70 when there is no CFBundleVersion to copy or a key is still
 # missing afterwards.
 set -eu
 
-target="${1:?usage: patch-plist.sh APP_BUNDLE_OR_INFO_PLIST}"
+target="${1:?usage: patch-plist.sh APP_BUNDLE_OR_INFO_PLIST [wrapper]}"
+kind="${2:-}"
 case "$target" in
   *.plist) plist="$target" ;;
   *) plist="$target/Contents/Info.plist" ;;
@@ -41,6 +49,9 @@ fi
 /usr/bin/plutil -replace NSAudioCaptureUsageDescription -string "$AUDIO" "$plist"
 /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$plist"
 /usr/bin/plutil -replace LSMinimumSystemVersion -string "$MIN_MACOS" "$plist"
+if [ "$kind" = wrapper ]; then
+  /usr/bin/plutil -replace LSEnvironment -json '{"ELECTROBUN_INSTALLER_UI_AUTOCLOSE":"1"}' "$plist"
+fi
 /usr/bin/plutil -lint "$plist" >/dev/null
 
 for key in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription CFBundleShortVersionString LSMinimumSystemVersion; do
@@ -49,4 +60,9 @@ for key in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription CFBundleS
     exit 70
   fi
 done
+if [ "$kind" = wrapper ] &&
+  [ "$(/usr/bin/plutil -extract LSEnvironment.ELECTROBUN_INSTALLER_UI_AUTOCLOSE raw "$plist" 2>/dev/null)" != 1 ]; then
+  echo "patch-plist: LSEnvironment ELECTROBUN_INSTALLER_UI_AUTOCLOSE is still missing from $plist" >&2
+  exit 70
+fi
 echo "patch-plist: usage strings, version $VERSION and macOS $MIN_MACOS written to $plist"

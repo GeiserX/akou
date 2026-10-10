@@ -361,6 +361,24 @@ describe("[DK-M8] the process tree the CLI reads without the API", () => {
     // Never the asking process or anything above it, even with no child of its own left.
     const asking = rows.filter((r) => r.pid !== 901);
     expect(strayLaunchers(asking, "/Applications/akou.app", 501, 900)).toEqual([499]);
+    // The real wrapper never reaps the `open` it ran: a child that exited is not a process below
+    // it, as macOS lists it and as Linux does.
+    for (const dead of ["<defunct>", "[open] <defunct>"]) {
+      const reaped = parsePs(
+        ["  499     1 /Applications/akou.app/Contents/MacOS/launcher", `  498   499 ${dead}`].join(
+          "\n",
+        ),
+      );
+      expect(strayLaunchers(reaped, "/Applications/akou.app", 501, 999)).toEqual([499]);
+    }
+    // Positive control: the same child still running keeps the launcher.
+    const running = parsePs(
+      [
+        "  499     1 /Applications/akou.app/Contents/MacOS/launcher",
+        "  498   499 /usr/bin/open -n /Applications/akou.app",
+      ].join("\n"),
+    );
+    expect(strayLaunchers(running, "/Applications/akou.app", 501, 999)).toEqual([]);
   });
 
   test.skipIf(!POSIX)(

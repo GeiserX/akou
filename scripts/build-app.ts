@@ -62,6 +62,13 @@ export const PINS = {
  */
 export const MIN_MACOS = "14.4";
 
+/**
+ * The variable ElectroBun's release wrapper reads to exit once it has opened the unpacked app,
+ * instead of waiting on its "Installation complete" panel for a click (TRAPS "Minutes to start").
+ * `patch-plist.sh … wrapper` writes it into the wrapper's `LSEnvironment`.
+ */
+export const WRAPPER_AUTOCLOSE = "ELECTROBUN_INSTALLER_UI_AUTOCLOSE";
+
 export const ROOT = join(import.meta.dir, "..");
 
 /** Hutch's name for each machine the desktop app is built on. */

@@ -54,6 +54,7 @@ on:
       - scripts/post-build.ts
       - scripts/post-wrap.ts
       - scripts/patch-plist.sh
+      - scripts/first-open.ts
       - Dockerfile
       - .dockerignore
   workflow_dispatch:
@@ -251,6 +252,12 @@ jobs:
             gate-g1-shots/
           if-no-files-found: warn
           retention-days: 90
+      # After the gates, so the app they start is not this one. The wrapper in the zip unpacks the
+      # app on its first open and must then exit: one that stays makes every later open start
+      # nothing (docs/TRAPS.md "Minutes to start").
+      - name: the first open of the zip leaves no launcher behind
+        timeout-minutes: 5
+        run: bun scripts/first-open.ts
       - name: build the CLI (bun build --compile, codesign, --verify --strict, notarized when signed)
         run: bun scripts/build-cli.ts
       - name: check the CLI binary headless

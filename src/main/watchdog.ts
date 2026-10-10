@@ -11,8 +11,11 @@
  *    llama-server) with SIGKILL, since SIGTERM is handled on the stuck thread or on the window
  *    toolkit's, which is what stuck it. The ElectroBun launcher exits when its child does. The next
  *    `akou` command starts a fresh app.
- *    When the window was open, it opens the app again a second later (`open -a` on the bundle), at
- *    most once per `REOPEN_MS`, so a person using only the window does not see akou vanish.
+ *    When the window was open, it opens the app again, at most once per `REOPEN_MS`, so a person
+ *    using only the window does not see akou vanish. A process of its own does that (`REOPENER`),
+ *    since the Worker ends with the app: it stops the bundle's launchers left with nothing below
+ *    them, which `open` would take for the running app and start nothing, opens the bundle, waits
+ *    for the new app to answer, tries once more when it does not, and writes what happened.
  * 3. With a call recording, it ends nothing: the capture helper writes the audio to its file
  *    whatever the app does, and the CLI tells the user how to restart by hand. It writes a second
  *    line if the app's thread comes back.
@@ -48,9 +51,13 @@ export interface WatchdogOptions {
   pid?: number;
   /** Is the window open? Read at every beat; when it was, the app is opened again after it ends. */
   windowOpen?: () => boolean;
-  /** What opens the app again (`relaunchCommand`); null opens nothing. */
+  /** The command that opens the app again (`relaunchCommand`); null opens nothing. */
   relaunch?: readonly string[] | null;
   reopenMs?: number;
+  /** `runtime.json`, where the opened app says it is up; without it the reopen cannot tell. */
+  runtimeFile?: string;
+  /** How long each of the two opens is given to bring up an app that answers (`REOPEN_WAIT_MS`). */
+  reopenWaitMs?: number;
   /** The `ps` the Worker lists processes with (tests point it at one that fails). */
   ps?: string;
 }
@@ -58,17 +65,36 @@ export interface WatchdogOptions {
 /** Opening the app again after the watchdog ends it, at most this often. */
 export const REOPEN_MS = 10 * 60_000;
 
+/** How long an app opened again has to answer before the reopen tries once more, then gives up. */
+export const REOPEN_WAIT_MS = 30_000;
+
+/** The macOS bundle this process runs from (`…/akou.app`), or null outside one. */
+export function appBundle(
+  execPath: string = process.execPath,
+  platform: string = process.platform,
+): string | null {
+  const m = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath);
+  return platform === "darwin" && m ? (m[1] as string) : null;
+}
+
 /**
- * How to open the desktop app again once it has ended: `open -a` on its bundle, a second later so
- * the ended process is gone and LaunchServices starts a new one. Null outside a macOS bundle.
+ * The command that opens the desktop app again once it has ended: `open -n -a` on its bundle.
+ * `-n` starts a new app even when LaunchServices believes one is running, which it does while a
+ * launcher with no app below it is alive (docs/TRAPS.md "Minutes to start"); a second app beside
+ * a live one finds its lock and exits. Null outside a macOS bundle.
  */
 export function relaunchCommand(
   execPath: string = process.execPath,
   platform: string = process.platform,
 ): string[] | null {
-  const m = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath);
-  if (platform !== "darwin" || !m) return null;
-  return ["/bin/sh", "-c", 'sleep 1; exec /usr/bin/open -a "$1"', "sh", m[1] as string];
+  const bundle = appBundle(execPath, platform);
+  return bundle ? ["/usr/bin/open", "-n", "-a", bundle] : null;
+}
+
+/** The bundle a command opens (`open -a BUNDLE`), or null. */
+function openedBundle(cmd: readonly string[] | null): string | null {
+  const i = cmd ? cmd.indexOf("-a") : -1;
+  return cmd && i >= 0 && cmd[i + 1] ? (cmd[i + 1] as string) : null;
 }
 
 export interface Watchdog {
@@ -77,14 +103,8 @@ export interface Watchdog {
   touch(): void;
 }
 
-/** The Worker. `workerData`: `{ beats, cfg }`; `beats` is an Int32Array over shared memory. */
-const SOURCE = String.raw`
-const { workerData } = require("node:worker_threads");
-const { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
-const { spawn, spawnSync } = require("node:child_process");
-const { join } = require("node:path");
-const { beats, cfg } = workerData;
-const pad = (n, w = 2) => String(n).padStart(w, "0");
+/** How both scripts below write a line to `app.log`; `cfg.logFile` names it. */
+const LOG_SOURCE = String.raw`const pad = (n, w = 2) => String(n).padStart(w, "0");
 function stamp(d) {
   const off = -d.getTimezoneOffset();
   const a = Math.abs(off);
@@ -96,7 +116,101 @@ function line(level, msg) {
   // clock: the watchdog stamps its log line with the time it writes it.
   try { appendFileSync(cfg.logFile, stamp(new Date()) + " " + level + " watchdog: " + msg + "\n", { mode: 0o600 }); } catch {}
 }
-function sample() {
+`;
+
+/**
+ * The process that opens the app again after the watchdog ends it. It runs on the app's own Bun
+ * from this text, as the Worker does, and outlives the app. `AKOU_REOPEN` holds its settings:
+ * `{ open, bundle, logFile, runtimeFile, oldPid, waitMs, ps }`.
+ *
+ * `strays` is the test `strayLaunchers` makes in `cli/heal.ts`, here because this text can import
+ * nothing: a process whose command is exactly the bundle's launcher, with no child but ones that
+ * exited unreaped (the wrapper's `open`), that is not above this process. One is stopped only when
+ * two looks half a second apart both find it so.
+ */
+const REOPENER = String.raw`
+const { appendFileSync, readFileSync } = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const cfg = JSON.parse(process.env.AKOU_REOPEN);
+// The app this opens must not inherit them.
+delete process.env.AKOU_REOPEN;
+delete process.env.AKOU_REOPEN_JS;
+${LOG_SOURCE}
+// clock: this process waits on real processes: the ended app, the launchers, the app it opens.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+function strays() {
+  if (!cfg.bundle || process.platform === "win32") return [];
+  const r = spawnSync(cfg.ps, ["-A", "-o", "pid=,ppid=,args="], { encoding: "utf8" });
+  if (r.error || r.status !== 0) return [];
+  const rows = [];
+  for (const l of (r.stdout || "").split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), args: m[3].trim() });
+  }
+  const path = cfg.bundle.replace(/\/+$/, "") + "/Contents/MacOS/launcher";
+  const above = [];
+  for (let p = process.pid; p > 1 && !above.includes(p); p = (rows.find((x) => x.pid === p) || {}).ppid) above.push(p);
+  return rows
+    .filter((x) => x.args === path || x.args.startsWith(path + " "))
+    .filter((x) => !above.includes(x.pid) && !rows.some((c) => c.ppid === x.pid && !/(^|\s)<defunct>$/.test(c.args)) && alive(x.pid))
+    .map((x) => x.pid);
+}
+async function stopStrays() {
+  const first = strays();
+  if (first.length === 0) return;
+  await sleep(500);
+  const left = strays().filter((p) => first.includes(p));
+  if (left.length === 0) return;
+  for (const p of left) { try { process.kill(p, "SIGTERM"); } catch {} }
+  for (let i = 0; i < 30 && left.some(alive); i++) await sleep(100);
+  for (const p of left.filter(alive)) { try { process.kill(p, "SIGKILL"); } catch {} }
+  line("warn", "stopped " + (left.length === 1 ? "a launcher" : left.length + " launchers") +
+    " of akou left with nothing below (pid " + left.join(", ") + "), which open would have taken for the running app");
+}
+// The pid of an app other than the ended one that answers, or 0.
+async function up() {
+  let rt;
+  try { rt = JSON.parse(readFileSync(cfg.runtimeFile, "utf8")); } catch { return 0; }
+  if (!rt || typeof rt.pid !== "number" || typeof rt.port !== "number" || rt.pid === cfg.oldPid || !alive(rt.pid)) return 0;
+  try {
+    const res = await fetch("http://127.0.0.1:" + rt.port + "/healthz", { signal: AbortSignal.timeout(2000) });
+    if (res.body) await res.body.cancel();
+    return rt.pid;
+  } catch { return 0; }
+}
+(async () => {
+  // The ended process, and the launcher above it, which exits when it does.
+  for (let i = 0; i < 50 && alive(cfg.oldPid); i++) await sleep(100);
+  await sleep(1000);
+  const secs = Math.round(cfg.waitMs / 100) / 10;
+  for (const attempt of [1, 2]) {
+    await stopStrays();
+    const r = spawnSync(cfg.open[0], cfg.open.slice(1), { stdio: "ignore", timeout: 15000 });
+    const how = r.error ? r.error.message : r.signal ? "signal " + r.signal : "exit code " + r.status;
+    const until = performance.now() + cfg.waitMs;
+    while (performance.now() < until) {
+      const pid = await up();
+      if (pid) {
+        line("info", "akou is open again (pid " + pid + ")" + (attempt === 2 ? ", at the second try" : ""));
+        return;
+      }
+      await sleep(250);
+    }
+    if (attempt === 1) line("warn", "akou did not answer within " + secs + " s of being opened again (" + how + "); opening it once more");
+    else line("error", "akou did not come up after being opened twice (" + how + "); open it by hand, or run any akou command");
+  }
+})();
+`;
+
+/** The Worker. `workerData`: `{ beats, cfg }`; `beats` is an Int32Array over shared memory. */
+const SOURCE = String.raw`
+const { workerData } = require("node:worker_threads");
+const { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
+const { spawn, spawnSync } = require("node:child_process");
+const { join } = require("node:path");
+const { beats, cfg } = workerData;
+${LOG_SOURCE}function sample() {
   if (!cfg.sample || process.platform !== "darwin") return;
   try {
     mkdirSync(cfg.hangsDir, { recursive: true, mode: 0o700 });
@@ -136,7 +250,8 @@ function records(args) {
 }
 // Opens akou again after it ends, when its window was open, at most once per REOPEN_MS: a person
 // who uses only the window would otherwise see it vanish. The stamp file is what bounds it, so a
-// reopened app that hangs again is not reopened again.
+// reopened app that hangs again is not reopened again. The opening is REOPENER's, a process that
+// outlives this one.
 function reopen() {
   if (!cfg.relaunch || Atomics.load(beats, 2) !== 1) return;
   const stamp = join(cfg.hangsDir, "reopened");
@@ -151,7 +266,14 @@ function reopen() {
   try {
     mkdirSync(cfg.hangsDir, { recursive: true, mode: 0o700 });
     writeFileSync(stamp, "", { mode: 0o600 });
-    spawn(cfg.relaunch[0], cfg.relaunch.slice(1), { detached: true, stdio: "ignore" }).unref();
+    const env = Object.assign({}, process.env, {
+      AKOU_REOPEN_JS: cfg.reopener,
+      AKOU_REOPEN: JSON.stringify({ open: cfg.relaunch, bundle: cfg.bundle, logFile: cfg.logFile,
+        runtimeFile: cfg.runtimeFile, oldPid: cfg.pid, waitMs: cfg.reopenWaitMs, ps: cfg.ps }),
+    });
+    // The text travels in the environment, so the process list shows one short line for it.
+    spawn(cfg.runtime, ["-e", 'new Function("require", process.env.AKOU_REOPEN_JS)(require)'],
+      { detached: true, stdio: "ignore", env }).unref();
     line("info", "opening akou again, because its window was open");
   } catch (e) {
     line("warn", "could not open akou again: " + e.message);
@@ -234,6 +356,11 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
     sampleSeconds: WATCHDOG_SAMPLE_SECONDS,
     pid: o.pid ?? process.pid,
     relaunch: o.relaunch ?? null,
+    bundle: openedBundle(o.relaunch ?? null),
+    runtimeFile: o.runtimeFile ?? "",
+    reopenWaitMs: o.reopenWaitMs ?? REOPEN_WAIT_MS,
+    reopener: REOPENER,
+    runtime: process.execPath,
     ps: o.ps ?? "ps",
     reopenMs: o.reopenMs ?? REOPEN_MS,
   };
