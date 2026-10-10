@@ -76,6 +76,14 @@ import { completedData, Deliverer, type DelivererOptions } from "./webhooks.ts";
 
 /** How often retention runs, besides at start. */
 export const RETENTION_SWEEP_MS = 3_600_000;
+/**
+ * The most jobs retention removes in one go, and the longest one go holds the thread: a start
+ * after days stopped, or an hour of a busy archive, is thousands of jobs, and removing them in one
+ * loop answered no request until the last was gone. Each go is one transaction, so one write to
+ * the disk; the next runs after the requests that arrived meanwhile.
+ */
+export const SWEEP_BATCH = 200;
+export const SWEEP_SLICE_MS = 50;
 export { DAY_MS };
 /**
  * Starts a job gets. One left running when the server stopped is queued again once; running at a
@@ -412,6 +420,9 @@ export class JobService {
   private readonly progress = new Map<string, JobProgress>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
+  /** The next go of a retention sweep that had more jobs than one go removes, and its count so far. */
+  private sweepMore: ReturnType<typeof setTimeout> | null = null;
+  private swept = 0;
   /** Wakes `releaseIdle` when the next idle Worker's time is up. */
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   /** How many times each queued job was passed over for a job on a loaded model. */
@@ -875,7 +886,12 @@ export class JobService {
 
   private drop(id: string): { id: string; status: JobStatus } | null {
     const r = this.store.remove(id);
-    if (!r) return null;
+    return r ? this.dropped(r) : null;
+  }
+
+  /** What a removed job leaves outside the store: its Worker, its remote copy, its files, its waiters. */
+  private dropped(r: { job: Job; final: JobStatus }): { id: string; status: JobStatus } {
+    const id = r.job.id;
     const slot = [...this.slots, ...this.laneSlots].find((s) => s.job?.id === id);
     if (slot) {
       slot.job?.abort.abort();
@@ -899,7 +915,8 @@ export class JobService {
 
   /**
    * The hourly sweep: jobs past `server.retain_days`, then models unused for
-   * `server.models_unused_days` (SV-M5). Returns the number of jobs removed.
+   * `server.models_unused_days` (SV-M5). Returns the number of jobs removed before it returns: at
+   * most `SWEEP_BATCH`, the rest following in goes of their own (`sweepJobs`).
    */
   sweep(): number {
     const n = this.sweepJobs();
@@ -939,16 +956,37 @@ export class JobService {
    * that keeps its audio, which only a client's delete removes.
    */
   private sweepJobs(): number {
+    if (this.sweepMore) clearTimeout(this.sweepMore);
+    this.sweepMore = null;
     const before = this.now() - this.o.retainDays() * DAY_MS;
-    let n = 0;
-    for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
+    const ids = this.store.expired(before, SWEEP_BATCH);
+    const until = performance.now() + SWEEP_SLICE_MS;
+    const removed = this.store.db.transaction(() => {
+      const out: { job: Job; final: JobStatus }[] = [];
+      for (const id of ids) {
+        const r = this.store.remove(id);
+        if (r) out.push(r);
+        if (performance.now() >= until) break;
+      }
+      return out;
+    })();
+    for (const r of removed) this.dropped(r);
+    this.swept += removed.length;
+    if (removed.length > 0 && (removed.length < ids.length || ids.length === SWEEP_BATCH)) {
+      // clock: the next go runs as soon as the requests waiting on this thread have been answered.
+      this.sweepMore = setTimeout(() => {
+        if (!this.closed) this.sweepJobs();
+      }, 0);
+      return removed.length;
+    }
     this.store.scrubCancelled(before);
-    if (n > 0)
+    if (this.swept > 0)
       this.o.log(
         "info",
-        `jobs: retention removed ${n} job(s) older than ${this.o.retainDays()} days`,
+        `jobs: retention removed ${this.swept} job(s) older than ${this.o.retainDays()} days`,
       );
-    return n;
+    this.swept = 0;
+    return removed.length;
   }
 
   // -------------------------------------------------------------------------
@@ -1520,6 +1558,7 @@ export class JobService {
     this.remotes.close();
     for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
+    if (this.sweepMore) clearTimeout(this.sweepMore);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.deliverer.close();
     for (const s of [...this.slots, ...this.laneSlots]) {
