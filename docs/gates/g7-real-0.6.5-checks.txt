@@ -39,11 +39,21 @@ System Integrity Protection status: enabled.
 == The scratch home's launch.log for that run: lines saying the app was already running
 0
 
-== Watcher, the usage-limit run 58 s earlier
+== Watcher, the usage-limit run about a minute earlier
 80494 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
 80840 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
 81145 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
 82049 v0.6.5 /Applications/akou.app/Contents/MacOS/bun parent=/Applications/akou.app/Contents/MacOS/launcher
+
+== The scratch home's app.log for the usage-limit run: every start and quit
+2026-10-10 09:58:13.866 +02:00 info akou 0.6.5 started (pid 80494, app, headless, API on port 53599)
+2026-10-10 09:58:14.846 +02:00 info akou 0.6.5 quit (pid 80494)
+2026-10-10 09:58:17.475 +02:00 info akou 0.6.5 started (pid 80840, app, headless, API on port 53640)
+2026-10-10 09:58:18.442 +02:00 info akou 0.6.5 quit (pid 80840)
+2026-10-10 09:58:21.746 +02:00 info akou 0.6.5 started (pid 81145, app, headless, API on port 53690)
+2026-10-10 09:58:35.077 +02:00 info akou 0.6.5 quit (pid 81145)
+2026-10-10 09:58:35.613 +02:00 info akou 0.6.5 started (pid 82049, app, headless, API on port 53835)
+2026-10-10 09:58:43.619 +02:00 info akou 0.6.5 quit (pid 82049)
 
 == User context claude loads (counts only, read from the config folder claude ran with)
 user-level instruction file: present, 0 bytes
