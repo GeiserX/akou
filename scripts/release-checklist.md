@@ -45,7 +45,7 @@ git tag -a v0.1.0 -m "akou 0.1.0"
 git push origin v0.1.0
 ```
 
-The workflow checks the tag equals every version string and that `ci-ok` passed on the tagged commit, builds and checks every artifact, attests each one, and publishes the release with `SHA256SUMS`. A 0.x version is published as a prerelease. It is never a draft.
+The workflow checks the tag equals every version string and that `ci-ok` passed on the tagged commit, builds and checks every artifact, attests each one, and publishes the release with `SHA256SUMS`. A 0.x version, or one with a prerelease part, is published as a prerelease, and 1.0.0 or later as a full release. It is never a draft.
 
 ## After the workflow
 
