@@ -45,9 +45,10 @@ import {
   recordingBelow,
   sampleHung,
   seconds,
+  signalable,
   stopAll,
   stopList,
-  strayLaunchers,
+  stopStrayLaunchers,
 } from "./heal.ts";
 
 /** Exit codes (DESIGN 6.1). */
@@ -293,16 +294,6 @@ export function launchedBundle(cmd: readonly string[]): string | null {
   return i >= 0 && cmd[i + 1] ? (cmd[i + 1] as string) : null;
 }
 
-/** A process this user may signal: never another user's app on the same machine. */
-function ours(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export class ApiClient {
   readonly configDir: string;
   private readonly launchCmd: readonly string[] | null;
@@ -542,7 +533,8 @@ export class ApiClient {
       // A probe never runs past the wait: a slow answer is cut at the deadline.
       const rt = await this.running(Math.min(2000, deadline - performance.now()));
       if (rt) {
-        if (bundle) await this.stopStrayLaunchers(bundle, rt.pid);
+        // The bundle's launchers left with nothing below them, once its app answers (#356).
+        if (bundle) await stopStrayLaunchers(bundle, rt.pid);
         return rt;
       }
       if (bundle && ended !== null && performance.now() - bundleAt >= BUNDLE_CHECK_MS) {
@@ -575,14 +567,7 @@ export class ApiClient {
     const rows = await processTable();
     if (!rows) return true;
     const inside = `${bundle.replace(/\/+$/, "")}/Contents/`;
-    return rows.some((r) => r.args.trim().startsWith(inside) && ours(r.pid));
-  }
-
-  /** Stops the bundle's launchers left with nothing below them once its app answers (#356). */
-  private async stopStrayLaunchers(bundle: string, appPid: number): Promise<void> {
-    const rows = await processTable();
-    if (!rows) return;
-    await stopAll(strayLaunchers(rows, bundle, appPid).filter(ours));
+    return rows.some((r) => r.args.trim().startsWith(inside) && signalable(r.pid));
   }
 
   /**

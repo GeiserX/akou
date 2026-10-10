@@ -286,3 +286,81 @@ describe("[T3.6] Minutes to start: a first launch slower than the 3 s target (#3
     LONG,
   );
 });
+
+describe.skipIf(process.platform === "win32")(
+  "[T3.6] Minutes to start: a launcher left with no app below it (no ps on Windows)",
+  () => {
+    /**
+     * A fake bundle in `dir` whose launcher is this Bun, and an idle launcher of it with one child
+     * that exited and was never reaped, as the real wrapper is left (the shell starts that child,
+     * then becomes the launcher).
+     */
+    function strayOf(dir: string, name: string) {
+      const bundle = join(dir, name);
+      const launcher = join(bundle, "Contents", "MacOS", "launcher");
+      mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+      symlinkSync(process.execPath, launcher);
+      const proc = spawn(
+        "/bin/sh",
+        [
+          "-c",
+          'true & exec "$0" "$@"',
+          launcher,
+          FAKE_BUNDLE,
+          "stray",
+          "-a",
+          bundle,
+          "--pids",
+          join(dir, `${name}.pids`),
+        ],
+        { stdio: "ignore" },
+      );
+      return { bundle, pid: proc.pid as number };
+    }
+
+    test(
+      "the app stops it when it starts, says so in app.log, and leaves another bundle's alone",
+      async () => {
+        const t = tempDir();
+        const mine = strayOf(t.dir, "akou.app");
+        // Not this bundle's, though its path starts the same.
+        const other = strayOf(t.dir, "akou.app2");
+        const rig = await appRig({ supervise: true, bundle: mine.bundle });
+        try {
+          const until = performance.now() + 8000;
+          while (processAlive(mine.pid) && performance.now() < until) await Bun.sleep(50);
+          expect(processAlive(mine.pid)).toBe(false);
+          expect(processAlive(other.pid)).toBe(true);
+          const log = join(rig.home, ".config", "akou", APP_LOG);
+          const said = `info stopped a launcher of akou left with nothing below (pid ${mine.pid})`;
+          while (!readFileSync(log, "utf8").includes(said) && performance.now() < until)
+            await Bun.sleep(50);
+          expect(readFileSync(log, "utf8")).toContain(said);
+        } finally {
+          killAll([mine.pid, other.pid]);
+          await rig.close();
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+
+    test(
+      "positive control: an app that runs from no bundle stops nothing",
+      async () => {
+        const t = tempDir();
+        const mine = strayOf(t.dir, "akou.app");
+        const rig = await appRig({ supervise: true, bundle: null });
+        try {
+          await Bun.sleep(2500);
+          expect(processAlive(mine.pid)).toBe(true);
+        } finally {
+          killAll([mine.pid]);
+          await rig.close();
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+  },
+);

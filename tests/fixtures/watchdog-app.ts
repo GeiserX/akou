@@ -4,12 +4,15 @@
  * child that stands in for a helper, prints `ready`, then does what the arguments say.
  *
  *   bun tests/fixtures/watchdog-app.ts LOG HANGS --silence MS [--recording] [--no-watchdog]
- *     [--sample] [--window --reopen MARKER] [--late-helper FILE | --touch-recording] [--ps-fails]
+ *     [--sample] [--window (--reopen MARKER | --open JSON) [--runtime FILE] [--reopen-wait MS]]
+ *     [--late-helper FILE | --touch-recording] [--ps-fails]
  *     (--block MS | --busy MS)
  *
  * `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
  * silence, for MS, then exits 0. `--window` says the window is open; `--reopen MARKER` is what
- * opens the app again: a process that writes MARKER. Just before the thread blocks,
+ * opens the app again: a process that writes MARKER, and `--open JSON` is any command instead.
+ * `--runtime FILE` is where the opened app says it is up, and `--reopen-wait MS` how long each
+ * open is given (300 ms by default here). Just before the thread blocks,
  * `--late-helper FILE` spawns a helper that records into FILE (`run --out FILE`) with the live
  * flag still false, as a start whose helper comes after the last beat; `--touch-recording` turns
  * the flag on and publishes it with `touch`, as the app does when a call goes live.
@@ -22,6 +25,7 @@ import { startWatchdog } from "../../src/main/watchdog.ts";
 const [logFile, hangsDir] = process.argv.slice(2) as [string, string];
 const num = (flag: string) => Number(process.argv[process.argv.indexOf(flag) + 1]);
 const has = (flag: string) => process.argv.includes(flag);
+const str = (flag: string) => process.argv[process.argv.indexOf(flag) + 1] as string;
 let live = has("--recording");
 const wd = has("--no-watchdog")
   ? null
@@ -35,13 +39,17 @@ const wd = has("--no-watchdog")
       beatMs: 100,
       windowOpen: () => has("--window"),
       ...(has("--ps-fails") ? { ps: "/usr/bin/false" } : {}),
-      relaunch: has("--reopen")
-        ? [
-            process.execPath,
-            "-e",
-            `require("node:fs").appendFileSync(${JSON.stringify(process.argv[process.argv.indexOf("--reopen") + 1])}, "x")`,
-          ]
-        : null,
+      relaunch: has("--open")
+        ? (JSON.parse(str("--open")) as string[])
+        : has("--reopen")
+          ? [
+              process.execPath,
+              "-e",
+              `require("node:fs").appendFileSync(${JSON.stringify(str("--reopen"))}, "x")`,
+            ]
+          : null,
+      ...(has("--runtime") ? { runtimeFile: str("--runtime") } : {}),
+      reopenWaitMs: has("--reopen-wait") ? num("--reopen-wait") : 300,
     });
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 process.stdout.write(`child ${child.pid}\nready\n`);

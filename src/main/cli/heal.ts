@@ -129,6 +129,9 @@ export function launcherOf(rows: readonly ProcRow[], pid: number): number | null
  * place, opens it again and then stays, idle (docs/gates/M0-results.md, G7). While it runs,
  * `open -a` takes it for the running app and starts nothing, so the next launch fails (#356).
  * Never `self` or a process above it.
+ *
+ * A child that has exited and was never reaped is not a process below: the wrapper never reaps
+ * the `open` it ran, so the real one always has such a child, which `ps` lists as `<defunct>`.
  */
 export function strayLaunchers(
   rows: readonly ProcRow[],
@@ -143,8 +146,50 @@ export function strayLaunchers(
       const args = r.args.trim();
       return args === path || args.startsWith(`${path} `);
     })
-    .filter((r) => !keep.has(r.pid) && !rows.some((c) => c.ppid === r.pid))
+    .filter((r) => !keep.has(r.pid) && !rows.some((c) => c.ppid === r.pid && !defunct(c)))
     .map((r) => r.pid);
+}
+
+/** An exited process nobody reaped: `<defunct>` on macOS, `[name] <defunct>` on Linux. */
+export function defunct(row: ProcRow): boolean {
+  return /(^|\s)<defunct>$/.test(row.args.trim());
+}
+
+/** A process this user may signal: never another user's app on the same machine. */
+export function signalable(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Between the two looks `stopStrayLaunchers` takes at a launcher with nothing below it. */
+export const STRAY_LOOK_MS = 500;
+
+/**
+ * Stops the launchers of `bundle` left with nothing below them (`strayLaunchers`) and returns
+ * their pids. A launcher is stopped only when two looks `lookMs` apart both find it with no child,
+ * so one that is about to start its app is left alone. Nothing is stopped when the processes
+ * cannot be listed.
+ */
+export async function stopStrayLaunchers(
+  bundle: string,
+  appPid: number,
+  o: { lookMs?: number; self?: number } = {},
+): Promise<number[]> {
+  const look = async () => {
+    const rows = await processTable();
+    return rows ? strayLaunchers(rows, bundle, appPid, o.self).filter(signalable) : [];
+  };
+  const first = await look();
+  if (first.length === 0) return [];
+  // clock: a real process gets a moment to start its child before it counts as left behind.
+  await new Promise((r) => setTimeout(r, o.lookMs ?? STRAY_LOOK_MS));
+  const stray = (await look()).filter((p) => first.includes(p));
+  await stopAll(stray);
+  return stray;
 }
 
 /** `pid` and every process above it, nearest first. */

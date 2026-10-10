@@ -96,6 +96,8 @@ export interface RigOptions {
   window?: AppOptions["window"];
   /** How long one step of the quit may take before the quit goes on without it (#351). */
   quitStepMs?: number;
+  /** The macOS bundle the app takes itself to run from; none by default (a test runs from source). */
+  bundle?: string | null;
   /**
    * The real models in `asr.modelsDir` and this machine's own GPU, as an install runs them: no fake
    * recognizer and no stand-in for the accelerator probe. Only model-gated tests set it.
@@ -171,6 +173,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.supervise ? { supervise: true } : {}),
     ...(o.window ? { window: o.window } : {}),
     ...(o.quitStepMs ? { quitStepMs: o.quitStepMs } : {}),
+    ...(o.bundle !== undefined ? { bundle: o.bundle } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

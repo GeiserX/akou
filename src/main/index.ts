@@ -151,6 +151,7 @@ import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureDevices, queryDevices } from "./capture/devices.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
+import { stopStrayLaunchers } from "./cli/heal.ts";
 import {
   buildSettings,
   HOOK_STAGES,
@@ -252,7 +253,7 @@ import {
   type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
-import { relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
+import { appBundle, relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
@@ -446,6 +447,8 @@ export interface AppOptions {
   supervise?: boolean;
   /** How long one step of the quit may take before the quit goes on without it (#351). */
   quitStepMs?: number;
+  /** The macOS bundle this app runs from, or null; by default read from the running program. */
+  bundle?: string | null;
 }
 
 export { NotWritable };
@@ -4007,7 +4010,25 @@ export class AkouApp implements ApiApp {
       recording: () => this.starting > 0 || this.manager.live() !== null,
       windowOpen: () => this.window?.isOpen?.() ?? false,
       relaunch: relaunchCommand(),
+      runtimeFile: this.runtimeFile,
     });
+    // A launcher of this bundle with no app below it makes `open`, the Dock and Finder take it for
+    // the running app and start nothing (docs/TRAPS.md "Minutes to start"): the wrapper a release
+    // up to 0.6.5 left after its first open, or a launcher whose app was ended. This app is up, so
+    // none of them is needed.
+    const bundle = this.o.bundle === undefined ? appBundle() : this.o.bundle;
+    if (bundle) {
+      void stopStrayLaunchers(bundle, process.pid)
+        .then((pids) => {
+          if (pids.length > 0) {
+            this.appLog?.line(
+              "info",
+              `stopped ${pids.length === 1 ? "a launcher" : `${pids.length} launchers`} of akou left with nothing below (pid ${pids.join(", ")})`,
+            );
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   /** `runtime.json`: pid, port, version, and the harnesses found (DESIGN 5.3), mode 0600. */
