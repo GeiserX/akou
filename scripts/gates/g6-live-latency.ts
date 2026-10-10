@@ -13,11 +13,18 @@
  * last speech. With a stream diarizer a call line commits as `c?` and its speaker is a later
  * revision; `speakerMs` is that revision's time on the same scale.
  *
+ * With `AKOU_LINE_TIMING=1` in the app's environment the Worker logs each line's decode timing, and
+ * every row gains `decodeMs` (the line's own decode), `provisionals` and `provisionalMs` (the
+ * re-decodes of its open segment before it) and `behindMs` (how far behind the captured audio the
+ * Worker was when the decode started). Latency is read off the wall clock, so a clock that is
+ * stepped mid-run (a time sync) moves every later line: `clockSteps` lists each step this script
+ * saw against the monotonic clock, and a run with one is not a measurement.
+ *
  *   AKOU_HOME=… bun scripts/gates/g6-live-latency.ts --cli <cli.ts> --clips <dir of *.f32, 48 kHz>
  *     --wav <out.wav> --words w1,… [--gap 1.5] [--out result.json] [--build-only]
  */
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -111,7 +118,19 @@ if (started.code !== 0) throw new Error(`start failed: ${started.out}`);
 const folder = JSON.parse(started.out).folder as string;
 const status = await cli("status");
 const decoding = status.code === 0 ? (JSON.parse(status.out).asr?.decoding ?? null) : null;
-await sleep((total + 8) * 1000);
+// The wall clock against the monotonic one, twice a second: a step of 50 ms or more is recorded.
+const clockSteps: { at: number; stepMs: number }[] = [];
+const offset = () => Date.now() - performance.now();
+let lastOffset = offset();
+const playUntil = performance.now() + (total + 8) * 1000;
+while (performance.now() < playUntil) {
+  await sleep(500);
+  const now = offset();
+  if (Math.abs(now - lastOffset) >= 50) {
+    clockSteps.push({ at: Date.now(), stepMs: Math.round(now - lastOffset) });
+    lastOffset = now;
+  }
+}
 const stopped = await cli("stop");
 if (stopped.code !== 0) throw new Error(`stop failed, the call may still be live: ${stopped.out}`);
 
@@ -126,6 +145,24 @@ const wallStart = part?.wallStart as number;
 const segs = events.filter(
   (e) => e.type === "seg" && e.rev === 1 && e.layer === "live" && e.part === part?.part,
 );
+/** The Worker's timing of each decoded line, by channel and end (`AKOU_LINE_TIMING=1`). */
+interface Timing {
+  ch: string;
+  a1: number;
+  pos: number;
+  startedAt: number;
+  decodeMs: number;
+  provisionals: number;
+  provisionalMs: number;
+}
+const timings = new Map<string, Timing>();
+const appLog = join(home, ".config", "akou", "app.log");
+for (const line of existsSync(appLog) ? readFileSync(appLog, "utf8").split("\n") : []) {
+  const at = line.indexOf("line timing {");
+  if (at < 0) continue;
+  const t = JSON.parse(line.slice(at + "line timing ".length)) as Timing & { part: number };
+  if (t.part === part?.part) timings.set(`${t.ch} ${t.a1.toFixed(3)}`, t);
+}
 /** When each line got its speaker: revision 1's, else the first later one carrying `spk`. */
 const spokenAt = new Map<string, number>();
 for (const e of events) {
@@ -139,6 +176,7 @@ const rows = utterances.map((u) => {
   );
   const last = hits.sort((a, b) => (a.a1 as number) - (b.a1 as number)).at(-1);
   const spoken = last ? spokenAt.get(last.id as string) : undefined;
+  const timing = last ? timings.get(`${u.ch} ${(last.a1 as number).toFixed(3)}`) : undefined;
   return {
     ch: u.ch,
     clip: u.clip,
@@ -146,6 +184,14 @@ const rows = utterances.map((u) => {
     lines: hits.length,
     latencyMs: last ? (last.t as number) - (wallStart + u.end * 1000) : null,
     speakerMs: spoken === undefined ? null : spoken - (wallStart + u.end * 1000),
+    ...(timing
+      ? {
+          decodeMs: timing.decodeMs,
+          provisionals: timing.provisionals,
+          provisionalMs: timing.provisionalMs,
+          behindMs: Math.round(timing.startedAt - (wallStart + timing.pos * 1000)),
+        }
+      : {}),
     text: hits.map((h) => h.text).join(" / "),
   };
 });
@@ -163,6 +209,8 @@ const result = {
   seconds: Math.round(total * 10) / 10,
   utterances: utterances.length,
   committed: lat.length,
+  lineTimings: timings.size,
+  clockSteps,
   latencyMs: { min: lat[0], p50: q(0.5), p90: q(0.9), max: lat[lat.length - 1] },
   byChannel: Object.fromEntries(
     (["mic", "call"] as const).map((ch) => [

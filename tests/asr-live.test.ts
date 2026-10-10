@@ -12,6 +12,7 @@ import type { ModelSpec } from "../src/main/asr/engine.ts";
 import {
   type CallAccess,
   type FromWorker,
+  LINE_TIMING,
   LiveAsr,
   type LiveOut,
   LivePipeline,
@@ -79,6 +80,52 @@ const list = (names: string[], model = "fake-parakeet"): DecodeList =>
   buildDecodeList({ model, callVocab: [], names, files: [] });
 
 describe("segmenting", () => {
+  test("AKOU_LINE_TIMING=1 logs each decoded line's timing; without it the Worker logs none", () => {
+    const audio = concat(
+      silence(0.5),
+      speak(["hello", "world", "we", "should", "move", "the", "build"]),
+      silence(1),
+    );
+    const run = () => {
+      const { p, out, segs } = pipeline();
+      feed(p, "mic", audio);
+      p.endPart(1);
+      const timings = out.flatMap((x) =>
+        x.type === "log" && x.msg.startsWith(LINE_TIMING)
+          ? [JSON.parse(x.msg.slice(LINE_TIMING.length)) as Record<string, number | string>]
+          : [],
+      );
+      return { timings, segs: segs() };
+    };
+    const before = process.env.AKOU_LINE_TIMING;
+    try {
+      process.env.AKOU_LINE_TIMING = "1";
+      const on = run();
+      expect(on.segs.length).toBe(1);
+      expect(on.timings.length).toBe(1);
+      const [t] = on.timings;
+      const seg = on.segs[0];
+      if (seg?.type !== "seg" || !t) throw new Error("no line");
+      expect([t.part, t.ch]).toEqual([1, "mic"]);
+      expect(t.a0 as number).toBeCloseTo(seg.a0, 3);
+      expect(t.a1 as number).toBeCloseTo(seg.a1, 3);
+      // The Worker had taken in the line's audio and the pause that closed it.
+      expect(t.pos as number).toBeGreaterThanOrEqual((t.a1 as number) + 0.4);
+      expect(t.decodeMs as number).toBeGreaterThanOrEqual(0);
+      // Over a second of speech: the open segment was decoded for a provisional line first.
+      expect(t.provisionals as number).toBeGreaterThanOrEqual(1);
+      expect(t.provisionalMs as number).toBeGreaterThanOrEqual(0);
+      // Control: off by default, and the line is the same either way.
+      delete process.env.AKOU_LINE_TIMING;
+      const off = run();
+      expect(off.timings).toEqual([]);
+      expect(off.segs).toEqual(on.segs);
+    } finally {
+      if (before === undefined) delete process.env.AKOU_LINE_TIMING;
+      else process.env.AKOU_LINE_TIMING = before;
+    }
+  });
+
   test("a segment closes after 0.7 s without speech; a shorter pause stays one segment", () => {
     const { p, segs } = pipeline();
     const a = concat(
