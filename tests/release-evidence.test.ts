@@ -177,11 +177,12 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         );
         // G6: speed passes on both halves and the line passes on the Mac after the cold start; on
         // four x64 cores one run of six misses the 2.5 s line bar, with no reason on record.
-        for (const g of ["G6", "G7"])
+        for (const g of ["G6"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
-        // G1, G2, G3, G4, G5 and G8 are on record as passed. G4 passes under its criterion of
-        // 2026-10-10: measured against the host clock, with the macOS floor kept at 14.4.
-        for (const g of ["G1", "G2", "G3", "G4", "G5", "G8"])
+        // G1, G2, G3, G4, G5, G7 and G8 are on record as passed. G4 and G7 pass under their
+        // criteria of 2026-10-10: G4 measured against the host clock, with the macOS floor kept at
+        // 14.4; G7 with the user-level context the app lets a harness load.
+        for (const g of ["G1", "G2", "G3", "G4", "G5", "G7", "G8"])
           expect(r.out).not.toContain(`: ${g} `);
         // Outside a checkout it also says it could not read the tags, and still lists the rest.
         expect(r.out).toContain("cannot list the tags");
