@@ -175,13 +175,12 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
           "docs/providers.md: the terms table has no dated row",
         );
-        // G6: speed passes on both halves and the line passes on the Mac after the cold start; on
-        // four x64 cores one run of six misses the 2.5 s line bar, with no reason on record.
-        for (const g of ["G6", "G7"])
+        for (const g of ["G7"])
           expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
-        // G1, G2, G3, G4, G5 and G8 are on record as passed. G4 passes under its criterion of
-        // 2026-10-10: measured against the host clock, with the macOS floor kept at 14.4.
-        for (const g of ["G1", "G2", "G3", "G4", "G5", "G8"])
+        // G1 to G6 and G8 are on record as passed. G4 passes under its criterion of 2026-10-10:
+        // measured against the host clock, with the macOS floor kept at 14.4. G6 passes under its
+        // criterion of the same day: the one late x64 run measured a step of the box's clock.
+        for (const g of ["G1", "G2", "G3", "G4", "G5", "G6", "G8"])
           expect(r.out).not.toContain(`: ${g} `);
         // Outside a checkout it also says it could not read the tags, and still lists the rest.
         expect(r.out).toContain("cannot list the tags");

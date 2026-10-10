@@ -19,7 +19,7 @@ There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8
 | G3 | Pass | Both halves on a Mac with SIP on. First half on the signed, notarized 0.6.2 (2026-10-07): the Microphone and system-audio prompts named akou and nothing else got those grants; a 120 s recording found every call chirp on the right and every mic chirp on the left; after quit and restart, the same with no new prompt. Second half on the signed 0.6.4 copied over it (2026-10-08): no prompt and no grant from the install to the end of a 120 s recording that found 11 of 11 chirps of each train; then a Microphone reset followed by a start raised a prompt again, so the no-prompt check can go red. The earlier G3-lite on the SIP-off Mac mini stays below. |
 | G4 | Pass | Under [the criterion as of 2026-10-10](#g4-the-criterion-as-of-2026-10-10): the system tap and a separate mic stream, measured against the host clock, with the macOS floor kept at 14.4. Through the signed 0.6.2 on a Mac with SIP on (2026-10-08). Hour run: no gap over 5 ms on either channel in 3,689 s, every chirp of both trains inside the file, left-right offset 8.27 ms with a 0.022 ms spread and a 0.01 ms per hour slope, both channels 3,690.522 s. Quiet-tap run: the call channel digital silence from the start while the mic stream ran, first words whole after 28 s of silence and after a 10-minute mute, helper memory 17.6 to 19.5 MB inside the mute, both channels 795.413 s. Positive controls recover an injected 75 ms per hour drift. The first runs failed on a 10.5 s tap death and 20 ms of speech lost at a first start; both were fixed and measured again. Known limitation, not measured: drift between two independent device clocks. No tap died in an hour run since the fix, so the 1 s rebuild rests on simulated tests. |
 | G5 | Pass | Re-run at `36a2237` (2026-10-07). Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 154 ms while the teardown still hung. Crash: new part in 79 ms, 0.14 s of call audio lost. Real device helper SIGKILLed: new part in 212 ms, 1.30 s lost. The API never missed a poll. At `f6cabfc`: 78 ms; 79 ms and 0.13 s; 81 ms and 1.25 s. |
-| G6 | Partial | Under [the criterion as of 2026-10-10](#g6-the-criterion-as-of-2026-10-10): the line bar is 1.5 s on an M-series Mac and 2.5 s on four x64 cores, for lines whose speech ends after the first 10 s of a cold call. Speed passes on both halves (fp32, beam search, 12-word list): real-time factor 0.107 for both channels on a Mac mini M4 (target 0.25) and 0.25 on four x64 cores (target 0.5). The Mac line passes: after the first 10 s, all eight runs commit every line within 1.25 s; inside the first 10 s three runs had one to three lines at 1.52 to 5.77 s ([#378](https://github.com/GeiserX/akou/issues/378), a known limitation). On four x64 cores five of six runs pass, 2.27 s at worst. One fails: from 17 s into the call every line was 3.77 to 4.32 s late, not a cold start and not explained ([#379](https://github.com/GeiserX/akou/issues/379)). That run keeps the gate at Partial. |
+| G6 | Pass | Under [the criterion as of 2026-10-10](#g6-the-criterion-as-of-2026-10-10): the line bar is 1.5 s on an M-series Mac and 2.5 s on four x64 cores, for lines whose speech ends after the first 10 s of a cold call. Speed passes on both halves (fp32, beam search, 12-word list): real-time factor 0.107 for both channels on a Mac mini M4 (target 0.25) and 0.25 on four x64 cores (target 0.5). The Mac line passes: after the first 10 s, all eight runs commit every line within 1.25 s; inside the first 10 s three runs had one to three lines at 1.52 to 5.77 s ([#378](https://github.com/GeiserX/akou/issues/378), a known limitation). The x64 line passes: after the first 10 s, all ten runs of [the series of 2026-10-10](#g6-the-x64-series-of-2026-10-10) commit every line within 2.07 s, and five of the six runs of 2026-10-09 within 2.27 s. The sixth read 3.77 to 4.32 s from 17 s into the call because the Windows Time service stepped the box's clock forward by 2,572 ms at that moment. The step is in the System event log, it was reproduced on 2026-10-10, and without it that run's lines are 1.20 to 1.74 s. |
 | G7 | Partial | Fake run 5 of 5 against the signed 0.6.2 app: control `missing`, recorded streams answer (first token 113 ms claude, 62 ms codex), usage limits give excerpts only with `exhausted`. Real runs against the signed 0.6.4 app (2026-10-09) on two Macs, with no harness on its `PATH`: it found both harnesses through the login shell, and a signed-in claude streamed its answer both times, with the first token at 2,692 ms on a near-empty user context and at 4,528 ms on a daily-use one (answers at 4,063 ms and 7,160 ms). Codex has no working sign-in on either Mac (`errorKind: auth`, HTTP 401), so the codex half is still open. |
 | G8 | Pass | Re-run at `36a2237` (2026-10-07), on a quiet machine: cold `akou start` p95 578 ms (20 runs, 20 separate app processes), warm p95 319 ms; `f6cabfc` measured 193 ms and 159 ms. The app now takes about 180 ms longer to answer its API. Under heavy background load (load average 16 to 65) the cold p95 went over 3 s in two of four runs, and warm starts failed on both commits when the helper took over 3 s to open the devices (see below). |
 
@@ -530,14 +530,70 @@ The bar is 1.5 s for the Mac rows and 2.5 s for the x64 rows.
 
 **The x64 run that fails.** In embeddings run 1 the first six lines were as fast as in the other runs, 1.28 to 1.83 s. From the line whose speech ended at 16.98 s to the end of the call, all 18 lines were 3.77 to 4.32 s late, on both channels. That is not a cold start: it begins 17 s in and never recovers, and the cold-start rule leaves it in. The app wrote no `asr.lag`, which it writes from 10 s behind. The file records CPU load of 0 to 4 % after each run and no CI job on the machine, and nothing else about what the four cores were doing during this run. Until 2026-10-10 this page left the run out of the verdict without a reason. We have no measured reason to call it unrepresentative, so it stands as a failed run. It is tracked in [#379](https://github.com/GeiserX/akou/issues/379).
 
-**Verdict: partial.** Three of the four clauses pass. The x64 line clause fails on one run in six. The new bar does what it was meant to do: the five ordinary x64 runs, which missed 1.5 s on 5 to 10 of their 20 judged lines, are all inside 2.5 s. What keeps the gate open is the one run that fell 4 s behind.
+**Verdict at that point: partial**, since settled by [the x64 series of 2026-10-10](#g6-the-x64-series-of-2026-10-10). Three of the four clauses pass. The x64 line clause fails on one run in six. The new bar does what it was meant to do: the five ordinary x64 runs, which missed 1.5 s on 5 to 10 of their 20 judged lines, are all inside 2.5 s. What keeps the gate open is the one run that fell 4 s behind.
 
 **Known limitation: the first lines after a cold start can be late.** In three of eight Mac runs, one to three lines whose speech ended in the first 10 s of the call were committed 1.52 to 5.77 s after it, six lines in all. Later lines were on time. A fix would warm the recognizer and the VAD when the call starts ([#378](https://github.com/GeiserX/akou/issues/378)). For the person on the call, see [Troubleshooting](../troubleshooting.md#the-first-lines-of-a-call-show-up-late).
 
-**Still open.**
+**Still open at that point.** The first item is answered by the series below.
 
 - The x64 line clause. What would settle it is one more series on the same four cores, at least the same six runs, that also records per-line decode time and the CPU use of every process during each run. If a run stalls again, that record says whether the recognizer was slow or something else held the cores, and the stall is a defect to fix before G6 can pass. If no run stalls, G6 still does not pass on that alone: the failed run stays on record, and the page must say what the new series shows about it.
 - Vocabulary, for M1: 10 of the 12 listed words came out right every time, in both the speed and the live runs. "akou" was never right ("ACA", "ACAR", "Akao", "Akau"), and on this voice "pyannote" never was either ("pianoed", "Pianote", "Pianode").
+
+### G6: the x64 series of 2026-10-10
+
+**What ran.** Ten more runs on the same Windows x64 box, five with Nemotron and five with embeddings, plus one run timed to cross the box's daily time sync ([g6-x64-series.json](g6-x64-series.json)). The app is `v0.6.5` (`33b5d03e`) run from source with Bun 1.4.2, plus the line-timing change of [#382](https://github.com/GeiserX/akou/pull/382), which logs nothing unless `AKOU_LINE_TIMING=1`. `akou-capture` and `akou-diarize` are 0.6.5, built on the box from the same tag with Rust 1.97.1. The rest is the setup of 2026-10-07: fp32, beam search, the 12 words, the same 24 clips and timeline, a cold app for every run, and processor affinity `0x55`, read back from every akou process in every run. The runs went one at a time, alternating diarizers, each started with no Actions runner process on the box.
+
+Each run now also records what the earlier ones could not say:
+
+- per line, the Worker's own decode time, the re-decodes of the open segment before it, and how far behind the captured audio the Worker was when it started;
+- about every 1.2 s, the CPU of all logical CPUs, of each of the four pinned ones, and of the processes by group (akou, the sampler, Windows Defender, Windows services, every other program), with a wall-clock and a monotonic timestamp;
+- the process list with CPU time at the start and the end, the Windows System event log inside the run, and any step of the wall clock against the monotonic one.
+
+**The ten runs.** Worst line per channel, the decode time of a line (median, worst), and CPU seconds from the start to the end of the run for akou and for everything else on the box together. The bar is 2.5 s after the first 10 s.
+
+| Run | Mic, every line | Call, every line | Mic, after the first 10 s | Call, after the first 10 s | Lines over the bar after the first 10 s | Decode of a line | CPU: akou, everything else |
+|---|---|---|---|---|---|---|---|
+| x64, Nemotron, run 1 | 2.24 s | 2.07 s | 1.74 s | 2.07 s | 0 of 20 | 407 ms, 718 ms | 214 s, 32 s |
+| x64, Nemotron, run 2 | 1.91 s | 2.05 s | 1.73 s | 2.05 s | 0 of 20 | 396 ms, 662 ms | 218 s, 27 s |
+| x64, Nemotron, run 3 | 1.85 s | 1.96 s | 1.74 s | 1.96 s | 0 of 20 | 397 ms, 808 ms | 216 s, 25 s |
+| x64, Nemotron, run 4 | 1.78 s | 1.90 s | 1.68 s | 1.90 s | 0 of 20 | 366 ms, 698 ms | 213 s, 27 s |
+| x64, Nemotron, run 5 | 1.79 s | 1.82 s | 1.67 s | 1.82 s | 0 of 20 | 369 ms, 657 ms | 214 s, 29 s |
+| x64, embeddings, run 1 | 1.88 s | 1.75 s | 1.73 s | 1.69 s | 0 of 20 | 363 ms, 431 ms | 182 s, 27 s |
+| x64, embeddings, run 2 | 1.80 s | 1.78 s | 1.73 s | 1.68 s | 0 of 20 | 368 ms, 440 ms | 182 s, 27 s |
+| x64, embeddings, run 3 | 1.76 s | 1.74 s | 1.71 s | 1.68 s | 0 of 20 | 363 ms, 417 ms | 181 s, 25 s |
+| x64, embeddings, run 4 | 1.75 s | 1.70 s | 1.69 s | 1.65 s | 0 of 20 | 356 ms, 419 ms | 179 s, 24 s |
+| x64, embeddings, run 5 | 1.77 s | 1.69 s | 1.70 s | 1.68 s | 0 of 20 | 362 ms, 426 ms | 180 s, 24 s |
+
+- All ten runs committed 24 of 24 lines, wrote no `asr.lag`, saw no clock step and had no event in the System log.
+- After the first 10 s every line is within the bar: 1.74 s at worst on the mic and 2.07 s on the call. The cold-start lines are 1.26 to 2.24 s, so the cold-start rule changes nothing here either.
+- The time goes to the recognizer, not to a wait. A line's own decode takes 356 to 407 ms at the median and 808 ms at worst, and the provisional re-decodes of its open segment took 0.5 to 2.0 s before it. akou's processes used 179 to 218 s of CPU per run and everything else on the box 24 to 32 s, of which the sampler is 7 to 8 s. Windows Defender used 7 s in the first Nemotron run and under 2 s in every other.
+
+**The stalled run of 2026-10-09 was the box's clock, not akou.** That run is embeddings run 1 in [g6-after-hold-x64.json](g6-after-hold-x64.json): from the line whose speech ended at 16.98 s, all 18 lines read 3.77 to 4.32 s. What the record shows:
+
+- The Windows System event log has the cause. At 09:41:48.417 UTC that day the Windows Time service stepped the system clock forward by 2,572 ms. The call had started at 09:41:30.740 UTC, so the step fell 17.68 s into it: after the sixth line was committed and before the seventh.
+- The gate reads a line's latency off the wall clock, as the commit time of the `seg` event minus the wall time the speech ended. A clock stepped forward mid-call adds the step to every line committed after it. The recognizer does not slow down.
+- With the 2,572 ms taken off, those 18 lines are 1.20 to 1.74 s, and every line of the run is within 78 ms of the mean of the same clip in embeddings runs 2 and 3.
+- The sync is daily: the day before, the same service stepped the clock by 4,099 ms at 09:41:46 UTC. On 2026-10-10 we started an eleventh run so that the sync fell inside it. The clock stepped by 2,572 ms again, about 35 s into the call: the gate script saw 2,571 ms, the sampler 2,575 ms. The 15 lines before the step are within 1.84 s. The 9 lines after it read 3.74 to 4.16 s, which is 1.17 to 1.59 s without the step, and their own decodes took 294 to 405 ms against 345 to 429 ms before it. So the stall is reproduced, as a clock step with the recognizer at its usual speed.
+- No Actions job overlapped the old run. The box's two runner folders have no log folder, their work folders were last written in July 2026, and no runner process was running.
+
+The old run stays in its file and in the table above. From its seventh line on it measures the clock step, not akou's latency, so it does not count against the line clause. Since #382 the gate script lists every clock step it sees in `clockSteps`, and a run with one is not a measurement. `behindMs` is read off the same wall clock, so it jumps by the step too.
+
+**Clause by clause, with the series.**
+
+| Clause | Measured | Met |
+|---|---|---|
+| Real-time factor under 0.25 on an M-series Mac | 0.107, twice, both channels ([g6-offline-fp32.json](g6-offline-fp32.json)) | Yes |
+| Real-time factor under 0.5 on four x64 cores | 0.250 and 0.249, both channels ([g6-x64.json](g6-x64.json)) | Yes |
+| Line within 1.5 s on the M-series Mac, after the cold start, in every run | 1.25 s at worst over eight runs | Yes |
+| Line within 2.5 s on four x64 cores, after the cold start, in every run | 2.07 s at worst over the ten runs of 2026-10-10, and 2.27 s over the five runs of 2026-10-09 that measured akou. The sixth measured a clock step | Yes |
+
+**Verdict: pass.** All four clauses are met. The x64 line clause holds in every run that measured akou: 15 of 15, 2.27 s at worst. The one run that read late has a cause on record that is not akou, with its timestamps, and the same cause was reproduced with the recognizer's own decode times beside it.
+
+**Still open, and not gating.**
+
+- The first lines after a cold start can be late ([#378](https://github.com/GeiserX/akou/issues/378)).
+- On four x64 cores a line takes up to 2.07 s after the first 10 s, because the recognizer is busy for all of it ([#379](https://github.com/GeiserX/akou/issues/379)). The speaker of a call line lands up to 4.45 s after the speech with Nemotron.
+- Vocabulary, for M1: "akou" and "pyannote" are still misheard, as above.
 
 ## G7: harness provider
 
