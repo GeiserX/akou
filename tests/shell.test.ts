@@ -16,7 +16,7 @@ import config, {
   transcribeCppCopies,
 } from "../electrobun.config.ts";
 import { ICONSET, ICONSET_FILES } from "../scripts/app-icon.ts";
-import { MIN_MACOS } from "../scripts/build-app.ts";
+import { MIN_MACOS, WRAPPER_AUTOCLOSE } from "../scripts/build-app.ts";
 import { trayIconFiles } from "../scripts/tray-icons.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
@@ -820,6 +820,48 @@ describe("the ElectroBun build", () => {
     // Without a CFBundleVersion there is no version to show: the patch refuses.
     writeFileSync(plist, `${head}</dict></plist>\n`);
     expect(spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), plist]).status).toBe(70);
+    t.cleanup();
+  });
+
+  test("[T3.6] the release wrapper is told to exit once it has opened the unpacked app; the app itself is not", () => {
+    // The variable's name is written once in the script and once in the build, and they agree.
+    const script = readFileSync(join(ROOT, "scripts", "patch-plist.sh"), "utf8");
+    expect(script).toContain(`'{"${WRAPPER_AUTOCLOSE}":"1"}'`);
+    expect(readFileSync(join(ROOT, "scripts", "post-wrap.ts"), "utf8")).toContain(
+      '[script, bundle, "wrapper"]',
+    );
+    expect(readFileSync(join(ROOT, "scripts", "post-build.ts"), "utf8")).not.toContain('"wrapper"');
+    if (process.platform !== "darwin") {
+      console.log(
+        "patch-plist: skipped, plutil exists on macOS only; the release job runs it there",
+      );
+      return;
+    }
+    const t = tempDir();
+    const plist = join(t.dir, "Info.plist");
+    const write = () =>
+      writeFileSync(
+        plist,
+        `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string><key>CFBundleVersion</key><string>1.2.3</string></dict></plist>\n`,
+      );
+    const value = () => {
+      const r = spawnSync("/usr/bin/plutil", [
+        "-extract",
+        `LSEnvironment.${WRAPPER_AUTOCLOSE}`,
+        "raw",
+        plist,
+      ]);
+      return r.status === 0 ? r.stdout.toString().trim() : null;
+    };
+    // Positive control: the unpacked app's own plist, patched without the word, has no such key.
+    write();
+    expect(spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), plist]).status).toBe(0);
+    expect(value()).toBeNull();
+    write();
+    expect(
+      spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), plist, "wrapper"]).status,
+    ).toBe(0);
+    expect(value()).toBe("1");
     t.cleanup();
   });
 });

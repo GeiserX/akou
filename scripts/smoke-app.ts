@@ -57,6 +57,7 @@ import {
   RELEASE_DIR,
   releaseName,
   WRAPPER_APP,
+  WRAPPER_AUTOCLOSE,
 } from "./build-app.ts";
 import { sourceVersion } from "./stamp-version.ts";
 
@@ -459,6 +460,25 @@ async function main(argv: string[]): Promise<void> {
 
     // The wrapper.
     checkPlist(WRAPPER_APP, "wrapper", version);
+    // It must exit once it has opened the unpacked app (TRAPS "Minutes to start"): the variable
+    // is in its Info.plist, and its launcher is still a program that reads it.
+    check(
+      plistValue(
+        join(WRAPPER_APP, "Contents", "Info.plist"),
+        `LSEnvironment.${WRAPPER_AUTOCLOSE}`,
+      ) === "1",
+      `wrapper Info.plist LSEnvironment ${WRAPPER_AUTOCLOSE} is 1`,
+    );
+    const reads = readFileSync(join(WRAPPER_APP, "Contents", "MacOS", "launcher")).includes(
+      WRAPPER_AUTOCLOSE,
+    );
+    check(
+      reads,
+      `wrapper launcher reads ${WRAPPER_AUTOCLOSE}`,
+      reads
+        ? ""
+        : "this ElectroBun's wrapper has no such variable: find how it exits after its first open",
+    );
     checkSignature(WRAPPER_APP, "wrapper");
   } else {
     // The installer, and the launcher the installed app starts from.

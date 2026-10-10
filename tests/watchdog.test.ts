@@ -6,17 +6,18 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
-import { relaunchCommand } from "../src/main/watchdog.ts";
+import { appBundle, relaunchCommand } from "../src/main/watchdog.ts";
 import { tempDir } from "./helpers.ts";
 
 const APP = join(import.meta.dir, "fixtures", "watchdog-app.ts");
 const LONG = 60_000;
 const SILENCE = 1500;
 
-async function run(flags: string[], dir?: string) {
+async function run(flags: string[], dir?: string, env?: Record<string, string | undefined>) {
   const t = dir ? { dir, cleanup: () => {} } : tempDir("akou-wd-");
   const log = join(t.dir, "app.log");
   const hangs = join(t.dir, "hangs");
@@ -25,6 +26,7 @@ async function run(flags: string[], dir?: string) {
     {
       stdout: "pipe",
       stderr: "inherit",
+      ...(env ? { env } : {}),
     },
   );
   const reader = proc.stdout.getReader();
@@ -179,17 +181,19 @@ describe("[DK-M8] the watchdog inside the app", () => {
       try {
         const first = await run(["--block", "30000", "--window", "--reopen", marker], t.dir);
         expect(await first.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
-        const deadline = performance.now() + 5000;
-        while (!existsSync(marker) && performance.now() < deadline) await Bun.sleep(50);
-        expect(readFileSync(marker, "utf8")).toBe("x");
         expect(first.log()).toContain(
           "info watchdog: opening akou again, because its window was open",
         );
+        // Nothing here answers as an app, so the reopen opens it a second time, then gives up.
+        expect(await waitFor(first.log, "did not come up after being opened twice", 10_000)).toBe(
+          true,
+        );
+        expect(readFileSync(marker, "utf8")).toBe("xx");
         // The reopened app hangs too: it is ended, and not opened again.
         const second = await run(["--block", "30000", "--window", "--reopen", marker], t.dir);
         expect(await second.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
-        await Bun.sleep(1000);
-        expect(readFileSync(marker, "utf8")).toBe("x");
+        await Bun.sleep(3000);
+        expect(readFileSync(marker, "utf8")).toBe("xx");
         expect(second.log()).toMatch(
           /warn watchdog: not opening akou again: it was reopened \d+ min ago/,
         );
@@ -219,13 +223,17 @@ describe("[DK-M8] the watchdog inside the app", () => {
   );
 
   test("the app is opened again through its bundle on macOS, and not at all elsewhere", () => {
+    // `-n`: a launcher left with no app must not make `open` start nothing (TRAPS "Minutes to start").
     expect(relaunchCommand("/Applications/akou.app/Contents/MacOS/bun", "darwin")).toEqual([
-      "/bin/sh",
-      "-c",
-      'sleep 1; exec /usr/bin/open -a "$1"',
-      "sh",
+      "/usr/bin/open",
+      "-n",
+      "-a",
       "/Applications/akou.app",
     ]);
+    expect(appBundle("/Applications/akou.app/Contents/MacOS/bun", "darwin")).toBe(
+      "/Applications/akou.app",
+    );
+    expect(appBundle("/usr/local/bin/bun", "darwin")).toBeNull();
     // The headless app the CLI starts from source, and other systems: the next command starts it.
     expect(relaunchCommand("/usr/local/bin/bun", "darwin")).toBeNull();
     expect(relaunchCommand("/Applications/akou.app/Contents/MacOS/bun", "linux")).toBeNull();
@@ -286,3 +294,249 @@ describe("[DK-M8] the watchdog inside the app", () => {
     LONG,
   );
 });
+
+const FAKE_BUNDLE = join(import.meta.dir, "fixtures", "fake-bundle.ts");
+
+/** A fake unpacked bundle in `dir`, whose launcher is this Bun, and what the reopen tests share. */
+function fakeBundle(dir: string) {
+  const bundle = join(dir, "akou.app");
+  const launcher = join(bundle, "Contents", "MacOS", "launcher");
+  mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+  symlinkSync(process.execPath, launcher);
+  const pids = join(dir, "pids.txt");
+  const runtime = join(dir, ".config", "akou", "runtime.json");
+  const env = { ...process.env, AKOU_HOME: dir };
+  /** A process run as the bundle's launcher in a role of the fixture. */
+  const as = (role: string, ...more: string[]) =>
+    spawn(launcher, [FAKE_BUNDLE, role, "-a", bundle, "--pids", pids, ...more], {
+      stdio: "ignore",
+      env,
+    });
+  /**
+   * The wrapper as the real one is left: idle, with one child that exited and that it never
+   * reaps (the `open` it ran). The shell starts that child, then becomes the launcher.
+   */
+  const leftWrapper = () =>
+    spawn(
+      "/bin/sh",
+      ["-c", 'true & exec "$0" "$@"', launcher, FAKE_BUNDLE, "stray", "-a", bundle, "--pids", pids],
+      { stdio: "ignore", env },
+    );
+  /** The children of `pid` that exited unreaped, as `ps` lists them. */
+  const unreaped = (pid: number) =>
+    spawnSync("ps", ["-A", "-o", "ppid=,args="], { encoding: "utf8" })
+      .stdout.split("\n")
+      .filter((l) => l.trim().startsWith(`${pid} `) && l.includes("<defunct>")).length;
+  /** `open` on the unpacked bundle, as LaunchServices answers it; `flags` go before `-a`. */
+  const open = (...flags: string[]) => [
+    process.execPath,
+    FAKE_BUNDLE,
+    "open",
+    "--installed",
+    ...flags,
+    "-a",
+    bundle,
+    "--pids",
+    pids,
+    "--delay",
+    "200",
+  ];
+  /** The pid of the app that says it is up in `runtime.json`, once it does; 0 after `ms`. */
+  const appUp = async (ms: number) => {
+    const until = performance.now() + ms;
+    while (performance.now() < until) {
+      try {
+        const rt = JSON.parse(readFileSync(runtime, "utf8")) as { pid: number };
+        if (processAlive(rt.pid)) return rt.pid;
+      } catch {}
+      await Bun.sleep(100);
+    }
+    return 0;
+  };
+  const cleanup = (...more: number[]) => {
+    const all = [...more];
+    if (existsSync(pids)) {
+      for (const l of readFileSync(pids, "utf8").trim().split("\n"))
+        all.push(Number(l.split(" ")[1]));
+    }
+    // Never pid 0: that signals this process group, the test runner included.
+    for (const pid of all.filter((p) => p > 0)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+  };
+  return { bundle, launcher, pids, runtime, env, as, leftWrapper, unreaped, open, appUp, cleanup };
+}
+
+/** Waits until `text()` holds `what`, at most `ms`. */
+async function waitFor(text: () => string, what: string | RegExp, ms: number): Promise<boolean> {
+  const until = performance.now() + ms;
+  const has = () => (typeof what === "string" ? text().includes(what) : what.test(text()));
+  while (!has() && performance.now() < until) await Bun.sleep(100);
+  return has();
+}
+
+describe.skipIf(process.platform === "win32")(
+  "[DK-M8] [T3.6] the watchdog's reopen with a launcher left behind (no ps on Windows)",
+  () => {
+    test(
+      "a launcher with nothing below it is stopped, the app comes up, and app.log says both",
+      async () => {
+        const t = tempDir("akou-wd-");
+        const b = fakeBundle(t.dir);
+        const stray = b.leftWrapper();
+        // These two look like it and are not it: a launcher of another bundle whose path starts
+        // the same, and a process that only names the launcher.
+        mkdirSync(join(`${b.bundle}2`, "Contents", "MacOS"), { recursive: true });
+        symlinkSync(process.execPath, join(`${b.bundle}2`, "Contents", "MacOS", "launcher"));
+        const other = spawn(
+          join(`${b.bundle}2`, "Contents", "MacOS", "launcher"),
+          ["-e", "setInterval(() => {}, 1000)"],
+          { stdio: "ignore" },
+        );
+        const names = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", b.launcher], {
+          stdio: "ignore",
+        });
+        const kept = [other.pid, names.pid] as number[];
+        let r: Awaited<ReturnType<typeof run>> | null = null;
+        try {
+          // As the real wrapper, it has a child that exited and was never reaped.
+          await Bun.sleep(500);
+          expect(b.unreaped(stray.pid as number)).toBe(1);
+          // `open` with no `-n`, which starts nothing while the stray is alive: the app comes up
+          // only because the stray was stopped first.
+          r = await run(
+            [
+              "--block",
+              "30000",
+              "--window",
+              "--open",
+              JSON.stringify(b.open()),
+              "--runtime",
+              b.runtime,
+              "--reopen-wait",
+              "8000",
+            ],
+            t.dir,
+            b.env,
+          );
+          expect(await r.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+          const app = await b.appUp(15_000);
+          expect(app).toBeGreaterThan(0);
+          expect(processAlive(stray.pid as number)).toBe(false);
+          for (const pid of kept) expect(processAlive(pid)).toBe(true);
+          expect(await waitFor(r.log, `info watchdog: akou is open again (pid ${app})`, 5000)).toBe(
+            true,
+          );
+          expect(r.log()).toContain(
+            `warn watchdog: stopped a launcher of akou left with nothing below (pid ${stray.pid}), which open would have taken for the running app`,
+          );
+          expect(r.log()).not.toContain("did not answer");
+        } finally {
+          b.cleanup(stray.pid as number, ...kept);
+          r?.cleanup();
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+
+    test(
+      "a launcher whose app still runs is not stopped, and the watchdog's own open -n starts the app beside it",
+      async () => {
+        const t = tempDir("akou-wd-");
+        const b = fakeBundle(t.dir);
+        const stray = b.as("stray");
+        const busy = b.as("stray", "--with-child");
+        let r: Awaited<ReturnType<typeof run>> | null = null;
+        try {
+          r = await run(
+            [
+              "--block",
+              "30000",
+              "--window",
+              "--open",
+              JSON.stringify(b.open("-n")),
+              "--runtime",
+              b.runtime,
+              "--reopen-wait",
+              "8000",
+            ],
+            t.dir,
+            b.env,
+          );
+          expect(await r.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+          expect(await b.appUp(15_000)).toBeGreaterThan(0);
+          expect(processAlive(stray.pid as number)).toBe(false);
+          expect(processAlive(busy.pid as number)).toBe(true);
+        } finally {
+          b.cleanup(stray.pid as number, busy.pid as number);
+          r?.cleanup();
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+
+    test(
+      "positive control: the same open, with the launcher still there and nothing stopping it, starts nothing",
+      async () => {
+        const t = tempDir("akou-wd-");
+        const b = fakeBundle(t.dir);
+        const stray = b.as("stray");
+        try {
+          await Bun.sleep(300);
+          const open = b.open();
+          // What the watchdog ran before: `open -a` on the bundle, and nothing after it.
+          spawnSync(open[0] as string, open.slice(1), { env: b.env });
+          expect(await b.appUp(3000)).toBe(0);
+          expect(processAlive(stray.pid as number)).toBe(true);
+          // With `-n`, as the watchdog's own command has it, the same open starts the app.
+          const anew = b.open("-n");
+          spawnSync(anew[0] as string, anew.slice(1), { env: b.env });
+          expect(await b.appUp(10_000)).toBeGreaterThan(0);
+        } finally {
+          b.cleanup(stray.pid as number);
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+
+    test(
+      "an app that never comes up is opened once more, and app.log says it did not come up",
+      async () => {
+        const t = tempDir("akou-wd-");
+        const b = fakeBundle(t.dir);
+        const marker = join(t.dir, "opens.marker");
+        let r: Awaited<ReturnType<typeof run>> | null = null;
+        try {
+          r = await run(
+            ["--block", "30000", "--window", "--reopen", marker, "--runtime", b.runtime],
+            t.dir,
+            b.env,
+          );
+          expect(await r.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+          expect(
+            await waitFor(
+              r.log,
+              "error watchdog: akou did not come up after being opened twice (exit code 0); open it by hand, or run any akou command",
+              15_000,
+            ),
+          ).toBe(true);
+          expect(r.log()).toContain(
+            "warn watchdog: akou did not answer within 0.3 s of being opened again (exit code 0); opening it once more",
+          );
+          expect(readFileSync(marker, "utf8")).toBe("xx");
+          expect(r.log()).not.toContain("akou is open again");
+        } finally {
+          b.cleanup();
+          r?.cleanup();
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
+  },
+);

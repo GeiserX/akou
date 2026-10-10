@@ -81,6 +81,14 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Fix.** Run the harness once in a terminal (`claude` or `codex`) to see whether it is logged in and within its limits, set `provider.harnessPath` if it is installed somewhere akou does not look, or pick another assistant on the Settings page. See [Providers](providers.md).
 
+## An answer takes several seconds to start
+
+**What you see.** After you ask a question, the matching lines of the call appear at once, and the written answer starts 3 to 10 s later.
+
+**Why.** With Claude Code or Codex as the provider, akou starts the harness anew for every question, and the harness loads your own setup each time: skills, commands, hooks, plugins and your user-level instruction file. In our runs the first word of the answer came 2.7 to 10.4 s after the question through Claude Code and 5.3 s through Codex, and most of that was the harness starting. We have not measured it with a long instruction file. This is a known limitation ([#383](https://github.com/GeiserX/akou/issues/383)).
+
+**Fix.** None needed for the answer to arrive. A hosted or local provider starts no harness, so it does not have this wait ([providers.md](providers.md)).
+
 ## The server refuses to start with exit 78
 
 **Why.** Inside a container, and with `akou serve`, akou listens on every address by default, and it refuses to do that until you say a reverse proxy with TLS is in front of it, because akou has no TLS of its own.
