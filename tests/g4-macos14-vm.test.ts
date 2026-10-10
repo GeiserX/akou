@@ -1,6 +1,6 @@
 /**
- * ROADMAP G4's macOS 14.3 run (scripts/gates/g4-macos14-vm.sh) against stand-ins: `tart` boots
- * nothing, the "guest" is this machine reached through a fake `sshpass` with its own `sw_vers`,
+ * The macOS 14.3 run, the clause ROADMAP G4 had until 2026-10-10 (scripts/gates/g4-macos14-vm.sh),
+ * against stand-ins: `tart` boots nothing, the "guest" is this machine reached through a fake `sshpass` with its own `sw_vers`,
  * `afplay` and `open`, the helper writes a file and exits with the code it is given, and `ffmpeg`
  * reports a loud call channel for a tone recording the helper really heard, and silence otherwise.
  * The verdict must refuse a guest that is not 14.3, a helper that exits non-zero and a recording

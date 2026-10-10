@@ -51,6 +51,30 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Fix.** Open the line's menu, choose **Fix this line…**, change what akou got wrong and press Enter. A name or term is fixed on every line of the call at once, and learned for the workspace too; other words are fixed on that line only. After the call, the accurate final pass runs on the whole recording. To prepare names before a call, see [The vocabulary is the one thing that carries over](knowledge-handoff.md#the-vocabulary-is-the-one-thing-that-carries-over).
 
+## The first lines of a call show up late
+
+**What you see.** Right after a call starts, the first one to three lines of the live transcript appear a few seconds after the words were said. Later lines appear about a second after each sentence ends.
+
+**Why.** When akou was not already warm, the recognizer does its first work on the first sentences. In our runs on a Mac mini M4 this happened in three of eight cold starts: lines spoken in the first 10 s of the call took 1.5 to 5.8 s, and every later line took under 1.3 s. This is a known limitation ([#378](https://github.com/GeiserX/akou/issues/378)).
+
+**Fix.** None needed. No words are lost: the audio is recorded from the start, the late lines do arrive, and the final pass after the call transcribes the whole recording.
+
+## The two sides of a long recording slip out of step
+
+**What you see.** In a recording of an hour or more made with a USB microphone or a USB audio interface, your side and the other side are out of step near the end: people seem to talk over each other where they did not, or a pause between them is longer than it was.
+
+**Why.** A USB microphone has its own clock, and the system audio follows the Mac's. akou corrects the difference between the two as it records. We measured that with both sides on the Mac's clock, where they stayed within 0.03 ms of each other over an hour. We have not measured it with two separate device clocks, so this is a known limitation and not a guarantee ([the gate's record](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
+
+**Fix.** There is none to apply yourself. Please [report it](#reporting-a-bug) with the microphone's make and model, the macOS version and the length of the recording.
+
+## About a second of the other side is missing mid-call
+
+**What you see.** In the middle of a recording, about 1 to 1.5 s of the other side's audio is silent, and the words said then are not in the transcript. Your own side is whole.
+
+**Why.** macOS sometimes stops delivering system audio to akou while the call is still playing. akou notices after 1 s, reopens the system audio and carries on. What was said in that second is not recorded. This is a known limitation: akou shortens the loss, it cannot prevent it ([the gate's record](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
+
+**Fix.** None needed for the rest of the call. If it happens often, or the silence is much longer than a second, please [report it](#reporting-a-bug) with the macOS version and the output device.
+
 ## Ask says the provider cannot answer
 
 **Why.** akou says why and shows the excerpts it found instead: the program is missing (Claude Code or Codex not installed or not on your `PATH`), a usage limit is reached, you are logged out, or no answer came within `provider.timeoutSeconds` (60 s by default). It never queues or retries the request quietly.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ROADMAP G4, the macOS 14.2 or 14.3 clause, in a tart VM on an Apple silicon Mac: does the
-# process tap the capture helper records the call with deliver audio on macOS 14.3? The answer
-# decides whether the 14.4 floor (`MIN_MACOS` in scripts/build-app.ts) can drop.
+# The macOS 14.2 or 14.3 run, the clause ROADMAP G4 had until 2026-10-10, in a tart VM on an
+# Apple silicon Mac: does the process tap the capture helper records the call with deliver audio
+# on macOS 14.3? The answer decides whether the 14.4 floor (`MIN_MACOS` in scripts/build-app.ts) can drop.
 #
 #   TART_HOME=<folder on a disk with 60 GB free> scripts/gates/g4-macos14-vm.sh <akou-capture> [out folder]
 #

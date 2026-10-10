@@ -22,7 +22,7 @@ Traps that belong to the user's own downstream pipelines (archive formats, word-
 - **Capture priority under load** [T3.8] (M1). Given a fully loaded CPU, the audio file must have no gaps; the transcript may lag and must say so. Test: the soak with a CPU burner at 100 % on every core; assert the file duration matches wall time within 100 ms and an `asr.lag` event appears.
 - **Wake from sleep** [spike, ElectroBun #550] (M1). Given the machine sleeps mid-call, akou must hold a keep-awake assertion while recording, and if it sleeps anyway, write a `gap` event on wake, keep wall times correct, and keep the recording running even if the window froze. Test: a monotonic-clock jump injected into a fake helper.
 - **Aggregate device leaks** [I0.14]. Given a killed helper, no `akou-capture` or `akou-probe` aggregate device may remain. Test (not written yet): enumerate devices after a kill. Today the aggregate is private, so it goes away with the helper's process.
-- **Drift between two clocks** [T4.33, F0.28] (M0). Given 60 minutes of recording with a 1.5 kHz ping every 10 s heard by both channels, the left-right offset must stay under 200 ms per hour and gaps under 20 ms. Test (on hardware): `scripts/drift-test.ts` on real devices.
+- **Drift between two clocks** [T4.33, F0.28] (M0). Given 60 minutes of recording with a 1.5 kHz ping every 10 s heard by both channels, the left-right offset must stay under 200 ms per hour and gaps under 20 ms. Test (on hardware): `scripts/drift-test.ts` on real devices. On record since 2026-10-08 with both channels on the host clock (ROADMAP G4: 0.01 ms per hour); two independent device clocks are not measured, a known limitation ([M0 results](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
 
 ## Transcription
 
