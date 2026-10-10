@@ -67,6 +67,14 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Fix.** There is none to apply yourself. Please [report it](#reporting-a-bug) with the microphone's make and model, the macOS version and the length of the recording.
 
+## About a second of the other side is missing mid-call
+
+**What you see.** In the middle of a recording, about 1 to 1.5 s of the other side's audio is silent, and the words said then are not in the transcript. Your own side is whole.
+
+**Why.** macOS sometimes stops delivering system audio to akou while the call is still playing. akou notices after 1 s, reopens the system audio and carries on. What was said in that second is not recorded. This is a known limitation: akou shortens the loss, it cannot prevent it ([the gate's record](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
+
+**Fix.** None needed for the rest of the call. If it happens often, or the silence is much longer than a second, please [report it](#reporting-a-bug) with the macOS version and the output device.
+
 ## Ask says the provider cannot answer
 
 **Why.** akou says why and shows the excerpts it found instead: the program is missing (Claude Code or Codex not installed or not on your `PATH`), a usage limit is reached, you are logged out, or no answer came within `provider.timeoutSeconds` (60 s by default). It never queues or retries the request quietly.

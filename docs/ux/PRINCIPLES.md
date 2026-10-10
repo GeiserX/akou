@@ -113,7 +113,7 @@ Other tools keep your meetings in their cloud and sell search over them. akou re
 
 | Bar | Target |
 |---|---|
-| Committed live line | Within 1.5 s of the end of the utterance |
+| Committed live line | Within 1.5 s of the end of the utterance on Apple silicon, within 2.5 s on 4-core x64; the first lines after a cold start can be later ([#378](https://github.com/GeiserX/akou/issues/378)) |
 | Recognizer speed | Real-time factor under 0.25 on Apple silicon, under 0.5 on a 4-core x64 laptop, for the default live and final engines only |
 | Context pack | p95 under 50 ms on a 3-hour call; evidence cards under 300 ms |
 | Start | 201 within 1 s warm, 3 s cold |
