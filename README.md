@@ -31,7 +31,7 @@ akou is a desktop app for macOS that records your calls on your own computer, tr
 ## Quick start
 
 ```sh
-# Download akou-0.6.5-macos-arm64.dmg from https://github.com/GeiserX/akou/releases and drag akou into Applications.
+# Download akou-1.0.0-macos-arm64.dmg from https://github.com/GeiserX/akou/releases and drag akou into Applications.
 open -a akou
 ```
 
@@ -39,7 +39,7 @@ The first window asks what you will use akou for and downloads the speech models
 
 ## Status
 
-The 0.x releases are prereleases: macOS on Apple silicon only, signed with a Developer ID and notarized since 0.6.1. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
+1.0.0 is the first stable release. The 0.x releases were prereleases. The app runs on macOS on Apple silicon only, signed with a Developer ID and notarized since 0.6.1. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
 
 ## Documentation
 

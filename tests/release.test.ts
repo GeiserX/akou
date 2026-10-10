@@ -83,6 +83,26 @@ function repoCopy(): { dir: string; cleanup(): void } {
     join(t.dir, "native", "akou-capture", "Cargo.lock"),
     `version = 4\n\n[[package]]\nname = "akou-capture"\nversion = "${pkg.version}"\ndependencies = [\n "ogg",\n]\n\n[[package]]\nname = "ogg"\nversion = "0.9.2"\n`,
   );
+  // A stable version also needs its evidence (CI-28), which tests/release-evidence.test.ts covers.
+  // Here it is on record, so these tests see drift and the changelog alone: a dated terms row,
+  // every gate a plain Pass, and a git repository with no tag, which reads as the first stable
+  // release.
+  writeFileSync(
+    join(t.dir, "docs", "providers.md"),
+    "| Date checked | Anthropic | OpenAI | Change made |\n|---|---|---|---|\n| 2026-10-10 | ok | ok | none |\n",
+  );
+  mkdirSync(join(t.dir, "docs", "gates"), { recursive: true });
+  writeFileSync(
+    join(t.dir, "docs", "gates", "M0-results.md"),
+    `## Summary\n\n| Gate | Verdict |\n|---|---|\n${[1, 2, 3, 4, 5, 6, 7, 8].map((g) => `| G${g} | Pass |`).join("\n")}\n`,
+  );
+  // The user's git settings never reach this scratch repository (as in release-evidence.test.ts).
+  const empty = join(t.dir, "empty.gitconfig");
+  writeFileSync(empty, "");
+  const init = Bun.spawnSync(["git", "-C", t.dir, "init", "-q"], {
+    env: { ...process.env, GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  if (init.exitCode !== 0) throw new Error(`git init: ${init.stderr.toString()}`);
   return t;
 }
 

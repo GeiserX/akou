@@ -1,6 +1,35 @@
 # Changelog
 
-All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
+All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
+
+## 1.0.0 — the first stable release, with every M0 gate passed on what we can measure
+
+1.0.0 is the first stable release of akou. All eight M0 gates pass under the criteria recorded in [docs/gates/M0-results.md](docs/gates/M0-results.md): the window, tray, hotkey and login item on macOS, Windows and Linux (G1), recognition in a Worker of the packaged app on all three (G2), macOS permissions that name akou and survive an update (G3), the system audio and a separate microphone for an hour on a real Mac (G4), recovery from a hung or crashed capture helper (G5), live lines in time on an M-series Mac and on four x64 cores (G6), answers through Claude Code and Codex inside the packaged app (G7), and `akou start` within 3 s from cold (G8). We release with the guarantees we measured, and we write down what we could not guarantee instead of holding the release for it: drift between two separate device clocks is not measured, the first lines after a cold start can be late (#378), a line on four x64 cores can take about 2 s because the recognizer is busy for all of it (#379), and an answer through Claude Code can take about 10 s to start (#383). Since 0.6.5, akou also comes back when the watchdog ends a hung app, and a server with a large job history keeps answering its API.
+
+From 1.0.0 on, a release is a full release. Only a version with a prerelease part, such as 1.1.0-rc.1, is published as a prerelease.
+
+### Staying up
+- **akou comes back after the watchdog ends a hung app.** The watchdog ended a hung 0.6.5 and opened akou again, and nothing came up for eight hours. A launcher left over from the install, waiting on its "Installation complete" panel, took the open instead of a new app. The installer's launcher now exits after the first open, the watchdog's reopen stops leftover launchers, waits for the new app to answer and tries once more, and the app stops leftover launchers of its own bundle when it starts, which also clears those left by 0.6.5 and older (#384).
+- **Every hang leaves a sample or the reason there is none.** The watchdog gave `sample` 5 s and waited on it, so under load it ended the app with nothing in the hangs folder. The sample now runs beside the watchdog for up to 20 s, the log says where the file is and where the main thread was, or why there is no sample, and a second line gives the load average and how late the watchdog's own ticks ran. A thread that answers before the sample is done is no longer ended (#385).
+
+### Server
+- **The API keeps answering when `jobs.db` is large and the disk is busy.** A server with a 424 MB `jobs.db` stopped answering `/healthz` for minutes, twice in three days, so its remotes saw it as down and the queue stood still. The start and the hourly retention sweep read both tables whole on the thread that answers requests. Four indexes now serve those reads, retention removes at most 200 jobs or 50 ms of work per go, and an older file is read once in order off that thread before the API listens. On a copy of that file every start held the thread for 6.0 to 9.3 s. Now the first start builds the indexes in 0.12 s and later starts take 75 ms (#377).
+
+### Behind the scenes
+- G4, G6 and G7 pass, so every gate from G1 to G8 is now a plain Pass. We now judge G4 and G6 on what we can measure. G4 is measured against the host clock with the macOS floor kept at 14.4, and G6 has a 2.5 s line bar on four x64 cores for lines after the first 10 s of a cold call. The old wording, the new one and the reasons are in a dated section per gate (#381). G7 passed when claude and codex both answered in the signed 0.6.5 (#380). G6 passed on ten more x64 runs, every one inside the bar, and the one late run of 2026-10-09 was the Windows Time service stepping the box's clock forward by 2,572 ms mid-call, not akou (#382, #386).
+- `AKOU_LINE_TIMING=1` logs each live line's decode time, and the G6 script records any step of the wall clock during a run, so a late line can be explained (#382).
+- CI pulls its base images from `mirror.gcr.io`, so Docker Hub's pull limit on shared runner addresses no longer fails every image job (#375).
+- The recognizer library transcribe-cpp moves to 0.3.1 and the MCP SDK to 2.3.1 (#368). The native helpers take libc 0.2.190, objc2 0.6.5, rubato 5.0.1 and wasapi 0.25.0, with NOTICE in step (#376).
+- We read the current terms of Anthropic and OpenAI again for this release. Anthropic's new Usage Policy, effective 12 November 2026, forbids routing requests through consumer subscriptions. We read it as aimed at services that sell or share access, not at akou starting your own Claude Code for you. The open question is recorded in [docs/providers.md](docs/providers.md).
+
+### Known limitations
+- **Drift between two separate device clocks is not measured.** With a USB microphone, the microphone and the system audio run on two clocks. akou corrects the difference, but we measured it only with both on the Mac's clock.
+- **A system tap that dies mid-call costs about a second of the other side's audio.** macOS can stop delivering the tap's buffers while audio still plays. The helper rebuilds the tap after 1 s without buffers, and the microphone keeps recording through it.
+- **The first lines after a cold start can be late.** In three of eight runs on a Mac mini M4, lines spoken in the first 10 s of the call took 1.5 to 5.8 s. Every later line took under 1.3 s (#378).
+- **On four x64 cores a line takes up to about 2 s**, inside the 2.5 s bar, because the recognizer is busy for all of it (#379).
+- **An answer through Claude Code can take about 10 s to start**, most of it the harness starting. The first token with a large user-level instruction file is not measured (#383).
+- `akou start` with a leftover launcher and no app still waits 20 s and fails.
+- The other items under 0.6.5's Known limitations still apply.
 
 ## 0.6.5 — a call's lines no longer wait for their speaker, and `akou start` and `akou quit` finish
 

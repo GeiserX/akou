@@ -254,7 +254,7 @@ This is the one first-run flow; [WINDOW.md](WINDOW.md) section 10 draws it. One 
 
 ## 12. Updates
 
-Builds are signed with the Developer ID and notarized since 0.6.1, and every 0.x release is a prerelease. Each release publishes the feed ElectroBun's updater reads ([CI-CD.md](../CI-CD.md) CI-23), but the app does not call the updater yet. An in-place update from an ad-hoc signed build (0.6.0 and older) may cost the permission grants, which makes silent auto-apply a bad default today.
+Builds are signed with the Developer ID and notarized since 0.6.1, the 0.x releases were prereleases, and 1.0.0 is the first stable one. Each release publishes the feed ElectroBun's updater reads ([CI-CD.md](../CI-CD.md) CI-23), but the app does not call the updater yet. An in-place update from an ad-hoc signed build (0.6.0 and older) may cost the permission grants, which makes silent auto-apply a bad default today.
 
 The design has two steps and one mechanism, ElectroBun's `Updater`, fed by the release feed [CI-CD.md](../CI-CD.md) CI-23 publishes. First a notice. With `app.updateCheck` on, akou calls `Updater.checkForUpdate()` once a day and says that a newer version exists, in the tray (a badge and a menu item), in Settings, and in `akou status`. Clicking opens the release page. "Check for updates…" in the tray and the menu runs the same call whenever someone clicks it, because a click is the user asking. Second, once it is proven on hardware, apply in place through the same `Updater`. Never while a call records or a final pass runs. It applies on "Restart to update" or at the next quit, and DK-O4's post-update check follows.
 
