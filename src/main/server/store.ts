@@ -15,10 +15,18 @@
  * Every state change is one transaction. The call event log is never touched, and a job never
  * creates a call folder. The tables use SQLite's row id as their order (`seq`), with no
  * AUTOINCREMENT, which would add a fourth table.
+ *
+ * Every statement runs on the server's one thread, so none may read a whole table: a week of jobs
+ * is hundreds of MB, and read from a cold or busy disk a page at a time that is minutes in which
+ * nothing answers, `/healthz` included. What the start and the hourly sweep ask has its own index
+ * (`HOT_INDEXES`), and the sweep takes its jobs a bounded page at a time (`expired`).
  */
 
-import { Database } from "bun:sqlite";
+import { constants, Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 export const JOBS_DB = "jobs.db";
 
@@ -251,6 +259,72 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS outbox_due ON outbox (state, next_at);
 `;
 
+/**
+ * The indexes behind the statements that would otherwise read a whole table, by name, made after
+ * the columns they name exist on an older file. Each is small: the first and the last hold only
+ * the rows their question is about, and none holds a result.
+ *
+ * - `jobs_upload`: the uploads the rows name (`uploads`, at start): jobs still to run, and kept ones.
+ * - `jobs_expiry`: the jobs retention may remove, oldest first (`expired`, hourly and at start).
+ * - `jobs_key`: one key's jobs, newest first (`list`), which a key with few jobs otherwise pays
+ *   for with every other key's rows.
+ * - `events_cancelled`: the cancelled events that still carry metadata (`scrubCancelled`).
+ */
+export const HOT_INDEXES: Readonly<Record<string, string>> = {
+  jobs_upload: "jobs (coalesce(audio, kept)) WHERE coalesce(audio, kept) IS NOT NULL",
+  jobs_expiry: "jobs (created_at, id) WHERE keep_audio = 0",
+  jobs_key: "jobs (key_id, seq)",
+  events_cancelled:
+    "events (at) WHERE type = 'transcription.cancelled' AND json_extract(data, '$.deleted') IS NULL",
+};
+
+/**
+ * Reads a `jobs.db` that has yet to gain `HOT_INDEXES` once from end to end, off the thread,
+ * before it is opened. Building them reads every row of both tables, a page at a time wherever
+ * the pages lie, and from a cold or busy disk that holds the thread as long as the scans they
+ * replace; read in order, the same file takes seconds, and the build then finds it in the
+ * system's cache. Returns the bytes read: 0 for no file, a new one, or one that has the indexes.
+ */
+export async function warmForIndexes(path: string): Promise<number> {
+  if (!existsSync(path) || statSync(path).size === 0) return 0;
+  try {
+    // Immutable: no WAL recovery, no `-shm`, and no checkpoint at close, which on a writable
+    // connection copies whatever WAL a crash left into the file on this thread (2 s for 110 MB).
+    // An index built in a WAL that was never copied back reads as missing: the file is read once
+    // for nothing, and never the other way round, since no index is ever dropped.
+    // The URI flag by number: Bun's own SQLite on Linux and Windows reads a URI only with it.
+    const db = new Database(
+      `${pathToFileURL(path).href}?immutable=1`,
+      constants.SQLITE_OPEN_READONLY | constants.SQLITE_OPEN_URI,
+    );
+    try {
+      const have = new Set(
+        (db.query("SELECT name FROM sqlite_schema WHERE type = 'index'").all() as Row[]).map(
+          (r) => r.name,
+        ),
+      );
+      if (Object.keys(HOT_INDEXES).every((name) => have.has(name))) return 0;
+    } finally {
+      db.close();
+    }
+  } catch {
+    // Not a file this can read: the store's own open says why.
+    return 0;
+  }
+  const file = await open(path, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(4 * 1024 * 1024);
+    let bytes = 0;
+    for (;;) {
+      const { bytesRead } = await file.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) return bytes;
+      bytes += bytesRead;
+    }
+  } finally {
+    await file.close();
+  }
+}
+
 type Row = Record<string, string | number | null>;
 
 /** A job's end: its upload is no longer to run, and a job that keeps it holds it as `kept`. */
@@ -426,6 +500,11 @@ export class JobStore {
     }
     // The queue's order, after the column exists on an older file.
     this.db.run("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, priority DESC, seq)");
+    // On a file from before them, each of these reads its table once (`warmForIndexes` has the
+    // server read the file first); from then on no start and no sweep reads a whole table again.
+    for (const [name, on] of Object.entries(HOT_INDEXES)) {
+      this.db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${on}`);
+    }
   }
 
   close(): void {
@@ -577,12 +656,10 @@ export class JobStore {
     );
   }
 
-  /** Every upload a job row names: one still to run, or one kept. */
+  /** Every upload a job row names: one still to run, or one kept. Read from `jobs_upload` whole. */
   uploads(): Set<string> {
     const rows = this.db
-      .query(
-        "SELECT coalesce(audio, kept) AS f FROM jobs WHERE audio IS NOT NULL OR kept IS NOT NULL",
-      )
+      .query("SELECT coalesce(audio, kept) AS f FROM jobs WHERE coalesce(audio, kept) IS NOT NULL")
       .all() as { f: string }[];
     return new Set(rows.map((r) => r.f));
   }
@@ -754,13 +831,18 @@ export class JobStore {
     ).map(jobOf);
   }
 
-  /** Every job created before `t` that keeps no audio: what `server.retain_days` removes. */
-  createdBefore(t: number): Job[] {
-    return (
-      this.db
-        .query("SELECT * FROM jobs WHERE created_at < ? AND keep_audio = 0 ORDER BY seq")
-        .all(t) as Row[]
-    ).map(jobOf);
+  /**
+   * The ids of up to `limit` jobs created before `t` that keep no audio, oldest first: what
+   * `server.retain_days` removes. Ids only, read from `jobs_expiry`: the sweep never holds a
+   * week of results in memory, and never reads the jobs it leaves.
+   */
+  expired(t: number, limit: number): string[] {
+    const rows = this.db
+      .query(
+        "SELECT id FROM jobs WHERE created_at < ? AND keep_audio = 0 ORDER BY created_at LIMIT ?",
+      )
+      .all(t, limit) as { id: string }[];
+    return rows.map((r) => r.id);
   }
 
   // -------------------------------------------------------------------------
