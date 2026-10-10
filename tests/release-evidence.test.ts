@@ -162,30 +162,35 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
   });
 
   test(
-    "positive control: a v1.0.0 dry run fails today on the gates, and on the terms once undated",
+    "positive control: a v1.0.0 dry run has no gate problem today, fails when one gate row turns Partial or a qualified Pass, and fails on the terms once undated",
     () => {
       const t = repoCopy();
       try {
         expect(check(["--set", "1.0.0", "--root", t.dir]).code).toBe(0);
-        const r = check(["--check", "--tag", "v1.0.0", "--root", t.dir]);
+        const dryRun = () => check(["--check", "--tag", "v1.0.0", "--root", t.dir]);
+        // Today every gate G1 to G8 is a plain Pass: the dry run names no gate. It still fails,
+        // because outside a checkout it cannot list the tags, and it says so.
+        const r = dryRun();
         expect(r.code).toBe(1);
-        // The terms table has a dated row since 2026-10-03; with it undated the same run says so.
-        expect(r.out).not.toContain("docs/providers.md");
-        writeFileSync(join(t.dir, PROVIDERS), terms("not yet checked"));
-        expect(check(["--check", "--tag", "v1.0.0", "--root", t.dir]).out).toContain(
-          "docs/providers.md: the terms table has no dated row",
-        );
-        // G6: speed passes on both halves and the line passes on the Mac after the cold start; on
-        // four x64 cores one run of six misses the 2.5 s line bar, with no reason on record.
-        for (const g of ["G6"])
-          expect(r.out).toContain(`docs/gates/M0-results.md: ${g} is Partial, not Pass`);
-        // G1, G2, G3, G4, G5, G7 and G8 are on record as passed. G4 and G7 pass under their
-        // criteria of 2026-10-10: G4 measured against the host clock, with the macOS floor kept at
-        // 14.4; G7 with the user-level context the app lets a harness load.
-        for (const g of ["G1", "G2", "G3", "G4", "G5", "G7", "G8"])
-          expect(r.out).not.toContain(`: ${g} `);
-        // Outside a checkout it also says it could not read the tags, and still lists the rest.
         expect(r.out).toContain("cannot list the tags");
+        expect(gateProblems(readFileSync(join(t.dir, GATES), "utf8"))).toEqual([]);
+        for (const g of ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"])
+          expect(r.out).not.toContain(`: ${g} `);
+        // The terms table has a dated row since 2026-10-03.
+        expect(r.out).not.toContain("docs/providers.md");
+        // Mutated controls on the copy: one summary row set to Partial, then to a qualified Pass.
+        const today = readFileSync(join(t.dir, GATES), "utf8");
+        const row = /^\| G6 \| Pass \|/m;
+        expect(today).toMatch(row);
+        writeFileSync(join(t.dir, GATES), today.replace(row, "| G6 | Partial |"));
+        expect(dryRun().out).toContain("docs/gates/M0-results.md: G6 is Partial, not Pass");
+        writeFileSync(join(t.dir, GATES), today.replace(row, "| G6 | Pass (M-series half) |"));
+        expect(dryRun().out).toContain(
+          "docs/gates/M0-results.md: G6 is Pass (M-series half), a qualified Pass; only a plain Pass counts",
+        );
+        writeFileSync(join(t.dir, GATES), today);
+        writeFileSync(join(t.dir, PROVIDERS), terms("not yet checked"));
+        expect(dryRun().out).toContain("docs/providers.md: the terms table has no dated row");
       } finally {
         t.cleanup();
       }
