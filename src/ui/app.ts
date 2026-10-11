@@ -1458,7 +1458,7 @@ class App {
       attrs: { "aria-label": "The line as it should read", spellcheck: "false", rows: "1" },
       on: {
         keydown: (e) => {
-          if (e.key !== "Enter" || e.isComposing) return;
+          if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;
           e.preventDefault();
           form.requestSubmit();
         },

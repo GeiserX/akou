@@ -57,7 +57,8 @@ export class NotepadPane {
   constructor(private readonly d: NotepadDeps) {
     this.input.addEventListener("input", () => this.onInput());
     this.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      // An Enter that confirms an input method's candidate is not the end of the note.
+      if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         void this.commit(true);
       }
