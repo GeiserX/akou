@@ -311,7 +311,7 @@ function titleIn(metadata: unknown): string | null {
 }
 
 /** Does `model` name a preset or recognizer this server knows (not `whisper-1` or empty)? */
-function namesModel(jobs: ReturnType<typeof jobsOf>, model: string | undefined): boolean {
+export function namesModel(jobs: ReturnType<typeof jobsOf>, model: string | undefined): boolean {
   if ((model ?? "").trim() === "") return false;
   try {
     return jobs.choose({ model }, true).source === "request";

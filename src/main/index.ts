@@ -243,6 +243,7 @@ import {
 } from "./server/model-store.ts";
 import { JOBS_DB, warmForIndexes } from "./server/store.ts";
 import { NotWritable, requireWritable } from "./server/writable.ts";
+import { WyomingServer } from "./server/wyoming.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
@@ -591,6 +592,8 @@ export class AkouApp implements ApiApp {
   /** Starts under way, which the watchdog counts as recording from before the helper spawns. */
   private starting = 0;
   server: ApiServer | null = null;
+  /** Home Assistant's Wyoming listener (SV-C2), while `server.wyoming` is on. */
+  wyoming: WyomingServer | null = null;
   window: WindowShell | null = null;
   asr: LiveAsr | null = null;
   asrState: { state: "loading" | "ready" | "unavailable"; reason?: string; model?: string } = {
@@ -3103,6 +3106,11 @@ export class AkouApp implements ApiApp {
    * engine of its list. Undefined for the others, and outside server mode, where the route's own
    * rule stands.
    */
+  /** The Wyoming listener's port for `GET /v1/server` (SV-C2), null while it is off. */
+  wyomingPort(): number | null {
+    return this.wyoming?.port ?? null;
+  }
+
   presetAvailable(name: string): boolean | undefined {
     const jobs = this.jobService;
     if (!jobs) return undefined;
@@ -3994,6 +4002,17 @@ export class AkouApp implements ApiApp {
     this.writeRuntime();
     this.detectAccelerator();
     this.startJobs();
+    // SV-C2: bound where the API binds, so 127.0.0.1 in the app; off unless `server.wyoming`.
+    if (s["server.wyoming"] && this.jobService) {
+      this.wyoming = WyomingServer.listen({
+        hostname: apiBind(s),
+        port: s["server.wyoming_port"],
+        jobs: this.jobService,
+        app: this,
+        settings: () => this.cfg.settings,
+        log: (level, msg) => this.log(level, msg),
+      });
+    }
     this.startDictation();
     // Recovery and the final-pass catch-up run behind the API, never before it.
     void this.manager
@@ -4128,6 +4147,8 @@ export class AkouApp implements ApiApp {
       await this.quitStep("the live Qwen server", () => liveQwen?.server.stop());
       await this.quitStep("the live recognizer", () => this.asr?.close());
       await this.quitStep("the page server", () => this.page?.stop());
+      // Before the API server: no Wyoming session holds the store when the job service closes.
+      await this.quitStep("the Wyoming listener", () => this.wyoming?.stop());
       await this.quitStep("the API server", () => this.server?.stop());
       // After the API: no request is left holding the store. A running job is queued again at start.
       await this.quitStep("the job service", () => this.jobService?.close());
@@ -4202,6 +4223,9 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
     return app;
   } catch (err) {
     await app?.asr?.close();
+    await app?.wyoming?.stop();
+    // A listener that failed after the queue started (a Wyoming port in use) leaves no Worker.
+    app?.jobs()?.close();
     await app?.server?.stop();
     releaseLock(lockPath);
     throw err;

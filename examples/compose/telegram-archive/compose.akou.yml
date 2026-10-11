@@ -6,11 +6,13 @@ services:
     restart: unless-stopped
     environment:
       AKOU_BEHIND_PROXY: "true"   # the web page is reached through your TLS proxy
+      # AKOU_WYOMING: "true"      # Home Assistant Assist over Wyoming (no key: LAN only)
     volumes:
       - ./akou/data:/data         # settings, keys, jobs
       - ./akou/models:/models     # speech models, fetched on demand
     ports:
       - "127.0.0.1:8476:8476"     # for the reverse proxy on this machine only
+      # - "10300:10300"           # the Wyoming port, when AKOU_WYOMING is on
     networks:
       - telegram-network
 

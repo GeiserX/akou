@@ -94,6 +94,8 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | `server.admin_password_hash` (file only) | `""` | The web UI's admin password, hashed. Set it with `akou admin set-password`. |
 | `server.dictation_slots` | `1` | Workers kept for dictating clients (`interactive=true`): they never take queued jobs, and a dictation is never refused by the queue limits. 0: a dictation queues like any job. Applies at the next start. |
 | `server.dictation_engine` | `"auto"` | The preset or model a dictating client's request runs when it names none. `auto`: the server's default. |
+| `server.wyoming` (file only) | `false` | Home Assistant's Wyoming protocol on `server.wyoming_port`, bound where the API binds (127.0.0.1 in the app). No key and no TLS: keep the port on your network. Applies at the next start. |
+| `server.wyoming_port` (file only) | `10300` | Port of the Wyoming listener. 0 picks a free port (tests). Applies at the next start. |
 
 ### capture
 

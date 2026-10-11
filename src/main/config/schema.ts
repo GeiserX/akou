@@ -975,6 +975,23 @@ export const SETTINGS = {
     default: "auto",
     doc: "The preset or model a dictating client's request runs when it names none. `auto`: the server's default.",
   },
+  "server.wyoming": {
+    type: "boolean",
+    default: false,
+    env: "AKOU_WYOMING",
+    // An unauthenticated door that submits jobs opens only from the file or the environment.
+    apiWritable: false,
+    doc: "Home Assistant's Wyoming protocol on `server.wyoming_port`, bound where the API binds (127.0.0.1 in the app). No key and no TLS: keep the port on your network. Applies at the next start.",
+  },
+  "server.wyoming_port": {
+    type: "integer",
+    min: 1,
+    max: 65535,
+    also: [0],
+    default: 10300,
+    apiWritable: false,
+    doc: "Port of the Wyoming listener. 0 picks a free port (tests). Applies at the next start.",
+  },
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS;

@@ -84,6 +84,8 @@ ENV AKOU_HOME=/data \
 USER bun
 VOLUME ["/data", "/models"]
 EXPOSE 8476
+# Home Assistant's Wyoming listener, when AKOU_WYOMING is on (off by default).
+EXPOSE 10300
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
   CMD ["bun", "-e", "fetch('http://127.0.0.1:8476/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 ENTRYPOINT ["akou"]

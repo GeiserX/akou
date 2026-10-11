@@ -1465,6 +1465,7 @@ jobs:
           sudo chown 1000:1000 "$DATA"
           test -z "$(ls -A "$DATA")"
           docker run -d --name akou --add-host=host.docker.internal:host-gateway -e AKOU_BEHIND_PROXY=true \
+            -e AKOU_WYOMING=true -e AKOU_BAZARR=true -p 127.0.0.1:10300:10300 \
             -p 127.0.0.1:8476:8476 -v "$DATA:/data" -v "$MODELS:/models" akou:ci
       - name: GET /healthz answers within 60 s (SV-P1)
         run: |
@@ -1506,6 +1507,7 @@ jobs:
           chmod 0777 "$work"
           docker run --rm -v "$work:/work" --entrypoint ffmpeg akou:ci -nostdin -loglevel error -i /work/en.wav -c:a libopus /work/note.ogg
           cp "$work/note.ogg" "$RUNNER_TEMP/note.ogg"
+          cp "$work/en.wav" "$RUNNER_TEMP/en.wav"
           docker exec akou akou keys create --name ci --scope jobs --callback-host host.docker.internal --json > "$work/key.json"
           AKOU_API_KEY=$(jq -r .key "$work/key.json")
           AKOU_WEBHOOK_SECRET=$(jq -r .secret "$work/key.json")
@@ -1518,6 +1520,24 @@ jobs:
           docker run --rm --network host -e AKOU_URL=http://127.0.0.1:8476 -e AKOU_API_KEY \
             -v "$work:/work" akou:ci transcribe /work/note.ogg | tee "$work/transcribe.txt"
           tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
+      # SV-T4: Home Assistant's own Wyoming client, the `wyoming` package it pins, against the image.
+      # The container runs with AKOU_WYOMING=true, so a false capability is a bug, not a skip. The
+      # clip is 24 kHz; Home Assistant always sends 16000 Hz, 16-bit, mono, so the step resamples it
+      # first with the image's ffmpeg, and the probe refuses any other format.
+      - name: Wyoming round trip with the wyoming package (SV-T4)
+        if: steps.caps.outputs.roundtrip == 'true'
+        run: |
+          set -euo pipefail
+          jq -e '.capabilities.wyoming == true and .wyoming_port == 10300' server.json
+          wy=$(mktemp -d)
+          chmod 0777 "$wy"
+          cp "$RUNNER_TEMP/en.wav" "$wy/en.wav"
+          docker run --rm -v "$wy:/work" --entrypoint ffmpeg akou:ci -nostdin -loglevel error -i /work/en.wav -ar 16000 -ac 1 -sample_fmt s16 /work/en16.wav
+          python3 -m venv "$RUNNER_TEMP/wy" || { sudo apt-get update -q && sudo apt-get install -y python3-venv && python3 -m venv "$RUNNER_TEMP/wy"; }
+          "$RUNNER_TEMP/wy/bin/pip" install --require-hashes -r scripts/ci/wyoming/requirements.txt
+          "$RUNNER_TEMP/wy/bin/python" -I scripts/ci/wyoming/probe.py --host 127.0.0.1 --port 10300 --language en --wav "$wy/en16.wav" | tee wyoming.txt
+          head -n1 wyoming.txt | jq -e '.asr[0].name == "akou" and ([.asr[0].models[].name] | index("fast") != null)'
+          tail -n1 wyoming.txt | tr 'A-Z' 'a-z' | tr -cd 'a-z \n' | grep -q "ask not what your country"
       - name: the server's log
         if: always()
         run: docker logs akou 2>&1 | tail -n 200 || true

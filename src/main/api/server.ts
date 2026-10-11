@@ -101,6 +101,8 @@ export interface ApiApp {
   accelerator?(): AcceleratorState | null;
   /** What a job that names no model runs here, and why (SV-R2). */
   autoChoice?(): { model: string; preset: string; reason: string };
+  /** The Wyoming listener's port (SV-C2), or null while `server.wyoming` is off. */
+  wyomingPort?(): number | null;
   /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
   presetAvailable?(name: string): boolean | undefined;
   /** The recognizers `GET /v1/server` lists: where each runs and whether its files are there. */
