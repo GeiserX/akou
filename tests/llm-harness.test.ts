@@ -671,7 +671,7 @@ describe("starting the harness before the question (#383)", () => {
   });
 
   test.skipIf(process.platform === "win32")(
-    "when akou dies, the waiting harness exits on its own (its stdin closes)",
+    "when akou dies, the waiting harness exits on its own (its stdin closes; POSIX signals, skipped on Windows)",
     async () => {
       const t = tempDir();
       try {
