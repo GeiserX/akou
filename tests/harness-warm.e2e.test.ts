@@ -57,6 +57,7 @@ describe("POST /provider/warm", () => {
         settings: { "provider.kind": "harness", "provider.harnessPath": claude },
       });
       let pid = 0;
+      let scratch = "";
       try {
         const r = await rig.api("POST", "/provider/warm", {});
         expect(r.status).toBe(200);
@@ -71,10 +72,22 @@ describe("POST /provider/warm", () => {
         expect(Number(readFileSync(pidFile, "utf8"))).toBe(pid);
         // Nothing reached it: no question was asked.
         expect(existsSync(record)).toBe(false);
+        // Its scratch folder, read from the process itself.
+        const lsof = Bun.spawnSync(["lsof", "-a", "-p", String(pid), "-d", "cwd", "-Fn"]);
+        const cwd =
+          lsof.stdout
+            .toString()
+            .split("\n")
+            .find((l) => l.startsWith("n")) ?? "";
+        scratch = cwd.slice(1);
+        expect(scratch).toContain("akou-harness-");
+        expect(existsSync(scratch)).toBe(true);
       } finally {
         await rig.close();
       }
-      expect(await until(() => !alive(pid))).toBe(true);
+      // Quit waited for it: the process is gone and so is its folder, at once, with no polling.
+      expect(alive(pid)).toBe(false);
+      expect(existsSync(scratch)).toBe(false);
       // It ended with nothing on its stdin.
       if (existsSync(record)) expect(JSON.parse(readFileSync(record, "utf8")).stdin).toBe("");
       t.cleanup();

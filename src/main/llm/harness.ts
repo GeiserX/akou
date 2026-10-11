@@ -556,8 +556,12 @@ function running(proc: Started["proc"]): boolean {
   }
 }
 
-/** Ends a started harness that was never sent a question, and removes its scratch folder. */
-function stopStarted(run: Started): void {
+/**
+ * Ends a started harness that was never sent a question, and removes its scratch folder. Resolves
+ * once the process has exited and the folder is gone; a harness that ignores SIGTERM and end of
+ * stdin is killed after `KILL_GRACE_MS`.
+ */
+function stopStarted(run: Started): Promise<void> {
   try {
     (run.proc.stdin as import("bun").FileSink).end();
   } catch {}
@@ -567,7 +571,7 @@ function stopStarted(run: Started): void {
     if (running(run.proc)) killTree(run.proc, "SIGKILL");
   }, KILL_GRACE_MS).unref?.();
   // Windows refuses to remove a folder a running process works in: remove it once it has exited.
-  void run.proc.exited.then(() => {
+  return run.proc.exited.then(() => {
     try {
       rmSync(run.scratch, { recursive: true, force: true });
     } catch {}
@@ -614,7 +618,7 @@ export class HarnessSpare {
       h.timer = this.idle();
       return true;
     }
-    this.clear();
+    void this.clear();
     let run: Started;
     try {
       run = startHarness(t, system, undefined, env);
@@ -636,22 +640,22 @@ export class HarnessSpare {
     this.held = null;
     clearTimeout(h.timer);
     if (h.key === key && running(h.run.proc)) return h.run;
-    stopStarted(h.run);
+    void stopStarted(h.run);
     return null;
   }
 
-  /** Stops the waiting harness, if there is one. */
-  clear(): void {
+  /** Stops the waiting harness, if there is one; resolves once it has exited and its folder is gone. */
+  clear(): Promise<void> {
     const h = this.held;
-    if (!h) return;
+    if (!h) return Promise.resolve();
     this.held = null;
     clearTimeout(h.timer);
-    stopStarted(h.run);
+    return stopStarted(h.run);
   }
 
   private idle(): ReturnType<typeof setTimeout> {
     // clock: how long a started harness may wait for a question.
-    const timer = setTimeout(() => this.clear(), this.idleMs);
+    const timer = setTimeout(() => void this.clear(), this.idleMs);
     timer.unref?.();
     return timer;
   }
