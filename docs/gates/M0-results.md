@@ -707,9 +707,10 @@ Every other clause is unchanged.
 | claude, stream-json and `--safe-mode`, started on the question | 4,034 and 8,683 ms | 1,592 and 1,040 ms |
 | claude, stream-json and `--safe-mode`, started 8 s before the question | 1,431 and 2,927 ms | 18 and 14 ms |
 
-These claude rows also tried `--safe-mode`, which leaves out the user's hooks, plugins, skills and user-level instructions. akou does not pass it: the early start already takes the start out of the wait, and safe mode would change what the user's answers follow. The rows show what each part does.
 | codex, started on the question | 4,985 and 2,890 ms | |
 | codex, started 8 s before the question | 3,241 and 2,676 ms | |
+
+These claude rows also tried `--safe-mode`, which leaves out the user's hooks, plugins, skills and user-level instructions and keeps sign-in, the model setting and the settings' `env`. akou passes it only with `provider.harnessSafeMode` on, which is off by default, so akou's answers follow the user's own Claude Code setup unless the user turns it on. The rows show what each part does.
 
 Started early, claude was ready 15 ms after the question, so what is left is the model: 1.4 and 2.9 s here. Safe mode alone took claude's start from about 3.1 s to about 1.3 s on that Mac, but one of those two answers still took 7.6 s after `init`, so the model's own time varies more than the start does. Codex's first token arrives with its whole answer; started early, it began its turn within 50 ms of the question, and the rest is the model. Two samples per row on a loaded machine: these show the size of the change, not a distribution.
 
@@ -733,7 +734,7 @@ There the user context cost nothing measurable, and claude's own start was about
 | claude | 3,498 ms | 5,398 ms |
 | codex | 5,396 ms | 2,657 ms |
 
-One sample per cell. Codex's dropped by 2.7 s. Claude's rose: its start, about 3 s here with the account script, fits in the 5 s it was given, and its model took 1.2 to 7.6 s across the shell spawns above, so one pair cannot separate the two. More samples on a quieter machine would. `akou ask` and agents still start the harness when the question arrives, and pay its start.
+One sample per cell. Codex's dropped by 2.7 s. Claude's rose: its start, about 3 s here with the account script, fits in the 5 s it was given, and its model took 1.2 to 7.6 s across the shell spawns above, so one pair cannot separate the two. More samples on a quieter machine would. `akou ask` and agents still start the harness when the question arrives, and pay its start; `provider.harnessSafeMode` cuts it for those who turn it on.
 
 **Still open.**
 

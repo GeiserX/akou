@@ -15,7 +15,8 @@
  * deadlines and cancelling), `FAKE_RECORD` (a file that receives `{argv, cwd, cwdEntries, stdin,
  * prompt, startedAt, promptAt}` as JSON: `stdin` as read, `prompt` the message's text in
  * stream-json mode, the two times in epoch ms), `FAKE_PIDFILE` (a file that receives this
- * process's pid as soon as it starts), `FAKE_READYFILE` (a file written once its start-up is done
+ * process's pid as soon as it starts), `FAKE_ARGVFILE` (a file that receives its arguments as JSON
+ * as soon as it starts), `FAKE_READYFILE` (a file written once its start-up is done
  * and it waits for stdin), `FAKE_GRANDCHILD` (`group` or `escape`: start a
  * long-lived child that inherits stdout, in the harness's process group or in a session of its
  * own, and write its pid to `FAKE_GRANDCHILD_PID`).
@@ -25,6 +26,9 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const startedAt = Date.now();
 if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
+if (process.env.FAKE_ARGVFILE) {
+  writeFileSync(process.env.FAKE_ARGVFILE, JSON.stringify(process.argv.slice(3)));
+}
 const [fixture, ...args] = process.argv.slice(2);
 const streamJson = args.some((a, i) => a === "--input-format" && args[i + 1] === "stream-json");
 const start = Number(process.env.FAKE_START_MS ?? 0);

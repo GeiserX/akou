@@ -14,7 +14,10 @@
  *   from stdin). Both run in a fresh empty scratch folder, so no project instructions load, with no
  *   tools (Claude Code) or a read-only sandbox (Codex). `--strict-mcp-config` with no MCP config
  *   keeps the user's MCP servers out: measured on one tiny prompt, it cut the context Claude Code
- *   sent from about 17k tokens to about 3k.
+ *   sent from about 17k tokens to about 3k. With `provider.harnessSafeMode` on (off by default),
+ *   Claude Code 2.1.169 and later also get `--safe-mode`, which leaves out the user's hooks,
+ *   plugins, skills and user-level instructions and keeps sign-in, the model setting and the
+ *   settings' `env`; it took about 1.8 s off a cold start on a daily-use Mac (#383).
  * - **Starting early** (#383). Most of the wait for an answer was the harness starting, not the
  *   model. Both harnesses do their start-up while waiting for stdin (Claude Code with stream-json
  *   input waits with no time limit; in text mode it gives up after 3 s), so `HarnessSpare` starts
@@ -58,6 +61,9 @@ export const HARNESS_LABEL: Record<HarnessKind, string> = { claude: "claude-code
 
 /** Codex's `exec --json` event format (`thread.started`, `item.*`) is checked from this version. */
 export const CODEX_MIN_JSON = "0.44.0";
+
+/** Claude Code has `--safe-mode` from this version; an older one refuses the flag and exits. */
+export const CLAUDE_SAFE_MODE = "2.1.169";
 
 export interface HarnessInfo {
   kind: HarnessKind;
@@ -416,6 +422,8 @@ export interface HarnessTarget {
   /** The program and any leading arguments (tests run a fake through Bun). */
   command: string[];
   version: string | null;
+  /** `provider.harnessSafeMode`: run Claude Code with `--safe-mode` where it has the flag. */
+  safeMode?: boolean;
 }
 
 export interface HarnessProviderOptions {
@@ -427,10 +435,21 @@ export interface HarnessProviderOptions {
   spare?: HarnessSpare;
 }
 
+/** Whether this Claude Code takes `--safe-mode`: only a version known to be new enough. */
+export function claudeSafeMode(version: string | null | undefined): boolean {
+  return version != null && compareVersions(version, CLAUDE_SAFE_MODE) >= 0;
+}
+
+/** `--safe-mode` for this target: the setting on, Claude Code, and a version that has the flag. */
+export function safeModeFor(t: HarnessTarget): boolean {
+  return t.safeMode === true && t.kind === "claude" && claudeSafeMode(t.version);
+}
+
 export function harnessArgs(
   kind: HarnessKind,
   system: string,
   session?: CompleteRequest["session"],
+  safeMode = false,
 ): string[] {
   if (kind === "claude") {
     const persistence = !session
@@ -449,6 +468,7 @@ export function harnessArgs(
       "--tools",
       "",
       "--strict-mcp-config",
+      ...(safeMode && kind === "claude" ? ["--safe-mode"] : []),
       ...persistence,
       "--system-prompt",
       system,
@@ -501,7 +521,11 @@ interface Started {
  * request only when this matches, so a changed harness, version or system prompt never answers.
  */
 export function spareKey(t: HarnessTarget, system: string): string {
-  return JSON.stringify([t.command, t.version, harnessArgs(t.kind, system)]);
+  return JSON.stringify([
+    t.command,
+    t.version,
+    harnessArgs(t.kind, system, undefined, safeModeFor(t)),
+  ]);
 }
 
 /** Starts the harness in its scratch folder; throws `ProviderError` when it cannot start. */
@@ -519,15 +543,18 @@ function startHarness(
     scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
   }
   try {
-    const proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, system, session)], {
-      cwd: scratch,
-      env: env as Record<string, string>,
-      stdin: "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      // Its own process group, so cancelling reaches anything it started.
-      detached: process.platform !== "win32",
-    });
+    const proc = Bun.spawn(
+      [...t.command, ...harnessArgs(t.kind, system, session, safeModeFor(t))],
+      {
+        cwd: scratch,
+        env: env as Record<string, string>,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        // Its own process group, so cancelling reaches anything it started.
+        detached: process.platform !== "win32",
+      },
+    );
     return { proc, scratch };
   } catch (err) {
     // A session's folder outlives the run: its next question resumes from it.
