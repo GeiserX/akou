@@ -1,6 +1,8 @@
 Harness start-up (#383), 2026-10-11, on a Mac mini M4 (macOS 26.6.1, 16 GB): raw output of the checks
 behind the G7 section in M0-results.md. claude 2.1.296, codex 0.147.0.
 
+== Every reply on the Mac mini below was rejected by the account limit: none is a first-token sample.
+
 == The split, from a shell: the timing script committed as scripts/gates/g7-startup.ts, 5 interleaved samples per case after one warm-up run each
    init: claude's system/init from the spawn. api: claude's first event that needed the API, from the question.
    The account was at its weekly limit, so the API's reply was a refusal (rate_limit_event status rejected), never an answer.
@@ -71,3 +73,19 @@ g7-fake-warm.json warm 4000 start 3000 claude: a recorded answer streams | first
 g7-fake-warm.json warm 4000 start 3000 claude: a usage limit gives the excerpts only | first token None answer 3059 ok
 g7-fake-warm.json warm 4000 start 3000 codex: a recorded answer streams | first token 40 answer 45 ok
 g7-fake-warm.json warm 4000 start 3000 codex: a usage limit gives the excerpts only | first token None answer 3061 ok
+
+== A daily-use Mac with other sessions running (load average 8 to 12), 2026-10-11, claude 2.1.296, codex 0.162.0
+   scripts/gates/g7-startup.ts, one spawn at a time, 10 in all, each harness through the same account-selection script
+   the G7 run of 2026-10-10 used (it adds 1.1 to 1.4 s before the harness starts, which a normal install does not pay).
+   old: akou 1.0's command line. new: stream-json input and --safe-mode. held: the prompt written 8 s after the spawn.
+   text: the first token, in ms from the spawn; apiAfterWrite equals the first token from the question here.
+{"label": "claude-old-cold", "hold": 0, "write": 3, "init": 2950, "api": 6660, "text": 6661, "apiAfterWrite": 6657, "done": 9131, "code": 0}
+{"label": "claude-new-cold", "hold": 0, "write": 2, "init": 1594, "api": 4036, "text": 4036, "apiAfterWrite": 4034, "done": 6066, "code": 0}
+{"label": "claude-new-held", "hold": 8000, "write": 8001, "init": 8019, "api": 9432, "text": 9433, "apiAfterWrite": 1431, "done": 11013, "code": 0}
+{"label": "claude-old-cold", "hold": 0, "write": 2, "init": 3240, "api": 4434, "text": 4434, "apiAfterWrite": 4432, "done": 7567, "code": 0}
+{"label": "claude-new-cold", "hold": 0, "write": 1, "init": 1041, "api": 8684, "text": 8684, "apiAfterWrite": 8683, "done": 10546, "code": 0}
+{"label": "claude-new-held", "hold": 8000, "write": 8001, "init": 8015, "api": 10928, "text": 10928, "apiAfterWrite": 2927, "done": 13126, "code": 0}
+{"label": "codex-cold", "hold": 0, "write": 2, "init": 2503, "api": 4987, "text": 4987, "apiAfterWrite": 4985, "done": 5457, "code": 0}
+{"label": "codex-held", "hold": 8000, "write": 8002, "init": 8050, "api": 11243, "text": 11243, "apiAfterWrite": 3241, "done": 11734, "code": 0}
+{"label": "codex-cold", "hold": 0, "write": 2, "init": 495, "api": 2892, "text": 2892, "apiAfterWrite": 2890, "done": 3353, "code": 0}
+{"label": "codex-held", "hold": 8000, "write": 8001, "init": 8051, "api": 10677, "text": 10677, "apiAfterWrite": 2676, "done": 11728, "code": 0}
