@@ -214,7 +214,7 @@ Table stakes, in every serious tool: file upload in any container, batch submiss
 
 What akou adds that no single tool combines today:
 
-- The three dialects on one port: jobs with signed callbacks, the OpenAI endpoint and Wyoming. Today a user runs speaches for one, wyoming-faster-whisper for another and a webhook shim for the third.
+- The three dialects on one port, once SV-C2 lands: jobs with signed callbacks, the OpenAI endpoint and Wyoming. Today akou has the first two; a user runs speaches for one, wyoming-faster-whisper for another and a webhook shim for the third.
 - A replayable per-key event feed beside the webhook. No self-hosted competitor signs its webhooks, and none lets a client catch up after a day offline.
 - Presets that read the hardware, with the choice and its reason visible.
 - Language routing across engines, with the caller's hint first.
