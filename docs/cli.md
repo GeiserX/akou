@@ -888,6 +888,7 @@ example: akou serve
 | One call's record | none: `show` prints the transcript; no command prints the record itself | `GET /calls/:id` | none: the tools read it internally (akou_vocab_propose, akou_enhanced_put); none returns it | none: the window builds its view from the call list and the followed log |
 | Context pack | `context` | `POST /calls/:id/context` | `akou_context` | `src/ui/ask.ts` |
 | Ask | `ask` | `POST /calls/:id/ask` | `akou_ask` | `src/ui/window.ts` |
+| Start the harness before a question | none: `akou ask` sends its question at once: there is no typing for the start to overlap | `POST /provider/warm` | none: an agent sends its question at once: there is no typing for the start to overlap | `src/ui/ask.ts` |
 | Ask presets | `presets`, `ask` | `GET /presets` | none: the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7) | `src/ui/ask.ts` |
 | Search one call | `search` | `GET /calls/:id/search` | `akou_search` | none: find in the call is designed in docs/ux/WINDOW.md and not built |
 | Name, merge and unmerge speakers | `name` | `POST /calls/:id/speakers`, `POST /calls/:id/speakers/merge`, `POST /calls/:id/speakers/unmerge` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | `src/ui/app.ts` |

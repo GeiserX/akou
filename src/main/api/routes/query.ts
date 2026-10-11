@@ -11,12 +11,15 @@
  *   nothing"). With `stream`, Server-Sent Events: `excerpts` at once, a `token` per piece of the
  *   answer, then `answer` with the same body as the plain reply. A client that goes away cancels
  *   the provider run.
+ * - `POST /provider/warm`: the ask box has focus, so a question may follow. The harness provider
+ *   starts its program now, so its start-up overlaps the typing (#383); nothing is sent to it until
+ *   a question is asked, and it stops after a minute with no question. Other providers do nothing.
  */
 
 import type { EventDraft } from "../../../core/log/events.ts";
 import type { CallView } from "../../../core/log/fold.ts";
 import { ProviderError } from "../../llm/provider.ts";
-import { type AskOptions, ask } from "../../query/ask.ts";
+import { ASK_SYSTEM, type AskOptions, ask } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Router } from "../http.ts";
@@ -155,6 +158,34 @@ export function queryRoutes(r: Router<ApiApp>): void {
         }
       }
       return sseAnswer(id, opts, c.req.signal);
+    },
+  );
+
+  r.add(
+    "POST",
+    "/provider/warm",
+    {
+      id: "provider.warm",
+      doc: "A question may follow soon (the ask box has focus): the harness provider starts Claude Code or Codex now, so its start-up does not delay the answer. The program is sent nothing until a question is asked, and it is stopped after a minute with no question or another warm. `warming` says whether one is started and waiting; `reason` says why not. Other providers have nothing to start. Spends nothing from the subscription.",
+      access: "admin",
+      modes: ["app"],
+      body: {},
+      ok: 200,
+    },
+    async (c) => {
+      await c.body();
+      const p = c.app.provider();
+      // A kept session runs each question with its own session flags: nothing to start early.
+      if (c.app.askSessions?.() && p.sessions?.()) {
+        return json(200, {
+          warming: false,
+          reason: "session reuse is on: each question starts its own run",
+        });
+      }
+      const r = p.warm
+        ? await p.warm(ASK_SYSTEM)
+        : { warming: false, reason: `the ${p.id} provider has nothing to start` };
+      return json(200, r);
     },
   );
 }

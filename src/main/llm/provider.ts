@@ -76,6 +76,11 @@ export interface Provider {
   available(): Promise<Availability>;
   /** Whether `CompleteRequest.session` is honoured. Absent: it is not. */
   sessions?(): boolean;
+  /**
+   * Gets ready for a question with this system prompt before it is asked (the harness starts its
+   * program early, #383). Sends nothing to a model. Absent: there is nothing to get ready.
+   */
+  warm?(system: string): Promise<{ warming: boolean; reason?: string }>;
   complete(
     req: CompleteRequest,
     onToken: (t: string) => void,

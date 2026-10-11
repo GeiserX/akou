@@ -136,6 +136,18 @@ export const PARITY: readonly Row[] = [
     note: "akou_ask is listed only when a provider can answer, and hidden from a harness client when that harness is the provider (src/main/mcp/server.ts askListed)",
   },
   {
+    action: "Start the harness before a question",
+    cli: {
+      none: "`akou ask` sends its question at once: there is no typing for the start to overlap",
+    },
+    api: ["POST /provider/warm"],
+    mcp: {
+      none: "an agent sends its question at once: there is no typing for the start to overlap",
+    },
+    window: [ui("ask.ts", '"/provider/warm"')],
+    note: "the ask box sends it when it gets focus, while the user types and after an answer; the harness gets nothing until the question (#383)",
+  },
+  {
     action: "Ask presets",
     cli: ["presets", "ask"],
     api: ["GET /presets"],

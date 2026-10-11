@@ -67,8 +67,8 @@ describe("DC-U6: the formatting pass", () => {
     const r = await formatDictation({ raw: "um three apples", provider: fakeHarness(record) });
     expect(r).toMatchObject({ text: "Three apples.", raw: "um three apples", skipped: null });
     // The harness got the dictation inside the block, under the header, with no tools.
-    const sent = JSON.parse(readFileSync(record, "utf8")) as { argv: string[]; stdin: string };
-    expect(sent.stdin).toBe(formatRequestText("um three apples"));
+    const sent = JSON.parse(readFileSync(record, "utf8")) as { argv: string[]; prompt: string };
+    expect(sent.prompt).toBe(formatRequestText("um three apples"));
     expect(sent.argv[sent.argv.indexOf("--tools") + 1]).toBe("");
     tmp.cleanup();
   });

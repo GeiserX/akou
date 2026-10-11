@@ -15,6 +15,8 @@ import {
   compareVersions,
   discoverHarnesses,
   HarnessProvider,
+  HarnessSpare,
+  type HarnessTarget,
   harnessArgs,
   harnessStdin,
   kindOfPath,
@@ -184,6 +186,8 @@ describe("invocation and discovery", () => {
       "stream-json",
       "--verbose",
       "--include-partial-messages",
+      "--input-format",
+      "stream-json",
       "--tools",
       "",
       "--strict-mcp-config",
@@ -201,7 +205,9 @@ describe("invocation and discovery", () => {
       "-",
     ]);
     const req = { system: "SYS", prompt: "PACK", maxTokens: 10 };
-    expect(harnessStdin("claude", req)).toBe("PACK");
+    expect(harnessStdin("claude", req)).toBe(
+      '{"type":"user","message":{"role":"user","content":"PACK"}}\n',
+    );
     expect(harnessStdin("codex", req)).toBe("SYS\n\nPACK");
   });
 
@@ -330,7 +336,10 @@ describe("the provider against a fake harness", () => {
       });
       expect(tokens).toEqual(["ok"]);
       const rec = JSON.parse(readFileSync(record, "utf8"));
-      expect(rec.stdin).toBe("Reply with the word ok");
+      expect(rec.prompt).toBe("Reply with the word ok");
+      expect(rec.stdin).toBe(
+        harnessStdin("claude", { system: "SYS", prompt: "Reply with the word ok", maxTokens: 10 }),
+      );
       expect(rec.argv).toEqual(harnessArgs("claude", "SYS"));
       expect(rec.cwdEntries).toEqual([]);
       // The scratch folder is gone afterwards.
@@ -466,4 +475,258 @@ describe("the provider against a fake harness", () => {
     expect(a.ok).toBe(false);
     expect(!a.ok && a.reason).toContain(`older than ${CODEX_MIN_JSON}`);
   });
+});
+
+describe("starting the harness before the question (#383)", () => {
+  /** The fake's start-up: long enough that waiting for it shows, short enough for a test. */
+  const START_MS = 1500;
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const until = async (ok: () => boolean, ms = 5000) => {
+    const end = performance.now() + ms;
+    while (!ok() && performance.now() < end) await Bun.sleep(20);
+    return ok();
+  };
+  function target(fixture: string, kind: "claude" | "codex" = "claude"): HarnessTarget {
+    return {
+      kind,
+      command: [process.execPath, FAKE, join(FIX, fixture)],
+      version: kind === "claude" ? "2.1.281" : "0.162.0",
+    };
+  }
+  function rig(
+    env: Record<string, string>,
+    o: { idleMs?: number; kind?: "claude" | "codex" } = {},
+  ) {
+    const kind = o.kind ?? "claude";
+    const fixture = kind === "claude" ? "claude-ok.jsonl" : "codex-ok.synthetic.jsonl";
+    const spare = new HarnessSpare({ idleMs: o.idleMs ?? 30_000 });
+    const t = target(fixture, kind);
+    const provider = new HarnessProvider({
+      target: () => t,
+      env: { ...process.env, FAKE_START_MS: String(START_MS), ...env },
+      spare,
+    });
+    return { spare, provider, t };
+  }
+  /** Asks one question and answers how long the first token took, from the request. */
+  async function firstToken(
+    p: HarnessProvider,
+    system = "SYS",
+    session?: { id: string; resume: boolean },
+  ) {
+    const t0 = performance.now();
+    let first = -1;
+    const r = await runProvider(
+      p,
+      { system, prompt: "When is the release?", maxTokens: 10, ...(session ? { session } : {}) },
+      () => {
+        if (first < 0) first = performance.now() - t0;
+      },
+    );
+    return { first, text: r.text, askedAt: Date.now() - (performance.now() - t0) };
+  }
+
+  test("control: with no harness started early, the first token waits for the start-up", async () => {
+    const { provider, spare } = rig({});
+    const r = await firstToken(provider);
+    expect(r.text).toBe("ok");
+    expect(r.first).toBeGreaterThanOrEqual(START_MS);
+    expect(spare.pid()).toBeNull();
+  }, 15_000);
+
+  test("started when the box asked, the question finds it up and the first token comes at once", async () => {
+    const t = tempDir();
+    try {
+      const record = join(t.dir, "record.json");
+      const ready = join(t.dir, "ready");
+      const { provider, spare } = rig({ FAKE_RECORD: record, FAKE_READYFILE: ready });
+      expect(await provider.warm("SYS")).toEqual({ warming: true });
+      const pid = spare.pid() as number;
+      expect(alive(pid)).toBe(true);
+      // The user types while the harness starts; a loaded machine may take longer than START_MS.
+      expect(await until(() => existsSync(ready), 15_000)).toBe(true);
+      // Nothing was sent to it yet.
+      expect(existsSync(record)).toBe(false);
+      const r = await firstToken(provider);
+      expect(r.text).toBe("ok");
+      expect(r.first).toBeLessThan(START_MS / 2);
+      const rec = JSON.parse(readFileSync(record, "utf8"));
+      // The process that answered is the one started early, before the question...
+      expect(rec.startedAt).toBeLessThan(r.askedAt - START_MS);
+      // ...and it got the question only when it was asked.
+      expect(rec.promptAt).toBeGreaterThanOrEqual(r.askedAt - 5);
+      expect(rec.prompt).toBe("When is the release?");
+      // Taken, it is no longer kept, and its scratch folder went with the answer.
+      expect(spare.pid()).toBeNull();
+      expect(existsSync(rec.cwd)).toBe(false);
+      expect(await until(() => !alive(pid))).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("Codex too: its start-up overlaps the wait for stdin", async () => {
+    const t = tempDir();
+    try {
+      const ready = join(t.dir, "ready");
+      const { provider } = rig({ FAKE_READYFILE: ready }, { kind: "codex" });
+      await provider.warm("SYS");
+      expect(await until(() => existsSync(ready), 15_000)).toBe(true);
+      const r = await firstToken(provider);
+      expect(r.text.length).toBeGreaterThan(0);
+      expect(r.first).toBeLessThan(START_MS / 2);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("asking again while one waits keeps that one; it is never sent anything and stops when idle", async () => {
+    const t = tempDir();
+    try {
+      const record = join(t.dir, "record.json");
+      const { provider, spare } = rig({ FAKE_RECORD: record, FAKE_START_MS: "0" }, { idleMs: 400 });
+      await provider.warm("SYS");
+      const pid = spare.pid() as number;
+      await Bun.sleep(250);
+      await provider.warm("SYS");
+      expect(spare.pid()).toBe(pid);
+      // 250 ms after the second warm, the first one's 400 ms have passed: still kept.
+      await Bun.sleep(250);
+      expect(spare.pid()).toBe(pid);
+      expect(await until(() => spare.pid() === null, 2000)).toBe(true);
+      expect(await until(() => !alive(pid))).toBe(true);
+      // It ended with nothing on its stdin: no question reached it.
+      const rec = existsSync(record) ? JSON.parse(readFileSync(record, "utf8")) : { stdin: "" };
+      expect(rec.stdin).toBe("");
+      if (rec.cwd) expect(await until(() => !existsSync(rec.cwd))).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  }, 10_000);
+
+  test("quit (clear) stops a waiting harness", async () => {
+    const { provider, spare } = rig({ FAKE_START_MS: "0" });
+    await provider.warm("SYS");
+    const pid = spare.pid() as number;
+    spare.clear();
+    expect(spare.pid()).toBeNull();
+    expect(await until(() => !alive(pid))).toBe(true);
+  }, 10_000);
+
+  test("a question with another system prompt, or a session, never takes it", async () => {
+    const { provider, spare } = rig({});
+    await provider.warm("SYS");
+    const pid = spare.pid() as number;
+    await Bun.sleep(START_MS + 300);
+    // Enhance's system prompt is not the ask box's: a fresh harness answers, and the spare stops.
+    const other = await firstToken(provider, "ANOTHER");
+    expect(other.first).toBeGreaterThanOrEqual(START_MS);
+    expect(spare.pid()).toBeNull();
+    expect(await until(() => !alive(pid))).toBe(true);
+    await provider.warm("SYS");
+    const kept = spare.pid() as number;
+    const withSession = await firstToken(provider, "SYS", {
+      id: crypto.randomUUID(),
+      resume: false,
+    });
+    expect(withSession.first).toBeGreaterThanOrEqual(START_MS);
+    expect(spare.pid()).toBe(kept);
+    spare.clear();
+  }, 20_000);
+
+  test("a harness that died while waiting is not used: the question starts a fresh one", async () => {
+    const { provider, spare } = rig({ FAKE_START_MS: "0" });
+    await provider.warm("SYS");
+    const pid = spare.pid() as number;
+    process.kill(pid, "SIGKILL");
+    expect(await until(() => !alive(pid))).toBe(true);
+    const r = await firstToken(provider);
+    expect(r.text).toBe("ok");
+    expect(spare.pid()).toBeNull();
+  }, 10_000);
+
+  test("a harness started early that exits before its question: the question still gets an answer", async () => {
+    const t = tempDir();
+    try {
+      const first = join(t.dir, "first");
+      const { provider, spare } = rig({ FAKE_START_MS: "0", FAKE_EXIT_FIRST: first });
+      await provider.warm("SYS");
+      const pid = spare.pid() as number;
+      expect(await until(() => existsSync(first) && !alive(pid))).toBe(true);
+      const r = await firstToken(provider);
+      expect(r.text).toBe("ok");
+    } finally {
+      t.cleanup();
+    }
+  }, 15_000);
+
+  test("one that exits after taking the question unread: a fresh harness answers, with no unhandled rejection", async () => {
+    const t = tempDir();
+    try {
+      const first = join(t.dir, "first");
+      const logs: string[] = [];
+      const spare = new HarnessSpare();
+      const tg = target("claude-ok.jsonl");
+      const provider = new HarnessProvider({
+        target: () => tg,
+        env: { ...process.env, FAKE_EXIT_FIRST: first, FAKE_EXIT_FIRST_MS: "300" },
+        spare,
+        onLog: (_l, m) => logs.push(m),
+      });
+      await provider.warm("SYS");
+      // Asked at once: the spare is still running when the question takes it, then exits unread.
+      const r = await firstToken(provider);
+      expect(r.text).toBe("ok");
+      expect(existsSync(first)).toBe(true);
+      expect(logs).toContain("harness: the one started early had exited; starting another");
+    } finally {
+      t.cleanup();
+    }
+  }, 15_000);
+
+  test("no harness, no start: warm says why and starts nothing", async () => {
+    const spare = new HarnessSpare();
+    const p = new HarnessProvider({ target: () => ({ none: "no harness found" }), spare });
+    expect(await p.warm("SYS")).toEqual({ warming: false, reason: "no harness found" });
+    expect(spare.pid()).toBeNull();
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "when akou dies, the waiting harness exits on its own (its stdin closes; POSIX signals, skipped on Windows)",
+    async () => {
+      const t = tempDir();
+      try {
+        const pidFile = join(t.dir, "spare.pid");
+        const harness = join(import.meta.dir, "..", "src", "main", "llm", "harness.ts");
+        const script = [
+          `import { HarnessSpare } from ${JSON.stringify(harness)};`,
+          "const s = new HarnessSpare();",
+          `s.warm({ kind: "claude", command: [process.execPath, ${JSON.stringify(FAKE)}, ${JSON.stringify(join(FIX, "claude-ok.jsonl"))}], version: "2.1.281" }, "SYS", process.env);`,
+          `await Bun.write(${JSON.stringify(pidFile)}, String(s.pid()));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const owner = Bun.spawn([process.execPath, "-e", script], {
+          stdio: ["ignore", "ignore", "inherit"],
+        });
+        expect(await until(() => existsSync(pidFile) && readFileSync(pidFile, "utf8") !== "")).toBe(
+          true,
+        );
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        expect(alive(pid)).toBe(true);
+        owner.kill("SIGKILL");
+        await owner.exited;
+        expect(await until(() => !alive(pid))).toBe(true);
+      } finally {
+        t.cleanup();
+      }
+    },
+    15_000,
+  );
 });
