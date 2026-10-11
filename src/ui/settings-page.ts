@@ -235,6 +235,7 @@ const SUBS: Record<string, SubPage> = {
         title: "Dictation for other computers",
         keys: ["server.dictation_slots", "server.dictation_engine"],
       },
+      { title: "Home Assistant (Wyoming)", keys: ["server.wyoming", "server.wyoming_port"] },
       { title: "Other servers", keys: ["server.remotes", "server.remotes_overflow"] },
     ],
   },

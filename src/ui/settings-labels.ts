@@ -362,6 +362,14 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["best", "Best"],
     ],
   },
+  "server.wyoming": {
+    label: "Speech to text for Home Assistant",
+    help: "Set in the config file. It has no key: keep its port on your own network.",
+  },
+  "server.wyoming_port": {
+    label: "Home Assistant port",
+    help: "Set in the config file. Home Assistant's Wyoming integration connects here.",
+  },
 
   // The Dictation page (docs/ux/design-explorations/sd-a-dictation.html).
   "dictation.enabled": {
