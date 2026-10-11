@@ -132,7 +132,7 @@ export const CUE_CHARS = 42;
 /**
  * Subtitle cues from timed words (SV-J5): words join a cue while it stays within `CUE_CHARS` and
  * inside one segment, so a cue never runs across a pause or a change of speaker. Null when a word
- * has no time (an engine that gives none, such as Qwen): the segments are the cues then.
+ * has no time (an engine that gives none, such as Qwen): `segmentCues` cuts the segments then.
  */
 export function wordCues(
   words: readonly JobWord[],
@@ -163,21 +163,55 @@ export function wordCues(
   return out;
 }
 
+/**
+ * Subtitle cues from segments with no timed words (SV-J5): a segment past `CUE_CHARS` is cut at
+ * word boundaries into cues of at most `CUE_CHARS`, and each cue gets a share of the segment's time
+ * in proportion to its characters, so the cues partition the segment. A word longer than
+ * `CUE_CHARS` is a cue of its own.
+ */
+export function segmentCues(segments: readonly JobSegment[]): JobSegment[] {
+  const out: JobSegment[] = [];
+  for (const seg of segments) {
+    if (seg.text.length <= CUE_CHARS) {
+      out.push(seg);
+      continue;
+    }
+    const lines: string[] = [];
+    for (const w of seg.text.split(/\s+/)) {
+      if (w === "") continue;
+      const last = lines.at(-1);
+      if (last !== undefined && last.length + 1 + w.length <= CUE_CHARS) {
+        lines[lines.length - 1] = `${last} ${w}`;
+      } else lines.push(w);
+    }
+    const total = lines.reduce((n, l) => n + l.length, 0);
+    let done = 0;
+    let start = seg.s;
+    lines.forEach((text, i) => {
+      done += text.length;
+      const end = i === lines.length - 1 ? seg.e : seg.s + ((seg.e - seg.s) * done) / total;
+      out.push({ s: start, e: end, text, speaker: seg.speaker });
+      start = end;
+    });
+  }
+  return out;
+}
+
 /** The formats of a job's result (SV-J5). */
 export const RESULT_FORMATS = ["json", "verbose_json", "text", "srt", "vtt"] as const;
 export type ResultFormat = (typeof RESULT_FORMATS)[number];
 
 /**
  * A done job's result in a format of SV-J5: `json` is the result as stored; `verbose_json` the
- * OpenAI shape of SV-C1 with its segments; `srt` and `vtt` cues from the timed words, else from
- * the segments; `text` the text.
+ * OpenAI shape of SV-C1 with its segments; `srt` and `vtt` cues of at most `CUE_CHARS` from the
+ * timed words, else from the segments cut at word boundaries; `text` the text.
  */
 export function renderResult(job: Job, format: ResultFormat): Response {
   if (format === "json") return json(200, job.result);
   const r = rendered(job);
   if (format === "srt" || format === "vtt") {
     const words = ((job.result as Record<string, unknown>).words ?? []) as JobWord[];
-    const cues = wordCues(words, r.segments) ?? r.segments;
+    const cues = wordCues(words, r.segments) ?? segmentCues(r.segments);
     return renderOpenAI({ ...r, segments: cues }, format, []);
   }
   return renderOpenAI(r, format, ["segment"]);

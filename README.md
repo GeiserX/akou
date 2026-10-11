@@ -26,7 +26,7 @@ akou is a desktop app for macOS that records your calls on your own computer, tr
 - Types what you dictate into any app when you hold a key, and learns a word you fix only if you say yes.
 - Fixes names and product terms across calls from one word list you own.
 - Hands a finished call to your own vault or repository as Markdown, an event log and the audio, through an export folder, hooks, a signed webhook or the API.
-- Runs as a transcription server in Docker, with file jobs and an OpenAI-compatible endpoint. Wyoming and Bazarr endpoints are planned.
+- Runs as a transcription server in Docker, with file jobs, an OpenAI-compatible endpoint, and Wyoming (Home Assistant Assist) and Bazarr's `/asr` endpoints, each one setting away.
 
 ## Quick start
 
