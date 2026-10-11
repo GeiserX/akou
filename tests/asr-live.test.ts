@@ -836,6 +836,43 @@ describe("speakers through the log", () => {
   });
 });
 
+describe("[#378] the recognizer loads as the call starts, not on its first audio", () => {
+  test("it loads for the call's words while the helper is still starting, and only once", async () => {
+    const r = rig();
+    await r.asr.ready;
+    const started = r.mgr.start({ workspace: "work", title: "Sync", vocab: [{ term: "Vercel" }] });
+    // The helper has not reported `capturing`: no part, no audio, and the recognizer is loaded.
+    await settle(r, () => (r.models().loads["fake-parakeet"] ?? 0) >= 1);
+    expect(ofType(r.events, "part.started")).toEqual([]);
+    const used = ofType(r.events, "vocab.used");
+    expect(used.length).toBe(1);
+    expect(used[0]?.entries.some((e) => e.startsWith("Vercel"))).toBe(true);
+    r.engine.last.capturing();
+    const res = await started;
+    if (!res.ok) throw new Error(res.error);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    await settle(r, () => segs(r.events).length >= 1);
+    // The first audio found the call's recognizer loaded: no second load.
+    expect(r.models().loads["fake-parakeet"]).toBe(1);
+    expect(ofType(r.events, "vocab.used").length).toBe(1);
+  });
+
+  test("a call whose capture never starts lets go of the Worker, so the models it loaded still unload", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await r.asr.ready;
+    const started = r.mgr.start({ workspace: "work", title: "Sync" });
+    await settle(r, () => (r.models().loads["fake-parakeet"] ?? 0) >= 1);
+    // The helper dies before `capturing`: the call fails without a part.
+    r.engine.last.exit(77);
+    const res = await started;
+    expect(res.ok).toBe(false);
+    expect(ofType(r.events, "call.failed").length).toBe(1);
+    await r.clock.advance(5 * 60_000 + 1000);
+    expect(told).toBe(1);
+  });
+});
+
 describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
   const UNLOADED = "models unloaded after 5 min with no call or dictation";
   const MIN = 60_000;

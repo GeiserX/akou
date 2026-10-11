@@ -2173,6 +2173,18 @@ export class LiveAsr {
 
   /** `CallManagerOptions.onEvent`. */
   onEvent(callId: string, e: LogEvent): void {
+    if (e.type === "call.created") {
+      // The call's recognizer starts loading now, while the capture helper starts, not on the
+      // call's first audio: the helper takes 0.3 to 4.6 s to deliver its first packet, and the
+      // first lines wait for the load (#378). A microtask, so the call's words, written right
+      // after `call.created`, are in the decode list the load is built for.
+      queueMicrotask(() => {
+        if (this.closed || this.failed || this.calls.has(callId)) return;
+        // Only a call that is starting now: never one read back from its log.
+        if (this.access(callId)?.view.state === "starting") this.ensureCall(callId);
+      });
+      return;
+    }
     const c = this.calls.get(callId);
     if (!c) return;
     const isCurrent = c === this.current;
@@ -2196,6 +2208,8 @@ export class LiveAsr {
         if (isCurrent) this.transport.post({ type: "unmerge", from: e.from, into: e.into });
         break;
       case "call.ended":
+      // A call whose capture never started fails instead of ending: it lets go of the Worker too.
+      case "call.failed":
         // Its open lines were flushed before this event; anything later is dropped.
         this.calls.delete(callId);
         if (isCurrent) this.current = null;
