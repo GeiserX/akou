@@ -119,8 +119,11 @@ describe("starting a call", () => {
       );
       expect(answeredOnCapturingBroken(steps.slice(from), 10_000)).toEqual([]);
       const types = (await eventsOf(r.body.call)).map((e) => e.type);
-      // `--vocab` words are written right after call.created, before capture opens.
-      expect(types.slice(0, 4)).toEqual(["call.created", "vocab.add", "vocab.add", "part.started"]);
+      // `--vocab` words are written right after call.created, before capture opens. The live
+      // recognizer loads for them as the call starts (#378), so its `vocab.used` can land before
+      // or after `part.started`, whichever finishes first.
+      expect(types.slice(0, 3)).toEqual(["call.created", "vocab.add", "vocab.add"]);
+      expect(types.filter((t) => t !== "vocab.used").slice(3, 4)).toEqual(["part.started"]);
     },
     LONG,
   );
