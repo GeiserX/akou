@@ -599,26 +599,31 @@ The old run stays in its file and in the table above. From its seventh line on i
 
 ### G6: the cold start on the Mac, 2026-10-11
 
-**Why the first lines were late ([#378](https://github.com/GeiserX/akou/issues/378)).** The call's decode list loads Parakeet when the call's first audio reaches the live Worker, and nothing is transcribed until that load ends. In beam mode the load is needed whenever the loaded hotword file lacks the call's words, which includes every call that starts the app. On the G6 timeline the first mic line closes about 4.7 s into the call, so it is late whenever the load ends after that. In the eight Mac runs of 2026-10-09 the load ended (`vocab.used`, counted from the part's start) 1.61 to 8.85 s into the call, and the three runs with late first lines are three of the four where it ended after 4.4 s. A warm-up decode at the call's start would not help. The wait is the load, and once the files are in the page cache the first decode is as fast as any later one.
+**Why the first lines were late ([#378](https://github.com/GeiserX/akou/issues/378)).** The call's decode list loads Parakeet, and nothing is transcribed until that load ends. The live layer used to learn of a call from its first packet, so the load began only once the capture helper delivered audio. In beam mode the load is needed whenever the loaded hotword file lacks the call's words, which includes every call that starts the app. On the G6 timeline the first mic line closes about 4.7 s into the call, so it is late whenever the load ends after that. In the eight Mac runs of 2026-10-09 the load ended (`vocab.used`, counted from the part's start) 1.61 to 8.85 s into the call, and the three runs with late first lines are three of the four where it ended after 4.4 s. Once the files are in the page cache the first decode is as fast as any later one.
 
 **What changed.**
 
+- The recognizer starts loading when the call starts (`call.created`), for the call's words, while the capture helper starts. In this machine's own log the helper took 0.3 to 4.6 s, 0.48 s at the median over 11 calls, from the call's start to its first part. G6's file-mode helper takes about 0.1 s, so the G6 runs below see only that much of the gain.
 - The speaker embedder (TitaNet) used to load on the first call line, after its decode, which added 54 to 111 ms to the first call line of every app run against 12 to 15 ms for later ones. It now loads as the call channel's speech starts.
 - With `AKOU_LINE_TIMING=1` the Worker logs every recognizer load, and [`g6-live-latency.ts`](../../scripts/gates/g6-live-latency.ts) records them as `loads`.
 
-**The runs** ([g6-cold-start-mac.json](g6-cold-start-mac.json)). Eight runs with the change and eight on `main` with only the load log added, four per diarizer, each from a cold app with every model file first evicted from the page cache (`mincore` read 0% resident). The rest is the setup of 2026-10-09: fp32, beam search, the 12 words, the same 24 clips and timeline. The machine was a Mac mini M4 with 16 GB on macOS 26.6.1, which also ran a VM, a 3 GB language-model server and at times another test run. The load average at the start of a run was 2.0 to 7.2 on 10 cores.
+**The runs** ([g6-cold-start-mac.json](g6-cold-start-mac.json)). Runs with the change alternated with runs on `main` with only the load log added, each from a cold app with every model file first evicted from the page cache (`mincore` read 0% resident). The rest is the setup of 2026-10-09: fp32, beam search, the 12 words, the same 24 clips and timeline. The machine was a Mac mini M4 with 16 GB on macOS 26.6.1, which also ran a VM, a 3 GB language-model server and at times another test run. The load average at the start of a run was 2.3 to 10.9 on 10 cores. Two more kinds of run go beyond G6's setup: a slower helper, modelled by a wrapper that waits 0.5 s before it starts `akou-capture`, and the first run of a freshly copied app.
 
-| Code | Recognizer load | Lines in the first 10 s, worst | Lines after the first 10 s, worst | First call line |
-|---|---|---|---|---|
-| With the change, 8 runs | 2.25 to 2.46 s | 1.23 to 1.31 s | 1.21 to 1.34 s | 1.23 to 1.31 s |
-| `main`, 8 runs | 2.28 to 3.05 s | 1.22 to 1.44 s | 1.21 to 1.34 s | 1.22 to 1.44 s |
+| Runs | Code | Load starts, after the part | Lines in the first 10 s, worst | Lines after the first 10 s, worst | First call line |
+|---|---|---|---|---|---|
+| Cold, 8 | With the change | -40 to 3 ms | 1.24 to 1.27 s | 1.22 to 1.36 s | 1.23 to 1.27 s |
+| Cold, 8 | `main` | 32 to 37 ms | 1.24 to 1.31 s | 1.22 to 1.35 s | 1.23 to 1.31 s |
+| Helper 0.5 s slower, 2 | With the change | -518 ms | 1.34, 1.36 s | 1.29, 1.38 s | 1.34, 1.36 s |
+| Helper 0.5 s slower, 2 | `main` | 34 to 38 ms | 1.42, 1.54 s | 1.33, 1.35 s | 1.42, 1.43 s |
+| Fresh app, 2 | With the change | -40 ms | 1.50, 1.58 s | 1.38, 1.40 s | 1.31, 1.36 s |
+| Fresh app, 2 | `main` | 33 to 36 ms | 1.39, 1.55 s | 1.31, 1.32 s | 1.34, 1.36 s |
 
-- All 16 runs committed 24 of 24 lines with no clock step. Every line, the first 10 s included, is within 1.5 s. The worst is 1.34 s with the change and 1.44 s on `main`.
-- In every run the load ended 2.3 to 3.1 s into the call, before the first line closes, so `main` passes here too. Cold files and this much other work did not stretch the load past 4.4 s.
-- With the embeddings diarizer the first call line was the worst line of every `main` run, at 1.30 to 1.44 s. With the change it is 1.24 to 1.31 s.
+- All 24 runs committed 24 of 24 lines with no clock step. In the 16 cold runs every line is within 1.5 s on both: the load took 2.25 to 2.72 s and ended before the first line closes, so starting it 29 to 77 ms sooner changes nothing there.
+- With the slower helper the load gets a 0.5 s head start, and the first lines are 1.34 and 1.36 s against 1.42 and 1.54 s on `main`.
+- With the embeddings diarizer the first call line was the worst line of every cold `main` run, at 1.31 s. With the change it is 1.25 to 1.27 s.
 - Reading the recognizer's files through before the load made a cold load 0.5 to 1.1 s shorter on this machine. On a second Mac mini M4 it did not shorten it, and it costs 0.15 s on a warm load, so we left it out.
 
-**Still open.** A first line is still late when the load outlasts the first utterance, which a busy machine, a slow disk or the first run of a freshly copied app can cause. Two of our app runs on 2026-10-11 were late, at 3.63 s and 2.02 s, and both were the first run of a fresh copy. A fresh copy of the model files alone did not reproduce it, and neither did a fresh install alone. The same call run in-process on the second Mac mini, while another test suite ran there, had its first line over the bar in two of six runs, at 1.54 and 2.21 s. Removing the wait needs a recognizer ready before the call's first line closes. One way is to load Parakeet before the call, which a call that starts the app cannot do. The other is to decode the first lines with a smaller model while the fp32 model loads.
+**Still open.** The first run of a freshly copied app still has a late first mic line, at 1.50 and 1.58 s with the change and 1.39 and 1.55 s on `main`. Its load ends about 3.3 s into the call, before the line closes. The time goes to the first decodes instead: the two provisional re-decodes before that line took 1.5 to 1.7 s together, against about 0.75 s for the three before each later line, and the line's own decode then started 0.5 s behind its audio instead of 0.15 s. A decode on silence right after the load would take that one-time cost while the Worker waits for speech, which a load that now starts with the call leaves time for. Earlier app runs on 2026-10-11 had first lines at 3.63 and 2.02 s, both the first run of a fresh copy, and the same call run in-process on the second Mac mini while another test suite ran there had its first line over the bar in two of six runs, at 1.54 and 2.21 s. A load that outlasts the first utterance on a busy machine or a slow disk is still possible. A smaller model for the first lines while the fp32 model loads would remove that wait.
 
 ### G6: the x64 line after the pause fix, 2026-10-11
 
