@@ -10,7 +10,7 @@ The first client is [Telegram-Archive](https://github.com/GeiserX/Telegram-Archi
 - **One job, one result.** A client uploads a file to `POST /v1/jobs`, gets an id back at once, and reads the result by long-poll, by the per-key event feed, or by a signed webhook to a URL it names. The result is one JSON shape with text, language, words, segments and the engine that made it.
 - **Pull is the truth, push is the hint.** Every job's outcome sits in a per-key event feed a client can read after any cursor. Webhooks are signed per the Standard Webhooks spec, retried for a day, and never the only way to learn a result. A client behind NAT with no reachable URL loses nothing.
 - **Presets first, a model name when asked.** `lite`, `fast`, `best`, `fusion` and `auto`. A client says how much it cares; the server maps that to engines the hardware can run, or to its own default. A client that needs one exact model names its engine id, and akou fetches it if it is missing (section 12).
-- **Three dialects for free.** The OpenAI transcription endpoint, the Wyoming protocol and Bazarr's `/asr`. Nextcloud, Home Assistant, Bazarr and whisper-subs work with no code on their side.
+- **Three dialects, one built.** The OpenAI transcription endpoint exists today (SV-C1), so Nextcloud and whisper-subs work with no code on their side. The Wyoming protocol for Home Assistant (SV-C2) and Bazarr's `/asr` (SV-C3) are planned and not built: a client that speaks only those cannot use akou yet.
 - **One URL, any number of boxes.** An akou can send jobs to other akou servers on the network, for example a Mac mini with a GPU, and still answer the client under its own job id, feed and webhook (section 14).
 - **Self-hosted, still.** There is no akou cloud and no relay. Server mode is the user's own box reachable by the user's own programs.
 
@@ -214,7 +214,7 @@ Table stakes, in every serious tool: file upload in any container, batch submiss
 
 What akou adds that no single tool combines today:
 
-- The three dialects on one port: jobs with signed callbacks, the OpenAI endpoint and Wyoming. Today a user runs speaches for one, wyoming-faster-whisper for another and a webhook shim for the third.
+- The three dialects on one port, once SV-C2 lands: jobs with signed callbacks, the OpenAI endpoint and Wyoming. Today akou has the first two; a user runs speaches for one, wyoming-faster-whisper for another and a webhook shim for the third.
 - A replayable per-key event feed beside the webhook. No self-hosted competitor signs its webhooks, and none lets a client catch up after a day offline.
 - Presets that read the hardware, with the choice and its reason visible.
 - Language routing across engines, with the caller's hint first.
