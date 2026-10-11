@@ -55,8 +55,6 @@ akou finds `claude` and `codex` on your `PATH` or through your login shell, or r
 
 Both run in a new empty folder, so no project instructions load. Claude Code gets no tools and none of your MCP servers; Codex runs in a read-only sandbox. The run keeps no session afterwards, so nothing akou asks shows up in your harness's history. The harness still loads your own user-level instructions, memory and skills, as it does for any run.
 
-`provider.harnessSafeMode` (off by default) runs Claude Code 2.1.169 and later with `--safe-mode`. akou's questions then leave out your hooks, plugins, skills and user-level instructions, and keep your sign-in, your model setting and the `env` block of your settings, so a Bedrock or proxy setup keeps working. On a daily-use Mac it took about 1.8 s off a cold start. That helps `akou ask` and agents most, because the ask box already starts the harness early. An older or unknown Claude Code runs without the flag.
-
 **Starting early.** When the ask box gets focus, akou starts the harness and leaves it waiting for its prompt, so its start-up runs while you type. It is sent nothing until you ask, and nothing reaches your subscription before then. A harness that gets no question is stopped after a minute, when akou quits, and on its own if akou crashes. `akou ask` and agents start the harness when the question arrives, as before.
 
 akou never logs in for you, never reads or copies the harness's credentials, and never changes its settings.

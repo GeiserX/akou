@@ -8,11 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  CLAUDE_SAFE_MODE,
   CODEX_MIN_JSON,
   classifyRun,
   claudeParser,
-  claudeSafeMode,
   codexParser,
   compareVersions,
   discoverHarnesses,
@@ -25,7 +23,6 @@ import {
   parseVersion,
   pickHarness,
   type StreamParser,
-  safeModeFor,
 } from "../src/main/llm/harness.ts";
 import { ProviderError, runProvider } from "../src/main/llm/provider.ts";
 import { tempDir } from "./helpers.ts";
@@ -212,55 +209,6 @@ describe("invocation and discovery", () => {
       '{"type":"user","message":{"role":"user","content":"PACK"}}\n',
     );
     expect(harnessStdin("codex", req)).toBe("SYS\n\nPACK");
-  });
-
-  test("--safe-mode only with provider.harnessSafeMode on, and only for a Claude Code that has it", () => {
-    expect(CLAUDE_SAFE_MODE).toBe("2.1.169");
-    expect(claudeSafeMode("2.1.169")).toBe(true);
-    expect(claudeSafeMode("2.1.296")).toBe(true);
-    // An older one refuses the flag and exits; an unknown version is not guessed at.
-    expect(claudeSafeMode("2.1.168")).toBe(false);
-    expect(claudeSafeMode(null)).toBe(false);
-    const claude = { kind: "claude" as const, command: ["claude"], version: "2.1.296" };
-    // Off by default: akou's runs follow the user's own Claude Code setup.
-    expect(safeModeFor(claude)).toBe(false);
-    expect(safeModeFor({ ...claude, safeMode: false })).toBe(false);
-    expect(safeModeFor({ ...claude, safeMode: true })).toBe(true);
-    expect(safeModeFor({ ...claude, safeMode: true, version: "2.1.168" })).toBe(false);
-    expect(safeModeFor({ ...claude, safeMode: true, version: null })).toBe(false);
-    expect(
-      safeModeFor({ kind: "codex", command: ["codex"], version: "0.162.0", safeMode: true }),
-    ).toBe(false);
-    expect(harnessArgs("claude", "SYS")).not.toContain("--safe-mode");
-    const on = harnessArgs("claude", "SYS", undefined, true);
-    // Before the session flags and the system prompt, never between a flag and its value.
-    expect(on.indexOf("--safe-mode")).toBe(on.indexOf("--strict-mcp-config") + 1);
-    expect(harnessArgs("codex", "SYS", undefined, true)).not.toContain("--safe-mode");
-  });
-
-  test("the provider passes --safe-mode only when its target asks for it", async () => {
-    const t = tempDir();
-    try {
-      const run = async (safeMode: boolean | undefined) => {
-        const record = join(t.dir, `record-${String(safeMode)}.json`);
-        const p = new HarnessProvider({
-          target: () => ({
-            kind: "claude",
-            command: [process.execPath, FAKE, join(FIX, "claude-ok.jsonl")],
-            version: "2.1.281",
-            ...(safeMode === undefined ? {} : { safeMode }),
-          }),
-          env: { ...process.env, FAKE_RECORD: record },
-        });
-        await runProvider(p, { system: "S", prompt: "P", maxTokens: 10 }, () => {});
-        return JSON.parse(readFileSync(record, "utf8")).argv as string[];
-      };
-      expect(await run(undefined)).not.toContain("--safe-mode");
-      expect(await run(false)).not.toContain("--safe-mode");
-      expect(await run(true)).toContain("--safe-mode");
-    } finally {
-      t.cleanup();
-    }
   });
 
   test("versions", () => {

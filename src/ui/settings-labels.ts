@@ -77,10 +77,6 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     label: "Follow-up questions reuse one session",
     help: "Sends only what is new since the last question. Claude Code or Codex keeps those sessions in its history.",
   },
-  "provider.harnessSafeMode": {
-    label: "Leave my Claude Code setup out of answers",
-    help: "Skips your own Claude Code add-ons and instructions, so it starts about 2 s sooner. Sign-in and model stay.",
-  },
   "provider.harnessPath": {
     label: "Program",
     help: "Set in the config file.",

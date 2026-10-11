@@ -15,8 +15,7 @@
  * deadlines and cancelling), `FAKE_RECORD` (a file that receives `{argv, cwd, cwdEntries, stdin,
  * prompt, startedAt, promptAt}` as JSON: `stdin` as read, `prompt` the message's text in
  * stream-json mode, the two times in epoch ms), `FAKE_PIDFILE` (a file that receives this
- * process's pid as soon as it starts), `FAKE_ARGVFILE` (a file that receives its arguments as JSON
- * as soon as it starts), `FAKE_EXIT_FIRST` (a file: the first run, finding it absent, creates it and
+ * process's pid as soon as it starts), `FAKE_EXIT_FIRST` (a file: the first run, finding it absent, creates it and
  * exits 1 after `FAKE_EXIT_FIRST_MS` without reading stdin or writing a line; later runs go on as
  * usual), `FAKE_READYFILE` (a file written once its start-up is done
  * and it waits for stdin), `FAKE_GRANDCHILD` (`group` or `escape`: start a
@@ -28,9 +27,6 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const startedAt = Date.now();
 if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
-if (process.env.FAKE_ARGVFILE) {
-  writeFileSync(process.env.FAKE_ARGVFILE, JSON.stringify(process.argv.slice(3)));
-}
 const [fixture, ...args] = process.argv.slice(2);
 const streamJson = args.some((a, i) => a === "--input-format" && args[i + 1] === "stream-json");
 const exitFirst = process.env.FAKE_EXIT_FIRST;
