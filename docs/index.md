@@ -87,7 +87,7 @@ Hold a key and speak, and akou types the words where your cursor is, in any app.
 - Types what you dictate into any app, and learns a word you fix only when you say yes. See [Dictation](dictation.md).
 - Keeps one word list you own, so names and product terms come out right across calls.
 - Hands every finished call to your own vault, repository or wiki as Markdown with frontmatter, the event log and the audio, through an export folder, hooks, a signed webhook or the API. See [Hand-off to your knowledge system](knowledge-handoff.md).
-- Runs the same core as a self-hosted transcription server in Docker, with OpenAI-compatible, Wyoming and Bazarr endpoints. See [Server mode](server.md) and [GPUs and presets](server-hardware.md).
+- Runs the same core as a self-hosted transcription server in Docker, with file jobs and an OpenAI-compatible endpoint; Wyoming and Bazarr endpoints are planned. See [Server mode](server.md) and [GPUs and presets](server-hardware.md).
 
 ## How it runs
 
