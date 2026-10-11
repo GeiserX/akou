@@ -263,6 +263,8 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "-p 127.0.0.1:10300:10300",
       "scripts/ci/wyoming/probe.py",
       "capabilities.wyoming",
+      // Home Assistant's fixed format: the clip is resampled before the probe sends it.
+      "-ar 16000 -ac 1 -sample_fmt s16",
     ]) {
       if (!runs.includes(want)) gaps.push(`no step runs ${want}`);
     }

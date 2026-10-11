@@ -2,7 +2,10 @@
 
 Line 1 is the `info` answer to `describe`, as JSON. Line 2 is the transcript of the WAV, sent as
 Home Assistant sends an utterance: `transcribe {language}`, `audio-start`, chunks, `audio-stop`.
-Exits 1 on an `error` event, on a connection that closes first, or when it cannot connect.
+The WAV must be in Home Assistant's fixed format, 16000 Hz, 16-bit, mono, since `wav_to_chunks`
+sends the file's own format and anything else would test a path Home Assistant never takes.
+Exits 2 when the WAV is in another format, 1 on an `error` event, on a connection that closes
+first, or when it cannot connect.
 """
 
 import argparse
@@ -37,6 +40,16 @@ async def main() -> None:
     p.add_argument("--language", default=None)
     p.add_argument("--wav", required=True)
     a = p.parse_args()
+    with wave.open(a.wav, "rb") as w:
+        got = (w.getframerate(), w.getsampwidth(), w.getnchannels())
+    if got != (16000, 2, 1):
+        rate, width, channels = got
+        print(
+            f"{a.wav} is {rate} Hz, {width * 8}-bit, {channels} channels;"
+            " Home Assistant sends 16000 Hz, 16-bit, mono",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     timeouts = {"connect_timeout": 10, "read_timeout": 600}
     async with AsyncTcpClient(a.host, a.port, **timeouts) as client:
         await client.write_event(Describe().event())
