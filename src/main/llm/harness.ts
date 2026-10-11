@@ -7,13 +7,24 @@
  *   (TRAPS "Harness not found from an app bundle"). The user can pin a path. Each one found is
  *   asked for its version.
  * - **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose
- *   --include-partial-messages --tools "" --strict-mcp-config --no-session-persistence
- *   --system-prompt SYSTEM`, the prompt on stdin. Codex: `codex exec --json --sandbox read-only
- *   --skip-git-repo-check --ephemeral -` (the trailing `-` reads the prompt from stdin). Both run in
- *   a fresh empty scratch folder, so no project instructions load, with no tools (Claude Code) or a
- *   read-only sandbox (Codex). `--strict-mcp-config` with no MCP config keeps the user's MCP
- *   servers out: measured on one tiny prompt, it cut the context Claude Code sent from about 17k
- *   tokens to about 3k.
+ *   --include-partial-messages --input-format stream-json --tools "" --strict-mcp-config
+ *   [--safe-mode] --no-session-persistence --system-prompt SYSTEM`, the prompt on stdin as one
+ *   stream-json user message; stdin is closed once the `result` arrives. Codex: `codex exec --json
+ *   --sandbox read-only --skip-git-repo-check --ephemeral -` (the trailing `-` reads the prompt
+ *   from stdin). Both run in a fresh empty scratch folder, so no project instructions load, with no
+ *   tools (Claude Code) or a read-only sandbox (Codex). `--strict-mcp-config` with no MCP config
+ *   keeps the user's MCP servers out: measured on one tiny prompt, it cut the context Claude Code
+ *   sent from about 17k tokens to about 3k. `--safe-mode` (Claude Code 2.1.169 and later) leaves
+ *   out the user's hooks, plugins, skills and user-level instructions, which an answer from the
+ *   pack never needs and which made start-up slow and unpredictable (#383); sign-in, the model
+ *   setting and the settings' `env` still apply.
+ * - **Starting early** (#383). Most of the wait for an answer was the harness starting, not the
+ *   model. Both harnesses do their start-up while waiting for stdin (Claude Code with stream-json
+ *   input waits with no time limit; in text mode it gives up after 3 s), so `HarnessSpare` starts
+ *   one when the ask box asks for it (`warm`) and the next question that matches its command line
+ *   takes it, instead of spawning. It is sent nothing until that question: a spare that is never
+ *   used is stopped after `SPARE_IDLE_MS` without a request, at quit, and on its own when akou dies,
+ *   because its stdin closes.
  * - **Parsing.** Both print one JSON object per line. Claude Code streams `text_delta`s inside
  *   `stream_event`s and ends with a `result`; Codex reports `item.*` events whose `agent_message`
  *   text grows, and ends with `turn.completed` or `turn.failed`. The parsers are tested on
@@ -50,6 +61,9 @@ export const HARNESS_LABEL: Record<HarnessKind, string> = { claude: "claude-code
 
 /** Codex's `exec --json` event format (`thread.started`, `item.*`) is checked from this version. */
 export const CODEX_MIN_JSON = "0.44.0";
+
+/** Claude Code has `--safe-mode` from this version; an older one refuses the flag and exits. */
+export const CLAUDE_SAFE_MODE = "2.1.169";
 
 export interface HarnessInfo {
   kind: HarnessKind;
@@ -415,12 +429,20 @@ export interface HarnessProviderOptions {
   target: () => HarnessTarget | { none: string };
   env?: Record<string, string | undefined>;
   onLog?(level: "info" | "warn", msg: string): void;
+  /** The harness started before its question, kept by the app across provider instances. */
+  spare?: HarnessSpare;
+}
+
+/** Whether this Claude Code takes `--safe-mode`: only a version known to be new enough. */
+export function claudeSafeMode(version: string | null | undefined): boolean {
+  return version != null && compareVersions(version, CLAUDE_SAFE_MODE) >= 0;
 }
 
 export function harnessArgs(
   kind: HarnessKind,
   system: string,
   session?: CompleteRequest["session"],
+  version?: string | null,
 ): string[] {
   if (kind === "claude") {
     const persistence = !session
@@ -434,9 +456,12 @@ export function harnessArgs(
       "stream-json",
       "--verbose",
       "--include-partial-messages",
+      "--input-format",
+      "stream-json",
       "--tools",
       "",
       "--strict-mcp-config",
+      ...(claudeSafeMode(version) ? ["--safe-mode"] : []),
       ...persistence,
       "--system-prompt",
       system,
@@ -445,9 +470,15 @@ export function harnessArgs(
   return ["exec", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "-"];
 }
 
-/** Codex has no system prompt flag; the instructions go first on stdin. */
+/**
+ * What goes on stdin: for Claude Code one stream-json user message (stdin stays open until its
+ * `result`); Codex has no system prompt flag, so the instructions go first, then stdin closes.
+ */
 export function harnessStdin(kind: HarnessKind, req: CompleteRequest): string {
-  return kind === "claude" ? req.prompt : `${req.system}\n\n${req.prompt}`;
+  if (kind === "claude") {
+    return `${JSON.stringify({ type: "user", message: { role: "user", content: req.prompt } })}\n`;
+  }
+  return `${req.system}\n\n${req.prompt}`;
 }
 
 const KILL_GRACE_MS = 2000;
@@ -471,6 +502,165 @@ function killTree(proc: { pid: number; kill(s?: NodeJS.Signals): void }, signal:
   }
 }
 const STDERR_KEEP = 16_384;
+
+/** A started harness: its process and the scratch folder it runs in. */
+interface Started {
+  proc: ReturnType<typeof Bun.spawn>;
+  scratch: string;
+}
+
+/**
+ * The command line, as one string, that a request without a session runs: a spare serves a
+ * request only when this matches, so a changed harness, version or system prompt never answers.
+ */
+export function spareKey(t: HarnessTarget, system: string): string {
+  return JSON.stringify([t.command, harnessArgs(t.kind, system, undefined, t.version)]);
+}
+
+/** Starts the harness in its scratch folder; throws `ProviderError` when it cannot start. */
+function startHarness(
+  t: HarnessTarget,
+  system: string,
+  session: CompleteRequest["session"] | undefined,
+  env: Record<string, string | undefined>,
+): Started {
+  let scratch: string;
+  if (session) {
+    scratch = HarnessProvider.sessionDir(session.id);
+    mkdirSync(scratch, { recursive: true });
+  } else {
+    scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
+  }
+  try {
+    const proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, system, session, t.version)], {
+      cwd: scratch,
+      env: env as Record<string, string>,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      // Its own process group, so cancelling reaches anything it started.
+      detached: process.platform !== "win32",
+    });
+    return { proc, scratch };
+  } catch (err) {
+    // A session's folder outlives the run: its next question resumes from it.
+    if (!session) rmSync(scratch, { recursive: true, force: true });
+    const code = (err as { code?: string }).code;
+    throw new ProviderError(
+      code === "ENOENT" ? "missing" : "other",
+      code === "ENOENT"
+        ? `${t.command[0]} was not found; is ${HARNESS_LABEL[t.kind]} still installed?`
+        : `cannot start ${HARNESS_LABEL[t.kind]}: ${(err as Error).message}`,
+    );
+  }
+}
+
+/**
+ * Whether a started harness is still running. Bun sets `exitCode` a moment after the process is
+ * reaped, so the pid is asked as well: a spare that just died is never handed a question.
+ */
+function running(proc: Started["proc"]): boolean {
+  if (proc.exitCode !== null || proc.signalCode !== null) return false;
+  try {
+    process.kill(proc.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Ends a started harness that was never sent a question, and removes its scratch folder. */
+function stopStarted(run: Started): void {
+  try {
+    (run.proc.stdin as import("bun").FileSink).end();
+  } catch {}
+  killTree(run.proc, "SIGTERM");
+  // clock: a grace for a real harness process to exit before it is killed.
+  setTimeout(() => {
+    if (running(run.proc)) killTree(run.proc, "SIGKILL");
+  }, KILL_GRACE_MS).unref?.();
+  rmSync(run.scratch, { recursive: true, force: true });
+}
+
+/** How long a spare waits for its question after the last `warm` before it is stopped. */
+export const SPARE_IDLE_MS = 60_000;
+
+/**
+ * At most one harness started before its question (#383). The ask box calls `warm` when it gets
+ * focus and while the user types; the next request with the same command line takes it, so the
+ * harness's start-up overlaps the typing. The spare is sent nothing until a request takes it, and
+ * it is stopped after `idleMs` with no `warm`, when a request for another command line finds it,
+ * and at `clear` (quit). When akou dies, the spare's stdin closes and it exits on its own.
+ */
+export class HarnessSpare {
+  private held: { key: string; run: Started; timer: ReturnType<typeof setTimeout> } | null = null;
+  private readonly idleMs: number;
+
+  constructor(
+    private readonly o: { idleMs?: number; onLog?: HarnessProviderOptions["onLog"] } = {},
+  ) {
+    this.idleMs = o.idleMs ?? SPARE_IDLE_MS;
+  }
+
+  /** The waiting harness's pid, or null. */
+  pid(): number | null {
+    return this.held?.run.proc.pid ?? null;
+  }
+
+  /**
+   * Starts a harness for the next request without a session, or keeps the one already waiting
+   * for `idleMs` more. False when it could not start.
+   */
+  warm(t: HarnessTarget, system: string, env: Record<string, string | undefined>): boolean {
+    const key = spareKey(t, system);
+    const h = this.held;
+    if (h && h.key === key && running(h.run.proc)) {
+      clearTimeout(h.timer);
+      h.timer = this.idle();
+      return true;
+    }
+    this.clear();
+    let run: Started;
+    try {
+      run = startHarness(t, system, undefined, env);
+    } catch (err) {
+      this.o.onLog?.("warn", `harness: could not start one early: ${(err as Error).message}`);
+      return false;
+    }
+    this.held = { key, run, timer: this.idle() };
+    return true;
+  }
+
+  /**
+   * The waiting harness, when it was started for exactly this command line and is still running;
+   * it is the caller's from then on. A spare for another command line is stopped.
+   */
+  take(key: string): Started | null {
+    const h = this.held;
+    if (!h) return null;
+    this.held = null;
+    clearTimeout(h.timer);
+    if (h.key === key && running(h.run.proc)) return h.run;
+    stopStarted(h.run);
+    return null;
+  }
+
+  /** Stops the waiting harness, if there is one. */
+  clear(): void {
+    const h = this.held;
+    if (!h) return;
+    this.held = null;
+    clearTimeout(h.timer);
+    stopStarted(h.run);
+  }
+
+  private idle(): ReturnType<typeof setTimeout> {
+    // clock: how long a started harness may wait for a question.
+    const timer = setTimeout(() => this.clear(), this.idleMs);
+    timer.unref?.();
+    return timer;
+  }
+}
 
 export class HarnessProvider implements Provider {
   readonly id = "harness" as const;
@@ -513,6 +703,18 @@ export class HarnessProvider implements Provider {
     return { ok: true, detail: `${this.label()} at ${t.command.at(-1)}` };
   }
 
+  /** Starts the harness now for the next question with this system prompt (`HarnessSpare`). */
+  async warm(system: string): Promise<{ warming: boolean; reason?: string }> {
+    if (!this.o.spare) return { warming: false, reason: "nothing keeps a harness started early" };
+    const avail = await this.available();
+    if (!avail.ok) return { warming: false, reason: avail.reason };
+    const t = this.o.target() as HarnessTarget;
+    const env = this.o.env ?? process.env;
+    return this.o.spare.warm(t, system, env)
+      ? { warming: true }
+      : { warming: false, reason: `${HARNESS_LABEL[t.kind]} could not start` };
+  }
+
   async complete(
     req: CompleteRequest,
     onToken: (t: string) => void,
@@ -522,39 +724,16 @@ export class HarnessProvider implements Provider {
     if (!avail.ok) throw new ProviderError(avail.kind, avail.reason);
     const t = this.o.target() as HarnessTarget;
     const session = t.kind === "claude" ? req.session : undefined;
-    let scratch: string;
-    if (session) {
-      scratch = HarnessProvider.sessionDir(session.id);
-      mkdirSync(scratch, { recursive: true });
-    } else {
-      scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
-    }
+    const env = this.o.env ?? process.env;
+    // A question sent whole takes the harness the ask box started early, when it matches.
+    const early = session ? null : (this.o.spare?.take(spareKey(t, req.system)) ?? null);
+    const run = early ?? startHarness(t, req.system, session, env);
+    const { proc, scratch } = run;
     // A session's folder outlives the run: its next question resumes from it.
     const cleanup = () => {
       if (!session) rmSync(scratch, { recursive: true, force: true });
     };
     const parser = t.kind === "claude" ? claudeParser() : codexParser();
-    let proc: ReturnType<typeof Bun.spawn>;
-    try {
-      proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, req.system, session)], {
-        cwd: scratch,
-        env: (this.o.env ?? process.env) as Record<string, string>,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        // Its own process group, so cancelling reaches anything it started.
-        detached: process.platform !== "win32",
-      });
-    } catch (err) {
-      cleanup();
-      const code = (err as { code?: string }).code;
-      throw new ProviderError(
-        code === "ENOENT" ? "missing" : "other",
-        code === "ENOENT"
-          ? `${t.command[0]} was not found; is ${HARNESS_LABEL[t.kind]} still installed?`
-          : `cannot start ${HARNESS_LABEL[t.kind]}: ${(err as Error).message}`,
-      );
-    }
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => {
       killTree(proc, "SIGTERM");
@@ -565,9 +744,16 @@ export class HarnessProvider implements Provider {
     if (signal.aborted) onAbort();
     try {
       const stdin = proc.stdin as import("bun").FileSink;
+      // Claude Code reads stream-json messages until stdin closes: it closes after the `result`.
+      const endStdin = () => {
+        try {
+          Promise.resolve(stdin.end()).catch(() => {});
+        } catch {}
+      };
       try {
         stdin.write(harnessStdin(t.kind, req));
-        await stdin.end();
+        if (t.kind === "claude") await stdin.flush();
+        else await stdin.end();
       } catch {
         // The harness quit before reading its prompt; its exit code says why.
       }
@@ -587,6 +773,7 @@ export class HarnessProvider implements Provider {
             continue;
           }
           for (const tok of parser.feed(event)) if (!signal.aborted) onToken(tok);
+          if (isObj(event) && event.type === "result" && t.kind === "claude") endStdin();
         }
       })();
       // A descendant that inherited the pipes (and left the group) can hold them open after the

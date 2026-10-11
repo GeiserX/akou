@@ -368,9 +368,12 @@ describe("[TS-26] meeting text is data: akou's own provider", () => {
         });
         expect(r.answered).toBe(true);
         const rec = JSON.parse(readFileSync(record, "utf8"));
-        expect(violations(rec.stdin)).toEqual([]);
-        expect(inside(rec.stdin)).toContain(INJECT);
-        expect(rec.argv).toEqual(harnessArgs(kind, ASK_SYSTEM));
+        // The prompt as the harness reads it: Claude Code's stream-json message decoded.
+        expect(violations(rec.prompt)).toEqual([]);
+        expect(inside(rec.prompt)).toContain(INJECT);
+        expect(rec.argv).toEqual(
+          harnessArgs(kind, ASK_SYSTEM, undefined, kind === "claude" ? "2.1.281" : "0.151.0"),
+        );
         if (kind === "claude") {
           expect(
             rec.argv.slice(rec.argv.indexOf("--tools"), rec.argv.indexOf("--tools") + 2),

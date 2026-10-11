@@ -202,6 +202,7 @@ import {
   type Discovery,
   discoverHarnesses,
   HarnessProvider,
+  HarnessSpare,
   type HarnessTarget,
   pickHarness,
 } from "./llm/harness.ts";
@@ -849,6 +850,7 @@ export class AkouApp implements ApiApp {
           target: () => this.harnessTarget(),
           env: this.o.env ?? process.env,
           onLog: (level, msg) => this.log(level, msg),
+          spare: this.spare,
         });
       case "openai-compatible":
         return new OpenAiCompatibleProvider({
@@ -872,6 +874,9 @@ export class AkouApp implements ApiApp {
   }
 
   private sessions: MemorySessions | null = null;
+
+  /** The harness started before its question, kept across the fresh providers above (#383). */
+  private readonly spare = new HarnessSpare({ onLog: (level, msg) => this.log(level, msg) });
 
   /**
    * Kept harness sessions for follow-up questions (`provider.harnessResume`, off by default until
@@ -4097,6 +4102,7 @@ export class AkouApp implements ApiApp {
       // clock: lets the answer to `POST /quit` go out first.
       await new Promise((r) => setTimeout(r, 20));
       await this.quitStep("the window", () => this.window?.close());
+      await this.quitStep("the harness waiting for a question", () => this.spare.clear());
       await this.quitStep("sharing", () => this.sharing.stopAll());
       for (const t of this.reexports.values()) clearTimeout(t);
       this.reexports.clear();

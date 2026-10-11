@@ -1,0 +1,73 @@
+Harness start-up (#383), 2026-10-11, on a Mac mini M4 (macOS 26.6.1, 16 GB): raw output of the checks
+behind the G7 section in M0-results.md. claude 2.1.296, codex 0.147.0.
+
+== The split, from a shell: the timing script committed as scripts/gates/g7-startup.ts, 5 interleaved samples per case after one warm-up run each
+   init: claude's system/init from the spawn. api: claude's first event that needed the API, from the question.
+   The account was at its weekly limit, so the API's reply was a refusal (rate_limit_event status rejected), never an answer.
+   The daily-use context: 36 skills, 6 commands, hooks on 3 events (8 commands), 2 plugins on (swift-lsp, warp), copied
+   into a scratch config folder; 2 of its hook commands name a program that machine does not have, so they fail at once.
+the Mac mini's own config folder: init median 314 ms, api after the question median 835 ms, samples [835, 837, 824, 833, 975], exit [1]
+bare config folder (sign-in file only): init median 281 ms, api after the question median 853 ms, samples [853, 782, 853, 859, 803], exit [1]
+daily-use context, as is: init median 380 ms, api after the question median 835 ms, samples [927, 798, 835, 828, 1124], exit [1]
+daily-use context, hooks off (--settings disableAllHooks): init median 327 ms, api after the question median 885 ms, samples [922, 836, 883, 885, 957], exit [1]
+daily-use context, plugins off (--settings enabledPlugins false): init median 349 ms, api after the question median 963 ms, samples [980, 845, 1024, 948, 963], exit [1]
+daily-use context, skills off (--disable-slash-commands): init median 401 ms, api after the question median 865 ms, samples [836, 839, 865, 878, 71575], exit [1]
+daily-use context, --safe-mode: init median 298 ms, api after the question median 835 ms, samples [835, 841, 805, 818, 857], exit [1]
+daily-use context, started 8 s before the question: init median 8036 ms, api after the question median 387 ms, samples [392, 387, 373, 364, 412], exit [1]
+daily-use context, --safe-mode, started 8 s before the question: init median 8024 ms, api after the question median 381 ms, samples [372, 386, 381, 377, 385], exit [1]
+   One sample of 'skills off' took 71,575 ms: one slow API reply; the other four took 836 to 878 ms.
+
+== Control: a SessionStart hook that sleeps 3 s and appends a line to a marker file, in a scratch config folder
+cold (3 steady runs): init 3281, 3297, 3328 ms; api 3647, 3636, 3677 ms
+started 6 s before the question: hook started 624 ms after the spawn, api 368 ms after the question; marker 1 -> 2 lines
+--safe-mode: init 254 ms, api 825 ms; marker unchanged (the hook did not run)
+--safe-mode, started 6 s before the question: api 428 ms after the question; marker unchanged
+The first run in a new config folder spent 20.9 s before the hook started (once per folder).
+
+== Claude Code text input with no stdin for 8 s
+Warning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.
+With --input-format stream-json, held 6 s and 20 s: api 375 and 417 ms after the question; init arrives with the first message.
+
+== Codex exec - held: every event with its time from the spawn (not signed in: the 401 retries follow)
+cold:   1 WRITE, 422 thread.started, 436 turn.started, 1237 first reconnect error
+held 5: 5002 WRITE, 5066 thread.started, 5067 turn.started, 5859 first reconnect error
+
+== Does a harness waiting for its prompt outlive its parent? (SIGKILL of the parent, then 3 s)
+claude (stream-json input, --safe-mode) RSS 336,816 KB, codex RSS 34,912 KB while waiting
+after SIGKILL of the parent: neither process left (both read end of file on stdin and exit)
+
+== --safe-mode by version (the darwin-arm64 binaries from npm, `--help`)
+2.1.168 --help mentions safe-mode: 0
+2.1.169 --help mentions safe-mode: 1
+
+== --safe-mode keeps the settings' model and env (settings.json: model haiku, env ANTHROPIC_BASE_URL at a closed local port)
+without: init model claude-haiku-5-5, then api_retry against the configured address
+--safe-mode: init model claude-haiku-5-5, then api_retry against the configured address
+
+== Through the app (source, the G7 runner, AKOU_HEADLESS, a fresh scratch home per run), claude found through the login shell
+   reply: from the request to the answer event; the reply was the refusal, so errorKind is exhausted and no token arrived.
+branch-cold-1.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1581 errorKind exhausted
+branch-cold-2.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1391 errorKind exhausted
+branch-cold-3.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1570 errorKind exhausted
+branch-cold-4.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1511 errorKind exhausted
+branch-cold-5.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1461 errorKind exhausted
+branch-warm-1.json warm 5000 harness claude-code/2.1.296 warmed {'warming': True} excerpts 28 reply 855 errorKind exhausted
+branch-warm-2.json warm 5000 harness claude-code/2.1.296 warmed {'warming': True} excerpts 29 reply 877 errorKind exhausted
+branch-warm-3.json warm 5000 harness claude-code/2.1.296 warmed {'warming': True} excerpts 26 reply 841 errorKind exhausted
+branch-warm-4.json warm 5000 harness claude-code/2.1.296 warmed {'warming': True} excerpts 27 reply 808 errorKind exhausted
+branch-warm-5.json warm 5000 harness claude-code/2.1.296 warmed {'warming': True} excerpts 28 reply 927 errorKind exhausted
+main-1.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1573 errorKind exhausted
+main-2.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1406 errorKind exhausted
+main-3.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1333 errorKind exhausted
+main-4.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1763 errorKind exhausted
+main-5.json warm None harness claude-code/2.1.296 warmed None excerpts 14 reply 1497 errorKind exhausted
+g7-fake.json warm None start 3000 control: a pinned harness that does not exist | first token None answer 19 ok
+g7-fake.json warm None start 3000 claude: a recorded answer streams | first token 3069 answer 3081 ok
+g7-fake.json warm None start 3000 claude: a usage limit gives the excerpts only | first token None answer 3089 ok
+g7-fake.json warm None start 3000 codex: a recorded answer streams | first token 3058 answer 3066 ok
+g7-fake.json warm None start 3000 codex: a usage limit gives the excerpts only | first token None answer 3061 ok
+g7-fake-warm.json warm 4000 start 3000 control: a pinned harness that does not exist | first token None answer 18 ok
+g7-fake-warm.json warm 4000 start 3000 claude: a recorded answer streams | first token 50 answer 61 ok
+g7-fake-warm.json warm 4000 start 3000 claude: a usage limit gives the excerpts only | first token None answer 3059 ok
+g7-fake-warm.json warm 4000 start 3000 codex: a recorded answer streams | first token 40 answer 45 ok
+g7-fake-warm.json warm 4000 start 3000 codex: a usage limit gives the excerpts only | first token None answer 3061 ok

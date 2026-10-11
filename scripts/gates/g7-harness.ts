@@ -4,7 +4,8 @@
  * window's ask box uses), with the time to the first token measured from the request.
  *
  *   AKOU_HOME=<scratch home> bun scripts/gates/g7-harness.ts --cli <cli.ts | akou>
- *     (--fake | --real --yes) [--harness claude,codex] [--out result.json]
+ *     (--fake | --real --yes) [--harness claude,codex] [--warm MS] [--fake-start-ms MS]
+ *     [--out result.json]
  *
  * `--cli` is `src/main/cli/cli.ts` (run with Bun, the app from source) or a compiled `akou`, which
  * starts the installed `akou.app`: the packaged app G7 asks for. Every case quits the app, writes
@@ -24,6 +25,14 @@
  *   `provider.harnessPath` is empty, and the CLI and so the app run with `PATH` cut to the system
  *   folders, so the app can only find the harness through the login shell. It must stream tokens
  *   and answer.
+ *
+ * - **`--warm MS`** (#383) does what the ask box does when it gets focus before each case that
+ *   expects an answer: `POST /provider/warm`, then MS of waiting, as a person typing the question,
+ *   then the question. Without it the harness starts on the question, as from `akou ask`. Run the
+ *   gate with and without it for the two first-token figures.
+ * - **`--fake-start-ms MS`** makes the stand-in program take MS to start before it reads its
+ *   prompt, as the real harnesses do their start-up while waiting for stdin, so a fake run shows
+ *   what `--warm` saves without spending anything.
  *
  * Prints one JSON object with a verdict per case and exits 1 when any case fails.
  */
@@ -68,6 +77,9 @@ if (real && !argv.includes("--yes")) {
   throw new Error("--real asks each harness a question on your subscription; add --yes");
 }
 const kinds = (opt("--harness") ?? "claude,codex").split(",") as Kind[];
+const warmMs = opt("--warm") === undefined ? null : Number(opt("--warm"));
+const fakeStartMs = Number(opt("--fake-start-ms") ?? 0);
+if (warmMs !== null && !(warmMs >= 0)) throw new Error("--warm takes the milliseconds to wait");
 for (const k of kinds) if (k !== "claude" && k !== "codex") throw new Error(`no harness ${k}`);
 
 const configDir = join(home, ".config", "akou");
@@ -133,7 +145,7 @@ function fakeHarness(kind: Kind, recording: string, code: number): string {
   const program = join(dir, kind);
   writeFileSync(
     program,
-    `#!/bin/sh\nFAKE_EXIT=${code} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_HARNESS)} ${JSON.stringify(join(FIX, recording))} "$@"\n`,
+    `#!/bin/sh\nFAKE_EXIT=${code} FAKE_START_MS=${fakeStartMs} exec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE_HARNESS)} ${JSON.stringify(join(FIX, recording))} "$@"\n`,
   );
   chmodSync(program, 0o755);
   return program;
@@ -154,6 +166,19 @@ async function providerReady(): Promise<Record<string, unknown>> {
     await sleep(100);
   }
   return provider;
+}
+
+/** `POST /provider/warm`, as the ask box sends it when it gets focus. */
+async function warm(): Promise<Record<string, unknown>> {
+  const rt = runtime();
+  if (!rt) throw new Error("the app is not running");
+  const token = readFileSync(join(configDir, TOKEN_FILE), "utf8").trim();
+  const res = await fetch(`http://127.0.0.1:${rt.port}/v1/provider/warm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  return (await res.json()) as Record<string, unknown>;
 }
 
 interface Asked {
@@ -232,6 +257,8 @@ const cases: {
   ok: boolean;
   problems: string[];
   provider: Record<string, unknown>;
+  /** What `POST /provider/warm` answered, with `--warm`. */
+  warmed?: Record<string, unknown>;
   asked: Asked;
 }[] = [];
 async function runCase(
@@ -243,9 +270,22 @@ async function runCase(
 ): Promise<void> {
   await restartWith({ "provider.kind": "harness", ...settings }, env);
   const provider = await providerReady();
+  let warmed: Record<string, unknown> | undefined;
+  if (warmMs !== null && expect === "answer") {
+    warmed = await warm();
+    await sleep(warmMs);
+  }
   const asked = await ask(call);
   const problems = judge(asked, expect);
-  cases.push({ name, ok: problems.length === 0, problems, provider, asked });
+  if (warmed && warmed.warming !== true) problems.push(`not started early: ${warmed.reason}`);
+  cases.push({
+    name,
+    ok: problems.length === 0,
+    problems,
+    provider,
+    ...(warmed ? { warmed } : {}),
+    asked,
+  });
   console.error(`${problems.length === 0 ? "ok  " : "FAIL"} ${name} ${problems.join("; ")}`);
 }
 
@@ -301,6 +341,8 @@ try {
 const result = {
   gate: "G7",
   mode: fake ? "fake" : "real",
+  warmMs,
+  ...(fake ? { fakeStartMs } : {}),
   cli: cliPath,
   question: QUESTION,
   ok: cases.every((c) => c.ok),

@@ -20,6 +20,10 @@
  * with no answer card and no reason naming a setting. A search writes nothing to the call. Until
  * the first status says which, the box shows neither Ask's words nor Search's. With an assistant
  * it is Ask again.
+ *
+ * With an assistant, focus in the box and typing in it ask the app to get the provider ready
+ * (`POST /provider/warm`, at most every `WARM_EVERY_MS`), and so does an answer arriving while the
+ * box has focus: the harness then starts while the user types instead of after Enter (#383).
  */
 
 import { formatWall } from "../core/log/clock.ts";
@@ -94,6 +98,9 @@ export function excerptLine(line: string): string {
   return line.replace(/^#[lf]\d{6,} /, "");
 }
 
+/** How often the box asks the app to keep the provider ready while it has focus. */
+export const WARM_EVERY_MS = 20_000;
+
 export class AskPane {
   private readonly form = byId<HTMLFormElement>("ask-form");
   private readonly input = byId<HTMLInputElement>("ask-input");
@@ -107,12 +114,16 @@ export class AskPane {
   private presetKey = "";
   /** The ask whose answer is on screen when it came from the log, not from a question asked here. */
   private shown: string | null = null;
+  /** When the box last asked the app to get the provider ready (`warm`). */
+  private warmedAt = 0;
 
   constructor(private readonly d: AskDeps) {
     this.form.addEventListener("submit", (e) => {
       e.preventDefault();
       this.ask(this.input.value);
     });
+    this.input.addEventListener("focus", () => this.warm());
+    this.input.addEventListener("input", () => this.warm());
     // The presets are a small menu on the input, not a row of buttons (WINDOW section 6.2).
     this.menuButton.addEventListener("click", () =>
       this.menu(this.presetsBox.hasAttribute("hidden")),
@@ -309,6 +320,19 @@ export class AskPane {
     );
   }
 
+  /**
+   * Asks the app to get the provider ready for a question (the harness starts its program now).
+   * Only with an assistant, and at most every `WARM_EVERY_MS`; `again` skips the wait, after an
+   * answer took the started one.
+   */
+  private warm(again = false): void {
+    if (this.searching !== false) return;
+    const now = Date.now(); // clock: the page's own clock, only to space out its requests
+    if (!again && now - this.warmedAt < WARM_EVERY_MS) return;
+    this.warmedAt = now;
+    void this.d.t.request("POST", "/provider/warm", {}).catch(() => {});
+  }
+
   ask(question: string): void {
     const q = question.trim();
     const call = this.d.call();
@@ -338,6 +362,8 @@ export class AskPane {
       answer: (a: AskAnswer) => {
         this.running = null;
         answer.classList.remove("streaming");
+        // The question took the harness started early: start the next one for a follow-up.
+        if (document.activeElement === this.input) this.warm(true);
         if (a.kind === "naming") {
           status.textContent = "";
           replace(answer, h("span", {}, a.text));

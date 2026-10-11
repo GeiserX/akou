@@ -693,6 +693,37 @@ Every other clause is unchanged.
 
 **Known limitation: an answer through Claude Code can take about 10 s to start.** On the daily-use Mac, claude's first token came 10.4 s after the request, against the 2 to 5 s that [DESIGN.md](../DESIGN.md) estimated. Most of it is the harness starting. Two spawns from a shell, with the arguments the app passes, took 5.1 s and 8.5 s to report ready, and the first text came 1.1 s after that both times. The script that chose the signed-in account in the gate run adds 1.1 to 1.4 s, which an install with one signed-in harness does not pay. Codex's first token came at 5.3 s. Each figure is one sample, and how the start-up splits between hooks, plugins, skills and the harness itself is not known. The excerpts came 15 to 46 ms after the request in the two 0.6.5 files, so the wait is for the written answer only ([#383](https://github.com/GeiserX/akou/issues/383)).
 
+### G7: the harness start, 2026-10-11
+
+[#383](https://github.com/GeiserX/akou/issues/383) asked where the start-up goes and how to take it out of the wait. Measured on a Mac mini M4 (macOS 26.6.1) with claude 2.1.296; raw lines in [g7-383-checks.txt](g7-383-checks.txt). No harness on that machine could answer: claude's account was at its weekly limit and codex was not signed in. So the claude figures stop at claude's first reply from the API, which was a refusal, and the model's own answer time is not in them.
+
+**The split.** From a shell, with akou's command line ([`scripts/gates/g7-startup.ts`](../../scripts/gates/g7-startup.ts)), five samples per case, the median time from the question to claude's first reply from the API:
+
+| Case | Reply |
+|---|---|
+| The machine's own config folder, near empty | 835 ms |
+| A config folder with nothing but the sign-in | 853 ms |
+| A copy of the daily-use context (36 skills, 6 commands, hooks on 3 events, 2 plugins on) | 835 ms |
+| The same, hooks off / plugins off / skills off | 885 / 963 / 865 ms |
+| The same, `--safe-mode` | 835 ms |
+| The same, started 8 s before the question | 387 ms |
+
+On this machine the user context cost nothing measurable, and claude's own start was about 0.45 s of the 0.84 s. The 5 to 9 s of the daily-use Mac did not reproduce here; its hooks scan transcripts, and that Mac carries other load. A hook that sleeps 3 s shows the mechanism: cold, the reply came at 3.6 s; with `--safe-mode` the hook did not run and the reply came at 0.83 s; started 6 s early, the hook ran during the wait and the reply came 0.37 s after the question.
+
+**What changed.** Claude Code runs with `--safe-mode` from 2.1.169, the first version that has it (2.1.168 does not). It leaves out the user's hooks, plugins, skills and user-level instructions, and keeps the sign-in, the model setting and the settings' `env`. That also answers the open question about a large user-level instruction file for Claude Code: it no longer loads. And the ask box starts the harness when it gets focus. Claude Code waits for stream-json input with no limit (in text mode it gives up after 3 s), and codex waits for stdin the same way, so both do their start-up during the wait. The waiting harness is sent nothing until a question, is stopped after 60 s without one, at quit, and exits on its own when akou dies, because its stdin closes. A waiting claude holds about 330 MB, a waiting codex about 35 MB.
+
+**Through the app,** with the G7 runner on the source app, claude found through the login shell, five runs each, the median from the request to claude's reply:
+
+| Build | Reply | Runs |
+|---|---|---|
+| main at 1.0.0 | 1,497 ms | 1,573, 1,406, 1,333, 1,763, 1,497 |
+| This change, question asked with no warm | 1,511 ms | 1,581, 1,391, 1,570, 1,511, 1,461 |
+| This change, `--warm 5000` | 855 ms | 855, 877, 841, 808, 927 |
+
+With a stand-in harness that takes 3 s to start (`--fake --fake-start-ms 3000`), every case passed both ways, and the first token went from 3,069 ms to 50 ms for claude and from 3,058 ms to 40 ms for codex.
+
+**Not measured.** A real first token, for either harness, with the harness started early. On a Mac whose harness answers, that is `g7-harness.ts --real --yes` with and without `--warm`. Codex's start on this machine was about 0.4 s to `thread.started`; its 5.3 s first token on the daily-use Mac came in one piece with the whole answer, so starting early saves codex only its start. `akou ask` and agents still start the harness when the question arrives; only `--safe-mode` helps them.
+
 **Still open.**
 
 - Codex answered on one Mac. The reference Mac mini has no Codex sign-in and its console session was logged out on 2026-10-09 ([g7-real-global-context-checks.txt](g7-real-global-context-checks.txt)), so the packaged app could not start there.

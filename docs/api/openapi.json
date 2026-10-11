@@ -54,6 +54,9 @@
       "name": "workspaces"
     },
     {
+      "name": "provider"
+    },
+    {
       "name": "speakers"
     },
     {
@@ -2895,6 +2898,64 @@
           },
           "499": {
             "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/provider/warm": {
+      "post": {
+        "operationId": "provider.warm",
+        "tags": [
+          "provider"
+        ],
+        "description": "A question may follow soon (the ask box has focus): the harness provider starts Claude Code or Codex now, so its start-up does not delay the answer. The program is sent nothing until a question is asked, and it is stopped after a minute with no question or another warm. `warming` says whether one is started and waiting; `reason` says why not. Other providers have nothing to start. Spends nothing from the subscription.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
           },
           "500": {
             "$ref": "#/components/responses/500.internal"
