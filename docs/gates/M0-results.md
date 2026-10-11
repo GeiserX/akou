@@ -707,7 +707,7 @@ Every other clause is unchanged.
 | claude, stream-json and `--safe-mode`, started on the question | 4,034 and 8,683 ms | 1,592 and 1,040 ms |
 | claude, stream-json and `--safe-mode`, started 8 s before the question | 1,431 and 2,927 ms | 18 and 14 ms |
 
-These claude rows also tried `--safe-mode`, which leaves out the user's hooks, plugins, skills and user-level instructions and keeps sign-in, the model setting and the settings' `env`. akou passes it only with `provider.harnessSafeMode` on, which is off by default, so akou's answers follow the user's own Claude Code setup unless the user turns it on. The rows show what each part does.
+These claude rows also tried `--safe-mode`, which leaves out the user's hooks, plugins, skills and user-level instructions. akou does not pass it: the early start already takes the start out of the wait, and safe mode would change what the user's answers follow. The rows show what each part does.
 | codex, started on the question | 4,985 and 2,890 ms | |
 | codex, started 8 s before the question | 3,241 and 2,676 ms | |
 
@@ -726,7 +726,7 @@ Started early, claude was ready 15 ms after the question, so what is left is the
 
 There the user context cost nothing measurable, and claude's own start was about 0.45 s. A hook that sleeps 3 s shows how a slow context adds to the wait: started on the question, the rejection came at 3.6 s; with `--safe-mode` the hook did not run and it came at 0.83 s; started 6 s early, the hook ran during the wait and it came 0.37 s after the question. Through the app on that Mac mini (the G7 runner on the source app, five runs each), the rejection came after a median of 1,497 ms on main, 1,511 ms on this change with the harness started on the question, and 855 ms with `--warm 5000`.
 
-**Not measured.** A first token through the packaged app with `--warm`, which is `g7-harness.ts --real --yes` with and without `--warm 5000` on a Mac whose harness answers. `akou ask` and agents still start the harness when the question arrives, and pay its start; `provider.harnessSafeMode` cuts it for those who turn it on. The app-level rows need a machine with a signed-in harness and no other akou running.
+**Not measured.** A first token through the packaged app with `--warm`, which is `g7-harness.ts --real --yes` with and without `--warm 5000` on a Mac whose harness answers. `akou ask` and agents still start the harness when the question arrives, and pay its start.
 
 **Still open.**
 

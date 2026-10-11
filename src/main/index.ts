@@ -833,12 +833,11 @@ export class AkouApp implements ApiApp {
   private harnessTarget(): HarnessTarget | { none: string } {
     const s = this.cfg.settings;
     if (s["provider.harnessPath"] === "") this.discoverHarnesses();
-    const t = pickHarness(
+    return pickHarness(
       s["provider.harness"] as "auto" | "claude" | "codex",
       s["provider.harnessPath"],
       this.discovery,
     );
-    return "none" in t ? t : { ...t, safeMode: s["provider.harnessSafeMode"] === true };
   }
 
   /** The provider the settings name, built fresh so a settings change applies at once. */

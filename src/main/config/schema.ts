@@ -607,11 +607,6 @@ export const SETTINGS = {
     default: false,
     doc: "Reuse one Claude Code session for follow-up questions on a call (`--resume`), sending only what is new since the last question. Off until measured to cut the tokens per follow-up by at least 40 % (docs/providers.md). With it on, Claude Code keeps those sessions in its own history.",
   },
-  "provider.harnessSafeMode": {
-    type: "boolean",
-    default: false,
-    doc: "Run Claude Code with `--safe-mode` (Claude Code 2.1.169 and later; an older or unknown version runs without it): akou's questions then leave out your hooks, plugins, skills and user-level instructions, and keep your sign-in, your model setting and your settings' `env`. On a daily-use Mac it took about 1.8 s off a cold start, which helps `akou ask` and agents most, since the ask box already starts the harness early. Off: akou's answers follow your own Claude Code setup.",
-  },
   "memo.provider": {
     type: "string",
     values: ["auto", "on", "off"],
