@@ -11,6 +11,7 @@ import { PROVISIONAL_TTL_MS } from "../src/core/log/fold.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import {
   type CallAccess,
+  DEFAULT_LIVE,
   type FromWorker,
   LINE_TIMING,
   LiveAsr,
@@ -124,6 +125,34 @@ describe("segmenting", () => {
       if (before === undefined) delete process.env.AKOU_LINE_TIMING;
       else process.env.AKOU_LINE_TIMING = before;
     }
+  });
+
+  test("provisionalInPause off: no re-decode in the closing pause, and the same line (#379)", () => {
+    // Five words: 1.73 s of sound. The re-decodes are due 1 s and 2 s after the speech starts,
+    // so the second falls in the 0.7 s pause that closes the segment.
+    const audio = concat(
+      silence(0.5),
+      speak(["hello", "world", "we", "should", "move"]),
+      silence(1.5),
+    );
+    const run = (provisionalInPause: boolean) => {
+      const { p, out, models, segs } = pipeline({}, { provisionalInPause });
+      feed(p, "mic", audio);
+      p.endPart(1);
+      const provisionals = out.filter((x) => x.type === "provisional").length;
+      return { decodes: models.calls.length, provisionals, segs: segs() };
+    };
+    const on = run(true);
+    const off = run(false);
+    // Control: with it on, the pause gets its re-decode.
+    expect(on.provisionals).toBe(2);
+    expect(on.decodes).toBe(3);
+    expect(off.provisionals).toBe(1);
+    expect(off.decodes).toBe(2);
+    expect(off.segs.length).toBe(1);
+    expect(off.segs).toEqual(on.segs);
+    // Off on x64 only.
+    expect(DEFAULT_LIVE.provisionalInPause).toBe(process.arch !== "x64");
   });
 
   test("a segment closes after 0.7 s without speech; a shorter pause stays one segment", () => {

@@ -30,7 +30,9 @@
  * 3. **Decode** with the offline recognizer and the call's decode list as the per-stream hotwords.
  *    A word added mid-call is in the list from the next segment. Hotwords reach only a transducer.
  * 4. **Provisional line.** While a segment is open it is re-decoded every second (bounded by the
- *    window) and published with a 3 s expiry. It is never written to the log.
+ *    window) and published with a 3 s expiry. It is never written to the log. On x64 the re-decode
+ *    waits for speech (`provisionalInPause`): one that falls in the pause that closes the segment
+ *    is skipped, because it would hold up that segment's line and the other channel's.
  * 5. **Speakers.** The mic is `you`. On the call channel, with a stream diarizer (`asr.diarizer`
  *    nemotron), the channel's audio also goes to Nemotron as one stream for the whole call. A call
  *    segment is written as `c?` when it closes, so it commits as fast as a mic line (ROADMAP G6),
@@ -123,6 +125,13 @@ export interface LiveOptions {
   segmentWindow: number;
   /** Re-decode of the open segment for the provisional line, seconds. */
   provisionalEvery: number;
+  /**
+   * Re-decode the open segment while no one is speaking too. Off on x64 (#379): on four x64 cores
+   * a re-decode of the whole segment takes about 0.4 s, and one that lands in the closing pause
+   * runs before the line's own decode and delays it and the other channel's line by that much.
+   * The line itself comes within a second and carries the same words.
+   */
+  provisionalInPause: boolean;
   /** Audio kept before the VAD's first speech window. */
   preRoll: number;
   /** Audio kept after the last speech window. */
@@ -133,6 +142,7 @@ export const DEFAULT_LIVE: LiveOptions = {
   segmentPause: 0.7,
   segmentWindow: 12,
   provisionalEvery: 1,
+  provisionalInPause: process.arch !== "x64",
   preRoll: 0.5,
   postRoll: 0.2,
 };
@@ -674,7 +684,11 @@ export class LivePipeline {
         this.close(st, st.segStart, we);
         st.segStart = we;
         st.lastProvisional = we;
-      } else if (this.live && we - st.lastProvisional >= this.sec(o.provisionalEvery)) {
+      } else if (
+        this.live &&
+        (speech || o.provisionalInPause) &&
+        we - st.lastProvisional >= this.sec(o.provisionalEvery)
+      ) {
         st.lastProvisional = we;
         this.provisional(st, st.segStart, we);
       }
