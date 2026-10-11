@@ -88,8 +88,8 @@ async function doubleClick(page: Page, line: string, word: string, nth = 0) {
 }
 
 const selection = (page: Page) =>
-  page.$eval("#popover input", (el) => {
-    const i = el as HTMLInputElement;
+  page.$eval("#popover .fix-line", (el) => {
+    const i = el as HTMLTextAreaElement;
     return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0);
   });
 
@@ -103,11 +103,14 @@ describe("double-click a word to fix it (W4.9)", () => {
         await page.waitForSelector(`${row("l000003")}`);
         const w = await doubleClick(page, "l000001", "build", 1);
         await page.waitForSelector("#popover:not([hidden])");
-        expect(await page.inputValue("#popover input")).toBe("the build and the build");
+        expect(await page.inputValue("#popover .fix-line")).toBe("the build and the build");
         expect(await selection(page)).toBe("build");
         // The second copy, not the first.
         expect(
-          await page.$eval("#popover input", (el) => (el as HTMLInputElement).selectionStart),
+          await page.$eval(
+            "#popover .fix-line",
+            (el) => (el as HTMLTextAreaElement).selectionStart,
+          ),
         ).toBe(w.at);
         // Next to the word: just under it, from its left edge, not under the line's Fix button.
         const box = (await page.locator("#popover").boundingBox()) as { x: number; y: number };
@@ -116,7 +119,7 @@ describe("double-click a word to fix it (W4.9)", () => {
         expect(Math.abs(box.x - w.left)).toBeLessThan(10);
         // Typing replaces the word; Enter fixes the line as today.
         await page.keyboard.type("Build");
-        expect(await page.inputValue("#popover input")).toBe("the build and the Build");
+        expect(await page.inputValue("#popover .fix-line")).toBe("the build and the Build");
         await page.keyboard.press("Escape");
         expect(await popoverOpen(page)).toBe(false);
       });
