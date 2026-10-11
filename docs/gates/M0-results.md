@@ -594,8 +594,28 @@ The old run stays in its file and in the table above. From its seventh line on i
 **Still open, and not gating.**
 
 - The first lines after a cold start can be late ([#378](https://github.com/GeiserX/akou/issues/378)).
-- On four x64 cores a line takes up to 2.07 s after the first 10 s, because the recognizer is busy for all of it ([#379](https://github.com/GeiserX/akou/issues/379)). The speaker of a call line lands up to 4.45 s after the speech with Nemotron.
+- On four x64 cores a line took up to 2.07 s after the first 10 s, because the recognizer is busy for all of it ([#379](https://github.com/GeiserX/akou/issues/379)). Since 2026-10-11 it takes up to 1.60 s, see [the x64 line after the pause fix](#g6-the-x64-line-after-the-pause-fix-2026-10-11). The speaker of a call line lands up to 4.45 s after the speech with Nemotron.
 - Vocabulary, for M1: "akou" and "pyannote" are still misheard, as above.
+
+### G6: the x64 line after the pause fix, 2026-10-11
+
+**Where a line's time went.** A line on four x64 cores is the 0.7 s pause that closes its segment, then however long the Worker is still busy with earlier work, then the line's own decode of about 0.4 s. In the ten series runs the Worker was 0.5 to 1.0 s behind when it started the worst lines' decodes. What kept it busy was the provisional re-decodes of the open segments: 21 to 27 s of decoding per 56 s run, against 9 to 11 s for the lines themselves. A re-decode due in the closing pause decodes the whole segment, about 0.4 s, and runs before the line's own decode, on that channel and the other.
+
+**The change.** On x64 a provisional re-decode waits for speech: one due in a window with no speech is skipped (`provisionalInPause` in [live-worker.ts](../../src/main/asr/live-worker.ts), off on x64 only). The line comes within a second and carries the same words. On other machines nothing changes.
+
+**Measured** ([g6-x64-pause.json](g6-x64-pause.json)). The same box and setup as the series: four pinned performance cores, fp32, beam search, the 12 words, the same timeline. Six runs on v1.0.0 and six with the change, alternating, three per diarizer each. Every run committed 24 of 24 lines and saw no clock step and no `asr.lag`.
+
+| | v1.0.0 | With the change |
+|---|---|---|
+| Worst line, all 144 | 2.01 s | **1.60 s** |
+| Worst line per run | 1.73 to 2.01 s | 1.47 to 1.60 s |
+| Median line | 1.37 s | **1.27 s** |
+| 90th percentile | 1.71 s | 1.37 s |
+| Worst mic line, worst call line | 1.80 s, 2.01 s | 1.60 s, 1.55 s |
+| How far behind the Worker started a line's decode, median | 134 ms | 13 ms |
+| Provisional re-decodes per run | 65, 22.9 s | 49, 15.7 s |
+
+Before choosing it we screened one run per diarizer of three rules. Making the host mark audio not live, which stops re-decodes, from 0.5 s behind instead of 2 s changed nothing (worst 1.85 and 1.75 s), because the Worker was rarely that far behind. Waiting for speech gave 1.64 and 1.51 s, and both rules together the same as waiting for speech alone. The worst lines left are the line's own decode on a busy box: up to 0.73 s with the Nemotron diarizer sharing the four cores. A faster decode, int8 or a smaller model, is what would cut them next.
 
 ## G7: harness provider
 
