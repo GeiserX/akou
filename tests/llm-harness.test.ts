@@ -616,7 +616,7 @@ describe("starting the harness before the question (#383)", () => {
       // It ended with nothing on its stdin: no question reached it.
       const rec = existsSync(record) ? JSON.parse(readFileSync(record, "utf8")) : { stdin: "" };
       expect(rec.stdin).toBe("");
-      if (rec.cwd) expect(existsSync(rec.cwd)).toBe(false);
+      if (rec.cwd) expect(await until(() => !existsSync(rec.cwd))).toBe(true);
     } finally {
       t.cleanup();
     }

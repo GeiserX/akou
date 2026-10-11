@@ -579,7 +579,12 @@ function stopStarted(run: Started): void {
   setTimeout(() => {
     if (running(run.proc)) killTree(run.proc, "SIGKILL");
   }, KILL_GRACE_MS).unref?.();
-  rmSync(run.scratch, { recursive: true, force: true });
+  // Windows refuses to remove a folder a running process works in: remove it once it has exited.
+  void run.proc.exited.then(() => {
+    try {
+      rmSync(run.scratch, { recursive: true, force: true });
+    } catch {}
+  });
 }
 
 /** How long a spare waits for its question after the last `warm` before it is stopped. */
