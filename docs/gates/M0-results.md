@@ -697,7 +697,7 @@ Every other clause is unchanged.
 
 [#383](https://github.com/GeiserX/akou/issues/383) asked where the start-up goes and how to take it out of the wait. Raw lines are in [g7-383-checks.txt](g7-383-checks.txt).
 
-**What changed.** Claude Code runs with `--safe-mode` from 2.1.169, the first version that has it (2.1.168 does not). It leaves out the user's hooks, plugins, skills and user-level instructions, and keeps the sign-in, the model setting and the settings' `env`. That also settles the open question about a large user-level instruction file for Claude Code: it no longer loads. And the ask box starts the harness when it gets focus. Claude Code waits for stream-json input with no limit (in text mode it gives up after 3 s), and codex waits for stdin the same way, so both do their start-up during the wait. The waiting harness is sent nothing until a question, is stopped after 60 s without one, at quit, and exits on its own when akou dies, because its stdin closes. A waiting claude holds about 330 MB, a waiting codex about 35 MB.
+**What changed.** The ask box starts the harness when it gets focus. Claude Code waits for stream-json input with no limit (in text mode it gives up after 3 s), and codex waits for stdin the same way, so both do their start-up during the wait. The waiting harness is sent nothing until a question, is stopped after 60 s without one, at quit, and exits on its own when akou dies, because its stdin closes. A waiting claude holds about 330 MB, a waiting codex about 35 MB.
 
 **First token on a daily-use Mac,** with other sessions running (load average 8 to 12), claude 2.1.296 and codex 0.162.0 with the user context of the 2026-10-10 run. Each spawn ran alone, from a shell with akou's command line ([`scripts/gates/g7-startup.ts`](../../scripts/gates/g7-startup.ts)), through the account-selection script that run used, which adds 1.1 to 1.4 s before a cold harness starts. Two spawns per row, from the question to the first token:
 
@@ -706,10 +706,12 @@ Every other clause is unchanged.
 | claude, akou 1.0's command, started on the question | 6,657 and 4,432 ms | 2,947 and 3,238 ms |
 | claude, stream-json and `--safe-mode`, started on the question | 4,034 and 8,683 ms | 1,592 and 1,040 ms |
 | claude, stream-json and `--safe-mode`, started 8 s before the question | 1,431 and 2,927 ms | 18 and 14 ms |
+
+These claude rows also tried `--safe-mode`, which leaves out the user's hooks, plugins, skills and user-level instructions. akou does not pass it: the early start already takes the start out of the wait, and safe mode would change what the user's answers follow. The rows show what each part does.
 | codex, started on the question | 4,985 and 2,890 ms | |
 | codex, started 8 s before the question | 3,241 and 2,676 ms | |
 
-Started early, claude was ready 15 ms after the question, so what is left is the model: 1.4 and 2.9 s here. Safe mode alone took claude's start from about 3.1 s to about 1.3 s, but one of those two answers still took 7.6 s after `init`, so the model's own time varies more than the start does. Codex's first token arrives with its whole answer; started early, it began its turn within 50 ms of the question, and the rest is the model. Two samples per row on a loaded machine: these show the size of the change, not a distribution.
+Started early, claude was ready 15 ms after the question, so what is left is the model: 1.4 and 2.9 s here. Safe mode alone took claude's start from about 3.1 s to about 1.3 s on that Mac, but one of those two answers still took 7.6 s after `init`, so the model's own time varies more than the start does. Codex's first token arrives with its whole answer; started early, it began its turn within 50 ms of the question, and the rest is the model. Two samples per row on a loaded machine: these show the size of the change, not a distribution.
 
 **The split,** on a Mac mini M4 (macOS 26.6.1) with claude 2.1.296. Its claude account was at its weekly limit, so every reply in this paragraph was rejected by the account limit, and none is a first-token sample. From a shell, five samples per case, the median from the question to that rejection:
 
@@ -724,7 +726,7 @@ Started early, claude was ready 15 ms after the question, so what is left is the
 
 There the user context cost nothing measurable, and claude's own start was about 0.45 s. A hook that sleeps 3 s shows how a slow context adds to the wait: started on the question, the rejection came at 3.6 s; with `--safe-mode` the hook did not run and it came at 0.83 s; started 6 s early, the hook ran during the wait and it came 0.37 s after the question. Through the app on that Mac mini (the G7 runner on the source app, five runs each), the rejection came after a median of 1,497 ms on main, 1,511 ms on this change with the harness started on the question, and 855 ms with `--warm 5000`.
 
-**Not measured.** A first token through the packaged app with `--warm`, which is `g7-harness.ts --real --yes` with and without `--warm 5000` on a Mac whose harness answers. `akou ask` and agents still start the harness when the question arrives; only `--safe-mode` helps them.
+**Not measured.** A first token through the packaged app with `--warm`, which is `g7-harness.ts --real --yes` with and without `--warm 5000` on a Mac whose harness answers. `akou ask` and agents still start the harness when the question arrives, and pay its start.
 
 **Still open.**
 

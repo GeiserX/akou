@@ -8,11 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  CLAUDE_SAFE_MODE,
   CODEX_MIN_JSON,
   classifyRun,
   claudeParser,
-  claudeSafeMode,
   codexParser,
   compareVersions,
   discoverHarnesses,
@@ -213,22 +211,6 @@ describe("invocation and discovery", () => {
     expect(harnessStdin("codex", req)).toBe("SYS\n\nPACK");
   });
 
-  test("--safe-mode only for a Claude Code known to have it (2.1.169 and later)", () => {
-    expect(CLAUDE_SAFE_MODE).toBe("2.1.169");
-    expect(claudeSafeMode("2.1.169")).toBe(true);
-    expect(claudeSafeMode("2.1.296")).toBe(true);
-    // An older one refuses the flag and exits; an unknown version is not guessed at.
-    expect(claudeSafeMode("2.1.168")).toBe(false);
-    expect(claudeSafeMode(null)).toBe(false);
-    expect(claudeSafeMode(undefined)).toBe(false);
-    const args = harnessArgs("claude", "SYS", undefined, "2.1.296");
-    expect(args).toContain("--safe-mode");
-    // Before the session flags and the system prompt, never between a flag and its value.
-    expect(args.indexOf("--safe-mode")).toBe(args.indexOf("--strict-mcp-config") + 1);
-    expect(harnessArgs("claude", "SYS", undefined, "2.1.168")).not.toContain("--safe-mode");
-    expect(harnessArgs("codex", "SYS", undefined, "2.1.296")).not.toContain("--safe-mode");
-  });
-
   test("versions", () => {
     expect(parseVersion("2.1.281 (Claude Code)")).toBe("2.1.281");
     expect(parseVersion("codex-cli 0.151.0")).toBe("0.151.0");
@@ -358,7 +340,7 @@ describe("the provider against a fake harness", () => {
       expect(rec.stdin).toBe(
         harnessStdin("claude", { system: "SYS", prompt: "Reply with the word ok", maxTokens: 10 }),
       );
-      expect(rec.argv).toEqual(harnessArgs("claude", "SYS", undefined, "2.1.281"));
+      expect(rec.argv).toEqual(harnessArgs("claude", "SYS"));
       expect(rec.cwdEntries).toEqual([]);
       // The scratch folder is gone afterwards.
       expect(existsSync(rec.cwd)).toBe(false);
@@ -563,12 +545,13 @@ describe("starting the harness before the question (#383)", () => {
     const t = tempDir();
     try {
       const record = join(t.dir, "record.json");
-      const { provider, spare } = rig({ FAKE_RECORD: record });
+      const ready = join(t.dir, "ready");
+      const { provider, spare } = rig({ FAKE_RECORD: record, FAKE_READYFILE: ready });
       expect(await provider.warm("SYS")).toEqual({ warming: true });
       const pid = spare.pid() as number;
       expect(alive(pid)).toBe(true);
-      // The user types while the harness starts.
-      await Bun.sleep(START_MS + 300);
+      // The user types while the harness starts; a loaded machine may take longer than START_MS.
+      expect(await until(() => existsSync(ready), 15_000)).toBe(true);
       // Nothing was sent to it yet.
       expect(existsSync(record)).toBe(false);
       const r = await firstToken(provider);
@@ -587,16 +570,22 @@ describe("starting the harness before the question (#383)", () => {
     } finally {
       t.cleanup();
     }
-  }, 15_000);
+  }, 30_000);
 
   test("Codex too: its start-up overlaps the wait for stdin", async () => {
-    const { provider } = rig({}, { kind: "codex" });
-    await provider.warm("SYS");
-    await Bun.sleep(START_MS + 300);
-    const r = await firstToken(provider);
-    expect(r.text.length).toBeGreaterThan(0);
-    expect(r.first).toBeLessThan(START_MS / 2);
-  }, 15_000);
+    const t = tempDir();
+    try {
+      const ready = join(t.dir, "ready");
+      const { provider } = rig({ FAKE_READYFILE: ready }, { kind: "codex" });
+      await provider.warm("SYS");
+      expect(await until(() => existsSync(ready), 15_000)).toBe(true);
+      const r = await firstToken(provider);
+      expect(r.text.length).toBeGreaterThan(0);
+      expect(r.first).toBeLessThan(START_MS / 2);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
 
   test("asking again while one waits keeps that one; it is never sent anything and stops when idle", async () => {
     const t = tempDir();

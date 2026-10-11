@@ -15,7 +15,8 @@
  * deadlines and cancelling), `FAKE_RECORD` (a file that receives `{argv, cwd, cwdEntries, stdin,
  * prompt, startedAt, promptAt}` as JSON: `stdin` as read, `prompt` the message's text in
  * stream-json mode, the two times in epoch ms), `FAKE_PIDFILE` (a file that receives this
- * process's pid as soon as it starts), `FAKE_GRANDCHILD` (`group` or `escape`: start a
+ * process's pid as soon as it starts), `FAKE_READYFILE` (a file written once its start-up is done
+ * and it waits for stdin), `FAKE_GRANDCHILD` (`group` or `escape`: start a
  * long-lived child that inherits stdout, in the harness's process group or in a session of its
  * own, and write its pid to `FAKE_GRANDCHILD_PID`).
  */
@@ -28,6 +29,7 @@ const [fixture, ...args] = process.argv.slice(2);
 const streamJson = args.some((a, i) => a === "--input-format" && args[i + 1] === "stream-json");
 const start = Number(process.env.FAKE_START_MS ?? 0);
 if (start > 0) await Bun.sleep(start);
+if (process.env.FAKE_READYFILE) writeFileSync(process.env.FAKE_READYFILE, String(Date.now()));
 
 const reader = Bun.stdin.stream().getReader();
 const dec = new TextDecoder();

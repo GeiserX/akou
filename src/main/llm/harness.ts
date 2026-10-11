@@ -8,16 +8,13 @@
  *   asked for its version.
  * - **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose
  *   --include-partial-messages --input-format stream-json --tools "" --strict-mcp-config
- *   [--safe-mode] --no-session-persistence --system-prompt SYSTEM`, the prompt on stdin as one
+ *   --no-session-persistence --system-prompt SYSTEM`, the prompt on stdin as one
  *   stream-json user message; stdin is closed once the `result` arrives. Codex: `codex exec --json
  *   --sandbox read-only --skip-git-repo-check --ephemeral -` (the trailing `-` reads the prompt
  *   from stdin). Both run in a fresh empty scratch folder, so no project instructions load, with no
  *   tools (Claude Code) or a read-only sandbox (Codex). `--strict-mcp-config` with no MCP config
  *   keeps the user's MCP servers out: measured on one tiny prompt, it cut the context Claude Code
- *   sent from about 17k tokens to about 3k. `--safe-mode` (Claude Code 2.1.169 and later) leaves
- *   out the user's hooks, plugins, skills and user-level instructions, which an answer from the
- *   pack never needs and which made start-up slow and unpredictable (#383); sign-in, the model
- *   setting and the settings' `env` still apply.
+ *   sent from about 17k tokens to about 3k.
  * - **Starting early** (#383). Most of the wait for an answer was the harness starting, not the
  *   model. Both harnesses do their start-up while waiting for stdin (Claude Code with stream-json
  *   input waits with no time limit; in text mode it gives up after 3 s), so `HarnessSpare` starts
@@ -61,9 +58,6 @@ export const HARNESS_LABEL: Record<HarnessKind, string> = { claude: "claude-code
 
 /** Codex's `exec --json` event format (`thread.started`, `item.*`) is checked from this version. */
 export const CODEX_MIN_JSON = "0.44.0";
-
-/** Claude Code has `--safe-mode` from this version; an older one refuses the flag and exits. */
-export const CLAUDE_SAFE_MODE = "2.1.169";
 
 export interface HarnessInfo {
   kind: HarnessKind;
@@ -433,16 +427,10 @@ export interface HarnessProviderOptions {
   spare?: HarnessSpare;
 }
 
-/** Whether this Claude Code takes `--safe-mode`: only a version known to be new enough. */
-export function claudeSafeMode(version: string | null | undefined): boolean {
-  return version != null && compareVersions(version, CLAUDE_SAFE_MODE) >= 0;
-}
-
 export function harnessArgs(
   kind: HarnessKind,
   system: string,
   session?: CompleteRequest["session"],
-  version?: string | null,
 ): string[] {
   if (kind === "claude") {
     const persistence = !session
@@ -461,7 +449,6 @@ export function harnessArgs(
       "--tools",
       "",
       "--strict-mcp-config",
-      ...(claudeSafeMode(version) ? ["--safe-mode"] : []),
       ...persistence,
       "--system-prompt",
       system,
@@ -514,7 +501,7 @@ interface Started {
  * request only when this matches, so a changed harness, version or system prompt never answers.
  */
 export function spareKey(t: HarnessTarget, system: string): string {
-  return JSON.stringify([t.command, harnessArgs(t.kind, system, undefined, t.version)]);
+  return JSON.stringify([t.command, t.version, harnessArgs(t.kind, system)]);
 }
 
 /** Starts the harness in its scratch folder; throws `ProviderError` when it cannot start. */
@@ -532,7 +519,7 @@ function startHarness(
     scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
   }
   try {
-    const proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, system, session, t.version)], {
+    const proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, system, session)], {
       cwd: scratch,
       env: env as Record<string, string>,
       stdin: "pipe",

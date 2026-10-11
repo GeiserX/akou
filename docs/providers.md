@@ -50,12 +50,10 @@ Re-enhancing is also skipped, in favour of the button, when a person or an agent
 
 akou finds `claude` and `codex` on your `PATH` or through your login shell, or runs the path you pin in `provider.harnessPath`. Each request is one run of the program, with akou's prompt on standard input:
 
-- Claude Code: `claude -p --output-format stream-json --verbose --include-partial-messages --input-format stream-json --tools "" --strict-mcp-config --safe-mode --no-session-persistence --system-prompt …`
+- Claude Code: `claude -p --output-format stream-json --verbose --include-partial-messages --input-format stream-json --tools "" --strict-mcp-config --no-session-persistence --system-prompt …`
 - Codex: `codex exec --json --sandbox read-only --skip-git-repo-check --ephemeral -`
 
-Both run in a new empty folder, so no project instructions load. Claude Code gets no tools and none of your MCP servers; Codex runs in a read-only sandbox. The run keeps no session afterwards, so nothing akou asks shows up in your harness's history.
-
-Claude Code 2.1.169 and later run in safe mode (`--safe-mode`): your hooks, plugins, skills and user-level instructions stay out of akou's questions. An answer from the call needs none of them, and they made the start slow and unpredictable. Your sign-in, your model setting and the `env` block of your settings still apply, so a Bedrock or proxy setup keeps working. An older Claude Code runs without the flag and loads all of that, as Codex does.
+Both run in a new empty folder, so no project instructions load. Claude Code gets no tools and none of your MCP servers; Codex runs in a read-only sandbox. The run keeps no session afterwards, so nothing akou asks shows up in your harness's history. The harness still loads your own user-level instructions, memory and skills, as it does for any run.
 
 **Starting early.** When the ask box gets focus, akou starts the harness and leaves it waiting for its prompt, so its start-up runs while you type. It is sent nothing until you ask, and nothing reaches your subscription before then. A harness that gets no question is stopped after a minute, when akou quits, and on its own if akou crashes. `akou ask` and agents start the harness when the question arrives, as before.
 
