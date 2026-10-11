@@ -597,6 +597,29 @@ The old run stays in its file and in the table above. From its seventh line on i
 - On four x64 cores a line takes up to 2.07 s after the first 10 s, because the recognizer is busy for all of it ([#379](https://github.com/GeiserX/akou/issues/379)). The speaker of a call line lands up to 4.45 s after the speech with Nemotron.
 - Vocabulary, for M1: "akou" and "pyannote" are still misheard, as above.
 
+### G6: the cold start on the Mac, 2026-10-11
+
+**Why the first lines were late ([#378](https://github.com/GeiserX/akou/issues/378)).** The call's decode list loads Parakeet when the call's first audio reaches the live Worker, and nothing is transcribed until that load ends. In beam mode the load is needed whenever the loaded hotword file lacks the call's words, which includes every call that starts the app. On the G6 timeline the first mic line closes about 4.7 s into the call, so it is late whenever the load ends after that. In the eight Mac runs of 2026-10-09 the load ended (`vocab.used`, counted from the part's start) 1.61 to 8.85 s into the call, and the three runs with late first lines are three of the four where it ended after 4.4 s. A warm-up decode at the call's start would not help. The wait is the load, and once the files are in the page cache the first decode is as fast as any later one.
+
+**What changed.**
+
+- The speaker embedder (TitaNet) used to load on the first call line, after its decode, which added 54 to 111 ms to the first call line of every app run against 12 to 15 ms for later ones. It now loads as the call channel's speech starts.
+- With `AKOU_LINE_TIMING=1` the Worker logs every recognizer load, and [`g6-live-latency.ts`](../../scripts/gates/g6-live-latency.ts) records them as `loads`.
+
+**The runs** ([g6-cold-start-mac.json](g6-cold-start-mac.json)). Eight runs with the change and eight on `main` with only the load log added, four per diarizer, each from a cold app with every model file first evicted from the page cache (`mincore` read 0% resident). The rest is the setup of 2026-10-09: fp32, beam search, the 12 words, the same 24 clips and timeline. The machine was a Mac mini M4 with 16 GB on macOS 26.6.1, which also ran a VM, a 3 GB language-model server and at times another test run. The load average at the start of a run was 2.0 to 7.2 on 10 cores.
+
+| Code | Recognizer load | Lines in the first 10 s, worst | Lines after the first 10 s, worst | First call line |
+|---|---|---|---|---|
+| With the change, 8 runs | 2.25 to 2.46 s | 1.23 to 1.31 s | 1.21 to 1.34 s | 1.23 to 1.31 s |
+| `main`, 8 runs | 2.28 to 3.05 s | 1.22 to 1.44 s | 1.21 to 1.34 s | 1.22 to 1.44 s |
+
+- All 16 runs committed 24 of 24 lines with no clock step. Every line, the first 10 s included, is within 1.5 s. The worst is 1.34 s with the change and 1.44 s on `main`.
+- In every run the load ended 2.3 to 3.1 s into the call, before the first line closes, so `main` passes here too. Cold files and this much other work did not stretch the load past 4.4 s.
+- With the embeddings diarizer the first call line was the worst line of every `main` run, at 1.30 to 1.44 s. With the change it is 1.24 to 1.31 s.
+- Reading the recognizer's files through before the load made a cold load 0.5 to 1.1 s shorter on this machine. On a second Mac mini M4 it did not shorten it, and it costs 0.15 s on a warm load, so we left it out.
+
+**Still open.** A first line is still late when the load outlasts the first utterance, which a busy machine, a slow disk or the first run of a freshly copied app can cause. Two of our app runs on 2026-10-11 were late, at 3.63 s and 2.02 s, and both were the first run of a fresh copy. A fresh copy of the model files alone did not reproduce it, and neither did a fresh install alone. The same call run in-process on the second Mac mini, while another test suite ran there, had its first line over the bar in two of six runs, at 1.54 and 2.21 s. Removing the wait needs a recognizer ready before the call's first line closes. One way is to load Parakeet before the call, which a call that starts the app cannot do. The other is to decode the first lines with a smaller model while the fp32 model loads.
+
 ## G7: harness provider
 
 **What ran.** [`scripts/gates/g7-harness.ts`](../../scripts/gates/g7-harness.ts) on 2026-10-07, on a Mac mini M4 (macOS 26.6.1), against the released 0.6.2 and not a source build. The v0.6.2 assets `akou-0.6.2-macos-arm64.zip` and `akou-cli-0.6.2-darwin-arm64.tar.gz` matched `SHA256SUMS` (a copy with one byte appended failed the same check). The app was unpacked with `ditto -x -k` into `/Applications`, and `spctl -a -vv` read `accepted, source=Notarized Developer ID` both before and after its first launch. The runner drove the compiled `akou` from the CLI archive, which starts `/Applications/akou.app` through `open`, with a scratch `AKOU_HOME` holding `dictation.enabled: false`, `capture.mic: none` and `capture.call: none`, so the app opened no microphone and no tap. The first case imports a fixture call; every case quits the app, writes the provider settings and lets the next command start it again.
