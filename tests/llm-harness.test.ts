@@ -704,6 +704,45 @@ describe("starting the harness before the question (#383)", () => {
     expect(spare.pid()).toBeNull();
   }, 10_000);
 
+  test("a harness started early that exits before its question: the question still gets an answer", async () => {
+    const t = tempDir();
+    try {
+      const first = join(t.dir, "first");
+      const { provider, spare } = rig({ FAKE_START_MS: "0", FAKE_EXIT_FIRST: first });
+      await provider.warm("SYS");
+      const pid = spare.pid() as number;
+      expect(await until(() => existsSync(first) && !alive(pid))).toBe(true);
+      const r = await firstToken(provider);
+      expect(r.text).toBe("ok");
+    } finally {
+      t.cleanup();
+    }
+  }, 15_000);
+
+  test("one that exits after taking the question unread: a fresh harness answers, with no unhandled rejection", async () => {
+    const t = tempDir();
+    try {
+      const first = join(t.dir, "first");
+      const logs: string[] = [];
+      const spare = new HarnessSpare();
+      const tg = target("claude-ok.jsonl");
+      const provider = new HarnessProvider({
+        target: () => tg,
+        env: { ...process.env, FAKE_EXIT_FIRST: first, FAKE_EXIT_FIRST_MS: "300" },
+        spare,
+        onLog: (_l, m) => logs.push(m),
+      });
+      await provider.warm("SYS");
+      // Asked at once: the spare is still running when the question takes it, then exits unread.
+      const r = await firstToken(provider);
+      expect(r.text).toBe("ok");
+      expect(existsSync(first)).toBe(true);
+      expect(logs).toContain("harness: the one started early had exited; starting another");
+    } finally {
+      t.cleanup();
+    }
+  }, 15_000);
+
   test("no harness, no start: warm says why and starts nothing", async () => {
     const spare = new HarnessSpare();
     const p = new HarnessProvider({ target: () => ({ none: "no harness found" }), spare });

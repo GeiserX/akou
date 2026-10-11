@@ -601,6 +601,9 @@ function stopStarted(run: Started): void {
   });
 }
 
+/** A harness started early that had exited by the time its question came: start a fresh one. */
+class EarlyHarnessGone extends Error {}
+
 /** How long a spare waits for its question after the last `warm` before it is stopped. */
 export const SPARE_IDLE_MS = 60_000;
 
@@ -744,10 +747,40 @@ export class HarnessProvider implements Provider {
     const t = this.o.target() as HarnessTarget;
     const session = t.kind === "claude" ? req.session : undefined;
     const env = this.o.env ?? process.env;
-    // A question sent whole takes the harness the ask box started early, when it matches.
+    // A question sent whole takes the harness the ask box started early, when it matches. One that
+    // turns out to have exited (it died while waiting, or quit on its own) is set aside, and the
+    // question starts a fresh harness, so it is still answered.
     const early = session ? null : (this.o.spare?.take(spareKey(t, req.system)) ?? null);
-    const run = early ?? startHarness(t, req.system, session, env);
-    const { proc, scratch } = run;
+    if (early) {
+      try {
+        return await this.run(t, req, early, undefined, onToken, signal, true);
+      } catch (err) {
+        if (!(err instanceof EarlyHarnessGone)) throw err;
+        this.o.onLog?.("info", "harness: the one started early had exited; starting another");
+      }
+    }
+    return this.run(
+      t,
+      req,
+      startHarness(t, req.system, session, env),
+      session,
+      onToken,
+      signal,
+      false,
+    );
+  }
+
+  /** One run of a started harness: the prompt in, the answer out. */
+  private async run(
+    t: HarnessTarget,
+    req: CompleteRequest,
+    started: Started,
+    session: CompleteRequest["session"] | undefined,
+    onToken: (t: string) => void,
+    signal: AbortSignal,
+    early: boolean,
+  ): Promise<CompleteResult> {
+    const { proc, scratch } = started;
     // A session's folder outlives the run: its next question resumes from it.
     const cleanup = () => {
       if (!session) rmSync(scratch, { recursive: true, force: true });
@@ -770,10 +803,15 @@ export class HarnessProvider implements Provider {
         } catch {}
       };
       try {
-        stdin.write(harnessStdin(t.kind, req));
+        await stdin.write(harnessStdin(t.kind, req));
         if (t.kind === "claude") await stdin.flush();
         else await stdin.end();
       } catch {
+        // A harness started early that is gone (EPIPE): this question starts a fresh one.
+        if (early && !signal.aborted) {
+          killTree(proc, "SIGKILL");
+          throw new EarlyHarnessGone();
+        }
         // The harness quit before reading its prompt; its exit code says why.
       }
       let stderr = "";
@@ -782,9 +820,11 @@ export class HarnessProvider implements Provider {
           if (stderr.length < STDERR_KEEP) stderr += `${line}\n`;
         }
       })();
+      let saidAnything = false;
       const outDone = (async () => {
         for await (const line of readLines(proc.stdout as ReadableStream<Uint8Array>)) {
           if (line.trim() === "") continue;
+          saidAnything = true;
           let event: unknown;
           try {
             event = JSON.parse(line);
@@ -802,6 +842,8 @@ export class HarnessProvider implements Provider {
       const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
       await Promise.race([Promise.all([outDone, errDone]), grace]);
       if (signal.aborted) throw new ProviderError("cancelled", "cancelled");
+      // Started early and gone before it said a word: it never read this question.
+      if (early && code !== 0 && !saidAnything) throw new EarlyHarnessGone();
       const report = parser.report();
       const failure = classifyRun(t.kind, code, report, stderr);
       if (failure) {

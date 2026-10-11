@@ -706,7 +706,6 @@ Every other clause is unchanged.
 | claude, akou 1.0's command, started on the question | 6,657 and 4,432 ms | 2,947 and 3,238 ms |
 | claude, stream-json and `--safe-mode`, started on the question | 4,034 and 8,683 ms | 1,592 and 1,040 ms |
 | claude, stream-json and `--safe-mode`, started 8 s before the question | 1,431 and 2,927 ms | 18 and 14 ms |
-
 | codex, started on the question | 4,985 and 2,890 ms | |
 | codex, started 8 s before the question | 3,241 and 2,676 ms | |
 

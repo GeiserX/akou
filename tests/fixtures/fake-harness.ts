@@ -16,13 +16,15 @@
  * prompt, startedAt, promptAt}` as JSON: `stdin` as read, `prompt` the message's text in
  * stream-json mode, the two times in epoch ms), `FAKE_PIDFILE` (a file that receives this
  * process's pid as soon as it starts), `FAKE_ARGVFILE` (a file that receives its arguments as JSON
- * as soon as it starts), `FAKE_READYFILE` (a file written once its start-up is done
+ * as soon as it starts), `FAKE_EXIT_FIRST` (a file: the first run, finding it absent, creates it and
+ * exits 1 after `FAKE_EXIT_FIRST_MS` without reading stdin or writing a line; later runs go on as
+ * usual), `FAKE_READYFILE` (a file written once its start-up is done
  * and it waits for stdin), `FAKE_GRANDCHILD` (`group` or `escape`: start a
  * long-lived child that inherits stdout, in the harness's process group or in a session of its
  * own, and write its pid to `FAKE_GRANDCHILD_PID`).
  */
 
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const startedAt = Date.now();
 if (process.env.FAKE_PIDFILE) writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
@@ -31,6 +33,12 @@ if (process.env.FAKE_ARGVFILE) {
 }
 const [fixture, ...args] = process.argv.slice(2);
 const streamJson = args.some((a, i) => a === "--input-format" && args[i + 1] === "stream-json");
+const exitFirst = process.env.FAKE_EXIT_FIRST;
+if (exitFirst && !existsSync(exitFirst)) {
+  writeFileSync(exitFirst, String(process.pid));
+  await Bun.sleep(Number(process.env.FAKE_EXIT_FIRST_MS ?? 0));
+  process.exit(1);
+}
 const start = Number(process.env.FAKE_START_MS ?? 0);
 if (start > 0) await Bun.sleep(start);
 if (process.env.FAKE_READYFILE) writeFileSync(process.env.FAKE_READYFILE, String(Date.now()));
