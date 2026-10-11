@@ -33,8 +33,10 @@ export const SECURITY_SCHEME = "bearerAuth";
 export const LOCAL_SERVER = "http://127.0.0.1:8476";
 /** `<tag>.<verb>`: Executor strips the tag, so the tool is `jobs.create`, not a long made-up name. */
 export const OPERATION_ID = /^([a-z][A-Za-z0-9]*)\.([a-z][A-Za-z0-9]*)$/;
-/** The tag of the one compatibility dialect, the OpenAI endpoint (`x-akou-door: compat`). */
-export const COMPAT_TAG = "openai";
+/** The tags of the compatibility dialects, OpenAI's and Bazarr's (`x-akou-door: compat`). */
+export const COMPAT_TAGS = ["openai", "bazarr"] as const;
+const isCompatTag = (tag: string | undefined) =>
+  (COMPAT_TAGS as readonly string[]).includes(tag ?? "");
 
 type Json = Record<string, unknown>;
 
@@ -509,7 +511,7 @@ export function errorProblems(doc: OpenApiDoc): string[] {
  * keeps them all): version 3.1.0; exactly one security scheme, `http` bearer; on every operation
  * one tag, a description, an `operationId` `<tag>.<verb>` unique in the file, `x-akou-modes`, an
  * `x-akou-access` of `open` or a scope, an `x-akou-door` only of `compat` or `spec`, `compat`
- * exactly on the `openai` tag; and every multipart file field `format: binary`.
+ * exactly on the `openai` and `bazarr` tags; and every multipart file field `format: binary`.
  */
 export function openApiProblems(doc: OpenApiDoc): string[] {
   const problems: string[] = [];
@@ -563,12 +565,14 @@ export function openApiProblems(doc: OpenApiDoc): string[] {
     if (upgrade !== undefined && (upgrade !== "websocket" || method !== "get")) {
       problems.push(`${where}: x-akou-upgrade ${JSON.stringify(upgrade)}`);
     }
-    // The `?scope=jobs` view drops a compatibility route by its door, so the OpenAI dialect must
+    // The `?scope=jobs` view drops a compatibility route by its door, so a dialect's routes must
     // carry it, and nothing else may.
-    if (tags[0] === COMPAT_TAG && door !== "compat") {
-      problems.push(`${where}: tag ${COMPAT_TAG} without x-akou-door: compat`);
-    } else if (door === "compat" && tags[0] !== COMPAT_TAG) {
-      problems.push(`${where}: x-akou-door: compat on tag ${tags[0]}, not ${COMPAT_TAG}`);
+    if (isCompatTag(tags[0]) && door !== "compat") {
+      problems.push(`${where}: tag ${tags[0]} without x-akou-door: compat`);
+    } else if (door === "compat" && !isCompatTag(tags[0])) {
+      problems.push(
+        `${where}: x-akou-door: compat on tag ${tags[0]}, not one of ${COMPAT_TAGS.join(", ")}`,
+      );
     }
     const form = (op.requestBody?.content as Json | undefined)?.["multipart/form-data"] as
       | { schema?: { properties?: Record<string, Json> } }

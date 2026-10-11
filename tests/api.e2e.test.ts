@@ -682,6 +682,7 @@ describe("settings over the API", () => {
         "provider.baseUrl",
         "provider.harnessPath",
         "server.admin_password_hash",
+        "server.bazarr",
         "server.behind_proxy",
         "server.enabled",
         "server.public_host",

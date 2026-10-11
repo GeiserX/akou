@@ -583,6 +583,7 @@ describe("SV-K1: GET /v1/server", () => {
       // mode only (SV-E2).
       for (const c of ["jobs", "events", "languages_bound"]) expect(b.capabilities[c]).toBe(true);
       expect(b.capabilities.webhooks).toBe(mode === "server");
+      expect(b.capabilities.bazarr).toBe(false); // off by default (SV-C3)
     }
   });
 

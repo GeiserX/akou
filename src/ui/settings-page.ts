@@ -236,6 +236,7 @@ const SUBS: Record<string, SubPage> = {
         keys: ["server.dictation_slots", "server.dictation_engine"],
       },
       { title: "Other servers", keys: ["server.remotes", "server.remotes_overflow"] },
+      { title: "Bazarr", keys: ["server.bazarr"] },
     ],
   },
 };

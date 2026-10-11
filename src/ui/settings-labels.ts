@@ -348,6 +348,10 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "server.retain_days": { label: "Keep finished jobs for", unit: "days" },
   "server.max_audio_minutes": { label: "Longest audio a job takes", unit: "minutes" },
   "server.max_upload_mb": { label: "Largest upload", unit: "MB" },
+  "server.bazarr": {
+    label: "Subtitles for Bazarr",
+    help: "Set in the config file or AKOU_BAZARR. Bazarr's endpoint is http://this-host:8476/v1, with no key.",
+  },
   "server.dictation_slots": {
     label: "Dictations at once for other computers",
     help: "0: their dictations wait in the queue like any job.",

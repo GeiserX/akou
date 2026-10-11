@@ -1401,7 +1401,8 @@ jobs:
   # it for /healthz within 60 s, for /v1/server with no token and for `id -u`; then transcribe an Ogg
   # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The job round trip runs when the
   # server's own /v1/server says it has jobs, webhooks and the event feed, and warns when it does not.
-  # Last, akou from the compose example beside Telegram-Archive (SV-T6), on the same gate.
+  # Then akou from the compose example beside Telegram-Archive (SV-T6), and last Bazarr's request
+  # against a server with AKOU_BAZARR on (SV-C3), on the same gate.
   server:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -1531,6 +1532,36 @@ jobs:
           docker rm -f akou
           docker tag akou:ci drumsergio/akou:ci
           AKOU_VERSION=ci MODELS="$MODELS" scripts/compose-e2e.sh "$RUNNER_TEMP/note.ogg"
+      # SV-C3: Bazarr's exact request against the image: raw 16 kHz mono s16le PCM in one
+      # `audio_file` part, `Subliminal/2.1`, no key, `encode=false`, and an SRT back. The server
+      # above went with the compose step, so this one starts its own with AKOU_BAZARR on.
+      - name: Bazarr-shaped /asr against the image (SV-C3)
+        if: steps.caps.outputs.roundtrip == 'true'
+        run: |
+          set -euo pipefail
+          data=$(mktemp -d)
+          sudo chown 1000:1000 "$data"
+          docker run -d --name akou-bazarr -e AKOU_BEHIND_PROXY=true -e AKOU_BAZARR=true \
+            -p 127.0.0.1:8476:8476 -v "$data:/data" -v "$MODELS:/models" akou:ci
+          trap 'docker logs akou-bazarr 2>&1 | tail -n 100; docker rm -f akou-bazarr > /dev/null' EXIT
+          up=0
+          for _ in $(seq 60); do
+            if curl -fsS http://127.0.0.1:8476/healthz > /dev/null 2>&1; then up=1; break; fi
+            sleep 1
+          done
+          [ "$up" = 1 ] || { echo "no /healthz within 60 s"; exit 1; }
+          curl -fsS http://127.0.0.1:8476/v1/server | jq -e '.capabilities.bazarr == true'
+          work=$(mktemp -d)
+          chmod 0777 "$work"
+          curl -fsSL --retry 3 -o "$work/en.wav" https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/1a468a35cbba69418f126de829e75261dea4a4e4/test_wavs/en.wav
+          echo "148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6  $work/en.wav" | sha256sum -c -
+          docker run --rm -v "$work:/work" --entrypoint ffmpeg akou:ci -nostdin -loglevel error -i /work/en.wav -f s16le -acodec pcm_s16le -ac 1 -ar 16000 /work/en.pcm
+          curl -fsS -A Subliminal/2.1 -F "audio_file=@$work/en.pcm;filename=audio_file" \
+            "http://127.0.0.1:8476/v1/asr?task=transcribe&language=en&output=srt&encode=false" | tee asr.srt
+          test "$(head -n1 asr.srt | tr -d '\r')" = "1"
+          sed -n 2p asr.srt | grep -q -- ' --> '
+          # Cues hold 42 characters at most, so the phrase may span two: join the cue text first.
+          tr 'A-Z' 'a-z' < asr.srt | tr -cd 'a-z \n' | tr -s ' \n' ' ' | grep -q "ask not what your country"
 
   # SI-8 (docs/research/service-interface.md): `akou serve` natively on macOS arm64, from a source
   # checkout with no Docker, since Docker on a Mac has no Metal. A Mac mini serving this way is the

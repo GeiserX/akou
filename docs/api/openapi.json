@@ -108,6 +108,9 @@
       "name": "live"
     },
     {
+      "name": "bazarr"
+    },
+    {
       "name": "openapi"
     }
   ],
@@ -7827,6 +7830,271 @@
         "x-akou-upgrade": "websocket"
       }
     },
+    "/v1/asr": {
+      "post": {
+        "operationId": "bazarr.asr",
+        "tags": [
+          "bazarr"
+        ],
+        "description": "Bazarr's whisper transcription request: a file part `audio_file` in, a subtitle out as text. Bazarr sends `encode=false` and raw 16 kHz mono 16-bit PCM with no header; `encode=true` takes any audio or video file. `output` is srt (the default Bazarr asks for), vtt or txt; cues hold at most 42 characters and keep the audio's own times. The job runs `server.default_model` in `language`, else `server.default_language`. `task=translate` is refused with 400. Needs no key, and answers only while `server.bazarr` is on (404 otherwise); a key sent as a bearer token is honoured. A caller that hangs up cancels its job, and the job is deleted once the answer is sent.",
+        "parameters": [
+          {
+            "name": "task",
+            "in": "query",
+            "required": false,
+            "description": "Only `transcribe`; `translate` is refused with 400.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "transcribe"
+              ],
+              "default": "transcribe"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "required": false,
+            "description": "The spoken language as an ISO 639 code or BCP-47 tag, or `auto`; absent: `server.default_language`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "output",
+            "in": "query",
+            "required": false,
+            "description": "The subtitle format: SubRip, WebVTT, or the plain text.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "srt",
+                "vtt",
+                "txt"
+              ],
+              "default": "txt"
+            }
+          },
+          {
+            "name": "encode",
+            "in": "query",
+            "required": false,
+            "description": "`false`: the part is raw 16 kHz mono 16-bit PCM with no header, as Bazarr sends; `true`: an audio or video file.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "true"
+            }
+          },
+          {
+            "name": "video_file",
+            "in": "query",
+            "required": false,
+            "description": "The video's path on Bazarr's side, sent when its option to pass the video name is on. Read and ignored.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "audio_file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  }
+                },
+                "required": [
+                  "audio_file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_multipart.bad_param.unknown_field"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.cancelled.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+          },
+          "429": {
+            "$ref": "#/components/responses/429.queue_full"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "open",
+        "x-akou-door": "compat"
+      }
+    },
+    "/v1/detect-language": {
+      "post": {
+        "operationId": "bazarr.detectLanguage",
+        "tags": [
+          "bazarr"
+        ],
+        "description": "Bazarr's whisper language detection: a file part `audio_file` in (raw 16 kHz mono 16-bit PCM with `encode=false`, as Bazarr sends the whole track; any audio or video file with `encode=true`), `{detected_language, language_code, confidence}` out. The first 30 s of raw PCM are transcribed under the `best` preset, whose Qwen names the language: `language_code` is its ISO code, `detected_language` its English name in lower case, `confidence` null; `und` and `unknown` when no language was heard. With `best` unavailable the refusal is akou's own JSON (409 `preset_unavailable`). Needs no key, and answers only while `server.bazarr` is on (404 otherwise).",
+        "parameters": [
+          {
+            "name": "encode",
+            "in": "query",
+            "required": false,
+            "description": "`false`: the part is raw 16 kHz mono 16-bit PCM with no header, as Bazarr sends; `true`: an audio or video file.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "true"
+            }
+          },
+          {
+            "name": "video_file",
+            "in": "query",
+            "required": false,
+            "description": "The video's path on Bazarr's side, sent when its option to pass the video name is on. Read and ignored.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "audio_file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  }
+                },
+                "required": [
+                  "audio_file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "detected_language",
+                    "language_code",
+                    "confidence"
+                  ],
+                  "properties": {
+                    "detected_language": {
+                      "type": "string"
+                    },
+                    "language_code": {
+                      "type": "string"
+                    },
+                    "confidence": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_multipart.bad_param.unknown_field"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.cancelled.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+          },
+          "429": {
+            "$ref": "#/components/responses/429.queue_full"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "open",
+        "x-akou-door": "compat"
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "operationId": "openapi.get",
@@ -8591,6 +8859,31 @@
                     "error": {
                       "enum": [
                         "bad_json",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_multipart.bad_param.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_multipart",
+                        "bad_param",
                         "unknown_field"
                       ]
                     }

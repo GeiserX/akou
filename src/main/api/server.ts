@@ -40,6 +40,7 @@ import {
 } from "./http.ts";
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
+import { bazarrRoutes } from "./routes/bazarr.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { deviceRoutes } from "./routes/devices.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
@@ -283,8 +284,9 @@ export interface ApiServer {
 /**
  * The route table. With a mode, the routes that akou serves: the job routes in both modes, so the
  * desktop app takes a file job with its one token (SV-J1, `akou transcribe`); the key routes and
- * the OpenAI-compatible ones in server mode only, so the desktop app answers 404 for them. With
- * none, every route, for the OpenAPI file (`scripts/openapi.ts`), which marks each with its modes.
+ * the compatible ones (OpenAI, Bazarr) in server mode only, so the desktop app answers 404 for
+ * them. With none, every route, for the OpenAPI file (`scripts/openapi.ts`), which marks each
+ * with its modes.
  */
 export function buildRouter(mode?: Mode): Router<ApiApp> {
   const r = new Router<ApiApp>();
@@ -307,6 +309,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
     keyRoutes(r);
     openaiRoutes(r);
     liveRoutes(r);
+    bazarrRoutes(r);
   }
   openapiRoutes(r);
   return r;

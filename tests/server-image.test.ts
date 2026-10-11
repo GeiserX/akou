@@ -257,6 +257,9 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "id -u",
       "scripts/server-smoke.ts",
       "scripts/server-roundtrip.ts",
+      // SV-C3: Bazarr's exact request against the image, and the capability it turns on.
+      "/v1/asr?task=transcribe",
+      "capabilities.bazarr",
       // SV-T6: akou from the compose example beside Telegram-Archive.
       "scripts/compose-e2e.sh",
     ]) {

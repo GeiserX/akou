@@ -74,7 +74,7 @@ export const MAX_KEYWORDS = 24;
 export const MAX_METADATA_BYTES = 4096;
 /** A job's `priority` runs from -10 to 10, default 0 (SV-Q2). */
 export const MAX_PRIORITY = 10;
-const LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
+export const LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 const IDEMPOTENCY = /^[\x21-\x7e]{1,255}$/;
 
 /** A multipart body, its file parts already on disk (SV-D3). */
@@ -174,12 +174,12 @@ export function textField(form: Form, name: string): string | undefined {
   return x;
 }
 
-export function fileField(form: Form): SpooledFile {
-  const files = form.getAll("file");
+export function fileField(form: Form, name = "file"): SpooledFile {
+  const files = form.getAll(name);
   const f = files[0];
   if (files.length !== 1 || typeof f === "string" || !f) {
-    throw new HttpError(422, "missing_field", '"file" is required: the audio, as a file part', {
-      field: "file",
+    throw new HttpError(422, "missing_field", `"${name}" is required: the audio, as a file part`, {
+      field: name,
     });
   }
   return f;

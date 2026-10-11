@@ -512,6 +512,13 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Transcribe for Bazarr (server mode, SV-C3)",
+    cli: { none: "Bazarr calls akou's endpoint itself; `akou transcribe` already takes a file" },
+    api: ["POST /asr", "POST /detect-language"],
+    mcp: { none: "an agent transcribes through the job tools; this door speaks Bazarr's dialect" },
+    window: { none: "Bazarr is the window: it saves the subtitle next to the video" },
+  },
+  {
     action: "Name or rename a job (server mode)",
     cli: {
       none: "a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name",
