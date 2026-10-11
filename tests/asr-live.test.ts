@@ -16,6 +16,7 @@ import {
   LiveAsr,
   type LiveOut,
   LivePipeline,
+  LOAD_TIMING,
   type VocabSource,
   WorkerSide,
 } from "../src/main/asr/live-worker.ts";
@@ -124,6 +125,61 @@ describe("segmenting", () => {
       if (before === undefined) delete process.env.AKOU_LINE_TIMING;
       else process.env.AKOU_LINE_TIMING = before;
     }
+  });
+
+  test("[#378] AKOU_LINE_TIMING=1 logs each recognizer load, what asked for it and how long it took", () => {
+    const run = () => {
+      const { p, out } = pipeline({ loadMs: 30 });
+      p.setDecodeList(list(["Vercel"]), 1);
+      // The same words: the loaded recognizer covers them, nothing loads.
+      p.setDecodeList(list(["Vercel"]), 2);
+      // A new word needs a new hotword file, so a new recognizer.
+      p.setDecodeList(list(["Vercel", "Hetzner"]), 3);
+      return out.flatMap((x) =>
+        x.type === "log" && x.msg.startsWith(LOAD_TIMING)
+          ? [JSON.parse(x.msg.slice(LOAD_TIMING.length)) as Record<string, number | string>]
+          : [],
+      );
+    };
+    const before = process.env.AKOU_LINE_TIMING;
+    try {
+      process.env.AKOU_LINE_TIMING = "1";
+      const loads = run();
+      expect(loads.map((l) => [l.why, l.terms])).toEqual([
+        ["decode-list", 1],
+        ["decode-list", 2],
+      ]);
+      for (const l of loads) {
+        expect(l.ms as number).toBeGreaterThanOrEqual(25);
+        expect(typeof l.startedAt).toBe("number");
+      }
+      // Control: off by default.
+      delete process.env.AKOU_LINE_TIMING;
+      expect(run()).toEqual([]);
+    } finally {
+      if (before === undefined) delete process.env.AKOU_LINE_TIMING;
+      else process.env.AKOU_LINE_TIMING = before;
+    }
+  });
+
+  test("[#378] the call channel loads its embedder as speech starts, before its first line closes", () => {
+    const words = speak(["hello", "world", "we", "should", "move", "the", "build"]);
+    const speech = concat(silence(0.5), words);
+    const audio = concat(speech, silence(1));
+    const { p, models, segs } = pipeline();
+    // Up to the end of the speech: the segment is open, nothing written yet.
+    feed(p, "call", speech);
+    expect(segs()).toEqual([]);
+    expect(models.embedders.length).toBe(1);
+    // The pause closes it; the line is embedded with the one embedder.
+    p.audio(1, "call", speech.length, audio.subarray(speech.length));
+    expect(segs().length).toBe(1);
+    expect(models.embedders.length).toBe(1);
+    // Control: the mic never embeds, so its speech loads none.
+    const mic = pipeline();
+    feed(mic.p, "mic", audio);
+    expect(mic.segs().length).toBe(1);
+    expect(mic.models.embedders.length).toBe(0);
   });
 
   test("a segment closes after 0.7 s without speech; a shorter pause stays one segment", () => {

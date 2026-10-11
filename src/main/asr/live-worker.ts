@@ -115,6 +115,12 @@ export const STREAM_FLUSH_MS = 3000;
  * (scripts/gates/g6-live-latency.ts) reads it from the app log.
  */
 export const LINE_TIMING = "line timing";
+/**
+ * With `AKOU_LINE_TIMING=1`, the Worker also logs one line with this prefix and a JSON object each
+ * time it loads the recognizer: how long the load took, how many hotwords it was built for, and
+ * what asked for it. The G6 gate reads it to tell a slow first line from a slow load.
+ */
+export const LOAD_TIMING = "recognizer load";
 
 export interface LiveOptions {
   /** Silence that closes a segment, seconds (0.2 to 5). */
@@ -486,7 +492,7 @@ export class LivePipeline {
     this.list = list;
     this.listVersion = version;
     this.prepared = null;
-    if (this.models.recognizerHere?.() !== false) this.hot();
+    if (this.models.recognizerHere?.() !== false) this.hot("decode-list");
   }
 
   unmerge(from: string, into: string): void {
@@ -569,10 +575,22 @@ export class LivePipeline {
     return { text: r.text.trim(), model: h.recognizer.model, ms: performance.now() - t };
   }
 
-  private hot(): PreparedHotwords {
+  private hot(why = "decode"): PreparedHotwords {
     if (this.prepared) return this.prepared;
+    const before = this.models.loads[this.models.recognizerModel] ?? 0;
+    const startedAt = this.now();
+    const t = performance.now();
     const p = this.models.prepare(this.list);
     this.prepared = p;
+    if (this.timing && (this.models.loads[this.models.recognizerModel] ?? 0) > before) {
+      const load = {
+        why,
+        startedAt,
+        ms: Math.round(performance.now() - t),
+        terms: p.entries.length,
+      };
+      this.emit({ type: "log", level: "info", msg: `${LOAD_TIMING} ${JSON.stringify(load)}` });
+    }
     for (const d of p.dropped) {
       this.emit({ type: "log", level: "error", msg: `hotword "${d.term}" dropped: ${d.reason}` });
     }
@@ -663,6 +681,7 @@ export class LivePipeline {
         st.inSpeech = true;
         st.segStart = Math.max(st.audio.start, ws - this.sec(o.preRoll));
         st.lastProvisional = we;
+        this.embedderAhead(st);
       }
       st.lastSpeech = we;
     }
@@ -681,6 +700,15 @@ export class LivePipeline {
     }
     // Keep only the open segment, or the pre-roll while nothing is open.
     st.audio.trimTo(st.inSpeech ? st.segStart : we - this.sec(o.preRoll));
+  }
+
+  /**
+   * A call line of `MIN_EMBED_SECONDS` or more is embedded when it is written, so the embedder is
+   * loaded as the call channel's speech starts, while the segment is still open: the call's first
+   * line no longer waits for TitaNet's load after its decode (issue #378).
+   */
+  private embedderAhead(st: ChannelState): void {
+    if (st.ch === "call") this.embedder ??= this.models.embedder();
   }
 
   /** Closes an open segment at the newest audio (part end, flush, skipped audio). */
@@ -759,6 +787,7 @@ export class LivePipeline {
     const open = sc.open();
     st.inSpeech = open !== null;
     if (open) {
+      this.embedderAhead(st);
       st.segStart = open.from;
       if (this.live && open.text !== st.shown) {
         st.shown = open.text;
@@ -1137,7 +1166,7 @@ export class LivePipeline {
    */
   warmDictation(want: LiveChoice | null, callActive: boolean, recognizer = want === null): void {
     this.dictationVad ??= this.models.vad();
-    if (recognizer && this.models.recognizerHere?.() !== false) this.hot();
+    if (recognizer && this.models.recognizerHere?.() !== false) this.hot("warm");
     if (!want || !this.models.liveEngine) return;
     if (!callActive && this.engine && this.engine.id !== want.engine) this.startEngine(undefined);
     if (!this.engine) this.models.liveEngine(want.engine);
