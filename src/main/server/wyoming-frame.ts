@@ -6,12 +6,16 @@
  *
  * Pure: no sockets. The reader takes inline `data` and the block; the writer moves `data` into the
  * block as the Python writer does, so a header stays small, and both lengths are byte counts of the
- * UTF-8, never string lengths. A header line past 64 KiB with no newline, or one that is not a JSON
+ * UTF-8, never string lengths. A header line longer than 65536 bytes, or one that is not a JSON
  * object with a `type`, is a `FrameError`: the Python reader's StreamReader limit is 65536 bytes,
- * and it treats either as a disconnect.
+ * and it treats either as a disconnect. A header whose data and payload together pass the reader's
+ * `maxBody` is refused before any of that body is held (`FrameTooLarge`).
  */
 
-/** The longest header line a reader takes, its newline included: asyncio's default limit. */
+/**
+ * The longest header line a reader takes, its newline not counted: asyncio's default limit, which
+ * `readline` applies to the bytes before the newline (StreamReader.readuntil, `isep > limit`).
+ */
 export const MAX_HEADER_BYTES = 65536;
 
 export interface WyomingEvent {
@@ -22,6 +26,11 @@ export interface WyomingEvent {
 
 export class FrameError extends Error {
   override name = "FrameError";
+}
+
+/** A header announcing more data and payload than the reader may hold. */
+export class FrameTooLarge extends FrameError {
+  override name = "FrameTooLarge";
 }
 
 const utf8 = new TextEncoder();
@@ -66,35 +75,42 @@ function parseObject(bytes: Uint8Array, what: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-/** One socket's reader: bytes in as they arrive, whole events out. */
+/**
+ * One socket's reader: bytes in as they arrive, whole events out. What has not made an event yet is
+ * kept as the chunks it came in, so a big payload is copied once when its event is cut, not once
+ * per push. `maxBody` bounds one event's data plus payload, in bytes.
+ */
 export class FrameReader {
-  private buf = new Uint8Array(0);
+  private chunks: Uint8Array[] = [];
+  private size = 0;
+  /** Bytes at the front already searched for a newline. */
+  private scanned = 0;
   /** The header of the event whose data and payload have not all arrived yet. */
   private pending: { type: string; data: Record<string, unknown>; dl: number; pl: number } | null =
     null;
 
+  constructor(private readonly maxBody = Number.POSITIVE_INFINITY) {}
+
   push(bytes: Uint8Array): WyomingEvent[] {
+    // A copy (a Buffer's `slice` is a view): the caller may reuse its buffer once this returns.
     if (bytes.byteLength > 0) {
-      const next = new Uint8Array(this.buf.byteLength + bytes.byteLength);
-      next.set(this.buf, 0);
-      next.set(bytes, this.buf.byteLength);
-      this.buf = next;
+      this.chunks.push(new Uint8Array(bytes));
+      this.size += bytes.byteLength;
     }
     const out: WyomingEvent[] = [];
-    let at = 0;
     for (;;) {
       if (!this.pending) {
-        const nl = this.buf.indexOf(0x0a, at);
+        const nl = this.newline();
         if (nl < 0) {
-          if (this.buf.byteLength - at >= MAX_HEADER_BYTES) {
+          if (this.size > MAX_HEADER_BYTES) {
             throw new FrameError(`a header line passed ${MAX_HEADER_BYTES} bytes with no newline`);
           }
           break;
         }
-        if (nl + 1 - at > MAX_HEADER_BYTES) {
+        if (nl > MAX_HEADER_BYTES) {
           throw new FrameError(`a header line passed ${MAX_HEADER_BYTES} bytes`);
         }
-        const header = parseObject(this.buf.subarray(at, nl), "header line");
+        const header = parseObject(this.take(nl + 1).subarray(0, nl), "header line");
         if (typeof header.type !== "string" || header.type === "") {
           throw new FrameError("the header has no type");
         }
@@ -103,24 +119,60 @@ export class FrameReader {
           typeof inline === "object" && inline !== null && !Array.isArray(inline)
             ? { ...(inline as Record<string, unknown>) }
             : {};
-        this.pending = {
-          type: header.type,
-          data,
-          dl: lengthOf(header, "data_length"),
-          pl: lengthOf(header, "payload_length"),
-        };
-        at = nl + 1;
+        const dl = lengthOf(header, "data_length");
+        const pl = lengthOf(header, "payload_length");
+        // Refused on the header, before a byte of the body is held.
+        if (dl + pl > this.maxBody) {
+          throw new FrameTooLarge(
+            `an event announced ${dl + pl} bytes of data and payload, past ${this.maxBody}`,
+          );
+        }
+        this.pending = { type: header.type, data, dl, pl };
       }
       const p = this.pending;
-      if (this.buf.byteLength - at < p.dl + p.pl) break;
-      if (p.dl > 0) Object.assign(p.data, parseObject(this.buf.subarray(at, at + p.dl), "data"));
-      at += p.dl;
-      const payload = p.pl > 0 ? this.buf.slice(at, at + p.pl) : null;
-      at += p.pl;
+      if (this.size < p.dl + p.pl) break;
+      if (p.dl > 0) Object.assign(p.data, parseObject(this.take(p.dl), "data"));
+      const payload = p.pl > 0 ? this.take(p.pl) : null;
       out.push({ type: p.type, data: p.data, payload });
       this.pending = null;
     }
-    this.buf = at > 0 ? this.buf.slice(at) : this.buf;
+    return out;
+  }
+
+  /** The offset of the first newline in what is held, or -1. */
+  private newline(): number {
+    let base = 0;
+    for (const c of this.chunks) {
+      if (base + c.byteLength > this.scanned) {
+        const i = c.indexOf(0x0a, Math.max(0, this.scanned - base));
+        if (i >= 0) return base + i;
+      }
+      base += c.byteLength;
+    }
+    this.scanned = this.size;
+    return -1;
+  }
+
+  /** The first `n` held bytes, removed: a view when one chunk holds them, else one joined copy. */
+  private take(n: number): Uint8Array {
+    this.size -= n;
+    this.scanned = 0;
+    const first = this.chunks[0] as Uint8Array;
+    if (first.byteLength >= n) {
+      if (first.byteLength === n) this.chunks.shift();
+      else this.chunks[0] = first.subarray(n);
+      return first.subarray(0, n);
+    }
+    const out = new Uint8Array(n);
+    let at = 0;
+    while (at < n) {
+      const c = this.chunks[0] as Uint8Array;
+      const k = Math.min(c.byteLength, n - at);
+      out.set(c.subarray(0, k), at);
+      at += k;
+      if (k === c.byteLength) this.chunks.shift();
+      else this.chunks[0] = c.subarray(k);
+    }
     return out;
   }
 }

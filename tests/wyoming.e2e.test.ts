@@ -10,7 +10,7 @@ import { readdirSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { WyomingServer } from "../src/main/server/wyoming.ts";
 import { FrameReader, type WyomingEvent } from "../src/main/server/wyoming-frame.ts";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { SERVER } from "./server-helpers.ts";
@@ -282,6 +282,53 @@ describe("[SV-C2] Wyoming in server mode", () => {
     expect(wyomingJobs(rig)).toEqual([]);
   });
 
+  test("[SV-C2] a header claiming a body past server.max_upload_mb gets body_too_large before the body", async () => {
+    const c = await client(port);
+    c.send("transcribe", { language: "en" });
+    c.send("audio-start", { ...FORMAT, timestamp: null });
+    // One billion bytes announced and none sent: the answer cannot wait for the body.
+    c.socket.write(utf8.encode('{"type":"audio-chunk","payload_length":1000000000}\n'));
+    const e = await c.next("error", 5000);
+    expect(e.data.code).toBe("body_too_large");
+    expect(e.data.text).toContain("server.max_upload_mb");
+    await c.closed;
+    await until(() => uploads(rig).length === 0, 5000, "the upload to be deleted");
+    expect(wyomingJobs(rig)).toEqual([]);
+  });
+
+  test("[SV-C2] a client that half-closes after audio-stop still reads its transcript", async () => {
+    // The Python client's `write_eof`: the write side ends, the read side stays open.
+    const c = await client(port);
+    utterance(c, HELLO);
+    c.socket.end();
+    const t = await c.next("transcript");
+    expect(t.data.text).toBe("hello world");
+    await c.closed;
+    await until(() => wyomingJobs(rig).length === 0, 5000, "the job to be removed");
+    expect(uploads(rig)).toEqual([]);
+  });
+
+  test("[SV-C2] a half-close with no audio-stop closes the connection and deletes the upload", async () => {
+    const c = await client(port);
+    c.send("audio-start", { ...FORMAT, timestamp: null });
+    for (const chunk of pcmChunks(HELLO).slice(0, 5)) c.send("audio-chunk", FORMAT, chunk);
+    await until(() => uploads(rig).length === 1, 5000, "the upload to start");
+    c.socket.end();
+    await c.closed;
+    await until(() => uploads(rig).length === 0, 5000, "the upload to be deleted");
+    expect(c.events).toEqual([]);
+  });
+
+  test("[SV-C2] audio-start with a sample width, channel count or rate past the range gets bad_field", async () => {
+    for (const bad of [{ width: 9 }, { channels: 64 }, { rate: 10_000_000 }]) {
+      const c = await client(port);
+      c.send("audio-start", { ...FORMAT, ...bad, timestamp: null });
+      expect((await c.next("error", 5000)).data).toMatchObject({ code: "bad_field" });
+      await c.closed;
+    }
+    expect(uploads(rig)).toEqual([]);
+  });
+
   test("[SV-C2] an unknown language tag gets error bad_field", async () => {
     const c = await client(port);
     c.send("transcribe", { language: "english please" });
@@ -371,5 +418,88 @@ describe("[SV-C2] Wyoming in the app, and off by default", () => {
     await c.closed;
     await until(() => uploads(app).length === 0, 5000, "the upload to be deleted");
     expect(app.logs.filter((l) => l.msg.includes("the Wyoming listener"))).toEqual([]);
+  });
+});
+
+describe("[SV-C2] Wyoming with a slow engine", () => {
+  let rig: AppRig;
+  let port: number;
+
+  beforeAll(async () => {
+    rig = await appRig({
+      settings: { ...SERVER, "server.wyoming": true, "server.wyoming_port": 0 },
+      // Every decode busy-waits, so a job is still running when its client goes.
+      models: {
+        kind: "module",
+        path: FAKE_MODELS,
+        model: "fake-parakeet",
+        options: { slowMs: 1500 },
+      },
+    });
+    port = rig.app.wyomingPort() as number;
+  });
+  afterAll(async () => {
+    await rig?.close();
+  });
+
+  test("[SV-C2] a disconnect while the job runs lets it finish; the next session still transcribes", async () => {
+    const jobs = rig.app.jobs();
+    if (!jobs) throw new Error("no job service");
+    // How each Wyoming job ended when it was removed: `cancelled` means its Worker was terminated.
+    const removed: string[] = [];
+    const remove = jobs.remove.bind(jobs);
+    jobs.remove = (who, id) => {
+      const r = remove(who, id);
+      if (r) removed.push(r.status);
+      return r;
+    };
+    try {
+      const a = await client(port);
+      utterance(a, HELLO);
+      await until(
+        () => wyomingJobs(rig).some((j) => j.status === "running"),
+        10_000,
+        "the job to run",
+      );
+      // Inside the decode, then the client goes. A reset, so the server sees the close at once (a
+      // plain FIN is a half-close, which waits for the answer by design).
+      await Bun.sleep(300);
+      a.socket.resetAndDestroy();
+      const b = await client(port);
+      utterance(b, HELLO);
+      expect((await b.next("transcript")).data.text).toBe("hello world");
+      await b.closed;
+      await until(() => wyomingJobs(rig).length === 0, 10_000, "no job left");
+      expect(uploads(rig)).toEqual([]);
+      // Both ran to the end: the gone client's job was not cut off mid-decode.
+      expect(removed).toEqual(["done", "done"]);
+    } finally {
+      jobs.remove = remove;
+    }
+  });
+
+  test("[SV-C2] a disconnect while the job is queued removes it at once", async () => {
+    const jobs = rig.app.jobs();
+    if (!jobs) throw new Error("no job service");
+    // The first utterance holds the lane; the second queues behind it, then its client goes.
+    const a = await client(port);
+    utterance(a, HELLO);
+    await until(() => wyomingJobs(rig).some((j) => j.status === "running"), 10_000, "a job to run");
+    const b = await client(port);
+    utterance(b, HELLO);
+    await until(
+      () => wyomingJobs(rig).some((j) => j.status === "queued"),
+      10_000,
+      "a job to queue",
+    );
+    b.socket.resetAndDestroy();
+    await until(
+      () => !wyomingJobs(rig).some((j) => j.status === "queued"),
+      1000,
+      "the queued job to be removed before the running one ends",
+    );
+    expect((await a.next("transcript")).data.text).toBe("hello world");
+    await until(() => wyomingJobs(rig).length === 0, 10_000, "no job left");
+    expect(uploads(rig)).toEqual([]);
   });
 });

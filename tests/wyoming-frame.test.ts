@@ -1,7 +1,8 @@
 /**
  * The Wyoming framing (docs/ux/SERVER.md SV-C2) against the `wyoming` 1.10.2 package's reader and
- * writer: lengths are UTF-8 byte counts, a data block wins over inline `data`, and a header line
- * past the Python reader's 65536-byte limit ends the connection.
+ * writer: lengths are UTF-8 byte counts, a data block wins over inline `data`, a header line past
+ * the Python reader's 65536-byte limit ends the connection, and a header announcing a body past the
+ * reader's bound is refused before the body is held.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -9,6 +10,7 @@ import {
   encode,
   FrameError,
   FrameReader,
+  FrameTooLarge,
   MAX_HEADER_BYTES,
   type WyomingEvent,
 } from "../src/main/server/wyoming-frame.ts";
@@ -110,17 +112,63 @@ describe("[SV-C2] Wyoming framing", () => {
     expect(() => new FrameReader().push(wrong)).toThrow(FrameError);
   });
 
-  test("[SV-C2] a 60 KiB header line parses; a 70 KiB line with no newline is refused", () => {
-    const pad = (n: number) => `{"type":"describe","data":{"x":"${"a".repeat(n)}"}}\n`;
-    const ok = pad(60 * 1024);
-    expect(Buffer.byteLength(ok)).toBeLessThan(MAX_HEADER_BYTES);
-    expect(new FrameReader().push(utf8.encode(ok)).map((e) => e.type)).toEqual(["describe"]);
-    const long = pad(70 * 1024);
+  test("[SV-C2] a header line of 65536 bytes parses; 65537 is refused, as Python's readline", () => {
+    // A line of exactly `n` bytes before its newline.
+    const line = (n: number) => {
+      const head = '{"type":"describe","data":{"x":"';
+      const tail = '"}}';
+      return `${head}${"a".repeat(n - head.length - tail.length)}${tail}`;
+    };
+    expect(Buffer.byteLength(line(MAX_HEADER_BYTES))).toBe(MAX_HEADER_BYTES);
+    // The edge: asyncio's limit counts the bytes before the newline, so 65536 of them pass.
+    const edge = utf8.encode(`${line(MAX_HEADER_BYTES)}\n`);
+    expect(new FrameReader().push(edge).map((e) => e.type)).toEqual(["describe"]);
+    // The same 65536 bytes with the newline still to come: held, not refused.
     const r = new FrameReader();
-    // Without its newline: refused once the buffer passes the limit.
-    expect(() => r.push(utf8.encode(long.slice(0, -1)))).toThrow(FrameError);
-    // With it, in one push: refused too.
-    expect(() => new FrameReader().push(utf8.encode(long))).toThrow(FrameError);
+    expect(r.push(edge.subarray(0, MAX_HEADER_BYTES))).toEqual([]);
+    expect(r.push(edge.subarray(MAX_HEADER_BYTES)).map((e) => e.type)).toEqual(["describe"]);
+    // One byte more is refused, with its newline in the same push or with none yet.
+    const over = `${line(MAX_HEADER_BYTES + 1)}\n`;
+    expect(() => new FrameReader().push(utf8.encode(over))).toThrow(FrameError);
+    expect(() => new FrameReader().push(utf8.encode(over.slice(0, -1)))).toThrow(FrameError);
+  });
+
+  test("[SV-C2] a header claiming a body past the bound is refused before it is buffered", () => {
+    const bound = 1024 * 1024;
+    // One billion bytes announced: refused on the header push, with no byte of the body sent.
+    const r = new FrameReader(bound);
+    expect(() =>
+      r.push(utf8.encode('{"type":"audio-chunk","payload_length":1000000000}\n')),
+    ).toThrow(FrameTooLarge);
+    // Data and payload count together.
+    expect(() =>
+      new FrameReader(bound).push(
+        utf8.encode(`{"type":"audio-chunk","data_length":2,"payload_length":${bound - 1}}\n`),
+      ),
+    ).toThrow(FrameTooLarge);
+    // Control: exactly the bound is taken, and the event comes out once its bytes arrive.
+    const ok = new FrameReader(bound);
+    expect(
+      ok.push(
+        utf8.encode(`{"type":"audio-chunk","data_length":2,"payload_length":${bound - 2}}\n`),
+      ),
+    ).toEqual([]);
+    expect(ok.push(utf8.encode("{}"))).toEqual([]);
+    expect(ok.push(new Uint8Array(bound / 2))).toEqual([]);
+    const [e] = ok.push(new Uint8Array(bound / 2 - 2).fill(7));
+    expect(e?.type).toBe("audio-chunk");
+    expect(e?.payload?.byteLength).toBe(bound - 2);
+    expect(e?.payload?.[bound - 3]).toBe(7);
+  });
+
+  test("[SV-C2] a payload is the bytes as pushed, even when the caller reuses its buffer", () => {
+    const r = new FrameReader();
+    const buf = Buffer.from('{"type":"audio-chunk","payload_length":4}\n\x01\x02', "latin1");
+    expect(r.push(buf)).toEqual([]);
+    // The socket's buffer is overwritten before the rest arrives.
+    buf.fill(0);
+    const [e] = r.push(new Uint8Array([3, 4]));
+    expect([...(e?.payload ?? [])]).toEqual([1, 2, 3, 4]);
   });
 
   test("[SV-C2] a line that is not JSON, or has no type, is refused", () => {

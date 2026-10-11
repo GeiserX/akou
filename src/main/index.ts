@@ -4224,6 +4224,8 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   } catch (err) {
     await app?.asr?.close();
     await app?.wyoming?.stop();
+    // A listener that failed after the queue started (a Wyoming port in use) leaves no Worker.
+    app?.jobs()?.close();
     await app?.server?.stop();
     releaseLock(lockPath);
     throw err;

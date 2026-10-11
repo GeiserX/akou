@@ -14,9 +14,12 @@
  *   does. A request that names nothing runs what a dictation runs (DC-R2): the dictation lane's
  *   engine while the lane has a slot, else the server's default. The answer is
  *   `transcript {text, language?}`, then akou closes the connection, as wyoming-faster-whisper does.
- * - A refusal is `error {text, code}` with akou's error code, then a close. A client that closes
- *   mid-stream leaves no job and no file. A connection with no event for `idleMs` while no job runs
- *   is closed.
+ * - A refusal is `error {text, code}` with akou's error code, then a close. A header announcing
+ *   more than `server.max_upload_mb` of data and payload is refused before its body is read.
+ * - A client that half-closes after `audio-stop` (the Python client's `write_eof`) still gets its
+ *   transcript. A client that closes mid-stream leaves no job and no file: a queued job is removed
+ *   at once, a running one finishes (its Worker stays whole for the next utterance) and is removed
+ *   with its answer unsent. A connection with no event for `idleMs` while no job runs is closed.
  */
 
 import { rmSync } from "node:fs";
@@ -33,7 +36,13 @@ import type { LoadedConfig } from "../config/schema.ts";
 import { streamingWavHeader } from "./audio.ts";
 import type { JobService } from "./jobs.ts";
 import { PRESET_NAMES, PRESETS } from "./presets.ts";
-import { encode, FrameError, FrameReader, type WyomingEvent } from "./wyoming-frame.ts";
+import {
+  encode,
+  FrameError,
+  FrameReader,
+  FrameTooLarge,
+  type WyomingEvent,
+} from "./wyoming-frame.ts";
 
 /** The caller a Wyoming job runs as: Wyoming has no key, so one stand-in key id for all of it. */
 export const WYOMING_IDENTITY: Identity = {
@@ -79,7 +88,6 @@ interface Session {
   transcribe: { language?: string; name?: string };
   file: Upload | null;
   jobId: string | null;
-  abort: AbortController;
   idle: ReturnType<typeof setTimeout> | null;
   /** Bytes the socket did not take yet; sent on `drain`. */
   out: Uint8Array[];
@@ -188,10 +196,13 @@ export class WyomingServer {
       w.listener = Bun.listen<Session>({
         hostname: d.hostname,
         port: d.port,
+        // A client may half-close after audio-stop and still read the transcript.
+        allowHalfOpen: true,
         socket: {
           open: (socket) => w.open(socket),
           data: (socket, bytes) => w.data(socket.data, bytes),
           drain: (socket) => w.flush(socket.data),
+          end: (socket) => w.ended(socket.data),
           close: (socket) => w.closed(socket.data),
           error: (socket, err) => {
             d.log("warn", `wyoming: ${err.message}`);
@@ -217,11 +228,13 @@ export class WyomingServer {
     return this.listener?.hostname ?? this.d.hostname;
   }
 
-  /** Ends every connection and its job or file, then stops listening. */
+  /** Ends every connection and its job, running or not, or file, then stops listening. */
   async stop(): Promise<void> {
     const open = [...this.sessions];
     for (const s of open) {
       this.closed(s);
+      // The quit does not wait for a running job: it goes too.
+      if (s.jobId !== null) this.d.jobs.remove(WYOMING_IDENTITY, s.jobId);
       s.socket.terminate();
     }
     await Promise.allSettled(open.map((s) => s.chain));
@@ -232,11 +245,12 @@ export class WyomingServer {
   private open(socket: Socket<Session>): void {
     const s: Session = {
       socket,
-      reader: new FrameReader(),
+      // One event's data and payload are bounded by the upload limit, so a header announcing more
+      // is refused before any of it is held.
+      reader: new FrameReader(this.maxUpload()),
       transcribe: {},
       file: null,
       jobId: null,
-      abort: new AbortController(),
       idle: null,
       out: [],
       ending: false,
@@ -268,6 +282,11 @@ export class WyomingServer {
     try {
       events = s.reader.push(bytes);
     } catch (err) {
+      if (err instanceof FrameTooLarge) {
+        // Answered as an oversize upload is; the rest of the connection is read and dropped.
+        this.fail(s, new HttpError(413, "body_too_large", `${err.message} (server.max_upload_mb)`));
+        return;
+      }
       // As the Python reader: a line it cannot read is the end of the connection.
       if (err instanceof FrameError) this.d.log("warn", `wyoming: ${err.message}; closing`);
       this.closed(s);
@@ -332,6 +351,14 @@ export class WyomingServer {
     const rate = int(data.rate, 16000);
     const width = int(data.width, 2);
     const channels = int(data.channels, 1);
+    // Past these the WAV header's fields overflow (bits per sample, byte rate).
+    if (width > 4 || channels > 8 || rate > 384_000) {
+      throw new HttpError(
+        422,
+        "bad_field",
+        `audio at ${rate} Hz of ${width}-byte samples in ${channels} channels is not audio akou reads`,
+      );
+    }
     const path = join(this.d.jobs.uploadDir, `${crypto.randomUUID()}.upload`);
     const sink = Bun.file(path).writer();
     const hasher = new Bun.CryptoHasher("sha256");
@@ -341,9 +368,14 @@ export class WyomingServer {
     return { path, sink, hasher, bytes: 0 };
   }
 
+  /** `server.max_upload_mb`, in bytes. */
+  private maxUpload(): number {
+    return this.d.settings()["server.max_upload_mb"] * 1024 * 1024;
+  }
+
   private chunk(f: Upload, payload: Uint8Array): void {
     f.bytes += payload.byteLength;
-    const max = this.d.settings()["server.max_upload_mb"] * 1024 * 1024;
+    const max = this.maxUpload();
     if (f.bytes > max) {
       throw new HttpError(
         413,
@@ -422,11 +454,14 @@ export class WyomingServer {
     s.jobId = id;
     this.arm(s);
     try {
+      // Not cut short by a close: a queued job is removed then (and the wait ends with it), a
+      // running one is waited out so its Worker is not terminated mid-decode.
       let job = jobs.get(WYOMING_IDENTITY, id);
-      while (!s.closed && job && (job.status === "queued" || job.status === "running")) {
-        await jobs.wait(WYOMING_IDENTITY, id, 60_000, s.abort.signal);
+      while (job && (job.status === "queued" || job.status === "running")) {
+        await jobs.wait(WYOMING_IDENTITY, id, 60_000);
         job = jobs.get(WYOMING_IDENTITY, id);
       }
+      // The connection went while it ran: the answer has nowhere to go.
       if (s.closed) return;
       if (!job) throw new HttpError(409, "cancelled", "the job was deleted before it finished");
       if (job.status !== "done") {
@@ -446,6 +481,7 @@ export class WyomingServer {
       // The client has the only copy it asked for; akou keeps none (SV-J6).
       jobs.remove(WYOMING_IDENTITY, id);
       s.jobId = null;
+      if (s.closed) this.sessions.delete(s);
     }
   }
 
@@ -489,15 +525,33 @@ export class WyomingServer {
     this.arm(s);
   }
 
-  /** The connection is gone: its job is removed and its file deleted. */
+  /**
+   * The client sent its last byte (a half-close). What it sent before is still answered: once the
+   * events ahead are handled, an upload with no audio-stop is deleted and the connection closes.
+   */
+  private ended(s: Session | undefined): void {
+    if (!s || s.closed) return;
+    s.chain = s.chain.then(() => {
+      this.drop(s);
+      if (!s.closed && !s.ending) this.finish(s);
+    });
+  }
+
+  /**
+   * The connection is gone: its file is deleted and a queued job removed. A running job is left to
+   * finish, since terminating its Worker mid-decode can leave the engine unfit for the next
+   * session; `transcribe` drops its answer and removes it, and the session stays known to `stop`
+   * until then.
+   */
   private closed(s: Session | undefined): void {
     if (!s || s.closed) return;
     s.closed = true;
     if (s.idle !== null) clearTimeout(s.idle);
     s.idle = null;
-    s.abort.abort();
-    if (s.jobId !== null) this.d.jobs.remove(WYOMING_IDENTITY, s.jobId);
+    if (s.jobId !== null && this.d.jobs.get(WYOMING_IDENTITY, s.jobId)?.status === "queued") {
+      this.d.jobs.remove(WYOMING_IDENTITY, s.jobId);
+    }
     this.drop(s);
-    this.sessions.delete(s);
+    if (s.jobId === null) this.sessions.delete(s);
   }
 }
