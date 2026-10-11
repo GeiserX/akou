@@ -15,11 +15,27 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # `enable-url-completion` below rewrites markdown links only. The banner, the screenshot and
+      # the LICENSE link are HTML tags with relative paths, which Docker Hub cannot resolve (the
+      # first sync, 2026-10-11, shipped them as `src="docs/images/banner.svg"` and the page showed
+      # no image). Images point at the raw file, other files at the blob page, on main.
+      - name: write the Hub copy of the README with absolute paths in its HTML tags
+        run: |
+          sed -E \
+            -e 's#(src=")(docs/[^"]+)"#\1https://raw.githubusercontent.com/GeiserX/akou/main/\2"#g' \
+            -e 's#(href=")([A-Za-z][^":/]*)"#\1https://github.com/GeiserX/akou/blob/main/\2"#g' \
+            README.md > README.dockerhub.md
+          # A check that can fail: no relative src or href may be left in an HTML tag.
+          if grep -nE '(src|href)="[^h"][^"]*"' README.dockerhub.md; then
+            echo "::error::relative paths left in the Hub copy of the README"; exit 1
+          fi
+
       - uses: peter-evans/dockerhub-description@1b9a80c056b620d92cedb9d9b5a223409c68ddfa # v5.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: drumsergio/akou
           short-description: "akou's self-hosted transcription server: file jobs, signed webhooks, an OpenAI-compatible endpoint"
-          # The README links its images and files by relative path; Docker Hub needs them absolute.
+          readme-filepath: ./README.dockerhub.md
+          # The README's markdown links (CHANGELOG.md, LICENSE) are relative; this makes them absolute.
           enable-url-completion: true
