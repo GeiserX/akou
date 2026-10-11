@@ -270,8 +270,10 @@ describe("[SV-C2] Wyoming in server mode", () => {
     const c = await client(port);
     c.send("transcribe", { language: "en" });
     c.send("audio-start", { ...FORMAT, timestamp: null });
-    // 40 s of 16 kHz 16-bit audio is 1.28 MB, past the rig's 1 MiB.
-    for (const chunk of pcmChunks(silence(40))) c.send("audio-chunk", FORMAT, chunk);
+    // 513 chunks of 2048 bytes pass the rig's 1 MiB by one chunk. The client stops there, so the
+    // server has read every byte when it closes: unread bytes at a close make some stacks (Windows)
+    // answer with a reset that drops the error event before the client reads it.
+    for (let i = 0; i < 513; i++) c.send("audio-chunk", FORMAT, new Uint8Array(2048));
     const e = await c.next("error");
     expect(e.data.code).toBe("body_too_large");
     expect(e.data.text).toContain("server.max_upload_mb");
