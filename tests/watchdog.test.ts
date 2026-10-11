@@ -529,9 +529,11 @@ describe.skipIf(process.platform === "win32")(
         const kept = [other.pid, names.pid] as number[];
         let r: Awaited<ReturnType<typeof run>> | null = null;
         try {
-          // As the real wrapper, it has a child that exited and was never reaped.
-          await Bun.sleep(500);
-          expect(b.unreaped(stray.pid as number)).toBe(1);
+          // As the real wrapper, it has a child that exited and was never reaped. A fixed wait
+          // was 500 ms, and a loaded runner took longer to start the stray twice in two days.
+          expect(await waitFor(() => String(b.unreaped(stray.pid as number)), "1", 10_000)).toBe(
+            true,
+          );
           // `open` with no `-n`, which starts nothing while the stray is alive: the app comes up
           // only because the stray was stopped first.
           r = await run(
