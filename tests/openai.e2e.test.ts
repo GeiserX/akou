@@ -13,12 +13,14 @@ import {
   CUE_CHARS,
   promptTerms,
   RESPONSE_FORMATS,
+  renderResult,
   srt,
   vtt,
   wordCues,
 } from "../src/main/api/routes/openai.ts";
 import { MODELS, RECOGNIZER } from "../src/main/asr/models.ts";
 import { resolveModel } from "../src/main/server/model-store.ts";
+import type { Job } from "../src/main/server/store.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
@@ -400,6 +402,36 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     // A word with no time (Qwen) leaves the cues to the segments.
     expect(wordCues([{ w: "a", s: null, e: null, c: 0.9 }], segs)).toBeNull();
     expect(wordCues([], segs)).toBeNull();
+  });
+
+  test("[SV-J5] a segment with no timed words (Qwen) is cut into cues of at most 42 characters that partition its time", async () => {
+    const text =
+      "the quick brown fox jumps over the lazy dog while the band plays on and the crowd sings along to every single word again";
+    expect(text.length).toBe(120);
+    const job = {
+      result: {
+        text,
+        segments: [{ s: 10, e: 22, text, speaker: null }],
+        words: text.split(" ").map((w) => ({ w, s: null, e: null, c: null })),
+      },
+    } as unknown as Job;
+    const body = await renderResult(job, "srt").text();
+    const cues = body
+      .trim()
+      .split("\n\n")
+      .map((c) => {
+        const [, times, ...lines] = c.split("\n");
+        const [start, end] = (times ?? "").split(" --> ");
+        return { start, end, text: lines.join(" ") };
+      });
+    expect(cues.length).toBeGreaterThan(1);
+    for (const c of cues) expect(c.text.length).toBeLessThanOrEqual(CUE_CHARS);
+    // The cues partition the segment: the first starts where it starts, each next one where the
+    // last one ended, the last ends where it ends, and no word is lost or split.
+    expect(cues[0]?.start).toBe("00:00:10,000");
+    for (let i = 1; i < cues.length; i++) expect(cues[i]?.start).toBe(cues[i - 1]?.end);
+    expect(cues.at(-1)?.end).toBe("00:00:22,000");
+    expect(cues.map((c) => c.text).join(" ")).toBe(text);
   });
 
   test("srt and vtt cues from segments", () => {
