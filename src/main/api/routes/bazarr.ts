@@ -8,7 +8,8 @@
  *   audio's own times, or the plain text.
  * - `POST /v1/detect-language?encode=false`: the same part, the whole track; the first 30 s are
  *   transcribed under the `best` preset (Qwen names the language) and the answer is
- *   `{detected_language, language_code, confidence}`, as whisper-asr-webservice answers.
+ *   `{detected_language, language_code, confidence}`, as whisper-asr-webservice answers. With
+ *   `encode=true` the whole file is decoded and transcribed; Bazarr never sends that.
  *
  * Bazarr sends no key, so both routes are open, and answer only while `server.bazarr` is on (a
  * file or environment setting); off, they answer 404 as a server without the dialect does. A key
@@ -347,7 +348,7 @@ export function bazarrRoutes(r: Router<ApiApp>): void {
     "/detect-language",
     {
       id: "bazarr.detectLanguage",
-      doc: "Bazarr's whisper language detection: a file part `audio_file` in (raw 16 kHz mono 16-bit PCM with `encode=false`, as Bazarr sends the whole track; any audio or video file with `encode=true`), `{detected_language, language_code, confidence}` out. The first 30 s of raw PCM are transcribed under the `best` preset, whose Qwen names the language: `language_code` is its ISO code, `detected_language` its English name in lower case, `confidence` null; `und` and `unknown` when no language was heard. With `best` unavailable the refusal is akou's own JSON (409 `preset_unavailable`). Needs no key, and answers only while `server.bazarr` is on (404 otherwise).",
+      doc: "Bazarr's whisper language detection: a file part `audio_file` in (raw 16 kHz mono 16-bit PCM with `encode=false`, as Bazarr sends the whole track; any audio or video file with `encode=true`), `{detected_language, language_code, confidence}` out. The first 30 s of raw PCM are transcribed under the `best` preset, whose Qwen names the language; with `encode=true` the whole file is decoded and transcribed (Bazarr never sends that): `language_code` is its ISO code, `detected_language` its English name in lower case, `confidence` null; `und` and `unknown` when no language was heard. With `best` unavailable the refusal is akou's own JSON (409 `preset_unavailable`). Needs no key, and answers only while `server.bazarr` is on (404 otherwise).",
       access: "open",
       modes: ["server"],
       door: "compat",

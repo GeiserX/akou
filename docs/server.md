@@ -137,6 +137,8 @@ There is no resume. A new socket is a new session: send `hello`, the OpusHead an
 
 Home Assistant's Wyoming integration adds akou as a speech-to-text engine for Assist, by host and port. Turn the listener on with `AKOU_WYOMING=true` (the `server.wyoming` setting), publish its port (`server.wyoming_port`, 10300) where Home Assistant can reach it, and add the Wyoming integration with akou's host and that port. The protocol has no key and no TLS, so keep the port on your own network. See `server.wyoming` in [Configuration](configuration.md) for how it binds.
 
+With `server.auto_download` on (the default), the first utterance after you turn on a preset that is not downloaded yet waits for the download, and Home Assistant may hit its 300-second pipeline timeout once. After a new preset is installed, reload the Wyoming entry in Home Assistant: it reads the list of languages once, at setup.
+
 ## Bazarr
 
 Bazarr's Whisper provider sends each video's audio to `POST /v1/asr` and gets an SRT back, and asks `POST /v1/detect-language` which language a track is in. akou answers both once `server.bazarr` is on. Set it with `AKOU_BAZARR=true` on the container, or in the config file; the API cannot turn it on, since these two routes take jobs with no key. Off, both answer 404.
@@ -150,7 +152,7 @@ Each request is one job on `server.default_model`, in the language Bazarr asks f
 Three things do not work, on purpose:
 
 - **Translation.** Bazarr asks for `task=translate` when it wants English subtitles for audio in another language. akou transcribes only, so it answers 400 and writes a `bazarr:` warning line in its log.
-- **Language detection without Qwen.** `/detect-language` transcribes the first 30 seconds under the `best` preset, whose Qwen model names the language. The first call downloads Qwen (2.5 GB) unless `akou models pull best` ran first; with `server.auto_download` off and Qwen missing, akou answers 409 and Bazarr marks the detection failed.
+- **Language detection without Qwen.** `/detect-language` transcribes the first 30 seconds under the `best` preset, whose Qwen model names the language. That cap is on Bazarr's raw PCM: with `encode=true`, which Bazarr never sends, the whole file is decoded. The first call downloads Qwen (2.5 GB) unless `akou models pull best` ran first; with `server.auto_download` off and Qwen missing, akou answers 409 and Bazarr marks the detection failed.
 - **Test Connection.** Bazarr's button calls `GET /status` on the host, which akou does not answer, so it never turns green. Check the endpoint with a request of Bazarr's shape instead:
 
 ```sh

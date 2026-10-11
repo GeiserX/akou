@@ -7979,7 +7979,7 @@
         "tags": [
           "bazarr"
         ],
-        "description": "Bazarr's whisper language detection: a file part `audio_file` in (raw 16 kHz mono 16-bit PCM with `encode=false`, as Bazarr sends the whole track; any audio or video file with `encode=true`), `{detected_language, language_code, confidence}` out. The first 30 s of raw PCM are transcribed under the `best` preset, whose Qwen names the language: `language_code` is its ISO code, `detected_language` its English name in lower case, `confidence` null; `und` and `unknown` when no language was heard. With `best` unavailable the refusal is akou's own JSON (409 `preset_unavailable`). Needs no key, and answers only while `server.bazarr` is on (404 otherwise).",
+        "description": "Bazarr's whisper language detection: a file part `audio_file` in (raw 16 kHz mono 16-bit PCM with `encode=false`, as Bazarr sends the whole track; any audio or video file with `encode=true`), `{detected_language, language_code, confidence}` out. The first 30 s of raw PCM are transcribed under the `best` preset, whose Qwen names the language; with `encode=true` the whole file is decoded and transcribed (Bazarr never sends that): `language_code` is its ISO code, `detected_language` its English name in lower case, `confidence` null; `und` and `unknown` when no language was heard. With `best` unavailable the refusal is akou's own JSON (409 `preset_unavailable`). Needs no key, and answers only while `server.bazarr` is on (404 otherwise).",
         "parameters": [
           {
             "name": "encode",
