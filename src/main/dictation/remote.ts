@@ -40,6 +40,7 @@ import { MAX_KEYWORDS } from "../api/routes/jobs.ts";
 import { ASR_RATE } from "../asr/engine.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import { wavBytes } from "../asr/qwen.ts";
+import { streamingWavHeader } from "../server/audio.ts";
 import { parseRemote, REMOTE_PROBE_MS } from "../server/remotes.ts";
 import { type Resolver, systemResolver } from "../server/webhooks.ts";
 
@@ -330,15 +331,6 @@ async function answer(
 // ---------------------------------------------------------------------------
 // DC-R6: the audio streamed during the hold
 
-/** A WAV header whose sizes say "to the end of the file", for audio whose length is not known yet. */
-function streamedWavHeader(): Uint8Array {
-  const h = wavBytes(new Float32Array(0));
-  const v = new DataView(h.buffer, h.byteOffset);
-  v.setUint32(4, 0xffffffff, true);
-  v.setUint32(40, 0xffffffff, true);
-  return h;
-}
-
 /** Samples as the WAV's 16-bit PCM, converted as `wavBytes` converts them. */
 function pcm16(samples: Float32Array): Uint8Array {
   return wavBytes(samples).subarray(44);
@@ -422,7 +414,7 @@ export class RemoteUpload {
       {
         start: (c) => {
           c.enqueue(this.enc.encode(head));
-          c.enqueue(streamedWavHeader());
+          c.enqueue(streamingWavHeader(ASR_RATE, 16, 1));
           for (const b of this.early) c.enqueue(b);
           this.early = [];
           this.body = c;

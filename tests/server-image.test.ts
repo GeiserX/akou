@@ -259,6 +259,12 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "scripts/server-roundtrip.ts",
       // SV-T6: akou from the compose example beside Telegram-Archive.
       "scripts/compose-e2e.sh",
+      // SV-T4: the `wyoming` package's client against the Wyoming port the container publishes.
+      "-p 127.0.0.1:10300:10300",
+      "scripts/ci/wyoming/probe.py",
+      "capabilities.wyoming",
+      // Home Assistant's fixed format: the clip is resampled before the probe sends it.
+      "-ar 16000 -ac 1 -sample_fmt s16",
     ]) {
       if (!runs.includes(want)) gaps.push(`no step runs ${want}`);
     }

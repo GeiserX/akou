@@ -87,3 +87,32 @@ export async function readUploadAudio(
   }
   return decodeAudio(path, o);
 }
+
+/**
+ * A 44-byte PCM WAV header whose sizes say "to the end of the file" (0xFFFFFFFF), for audio whose
+ * length is not known while it is written: a dictation streamed during the hold (DC-R6) and a
+ * Wyoming chunk stream (SV-C2). At 16 kHz and 16 bits it is read here with no ffmpeg; any other
+ * rate or depth goes through ffmpeg, which reads such a header to the end too.
+ */
+export function streamingWavHeader(rate: number, bits: number, channels: number): Uint8Array {
+  const out = new Uint8Array(44);
+  const v = new DataView(out.buffer);
+  const tag = (o: number, s: string) => {
+    for (let i = 0; i < 4; i++) out[o + i] = s.charCodeAt(i);
+  };
+  const block = channels * (bits / 8);
+  tag(0, "RIFF");
+  v.setUint32(4, 0xffffffff, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, channels, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * block, true);
+  v.setUint16(32, block, true);
+  v.setUint16(34, bits, true);
+  tag(36, "data");
+  v.setUint32(40, 0xffffffff, true);
+  return out;
+}

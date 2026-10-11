@@ -22,6 +22,8 @@
  *   slot, so a dictating client knows its requests will not wait behind the queue.
  *   `live` is the live door (`GET /v1/live`) in server mode: `engines`, the streaming models on disk
  *   a `hello` can name; `capabilities.live` is true while there is one.
+ *   `wyoming_port` is the Wyoming listener's port (SV-C2) while `server.wyoming` has it up, else
+ *   null; `capabilities.wyoming` is true while it is.
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
@@ -42,7 +44,7 @@ function queueOf(app: ApiApp): QueueStats | null {
 }
 
 /** The models load (files downloading, or the recognizer reading them), and are ready to use. */
-function modelState(app: ApiApp): { loading: boolean; ready: boolean } {
+export function modelState(app: ApiApp): { loading: boolean; ready: boolean } {
   const files = app.models().state;
   const recognizer = app.recognizer?.() ?? "ready";
   return {
@@ -81,7 +83,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `eta_seconds` (so a client paces a backlog) and `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `wyoming_port`: the TCP port of the Wyoming listener for Home Assistant while `server.wyoming` has it up (`capabilities.wyoming`), else null. `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -189,11 +191,14 @@ export function serverRoutes(r: Router<ApiApp>): void {
           languages_bound: has("POST", "/jobs"),
           // `GET /v1/live` answers with words: the route exists and a streaming model is on disk.
           live: liveEngines.length > 0,
-          wyoming: false,
+          // SV-C2: the Wyoming listener is up (server.wyoming), on `wyoming_port` of this answer.
+          wyoming: (c.app.wyomingPort?.() ?? null) !== null,
           bazarr: false,
         },
         // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
         bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],
+        // SV-C2: the port Home Assistant's Wyoming integration connects to, null while it is off.
+        wyoming_port: c.app.wyomingPort?.() ?? null,
         // SV-C4: where this API's description is, once the route serving it exists.
         links: has("GET", "/openapi.json") ? { openapi: "/v1/openapi.json" } : {},
       });

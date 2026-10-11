@@ -687,6 +687,9 @@ describe("settings over the API", () => {
         "server.public_host",
         "server.remotes",
         "server.trusted_proxies",
+        // SV-C2: an unauthenticated door opens from the file or the environment only.
+        "server.wyoming",
+        "server.wyoming_port",
         "webhook.url",
       ].sort(),
     );
