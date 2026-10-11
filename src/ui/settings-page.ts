@@ -122,6 +122,7 @@ const MAIN: Layout = [
 const PROVIDER_KEYS = [
   "provider.harness",
   "provider.harnessResume",
+  "provider.harnessSafeMode",
   "provider.harnessPath",
   "provider.apiKey",
   "provider.model",
@@ -134,6 +135,7 @@ const FOR_KIND: Record<string, string[]> = {
   harness: [
     "provider.harness",
     "provider.harnessResume",
+    "provider.harnessSafeMode",
     "provider.timeoutSeconds",
     "provider.harnessPath",
   ],
