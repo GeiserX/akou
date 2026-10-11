@@ -17,6 +17,7 @@ import {
   LiveAsr,
   type LiveOut,
   LivePipeline,
+  LOAD_TIMING,
   type VocabSource,
   WorkerSide,
 } from "../src/main/asr/live-worker.ts";
@@ -125,6 +126,61 @@ describe("segmenting", () => {
       if (before === undefined) delete process.env.AKOU_LINE_TIMING;
       else process.env.AKOU_LINE_TIMING = before;
     }
+  });
+
+  test("[#378] AKOU_LINE_TIMING=1 logs each recognizer load, what asked for it and how long it took", () => {
+    const run = () => {
+      const { p, out } = pipeline({ loadMs: 30 });
+      p.setDecodeList(list(["Vercel"]), 1);
+      // The same words: the loaded recognizer covers them, nothing loads.
+      p.setDecodeList(list(["Vercel"]), 2);
+      // A new word needs a new hotword file, so a new recognizer.
+      p.setDecodeList(list(["Vercel", "Hetzner"]), 3);
+      return out.flatMap((x) =>
+        x.type === "log" && x.msg.startsWith(LOAD_TIMING)
+          ? [JSON.parse(x.msg.slice(LOAD_TIMING.length)) as Record<string, number | string>]
+          : [],
+      );
+    };
+    const before = process.env.AKOU_LINE_TIMING;
+    try {
+      process.env.AKOU_LINE_TIMING = "1";
+      const loads = run();
+      expect(loads.map((l) => [l.why, l.terms])).toEqual([
+        ["decode-list", 1],
+        ["decode-list", 2],
+      ]);
+      for (const l of loads) {
+        expect(l.ms as number).toBeGreaterThanOrEqual(25);
+        expect(typeof l.startedAt).toBe("number");
+      }
+      // Control: off by default.
+      delete process.env.AKOU_LINE_TIMING;
+      expect(run()).toEqual([]);
+    } finally {
+      if (before === undefined) delete process.env.AKOU_LINE_TIMING;
+      else process.env.AKOU_LINE_TIMING = before;
+    }
+  });
+
+  test("[#378] the call channel loads its embedder as speech starts, before its first line closes", () => {
+    const words = speak(["hello", "world", "we", "should", "move", "the", "build"]);
+    const speech = concat(silence(0.5), words);
+    const audio = concat(speech, silence(1));
+    const { p, models, segs } = pipeline();
+    // Up to the end of the speech: the segment is open, nothing written yet.
+    feed(p, "call", speech);
+    expect(segs()).toEqual([]);
+    expect(models.embedders.length).toBe(1);
+    // The pause closes it; the line is embedded with the one embedder.
+    p.audio(1, "call", speech.length, audio.subarray(speech.length));
+    expect(segs().length).toBe(1);
+    expect(models.embedders.length).toBe(1);
+    // Control: the mic never embeds, so its speech loads none.
+    const mic = pipeline();
+    feed(mic.p, "mic", audio);
+    expect(mic.segs().length).toBe(1);
+    expect(mic.models.embedders.length).toBe(0);
   });
 
   test("provisionalInPause off: no re-decode in the closing pause, and the same line (#379)", () => {
@@ -777,6 +833,43 @@ describe("speakers through the log", () => {
       model: "fake-parakeet",
     });
     expect(r.events.length).toBe(before);
+  });
+});
+
+describe("[#378] the recognizer loads as the call starts, not on its first audio", () => {
+  test("it loads for the call's words while the helper is still starting, and only once", async () => {
+    const r = rig();
+    await r.asr.ready;
+    const started = r.mgr.start({ workspace: "work", title: "Sync", vocab: [{ term: "Vercel" }] });
+    // The helper has not reported `capturing`: no part, no audio, and the recognizer is loaded.
+    await settle(r, () => (r.models().loads["fake-parakeet"] ?? 0) >= 1);
+    expect(ofType(r.events, "part.started")).toEqual([]);
+    const used = ofType(r.events, "vocab.used");
+    expect(used.length).toBe(1);
+    expect(used[0]?.entries.some((e) => e.startsWith("Vercel"))).toBe(true);
+    r.engine.last.capturing();
+    const res = await started;
+    if (!res.ok) throw new Error(res.error);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    await settle(r, () => segs(r.events).length >= 1);
+    // The first audio found the call's recognizer loaded: no second load.
+    expect(r.models().loads["fake-parakeet"]).toBe(1);
+    expect(ofType(r.events, "vocab.used").length).toBe(1);
+  });
+
+  test("a call whose capture never starts lets go of the Worker, so the models it loaded still unload", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await r.asr.ready;
+    const started = r.mgr.start({ workspace: "work", title: "Sync" });
+    await settle(r, () => (r.models().loads["fake-parakeet"] ?? 0) >= 1);
+    // The helper dies before `capturing`: the call fails without a part.
+    r.engine.last.exit(77);
+    const res = await started;
+    expect(res.ok).toBe(false);
+    expect(ofType(r.events, "call.failed").length).toBe(1);
+    await r.clock.advance(5 * 60_000 + 1000);
+    expect(told).toBe(1);
   });
 });
 

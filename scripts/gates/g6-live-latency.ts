@@ -18,7 +18,9 @@
  * re-decodes of its open segment before it) and `behindMs` (how far behind the captured audio the
  * Worker was when the decode started). Latency is read off the wall clock, so a clock that is
  * stepped mid-run (a time sync) moves every later line: `clockSteps` lists each step this script
- * saw against the monotonic clock, and a run with one is not a measurement.
+ * saw against the monotonic clock, and a run with one is not a measurement. `loads` lists each
+ * recognizer load of the app run (what asked for it, when it started relative to the part, and how
+ * long it took), so a late first line can be told apart from a load still running.
  *
  *   AKOU_HOME=… bun scripts/gates/g6-live-latency.ts --cli <cli.ts> --clips <dir of *.f32, 48 kHz>
  *     --wav <out.wav> --words w1,… [--gap 1.5] [--out result.json] [--build-only]
@@ -156,8 +158,21 @@ interface Timing {
   provisionalMs: number;
 }
 const timings = new Map<string, Timing>();
+/** Each recognizer load the Worker made in this app run, ms after the part started. */
+const loads: { why: string; atMs: number; ms: number; terms: number }[] = [];
 const appLog = join(home, ".config", "akou", "app.log");
 for (const line of existsSync(appLog) ? readFileSync(appLog, "utf8").split("\n") : []) {
+  const lat = line.indexOf("recognizer load {");
+  if (lat >= 0) {
+    const l = JSON.parse(line.slice(lat + "recognizer load ".length)) as {
+      why: string;
+      startedAt: number;
+      ms: number;
+      terms: number;
+    };
+    loads.push({ why: l.why, atMs: l.startedAt - wallStart, ms: l.ms, terms: l.terms });
+    continue;
+  }
   const at = line.indexOf("line timing {");
   if (at < 0) continue;
   const t = JSON.parse(line.slice(at + "line timing ".length)) as Timing & { part: number };
@@ -210,6 +225,7 @@ const result = {
   utterances: utterances.length,
   committed: lat.length,
   lineTimings: timings.size,
+  loads,
   clockSteps,
   latencyMs: { min: lat[0], p50: q(0.5), p90: q(0.9), max: lat[lat.length - 1] },
   byChannel: Object.fromEntries(
