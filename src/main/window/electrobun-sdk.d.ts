@@ -111,6 +111,8 @@ declare module "electrobun/main" {
     getFrame(): { x: number; y: number; width: number; height: number };
     /** Moves and sizes the window, in the same screen points as `getFrame` and `Screen`. */
     setFrame(x: number, y: number, width: number, height: number): void;
+    /** Sizes the window, its top-left corner kept; each change runs the delegate's `windowDidResize`. */
+    setSize(width: number, height: number): void;
     on(
       event: "close" | "will-close" | "focus" | "blur" | "move" | "resize",
       fn: (e: unknown) => void,

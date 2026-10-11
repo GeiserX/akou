@@ -716,6 +716,9 @@ export const WINDOW_RPC: Readonly<Record<string, readonly string[] | None>> = {
     none: "a level meter while the dictation setup is on screen; nothing to act on",
   },
   zoomWindow: { none: "zooms the window on a double-click of its title bar" },
+  viewport: {
+    none: "the page's size, so the shell can re-fit a webview ElectroBun left behind; nothing to act on",
+  },
 };
 
 /**

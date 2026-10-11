@@ -58,6 +58,10 @@ export interface FakeUi {
   zoom: () => Promise<unknown>;
   /** The OS moved or resized the window. */
   moveWindow: (r: Rect) => void;
+  /** The main window's size in points, as the native window reports it. */
+  windowSize: { width: number; height: number };
+  /** The booted page reports its viewport (TRAPS "A webview left at its old size"). */
+  viewport: (v: { width: number; height: number; dpr: number }) => Promise<unknown>;
   /** The user closed the window (its close button). */
   closeWindow: () => void;
   /** The displays' work areas, the primary first. */
@@ -119,6 +123,8 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           },
           close: () => log.push("close"),
           zoom: () => log.push("zoom"),
+          size: () => ({ ...f.windowSize }),
+          setSize: (width, height) => log.push(`size ${width}x${height}`),
           onClose: (fn) => {
             closeFn = fn;
           },
@@ -135,6 +141,7 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           status: () => {},
           showCall: (m) => page(`call ${m.call}`),
           showSettings: () => page("settings"),
+          measure: () => page("measure"),
           askQuit: (q) => {
             if (!booted) return;
             f.questions.push(q);
@@ -261,6 +268,11 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     },
     moveWindow: (r) => {
       frameFn(r);
+    },
+    windowSize: { width: 1280, height: 820 },
+    viewport: async (v) => {
+      if (!rpc) throw new Error("no window is open");
+      return rpc.handlers.viewport(v);
     },
     closeWindow: () => {
       log.push("closed by the user");

@@ -294,6 +294,38 @@ describe("the desktop shell over a fake NativeUi", () => {
     await shell.close();
   });
 
+  test("[DK-M7] A webview left at its old size: on macOS a move asks the page for its viewport, and a short page re-fits the window; elsewhere nothing", async () => {
+    for (const platform of ["darwin", "linux"]) {
+      const f = fakeUi();
+      const a = fakeApp();
+      const shell = new Shell(a.app, bridgeStub, f.ui, {
+        platform,
+        setLoginItem: async () => {},
+      });
+      a.bind(shell);
+      await shell.start();
+      shell.show();
+      await f.boot();
+      f.moveWindow({ x: 10, y: 10, width: 1280, height: 820 });
+      const asked = () => f.log.filter((l) => l === "measure").length;
+      if (platform === "darwin") await until(() => asked() === 1, 2000, "the page asked");
+      else {
+        await Bun.sleep(400);
+        expect(asked()).toBe(0);
+      }
+      await f.viewport({ width: 1280, height: 540, dpr: 2 });
+      const sizes = () => f.log.filter((l) => l.startsWith("size "));
+      if (platform === "darwin") {
+        await until(() => sizes().length === 2, 2000, "the nudge");
+        expect(sizes()).toEqual(["size 1281x820", "size 1280x820"]);
+      } else {
+        await Bun.sleep(200);
+        expect(sizes()).toEqual([]);
+      }
+      await shell.close();
+    }
+  });
+
   test("the tray menu and title follow the state; Open at login toggles the login item", async () => {
     expect(trayMenu({ live: false, openAtLogin: false })[0]).toMatchObject({ action: "record" });
     expect(trayMenu({ live: true, openAtLogin: true })[0]).toMatchObject({ action: "stop" });
