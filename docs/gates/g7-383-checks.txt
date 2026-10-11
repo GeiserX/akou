@@ -89,3 +89,12 @@ g7-fake-warm.json warm 4000 start 3000 codex: a usage limit gives the excerpts o
 {"label": "codex-held", "hold": 8000, "write": 8002, "init": 8050, "api": 11243, "text": 11243, "apiAfterWrite": 3241, "done": 11734, "code": 0}
 {"label": "codex-cold", "hold": 0, "write": 2, "init": 495, "api": 2892, "text": 2892, "apiAfterWrite": 2890, "done": 3353, "code": 0}
 {"label": "codex-held", "hold": 8000, "write": 8001, "init": 8051, "api": 10677, "text": 10677, "apiAfterWrite": 2676, "done": 11728, "code": 0}
+
+== Through the app on the same daily-use Mac, 2026-10-11 17:02 (load average 11 to 15): the G7 runner on this change's source app,
+   a scratch AKOU_HOME on a free port, AKOU_HEADLESS=1, dictation off, no capture, the harnesses found through the login shell
+   with the 2026-10-10 run's startup folder. One run without and one with --warm 5000; every case passed in both.
+   The akou installed on that Mac answered `akou status` before and after each run, and no process the runs started was left.
+started on the question | claude | excerpts 16 ms | first token 3498 ms | answer 6071 ms | tokens 12
+started on the question | codex | excerpts 16 ms | first token 5396 ms | answer 5837 ms | tokens 1
+--warm 5000 | claude | excerpts 21 ms | first token 5398 ms | answer 7238 ms | tokens 10
+--warm 5000 | codex | excerpts 17 ms | first token 2657 ms | answer 3116 ms | tokens 1
