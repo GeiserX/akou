@@ -109,7 +109,7 @@ describe("a pinned download", () => {
     }
   });
 
-  test("[T4.34] a mirror that answers 403 twice is asked again and the file lands; a 404 and a fourth 503 are final", async () => {
+  test("[T4.34] a mirror that answers 403 twice is asked again and the file lands; a 404 and a fourth 522 are final", async () => {
     const good = new TextEncoder().encode("the pinned bytes");
     const sha = createHash("sha256").update(good).digest("hex");
     const asked: number[] = [];
@@ -136,8 +136,8 @@ describe("a pinned download", () => {
       expect(asked).toEqual([404]);
       // A mirror that never recovers: the three retries are spent, the fourth answer is final.
       asked.length = 0;
-      await expect(pinned(url(503), join(dir, "c"), sha, waits)).rejects.toThrow("HTTP 503");
-      expect(asked).toEqual([503, 503, 503, 503]);
+      await expect(pinned(url(522), join(dir, "c"), sha, waits)).rejects.toThrow("HTTP 522");
+      expect(asked).toEqual([522, 522, 522, 522]);
       // The positive control: with no retries, the same 403 is final on the first answer.
       asked.length = 0;
       await expect(pinned(url(403), join(dir, "d"), sha, [])).rejects.toThrow("HTTP 403");

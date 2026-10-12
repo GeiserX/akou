@@ -185,7 +185,8 @@ const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
  */
 export const RETRY_WAITS_MS = [15_000, 45_000, 120_000] as const;
 
-const RETRIED_STATUS = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
+/** The 4xx answers worth another try; every 5xx is. */
+const RETRIED_4XX = new Set([403, 408, 425, 429]);
 
 async function get(
   url: string,
@@ -199,7 +200,7 @@ async function get(
       const r = await fetch(url, { headers, redirect: "follow" });
       if (r.ok) return new Uint8Array(await r.arrayBuffer());
       why = `HTTP ${r.status}`;
-      again = RETRIED_STATUS.has(r.status);
+      again = r.status >= 500 || RETRIED_4XX.has(r.status);
     } catch (e) {
       why = e instanceof Error ? e.message : String(e);
       again = true;
