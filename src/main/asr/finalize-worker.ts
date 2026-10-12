@@ -1558,11 +1558,19 @@ export type JobLogLevel = "debug" | "info" | "warn" | "error";
 
 /**
  * The repeat-loop guard (SV-R5, TRAPS [T4.37]): a phrase of at most `LOOP_MAX_WORDS` words said
- * `LOOP_MIN_REPEATS` times or more in a row is a decoder stuck in a loop, the way Qwen3-ASR answers
- * noise ("the the the ..."). Four in a row ("no, no, no, no") is still speech.
+ * over and over is a decoder stuck in a loop, the way Qwen3-ASR answers noise ("the the the ...").
+ * Speech repeats short phrases too ("No, no, no, no, no!", "Go! Go! Go!", 哈哈哈哈哈), so a phrase
+ * of one or two words is a loop only at `LOOP_MIN_REPEATS_SHORT` in a row, and one of three or four
+ * at `LOOP_MIN_REPEATS`. A real loop runs for dozens.
  */
 export const LOOP_MAX_WORDS = 4;
+export const LOOP_MIN_REPEATS_SHORT = 8;
 export const LOOP_MIN_REPEATS = 5;
+
+/** Repeats in a row that make a loop of a phrase of `n` words. */
+export function loopMinRepeats(n: number): number {
+  return n <= 2 ? LOOP_MIN_REPEATS_SHORT : LOOP_MIN_REPEATS;
+}
 
 /** A word of the loop guard: a run of letters, or one Han or kana character (no spaces there). */
 const LOOP_TOKEN =
@@ -1573,17 +1581,26 @@ function loopNorm(w: string): string {
 }
 
 /**
- * Where a loop starts repeating: the index of the first word after the loop's first saying, so
- * `words.slice(0, k)` keeps what came before and the phrase once. Null when no phrase repeats
- * `LOOP_MIN_REPEATS` times in a row. Words compare in lower case without punctuation.
+ * The repeats of every loop in `words`, as `[from, to)` index ranges to remove: each loop keeps its
+ * phrase once, and the words before and after it stay. Words compare in lower case without
+ * punctuation, and a word that is punctuation alone ("-", "。") is passed over, so 谢谢观看。
+ * said over and over is a phrase of four words and "well - - - - fine" holds none.
  */
-export function loopCut(words: readonly string[]): number | null {
-  const w = words.map(loopNorm);
-  for (let i = 0; i < w.length; i++) {
-    // Punctuation alone ("-", "...") is no word to repeat.
-    if (w[i] === "") continue;
+export function loopRuns(words: readonly string[]): { from: number; to: number }[] {
+  const at: number[] = [];
+  const w: string[] = [];
+  for (const [i, x] of words.entries()) {
+    const n = loopNorm(x);
+    if (n === "") continue;
+    at.push(i);
+    w.push(n);
+  }
+  const runs: { from: number; to: number }[] = [];
+  let i = 0;
+  next: while (i < w.length) {
     for (let n = 1; n <= LOOP_MAX_WORDS; n++) {
-      if (i + n * LOOP_MIN_REPEATS > w.length) break;
+      const need = loopMinRepeats(n);
+      if (i + n * need > w.length) continue;
       let reps = 1;
       while (i + (reps + 1) * n <= w.length) {
         let same = true;
@@ -1591,31 +1608,94 @@ export function loopCut(words: readonly string[]): number | null {
         if (!same) break;
         reps++;
       }
-      if (reps >= LOOP_MIN_REPEATS) return i + n;
+      if (reps >= need) {
+        runs.push({
+          from: (at[i + n - 1] as number) + 1,
+          to: (at[i + reps * n - 1] as number) + 1,
+        });
+        i += reps * n;
+        continue next;
+      }
     }
+    i++;
   }
-  return null;
+  return runs;
 }
 
 /**
- * A hypothesis with its loop cut at the first repeat (`loopCut`), text and words each, or null
- * when neither loops. The text is cut where its kept words end, so its own spacing stays.
+ * Words as they read once the character ranges `cuts` (sorted) are taken out of `text`, or null
+ * when a word is not in `text`.
+ */
+function wordsAfterCuts(
+  text: string,
+  words: readonly WordHyp[],
+  cuts: readonly { a: number; b: number }[],
+): WordHyp[] | null {
+  const out: WordHyp[] = [];
+  let at = 0;
+  for (const w of words) {
+    const s = text.indexOf(w.w, at);
+    if (s < 0) return null;
+    const e = s + w.w.length;
+    at = e;
+    let kept = "";
+    let pos = s;
+    for (const c of cuts) {
+      if (c.b <= pos || c.a >= e) continue;
+      kept += text.slice(pos, Math.max(pos, c.a));
+      pos = Math.max(pos, c.b);
+    }
+    if (pos < e) kept += text.slice(pos, e);
+    if (kept.trim() !== "") out.push(kept === w.w ? w : { ...w, w: kept.trim() });
+  }
+  return out;
+}
+
+function loopWords(text: string): number {
+  return [...text.matchAll(LOOP_TOKEN)].filter((m) => loopNorm(m[0]) !== "").length;
+}
+
+/**
+ * A hypothesis with every loop spliced out (`loopRuns`), or null when nothing loops. The text keeps
+ * each looped phrase once and everything around it, with its own spacing. The words lose the same
+ * characters as the text, so a whitespace-split word holding a Han loop is cut too; words that
+ * cannot be found in the text are matched on their own. `from` and `to` count the text's words.
  */
 export function cutLoop(h: Hypothesis): { h: Hypothesis; from: number; to: number } | null {
   const toks = [...h.text.matchAll(LOOP_TOKEN)];
-  const k = loopCut(toks.map((m) => m[0]));
-  const kw = loopCut(h.words.map((x) => x.w));
-  if (k === null && kw === null) return null;
-  let text = h.text;
-  if (k !== null) {
-    const last = toks[k - 1] as RegExpMatchArray;
-    text = h.text.slice(0, (last.index as number) + last[0].length).replace(/[\s,;:]+$/u, "");
-  }
-  return {
-    h: { ...h, text, words: kw === null ? h.words : h.words.slice(0, kw) },
-    from: Math.max(toks.length, h.words.length),
-    to: k ?? kw ?? 0,
+  const runs = loopRuns(toks.map((m) => m[0]));
+  const dropWords = (): WordHyp[] | null => {
+    const wr = loopRuns(h.words.map((x) => x.w));
+    if (wr.length === 0) return null;
+    return h.words.filter((_, i) => !wr.some((r) => i >= r.from && i < r.to));
   };
+  const end = (m: RegExpMatchArray) => (m.index as number) + m[0].length;
+  if (runs.length === 0) {
+    const words = dropWords();
+    if (!words) return null;
+    return { h: { ...h, words }, from: h.words.length, to: words.length };
+  }
+  // A loop's last saying may carry the sentence's end ("the the the."): kept when the phrase kept
+  // has no punctuation of its own.
+  const cuts = runs.map((r) => {
+    const last = toks[r.to - 1] as RegExpMatchArray;
+    const tail = /[\p{P}\p{S}]+$/u.exec(last[0])?.[0] ?? "";
+    const kept = (toks[r.from - 1] as RegExpMatchArray)[0];
+    const keepTail = tail !== "" && !/[\p{P}\p{S}]$/u.test(kept);
+    return {
+      a: end(toks[r.from - 1] as RegExpMatchArray),
+      b: end(last) - (keepTail ? tail.length : 0),
+    };
+  });
+  let text = "";
+  let pos = 0;
+  for (const c of cuts) {
+    text += h.text.slice(pos, c.a);
+    pos = c.b;
+  }
+  text += h.text.slice(pos);
+  const words = wordsAfterCuts(h.text, h.words, cuts) ?? dropWords() ?? h.words;
+  return { h: { ...h, text, words }, from: loopWords(h.text), to: loopWords(text) };
 }
 
 export interface JobPassInput {
@@ -1748,8 +1828,8 @@ export interface FusionPass {
  * - A piece in which the VAD heard no speech is never decoded. Inside the speech the
  *   whole-timeline rule holds, so a word the VAD missed between two runs of speech is still
  *   decoded.
- * - A decoded piece that says one short phrase over and over is cut at the first repeat
- *   (`cutLoop`).
+ * - A decoded piece that says one short phrase over and over keeps it once and the words after
+ *   it (`cutLoop`).
  *
  * Each piece left undecoded and each loop cut is one `debug` line with its times, never its text.
  */
@@ -1887,7 +1967,7 @@ export async function runJobPass(
     if (loop) {
       log(
         "debug",
-        `loop guard: ${at(piece.from)}-${at(piece.to)} s repeats one phrase, cut at its first repeat (${loop.from} words to ${loop.to})`,
+        `loop guard: ${at(piece.from)}-${at(piece.to)} s repeats a phrase, its repeats spliced out (${loop.from} words to ${loop.to})`,
       );
       r = loop.h;
     }

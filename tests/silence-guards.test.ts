@@ -25,7 +25,8 @@ import {
   type JobLogLevel,
   type JobPassResult,
   LOOP_MIN_REPEATS,
-  loopCut,
+  LOOP_MIN_REPEATS_SHORT,
+  loopRuns,
   recognizerEngine,
   runJobPass,
 } from "../src/main/asr/finalize-worker.ts";
@@ -230,11 +231,17 @@ describe("[T4.37] room noise through every preset's pass: empty text, no model a
     }
   });
 
-  test("[T4.37] digital silence is no_speech too, before the VAD runs", async () => {
+  test("[T4.37] digital silence is no_speech by the energy gate alone, before the VAD runs", async () => {
+    // A VAD that hears speech everywhere: only the energy gate can stop this pass.
     const m = modelSet("fake");
+    let asked = 0;
+    m.vad = () => {
+      asked++;
+      return { windowSize: 512, accept: () => true, reset: () => {} };
+    };
     const r = await runJobPass({ samples: silence(10), diarize: false, decode: null }, m);
     expect([r.text, r.segments, r.note]).toEqual(["", [], "no_speech"]);
-    expect(m.loads).toEqual({});
+    expect([asked, m.loads]).toEqual([0, {}]);
   });
 });
 
@@ -278,47 +285,68 @@ describe.skipIf(!HAS_SILERO)(
   },
 );
 
-describe("[T4.37] the loop guard: one short phrase over and over is cut at its first repeat", () => {
+describe("[T4.37] the loop guard: a short phrase over and over keeps it once and what follows", () => {
   const LOOP = `we should move ${Array(12).fill("the").join(" ")}`;
+  const THANKS = "谢谢观看。".repeat(6);
 
-  test("[T4.37] loopCut finds the first repeat of a phrase of up to four words", () => {
+  test("[T4.37] loopRuns: eight in a row for one or two words, five for three or four", () => {
     const w = (s: string) => s.split(" ");
-    expect(loopCut(w("the the the the the the the the"))).toBe(1);
-    expect(loopCut(w("hello world the the the the the the"))).toBe(3);
-    expect(loopCut(w("I think I think I think I think I think I think"))).toBe(2);
-    expect(loopCut(w("The, the. THE the! the"))).toBe(1);
-    // Fewer than LOOP_MIN_REPEATS in a row is speech, as is a phrase longer than four words.
-    expect(
-      loopCut(
-        w(
-          Array(LOOP_MIN_REPEATS - 1)
-            .fill("no")
-            .join(" "),
-        ),
-      ),
-    ).toBeNull();
-    expect(loopCut(w("we should move the build ".repeat(6).trim()))).toBeNull();
-    expect(loopCut(w("hello world ok great"))).toBeNull();
-    expect(loopCut(w("well - - - - - - fine"))).toBeNull();
+    const n = (k: number, p: string) => Array(k).fill(p).join(" ");
+    expect(LOOP_MIN_REPEATS_SHORT).toBe(8);
+    expect(LOOP_MIN_REPEATS).toBe(5);
+    expect(loopRuns(w(n(8, "the")))).toEqual([{ from: 1, to: 8 }]);
+    expect(loopRuns(w(`hello world ${n(10, "the")} ok`))).toEqual([{ from: 3, to: 12 }]);
+    expect(loopRuns(w(n(8, "I think")))).toEqual([{ from: 2, to: 16 }]);
+    expect(loopRuns(w(n(5, "we should go")))).toEqual([{ from: 3, to: 15 }]);
+    expect(loopRuns(w("The, the. THE the! the THE the, the"))).toEqual([{ from: 1, to: 8 }]);
+    // Speech: under the bar, or a phrase longer than four words.
+    expect(loopRuns(w(n(LOOP_MIN_REPEATS_SHORT - 1, "the")))).toEqual([]);
+    expect(loopRuns(w(n(4, "we should go")))).toEqual([]);
+    expect(loopRuns(w(n(6, "we should move the build")))).toEqual([]);
+    expect(loopRuns(w("well - - - - - - - - - fine"))).toEqual([]);
   });
 
-  test("[T4.37] cutLoop cuts the text and the words alike, and Han text with no spaces", () => {
-    const words = LOOP.split(" ").map((x, i) => ({ w: x, t0: i * 0.3, t1: i * 0.3 + 0.2 }));
-    const cut = cutLoop({ engine: "e", text: `${LOOP}.`, words, ms: 0 });
-    expect(cut?.h.text).toBe("we should move the");
-    expect(cut?.h.words.map((x) => x.w)).toEqual(["we", "should", "move", "the"]);
-    expect([cut?.from, cut?.to]).toEqual([15, 4]);
-    expect(cutLoop({ engine: "e", text: "我们走吧吧吧吧吧吧", words: [], ms: 0 })?.h.text).toBe(
-      "我们走吧",
-    );
-    expect(cutLoop({ engine: "e", text: "no, no, no, no", words: [], ms: 0 })).toBeNull();
+  test("[T4.37] film lines that repeat a word are kept whole", () => {
+    for (const text of [
+      "No, no, no, no, no!",
+      "Go! Go! Go! Go! Go! Go! Get in!",
+      "no no no no no, put it down",
+      "哈哈哈哈哈",
+    ]) {
+      expect(cutLoop({ engine: "e", text, words: [], ms: 0 })).toBeNull();
+    }
+  });
+
+  test("[T4.37] a loop is spliced out: the phrase once, and the words after it kept", () => {
+    const go = `${Array(10).fill("Go!").join(" ")} Get in!`;
+    const words = go.split(" ").map((x, i) => ({ w: x, t0: i * 0.3, t1: i * 0.3 + 0.2 }));
+    const cut = cutLoop({ engine: "e", text: go, words, ms: 0 });
+    expect(cut?.h.text).toBe("Go! Get in!");
+    expect(cut?.h.words.map((x) => [x.w, x.t0])).toEqual([
+      ["Go!", 0],
+      ["Get", 3],
+      ["in!", 3.3],
+    ]);
+    expect([cut?.from, cut?.to]).toEqual([12, 3]);
+    const the = cutLoop({ engine: "e", text: `${LOOP}.`, words: [], ms: 0 });
+    expect(the?.h.text).toBe("we should move the.");
+  });
+
+  test("[T4.37] Han text: 谢谢观看。 said six times is cut to one, and the words read as the text", () => {
+    // Qwen's words are its text split on spaces, so Han text is one word holding the whole loop.
+    const one = cutLoop({ engine: "e", text: THANKS, words: [{ w: THANKS, conf: 0.4 }], ms: 0 });
+    expect(one?.h.text).toBe("谢谢观看。");
+    expect(one?.h.words).toEqual([{ w: "谢谢观看。", conf: 0.4 }]);
+    const ba = `我们走${"吧".repeat(10)}`;
+    const two = cutLoop({ engine: "e", text: ba, words: [{ w: ba }], ms: 0 });
+    expect([two?.h.text, two?.h.words.map((x) => x.w).join("")]).toEqual(["我们走吧", "我们走吧"]);
   });
 
   test("[T4.37] through a job's pass: the looping segment keeps its words before the loop and the phrase once", async () => {
     const x = concat(silence(0.3), speak(["we", "should", "move"]), silence(0.5));
-    const q = stub(QWEN_ASR, () => ({ text: LOOP }));
+    const q = stub(QWEN_ASR, () => ({ text: `${LOOP} today` }));
     // Positive control: the engine does loop when it is asked directly.
-    expect((await q.decode({ samples: x, lang: "auto", glossary: [] })).text).toBe(LOOP);
+    expect((await q.decode({ samples: x, lang: "auto", glossary: [] })).text).toBe(`${LOOP} today`);
     const lines: { level: JobLogLevel; msg: string }[] = [];
     const r = await runJobPass(
       { samples: x, diarize: false, decode: null },
@@ -326,24 +354,23 @@ describe("[T4.37] the loop guard: one short phrase over and over is cut at its f
       (level, msg) => lines.push({ level, msg }),
       q,
     );
-    expect(r.segments.map((s) => s.text)).toEqual(["we should move the"]);
-    expect(r.text).toBe("we should move the");
+    expect(r.segments.map((s) => s.text)).toEqual(["we should move the today"]);
     const guard = lines.filter((l) => l.msg.startsWith("loop guard"));
     expect(guard.map((l) => l.level)).toEqual(["debug"]);
     // The line names the times and the counts, never the dropped text.
-    expect(guard[0]?.msg).toContain("15 words to 4");
+    expect(guard[0]?.msg).toContain("16 words to 5");
     expect(guard[0]?.msg).not.toContain("the the");
   });
 
-  test("[T4.37] speech that repeats itself a little is kept whole", async () => {
-    const x = concat(silence(0.3), speak(["no", "no", "no", "no"]), silence(0.5));
-    const q = stub(QWEN_ASR, () => ({ text: "No, no, no, no." }));
+  test("[T4.37] five no's said through a job's pass are kept whole", async () => {
+    const x = concat(silence(0.3), speak(["no", "no", "no", "no", "no"]), silence(0.5));
+    const q = stub(QWEN_ASR, () => ({ text: "No, no, no, no, no." }));
     const r = await runJobPass(
       { samples: x, diarize: false, decode: null },
       new FakeModels(),
       () => {},
       q,
     );
-    expect(r.text).toBe("No, no, no, no.");
+    expect(r.text).toBe("No, no, no, no, no.");
   });
 });
