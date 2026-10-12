@@ -40,6 +40,10 @@ export const A11Y_OFF = "Dictation is off: allow akou under Accessibility";
 export const A11Y_STALE =
   "If akou already shows as on there, switch it off and on again, or remove it with the minus button and add it back.";
 
+/** The same recovery, short enough for the island's sheet, which has one dimmer line for it. */
+export const A11Y_STALE_SHORT =
+  "Already on there? Switch it off and on, or remove akou and add it back.";
+
 /**
  * The language chip on the listening island (akou-5v8): the session's language, a BCP-47 tag, as a
  * partial named it, as the chip forced it, as `dictation.language` sets it, or `auto` while the

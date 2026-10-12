@@ -65,7 +65,7 @@ import type {
   PillRpc,
   PillState,
 } from "../../ui/pill-protocol.ts";
-import { A11Y_OFF, A11Y_STALE, pillPreview } from "../../ui/pill-protocol.ts";
+import { A11Y_OFF, A11Y_STALE_SHORT, pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
 import type { Frame } from "../dictation/protocol.ts";
 import type { DictationFollow, ErrorAction } from "../dictation/service.ts";
@@ -290,7 +290,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     state: "notice",
     reason: "grant-denied",
     message: A11Y_OFF,
-    detail: A11Y_STALE,
+    detail: A11Y_STALE_SHORT,
     actions: o.grant ? ["grant"] : [],
   });
 

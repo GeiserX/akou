@@ -15,7 +15,7 @@ import { A11Y_ASKED, DictationService } from "../src/main/dictation/service.ts";
 import { DICTATION_DIR } from "../src/main/dictation/store.ts";
 import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import { type PillDictation, pillRpc } from "../src/main/window/pill.ts";
-import { A11Y_OFF, A11Y_STALE, type PillState } from "../src/ui/pill-protocol.ts";
+import { A11Y_OFF, A11Y_STALE_SHORT, type PillState } from "../src/ui/pill-protocol.ts";
 import { FAKE_HELPER } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -171,7 +171,7 @@ const DENIED: PillState = {
   state: "notice",
   reason: "grant-denied",
   message: A11Y_OFF,
-  detail: A11Y_STALE,
+  detail: A11Y_STALE_SHORT,
   actions: ["grant"],
 };
 
