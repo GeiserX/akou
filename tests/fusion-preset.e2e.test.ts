@@ -27,7 +27,7 @@ import {
 import { resolveModel } from "../src/main/server/model-store.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { monoWav } from "./fixtures/audio.ts";
+import { monoWav, roomNoise } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
 import { asKey, type Key, newKey, SERVER, submit } from "./server-helpers.ts";
 
@@ -100,6 +100,23 @@ describe("[akou-5an.41] preset fusion through the API, with fakes", () => {
     expect(result.engine.fusion.dropped).toEqual([]);
     expect(result.words.map((w: { w: string }) => w.w).join(" ")).toBe(result.text);
     expect(result.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
+  });
+
+  test("[T4.36] ten seconds of room noise on fusion: done, empty text, no_speech, no engine ran", async () => {
+    const s = await submit(rig, key.key, monoWav(roomNoise(10)), {
+      preset: "fusion",
+      diarize: "true",
+    });
+    expect(s.status).toBe(202);
+    const { result } = await done(rig, key, s.body.id);
+    expect([result.text, result.segments, result.words, result.note]).toEqual([
+      "",
+      [],
+      [],
+      "no_speech",
+    ]);
+    // The VAD stopped the pass before any engine of the list loaded: no fusion run to report.
+    expect(result.engine.fusion).toBeUndefined();
   });
 
   test("model: rover-conf(qwen, parakeet) runs that list, as a custom choice", async () => {

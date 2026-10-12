@@ -1553,6 +1553,71 @@ export async function finalizeCall(
 /** Speech found by the VAD is kept with this much audio around it; the rest is trimmed (SV-R5). */
 export const JOB_TRIM_PAD_SECONDS = 0.5;
 
+/** A job's log takes `debug` too: a guard's line, which names times and counts, never text. */
+export type JobLogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * The repeat-loop guard (SV-R5, TRAPS [T4.36]): a phrase of at most `LOOP_MAX_WORDS` words said
+ * `LOOP_MIN_REPEATS` times or more in a row is a decoder stuck in a loop, the way Qwen3-ASR answers
+ * noise ("the the the ..."). Four in a row ("no, no, no, no") is still speech.
+ */
+export const LOOP_MAX_WORDS = 4;
+export const LOOP_MIN_REPEATS = 5;
+
+/** A word of the loop guard: a run of letters, or one Han or kana character (no spaces there). */
+const LOOP_TOKEN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu;
+
+function loopNorm(w: string): string {
+  return w.toLowerCase().replace(/[\p{P}\p{S}]/gu, "");
+}
+
+/**
+ * Where a loop starts repeating: the index of the first word after the loop's first saying, so
+ * `words.slice(0, k)` keeps what came before and the phrase once. Null when no phrase repeats
+ * `LOOP_MIN_REPEATS` times in a row. Words compare in lower case without punctuation.
+ */
+export function loopCut(words: readonly string[]): number | null {
+  const w = words.map(loopNorm);
+  for (let i = 0; i < w.length; i++) {
+    // Punctuation alone ("-", "...") is no word to repeat.
+    if (w[i] === "") continue;
+    for (let n = 1; n <= LOOP_MAX_WORDS; n++) {
+      if (i + n * LOOP_MIN_REPEATS > w.length) break;
+      let reps = 1;
+      while (i + (reps + 1) * n <= w.length) {
+        let same = true;
+        for (let k = 0; k < n && same; k++) same = w[i + k] === w[i + reps * n + k];
+        if (!same) break;
+        reps++;
+      }
+      if (reps >= LOOP_MIN_REPEATS) return i + n;
+    }
+  }
+  return null;
+}
+
+/**
+ * A hypothesis with its loop cut at the first repeat (`loopCut`), text and words each, or null
+ * when neither loops. The text is cut where its kept words end, so its own spacing stays.
+ */
+export function cutLoop(h: Hypothesis): { h: Hypothesis; from: number; to: number } | null {
+  const toks = [...h.text.matchAll(LOOP_TOKEN)];
+  const k = loopCut(toks.map((m) => m[0]));
+  const kw = loopCut(h.words.map((x) => x.w));
+  if (k === null && kw === null) return null;
+  let text = h.text;
+  if (k !== null) {
+    const last = toks[k - 1] as RegExpMatchArray;
+    text = h.text.slice(0, (last.index as number) + last[0].length).replace(/[\s,;:]+$/u, "");
+  }
+  return {
+    h: { ...h, text, words: kw === null ? h.words : h.words.slice(0, kw) },
+    from: Math.max(toks.length, h.words.length),
+    to: k ?? kw ?? 0,
+  };
+}
+
 export interface JobPassInput {
   /** 16 kHz mono. */
   samples: Float32Array;
@@ -1640,6 +1705,11 @@ export interface JobPassResult {
   /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
   diarized: boolean;
   /**
+   * `no_speech`: the file is silent, or the VAD heard no speech in it, so no model ran and the
+   * text is empty on purpose (SV-R5). Absent otherwise.
+   */
+  note?: "no_speech";
+  /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
    * With several engines, the VAD and every engine's decode time, summed.
@@ -1668,16 +1738,25 @@ export interface FusionPass {
 /**
  * The final pass over one channel. The same rules as a call's channel: energy before any model
  * loads, VAD cut points, pieces over the whole timeline, `prepareSpan`, and the halving of a span
- * the engine refuses. Two rules are the job's own (SV-R5): a file in which the VAD finds no speech
- * at all is not decoded, and the audio before the first and after the last speech the VAD finds
- * (less `JOB_TRIM_PAD_SECONDS`) is trimmed, so an engine never sees room noise on its own and
- * cannot invent a sentence from it. Inside the speech the whole-timeline rule holds, so a word the
- * VAD missed between two runs of speech is still decoded.
+ * the engine refuses. The rules that are the job's own (SV-R5, TRAPS [T4.36]):
+ *
+ * - A file in which the VAD finds no speech at all loads no model and is not decoded: it is done
+ *   with empty text and `note: no_speech`.
+ * - The audio before the first and after the last speech the VAD finds (less
+ *   `JOB_TRIM_PAD_SECONDS`) is trimmed, so an engine never sees room noise on its own and cannot
+ *   invent a sentence from it. The segment times stay in the file's clock.
+ * - A piece in which the VAD heard no speech is never decoded. Inside the speech the
+ *   whole-timeline rule holds, so a word the VAD missed between two runs of speech is still
+ *   decoded.
+ * - A decoded piece that says one short phrase over and over is cut at the first repeat
+ *   (`cutLoop`).
+ *
+ * Each piece left undecoded and each loop cut is one `debug` line with its times, never its text.
  */
 export async function runJobPass(
   input: JobPassInput,
   models: ModelSet,
-  log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
+  log: (level: JobLogLevel, msg: string) => void = () => {},
   engine?: FinalEngine | FusionPass,
 ): Promise<JobPassResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
@@ -1702,7 +1781,19 @@ export async function runJobPass(
     speakers: { asked: input.diarize, labelled: false, error: null },
     diarized: false,
   };
-  if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
+  if (peak(x) < 10 ** (o.silenceDbfs / 20)) return { ...empty, note: "no_speech" };
+  // Until the pass has run, the model is the fused id over the whole list.
+  const ids = fusion ? fusion.engines.map((e) => e.id) : [one ? one.id : models.recognizerModel];
+  let modelId = ids.length > 1 ? fusionModelId(fusion?.fuser ?? "first", ids) : (ids[0] as string);
+  // The VAD before anything else loads: a file with no speech costs no recognizer and no engine.
+  const vadFrom = performance.now();
+  const { flags, window } = speechFlags(x, models);
+  const vadS = (performance.now() - vadFrom) / 1000;
+  const first = flags.indexOf(true);
+  if (first < 0) {
+    log("debug", `no-speech guard: the VAD heard no speech in ${duration_s} s, nothing decoded`);
+    return { ...empty, model: modelId, note: "no_speech" };
+  }
   // With an engine the model set's recognizer is never prepared, so it never loads; in a fusion
   // list it loads in its own turn.
   const hw = engine ? null : models.prepare(input.decode);
@@ -1710,19 +1801,8 @@ export async function runJobPass(
   const engines: readonly FinalEngine[] = fusion
     ? fusion.engines
     : [one ?? hotwordEngine(hw as PreparedHotwords)];
-  // Until the pass has run, the model is the fused id over the whole list.
-  let modelId =
-    engines.length > 1
-      ? fusionModelId(
-          fusion?.fuser ?? "first",
-          engines.map((e) => e.id),
-        )
-      : (engines[0] as FinalEngine).id;
-  const vadFrom = performance.now();
-  const { flags, window } = speechFlags(x, models);
-  const vadS = (performance.now() - vadFrom) / 1000;
-  const first = flags.indexOf(true);
-  if (first < 0) return { ...empty, model: modelId };
+  // The loaded recognizer's own name, as the lines of a call take it.
+  if (hw) modelId = hw.recognizer.model;
   const last = flags.lastIndexOf(true);
   const pad = Math.round((JOB_TRIM_PAD_SECONDS * ASR_RATE) / window);
   const w0 = Math.max(0, first - pad);
@@ -1760,9 +1840,19 @@ export async function runJobPass(
   // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
   // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a word
   // there that the plain run does not have.
-  const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) =>
-    heardSpeech.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true),
-  );
+  const at = (n: number) => round3((from + n) / ASR_RATE);
+  const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) => {
+    const speech = heardSpeech
+      .slice(Math.floor(piece.from / window), Math.ceil(piece.to / window))
+      .includes(true);
+    if (!speech) {
+      log(
+        "debug",
+        `no-speech guard: ${at(piece.from)}-${at(piece.to)} s left undecoded, the VAD heard no speech there`,
+      );
+    }
+    return speech;
+  });
   const pass = await runEngines(
     engines,
     pieces.map((p) => ({ samples, from: p.from, to: p.to })),
@@ -1792,14 +1882,22 @@ export async function runJobPass(
     });
   }
   for (const [u, piece] of pieces.entries()) {
-    const r = pass.hyps[u] as Hypothesis;
+    let r = pass.hyps[u] as Hypothesis;
+    const loop = cutLoop(r);
+    if (loop) {
+      log(
+        "debug",
+        `loop guard: ${at(piece.from)}-${at(piece.to)} s repeats one phrase, cut at its first repeat (${loop.from} words to ${loop.to})`,
+      );
+      r = loop.h;
+    }
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
     for (const w of r.words) words.push(jobWord(w, offset));
     if (r.conf !== undefined) unitConfs.push(r.conf);
     segments.push({
-      s: round3((from + piece.from) / ASR_RATE),
-      e: round3((from + piece.to) / ASR_RATE),
+      s: at(piece.from),
+      e: at(piece.to),
       text: r.text,
       // A job's piece outside every turn takes the nearest turn's speaker, never `s?`, a label a
       // client would read as one more speaker (SV-J4); no turns at all is no labels.
@@ -1873,7 +1971,7 @@ type ToJob = {
 };
 
 type FromJob =
-  | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | { type: "log"; level: JobLogLevel; msg: string }
   | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
@@ -1955,7 +2053,7 @@ async function fusionEngines(
   spec: FusionSpec,
   models: ModelSet,
   decode: DecodeList | null,
-  reply: (r: Extract<FromJob, { type: "log" | "child" }>) => void,
+  reply: (r: Extract<FromFinal, { type: "log" | "child" }>) => void,
 ): Promise<FinalEngine[]> {
   const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
   const out: FinalEngine[] = [];
@@ -2078,7 +2176,7 @@ export class JobWorker {
 
   constructor(
     private readonly models: ModelSpec,
-    private readonly onLog?: (level: "info" | "warn" | "error", msg: string) => void,
+    private readonly onLog?: (level: JobLogLevel, msg: string) => void,
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {

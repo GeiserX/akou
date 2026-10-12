@@ -41,7 +41,7 @@ export class AppLog {
   ) {}
 
   /** Appends one line. Never throws: a log that cannot be written must not stop the app. */
-  line(level: "info" | "warn" | "error", msg: string): void {
+  line(level: "debug" | "info" | "warn" | "error", msg: string): void {
     const text = `${logStamp(this.now())} ${level} ${msg.replace(/\r?\n/g, " ")}\n`;
     try {
       if (this.size === null) {

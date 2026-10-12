@@ -147,7 +147,7 @@ In Bazarr, under Settings, Providers, Whisper, set the endpoint to **`http://ako
 
 Bazarr sends `Host: akou:8476`. akou accepts that with `server.behind_proxy` on, as the container above has it, while `server.public_host` is empty. With `server.public_host` set to your proxy's name, other names get `403 bad_host`: set it to `akou:8476` instead, or point Bazarr at the public name.
 
-Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
+Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A track with no speech, or a stretch of one, gets no cue: akou returns an empty subtitle rather than inventing a sentence from the noise. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
 
 Three things do not work, on purpose:
 

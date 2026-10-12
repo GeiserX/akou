@@ -1630,6 +1630,17 @@ jobs:
         with:
           path: ${{ env.AKOU_MODELS_DIR }}
           key: akou-models-fast-macos-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
+      # The silence guards with the real Silero VAD and speech from `say` (TRAPS [T4.36]): the
+      # check jobs have no model and skip these two tests, so here they must run, not skip.
+      - name: the silence guards on the real VAD
+        run: |
+          set -euo pipefail
+          test -f "$AKOU_MODELS_DIR/silero-vad/silero_vad.onnx" || { echo "silero-vad is not in $AKOU_MODELS_DIR"; exit 1; }
+          bun test tests/silence-guards.test.ts 2>&1 | tee "$RUNNER_TEMP/silence-guards.txt"
+          if grep -qE '^ *[1-9][0-9]* skip$' "$RUNNER_TEMP/silence-guards.txt"; then
+            echo "a silence guard test was skipped here, where the real VAD is on disk"
+            exit 1
+          fi
       - name: akou serve, on this machine only
         run: |
           mkdir -p "$AKOU_HOME/.config/akou"

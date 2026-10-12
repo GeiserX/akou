@@ -23,6 +23,8 @@ import { roomNoise } from "./fixtures/audio.ts";
 import { LogBuilder, T0 } from "./helpers.ts";
 
 const FAKE = join(import.meta.dir, "fixtures", "asr-fake.ts");
+/** A long clip's words: five in turn, never one short phrase over and over (a decoder loop). */
+const CYCLE = ["hello", "world", "we", "should", "move"];
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -167,8 +169,9 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     expect(result.words[0]?.s).toBeCloseTo(1, 1);
     expect(result.words[2]?.s).toBeCloseTo(3.74, 1);
     for (const w of result.words) expect(w.c).toBe(0.9);
-    // A refused span halved: the halves' words keep their own times.
-    const many = Array.from({ length: 70 }, (_, i) => (i % 2 ? "hello" : "world"));
+    // A refused span halved: the halves' words keep their own times. Five words in turn, so the
+    // loop guard ([T4.36]) has no short phrase said over and over to cut.
+    const many = Array.from({ length: 70 }, (_, i) => CYCLE[i % CYCLE.length] as string);
     const halved = await job(speak(many, { gapSeconds: 0.05 }), { refuseOver: 12, words: true });
     expect(halved.result.words.length).toBe(70);
     const starts = halved.result.words.map((w) => w.s as number);
@@ -207,7 +210,7 @@ describe("SV-J7: a mono path through the finalize worker", () => {
   });
 
   test("a span the engine refuses is halved, as in the call pass", async () => {
-    const words = Array.from({ length: 70 }, (_, i) => (i % 2 ? "hello" : "world"));
+    const words = Array.from({ length: 70 }, (_, i) => CYCLE[i % CYCLE.length] as string);
     const x = speak(words, { gapSeconds: 0.05 });
     const { result, models } = await job(x, { refuseOver: 12 });
     expect(result.skipped).toEqual([]);
