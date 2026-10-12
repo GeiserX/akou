@@ -226,6 +226,11 @@ export interface AkouRpc {
       watchDictationMic: { params: { on: boolean }; response: boolean };
       /** A double-click on the title bar strip (DK-M7): the window zooms, or back. */
       zoomWindow: { params: Record<string, never>; response: boolean };
+      /**
+       * The page's viewport in CSS pixels (TRAPS "A webview left at its old size"): the main side
+       * compares it with the window's content and re-fits the webview when they differ.
+       */
+      viewport: { params: { width: number; height: number; dpr: number }; response: boolean };
     };
     messages: Record<string, never>;
   };
@@ -249,6 +254,8 @@ export interface AkouRpc {
       dictationKey: { name: string };
       /** The dictation mic's level while the setup's meter shows, in dBFS. */
       dictationLevel: { db: number };
+      /** The window moved, resized or took the focus: the page answers with `viewport`. */
+      measure: Record<string, never>;
     };
   };
 }

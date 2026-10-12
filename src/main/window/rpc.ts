@@ -28,6 +28,8 @@ export interface WindowSend {
   dictationKey?(m: Messages["dictationKey"]): void;
   /** The dictation mic's level while the page's meter is on (DC-U4, DC-N3). */
   dictationLevel?(m: Messages["dictationLevel"]): void;
+  /** Asks the page for its viewport (TRAPS "A webview left at its old size"). */
+  measure?(m: Messages["measure"]): void;
 }
 
 export interface WindowRpc {
@@ -48,6 +50,7 @@ export interface WindowRpc {
     recordDictationKeys(p: { on: boolean }): Promise<boolean>;
     watchDictationMic(p: { on: boolean }): Promise<boolean>;
     zoomWindow(p: Record<string, never>): Promise<boolean>;
+    viewport(p: { width: number; height: number; dpr: number }): Promise<boolean>;
   };
   /** Stops every stream (the window closed). */
   close(): void;
@@ -63,6 +66,8 @@ export function windowRpc(
   answerQuit: (id: number, go: boolean) => void = () => {},
   /** The page's title bar strip was double-clicked (DK-M7). */
   zoom: () => void = () => {},
+  /** The page's viewport, for the re-fit (TRAPS "A webview left at its old size"). */
+  viewport: (v: { width: number; height: number; dpr: number }) => void = () => {},
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
@@ -170,6 +175,12 @@ export function windowRpc(
 
       zoomWindow: async () => {
         zoom();
+        return true;
+      },
+
+      viewport: async ({ width, height, dpr }) => {
+        if ([width, height, dpr].every((n) => typeof n === "number" && Number.isFinite(n)))
+          viewport({ width, height, dpr });
         return true;
       },
 

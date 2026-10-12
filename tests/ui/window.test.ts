@@ -1271,6 +1271,118 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+/** How many text rows a box shows, how much of its text is hidden, and whether it scrolls. */
+const rowsOf = (page: Page, sel: string) =>
+  page.$eval(sel, (el) => {
+    const s = getComputedStyle(el);
+    const inner =
+      el.clientHeight - Number.parseFloat(s.paddingTop) - Number.parseFloat(s.paddingBottom);
+    return {
+      rows: Math.round(inner / Number.parseFloat(s.lineHeight)),
+      hidden: el.scrollHeight - el.clientHeight,
+      overflowY: s.overflowY,
+    };
+  });
+
+describe("the note box and the fix box grow with their text", () => {
+  test(
+    "the note box wraps and grows to show a long note whole, caps at twelve rows, and Enter (with or without Shift) still adds the note",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1440, height: 900 });
+          await page.waitForSelector("#lines .row >> nth=3");
+          const height = () => page.$eval("#note-input", (el) => el.getBoundingClientRect().height);
+          await page.click("#note-input");
+          // Empty, one row: the 36 px of the one-line input it replaced.
+          expect(await height()).toBe(36);
+          // About eight rows of text in the 340 px column.
+          const long = "we agreed to move the build to the new runners next sprint "
+            .repeat(8)
+            .trim();
+          await page.keyboard.type(long);
+          const grown = await rowsOf(page, "#note-input");
+          expect(grown.rows).toBeGreaterThanOrEqual(6);
+          // All of it shows: nothing is scrolled out of the box.
+          expect(grown.hidden).toBeLessThanOrEqual(0);
+          // Far more than twelve rows: the box stops at twelve and scrolls inside.
+          await page.fill("#note-input", long.repeat(6));
+          const capped = await rowsOf(page, "#note-input");
+          expect(capped.rows).toBe(12);
+          expect(capped.hidden).toBeGreaterThan(0);
+          expect(capped.overflowY).toBe("auto");
+          await page.fill("#note-input", long);
+          await page.keyboard.press("Enter");
+          await until(async () => (await text(page, "#notes-count")) === "1", 5000, "the note");
+          expect(await text(page, "#notes .note-text")).toBe(long);
+          // Back to one row for the next note.
+          expect(await page.inputValue("#note-input")).toBe("");
+          expect(await height()).toBe(36);
+          // Shift+Enter adds the note too, as it did in the one-line input: a note is one line.
+          await page.keyboard.type("second note");
+          await page.keyboard.press("Shift+Enter");
+          await until(async () => (await text(page, "#notes-count")) === "2", 5000, "the second");
+          expect(await page.inputValue("#note-input")).toBe("");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the fix box opens showing the whole long line, stays in the window, and Enter applies the fix",
+    async () => {
+      const long = `${"we should move the build to the new runners before the release ".repeat(6)}on hetzner`;
+      let id = "";
+      await withRig(
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              b.created();
+              b.partStarted(1, T0);
+              b.seg({ id: "l000001", ch: "call", spk: "c1", w0: T0 + 1000, text: long });
+              b.partEnded(1, "stop", 10);
+              b.add({ type: "call.ended", reason: "stop" });
+            }).id),
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1440, height: 900 });
+          await page.waitForSelector('#lines .row[data-id="l000001"]');
+          await page.hover('#lines .row[data-id="l000001"]');
+          await page.click('#lines .row[data-id="l000001"] .fix');
+          await page.waitForSelector("#popover:not([hidden])");
+          expect(await page.inputValue("#popover .fix-line")).toBe(long);
+          const box = await rowsOf(page, "#popover .fix-line");
+          expect(box.rows).toBeGreaterThanOrEqual(6);
+          expect(box.hidden).toBeLessThanOrEqual(0);
+          // The grown popover is still inside the window.
+          const pop = await page.$eval("#popover", (el) => {
+            const r = el.getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom, inner: innerHeight };
+          });
+          expect(pop.top).toBeGreaterThanOrEqual(0);
+          expect(pop.bottom).toBeLessThanOrEqual(pop.inner);
+          // Enter applies the fix; it never puts a line break in the line.
+          const fixed = long.replace("on hetzner", "on Hetzner");
+          await page.fill("#popover .fix-line", fixed);
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, '#lines .row[data-id="l000001"] .text')) === fixed,
+            5000,
+            "the line fixed",
+          );
+          await until(async () => !(await page.isVisible("#popover")), 5000, "the popover closed");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the sidebar at 1024 px wide", () => {
   test(
     "a long call title ends in an ellipsis inside its row, and a page gives the sidebar its full width",
@@ -2016,9 +2128,9 @@ describe("playback and Fix this line", () => {
         await page.click('#lines .row[data-id="l000002"] .fix');
         await page.waitForSelector("#popover:not([hidden])");
         // One field: the line as it reads.
-        expect(await page.locator("#popover input").count()).toBe(1);
-        expect(await page.inputValue("#popover input")).toBe("deploy to hetzner today");
-        await page.fill("#popover input", "deploy to Hetzner today");
+        expect(await page.locator("#popover input, #popover textarea").count()).toBe(1);
+        expect(await page.inputValue("#popover .fix-line")).toBe("deploy to hetzner today");
+        await page.fill("#popover .fix-line", "deploy to Hetzner today");
         await page.keyboard.press("Enter");
         const line = (lid: string) => page.locator(`#lines .row[data-id="${lid}"] .text`);
         await until(
@@ -2083,7 +2195,7 @@ describe("playback and Fix this line", () => {
         await page.hover('#lines .row[data-id="l000001"]');
         await page.click('#lines .row[data-id="l000001"] .fix');
         await page.waitForSelector("#popover:not([hidden])");
-        await page.fill("#popover input", "we could move the build");
+        await page.fill("#popover .fix-line", "we could move the build");
         await page.keyboard.press("Enter");
         await page.waitForSelector("#toast.info:not([hidden])");
         expect(await text(page, "#toast")).toBe(
@@ -2116,7 +2228,7 @@ describe("playback and Fix this line", () => {
         await page.hover('#lines .row[data-id="l000002"]');
         await page.click('#lines .row[data-id="l000002"] .fix');
         await page.waitForSelector("#popover:not([hidden])");
-        await page.fill("#popover input", "deploy to Hetzner today");
+        await page.fill("#popover .fix-line", "deploy to Hetzner today");
         // The in-call rewrite changes the line meanwhile.
         await rig.app.write(id, {
           type: "seg",
@@ -2133,7 +2245,8 @@ describe("playback and Fix this line", () => {
         );
         await page.keyboard.press("Enter");
         await until(
-          async () => (await page.inputValue("#popover input")) === "deploy it to hetzner today",
+          async () =>
+            (await page.inputValue("#popover .fix-line")) === "deploy it to hetzner today",
           5000,
           "the popover shows the line again",
         );

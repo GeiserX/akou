@@ -66,6 +66,11 @@ export function electrobunUi(): NativeUi {
         },
         close: () => win.close(),
         zoom: () => (win.isMaximized() ? win.unmaximize() : win.maximize()),
+        size: () => {
+          const f = win.getFrame();
+          return { width: f.width, height: f.height };
+        },
+        setSize: (width, height) => win.setSize(width, height),
         onClose: (fn) => win.on("close", fn),
         onFocus: (fn) => {
           win.on("focus", () => fn(true));
@@ -87,6 +92,7 @@ export function electrobunUi(): NativeUi {
           askQuit: (m) => defined.send.askQuit(m),
           dictationKey: (m) => defined.send.dictationKey(m),
           dictationLevel: (m) => defined.send.dictationLevel(m),
+          measure: (m) => defined.send.measure(m),
         },
       };
     },

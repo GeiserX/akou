@@ -18,7 +18,7 @@ import { CallPicker } from "./call-picker.ts";
 import { DictationDictionary } from "./dictation-dictionary.ts";
 import { DictationHistory } from "./dictation-history.ts";
 import { DictationPage, HISTORY, WORDS } from "./dictation-page.ts";
-import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
+import { autosize, byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
 import { liveChip } from "./live-options.ts";
@@ -1324,16 +1324,26 @@ class App {
     replace(pop, h("h3", {}, label), ...children);
     pop.setAttribute("aria-label", label);
     pop.hidden = false;
-    const r = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor.at;
+    this.popoverAt = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor.at;
     if (!(anchor instanceof HTMLElement)) anchor = anchor.el;
+    this.placePopover();
+    this.popoverFrom = anchor;
+    (pop.querySelector("input, textarea, select, button") as HTMLElement | null)?.focus();
+  }
+
+  private popoverAt: DOMRect | null = null;
+
+  /** Placed again when its content grows (a line being fixed wraps to more rows). */
+  private placePopover(): void {
+    const pop = byId("popover");
+    const r = this.popoverAt;
+    if (!r || pop.hidden) return;
     pop.style.left = `${Math.max(8, Math.min(innerWidth - 340, r.left))}px`;
     // Under the anchor, or above it when it does not fit below: the newest line sits at the
     // window's bottom edge, and the popover never covers what was clicked.
     const below = r.bottom + 6;
     const fitsBelow = below + pop.offsetHeight <= innerHeight - 8;
     pop.style.top = `${fitsBelow ? below : Math.max(8, r.top - 6 - pop.offsetHeight)}px`;
-    this.popoverFrom = anchor;
-    (pop.querySelector("input, select, button") as HTMLElement | null)?.focus();
   }
 
   private closePopover(): void {
@@ -1440,11 +1450,22 @@ class App {
     // The revision shown: a line rewritten meanwhile (the in-call upgrade) is read again first.
     let rev = this.view()?.resolve(lineId)?.rev;
     if (!call || shown === undefined) return;
-    const field = h("input", {
+    // The line wraps and the box grows with it, so all of it shows; Enter still fixes, as the
+    // one-line input it replaced did.
+    const field = h("textarea", {
       value: shown,
       class: "fix-line",
-      attrs: { "aria-label": "The line as it should read", spellcheck: "false" },
+      attrs: { "aria-label": "The line as it should read", spellcheck: "false", rows: "1" },
+      on: {
+        keydown: (e) => {
+          if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;
+          e.preventDefault();
+          form.requestSubmit();
+        },
+      },
     });
+    const fit = autosize(field);
+    field.addEventListener("input", () => this.placePopover());
     const note = h(
       "p",
       { class: "hint" },
@@ -1473,6 +1494,8 @@ class App {
                   shown = this.transcript.shown(lineId)?.text ?? shown;
                   rev = this.view()?.resolve(lineId)?.rev;
                   field.value = shown ?? "";
+                  fit();
+                  this.placePopover();
                   note.textContent =
                     "The line changed while you were fixing it. Check it, then press Enter again.";
                   return;
@@ -1529,6 +1552,8 @@ class App {
         : selected
           ? shown.indexOf(selected)
           : -1;
+    fit();
+    this.placePopover();
     // The field takes the keys, even with Forget above it.
     field.focus();
     if (at >= 0) field.setSelectionRange(at, at + selected.length);

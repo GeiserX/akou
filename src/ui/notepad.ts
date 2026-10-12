@@ -14,7 +14,7 @@
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView, NoteView } from "../core/log/fold.ts";
-import { byId, h, replace, toast } from "./dom.ts";
+import { autosize, byId, h, replace, toast } from "./dom.ts";
 import { noteKind } from "./model.ts";
 import type { Transport } from "./protocol.ts";
 
@@ -43,7 +43,9 @@ export interface NotepadDeps {
 
 export class NotepadPane {
   private readonly list = byId("notes");
-  private readonly input = byId<HTMLInputElement>("note-input");
+  private readonly input = byId<HTMLTextAreaElement>("note-input");
+  /** The note box grows with the note (WINDOW section 6), so a long one reads whole. */
+  private readonly fit = autosize(this.input);
   private readonly count = byId("notes-count");
   /** The line being typed: when it began, what was visible then, and its note once saved. */
   private draft: { w: number; afterSeq: number; id?: string; saved?: string } | null = null;
@@ -55,7 +57,8 @@ export class NotepadPane {
   constructor(private readonly d: NotepadDeps) {
     this.input.addEventListener("input", () => this.onInput());
     this.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      // An Enter that confirms an input method's candidate is not the end of the note.
+      if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
         e.preventDefault();
         void this.commit(true);
       }
@@ -67,6 +70,7 @@ export class NotepadPane {
     this.draft = null;
     this.editing = null;
     this.input.value = "";
+    this.fit();
     if (this.pause) clearTimeout(this.pause);
     this.render();
   }
@@ -91,6 +95,7 @@ export class NotepadPane {
     const draft = this.draft;
     if (newLine) {
       this.input.value = "";
+      this.fit();
       this.draft = null;
     }
     this.saving = this.saving.then(async () => {

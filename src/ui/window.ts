@@ -77,10 +77,36 @@ const rpc = Electroview.defineRPC<AkouRpc>({
       dictationLevel: ({ db }: { db: number }) => {
         for (const fn of levelWatchers) fn(db);
       },
+      measure: () => reportViewport(),
     },
   },
 });
 new Electroview({ rpc });
+
+/**
+ * Tells the main side how big the page is (TRAPS "A webview left at its old size"): on boot, on the
+ * focus, on a device pixel ratio change, and whenever the main side asks once a move or resize has
+ * settled. A raw resize is not reported: mid-drag it races the window. The main side re-fits the
+ * webview when the window is bigger than the page.
+ */
+function reportViewport(): void {
+  void rpc.request
+    .viewport({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio })
+    .catch(() => {});
+}
+function watchRatio(): void {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener(
+    "change",
+    () => {
+      reportViewport();
+      watchRatio();
+    },
+    { once: true },
+  );
+}
+addEventListener("focus", reportViewport);
+watchRatio();
+reportViewport();
 
 let streams = 0;
 const nextStream = () => `s${++streams}`;

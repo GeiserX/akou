@@ -197,3 +197,37 @@ export function openModal(dialog: HTMLDialogElement): void {
   openers.set(dialog, last ?? document.activeElement);
   dialog.showModal();
 }
+
+/**
+ * A one-line text box that wraps and grows with what it holds, so a long note or a long line being
+ * fixed reads whole: one row when empty, then as many rows as the text takes, up to `maxRows`,
+ * after which it scrolls inside. It stays one line of text, as the input it replaces was: a line
+ * break pasted in becomes a space, and the caller keeps Enter for its own action. Returns `fit`,
+ * for the caller to run after it sets the value itself or shows the box.
+ */
+export function autosize(area: HTMLTextAreaElement, maxRows = 12): () => void {
+  const fit = () => {
+    // Hidden, the box has no size to measure: back to its one row until it shows and is typed in.
+    if (area.getClientRects().length === 0) {
+      area.style.height = "";
+      return;
+    }
+    const s = getComputedStyle(area);
+    const edge = area.offsetHeight - area.clientHeight;
+    const pad = Number.parseFloat(s.paddingTop) + Number.parseFloat(s.paddingBottom);
+    const max = maxRows * Number.parseFloat(s.lineHeight) + pad + edge;
+    area.style.height = "auto";
+    const want = area.scrollHeight + edge;
+    area.style.height = `${Math.min(want, max)}px`;
+    area.style.overflowY = want > max ? "auto" : "hidden";
+  };
+  area.addEventListener("input", () => {
+    if (/[\r\n]/.test(area.value)) {
+      const [from, to] = [area.selectionStart, area.selectionEnd];
+      area.value = area.value.replace(/[\r\n]/g, " ");
+      area.setSelectionRange(from, to);
+    }
+    fit();
+  });
+  return fit;
+}

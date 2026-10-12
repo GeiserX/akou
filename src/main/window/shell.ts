@@ -45,6 +45,7 @@ import { type InstallOutcome, installMessage } from "./install-cli.ts";
 import { DEDUP_MS, type NotifyEvent, notifyFor, originOf } from "./notify.ts";
 import type { SettingsPane } from "./page-server.ts";
 import { type PillDictation, type PillRpcHandlers, type PillSend, pillRpc } from "./pill.ts";
+import { Refit } from "./refit.ts";
 import { type WindowRpc, type WindowSend, windowRpc } from "./rpc.ts";
 
 export { hotkeyFor };
@@ -104,6 +105,10 @@ export interface NativeWindow {
   onFocus(fn: (focused: boolean) => void): void;
   /** The window moved or was resized. The shell keeps the last, so it never reads a closed one. */
   onFrame(fn: (frame: Rect) => void): void;
+  /** The window's size in points; on macOS (`hiddenInset`) that is its content's too. */
+  size?(): { width: number; height: number };
+  /** Sizes the window, its top-left corner kept (the re-fit's nudge). */
+  setSize?(width: number, height: number): void;
 }
 
 /** The floating indicator's window: always on top, never takes the focus when shown. */
@@ -358,6 +363,30 @@ export const QUIT_QUESTION: Omit<QuitQuestion, "id"> = {
   detail: "Everything recorded so far is kept.",
   confirm: "Stop and quit",
 };
+
+/** How long the window must stay still after a move or resize before the page is measured. */
+const MEASURE_SETTLE_MS = 250;
+
+/**
+ * The webview re-fit for a window (TRAPS "A webview left at its old size"): on macOS only, where
+ * ElectroBun leaves the webview behind and the window's frame is its content (`hiddenInset`).
+ */
+export function refitFor(
+  platform: string,
+  win: NativeWindow,
+  log: (msg: string) => void,
+): Refit | null {
+  if (platform !== "darwin" || !win.size || !win.setSize) return null;
+  return new Refit({
+    size: () => win.size?.() ?? null,
+    setSize: (w, h) => win.setSize?.(w, h),
+    log,
+    // clock: the re-fit's once-a-second guard.
+    now: () => Date.now(),
+    // clock: the nudge's second half runs on a later tick of the real event loop.
+    later: (fn) => setTimeout(fn, 50),
+  });
+}
 
 /** The window's size the first time it opens. */
 export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
@@ -780,6 +809,9 @@ export class Shell implements WindowShell {
   private live = false;
   /** Only the window's focus and blur events set this: a shown window may not have the focus. */
   private focused = false;
+  /** Re-fits the webview when the page is not the window's size (macOS only). */
+  private refit: Refit | null = null;
+  private measuring: ReturnType<typeof setTimeout> | null = null;
   /** The page pulled the status, so its message handlers exist; a message sent earlier is lost. */
   private pageReady = false;
   /** What to tell a page that is still loading, sent when it boots. */
@@ -914,6 +946,11 @@ export class Shell implements WindowShell {
         () => this.onPageReady(),
         (id, go) => this.answerQuit(id, go),
         () => this.window?.zoom(),
+        // A report while a move or resize is still settling is stale against a window that has moved
+        // on (a drag, a full-screen animation); the settled `measure` decides.
+        (v) => {
+          if (!this.measuring) this.refit?.check(v);
+        },
       );
       const frame = placeFrame(this.o.state?.load().window, this.ui.workAreas());
       // The title is never drawn on macOS, but the Window menu, Mission Control and VoiceOver read it.
@@ -929,10 +966,15 @@ export class Shell implements WindowShell {
       this.send = w.send;
       this.pageReady = false;
       this.pending = [];
+      this.refit = refitFor(this.o.platform, w.window, (m) => this.o.onLog?.("info", m));
       w.window.onFrame((f) => {
         if (hasArea(f)) this.frame = f;
+        this.measure();
       });
       w.window.onClose(() => {
+        this.refit = null;
+        if (this.measuring) clearTimeout(this.measuring);
+        this.measuring = null;
         this.saveFrame();
         this.rpc?.close();
         this.rpc = null;
@@ -948,10 +990,26 @@ export class Shell implements WindowShell {
       w.window.onFocus((focused) => {
         this.focused = focused;
         this.showIndicator();
+        if (focused) this.measure();
       });
     }
     this.window.show();
     if (call) this.toPage((send) => send.showCall({ call }));
+  }
+
+  /**
+   * Asks the page for its viewport once the window has settled after a move, a resize or the
+   * focus (TRAPS "A webview left at its old size"); a drag sends many frames, the page hears one.
+   */
+  private measure(): void {
+    if (!this.refit) return;
+    if (this.measuring) clearTimeout(this.measuring);
+    // clock: the window must stay still in real time before the page is measured.
+    this.measuring = setTimeout(() => {
+      this.measuring = null;
+      if (this.pageReady) this.send?.measure?.({});
+    }, MEASURE_SETTLE_MS);
+    this.measuring.unref?.();
   }
 
   /** Sends to the page now, or when it boots if it is still loading. */
