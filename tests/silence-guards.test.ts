@@ -332,6 +332,15 @@ describe("[T4.37] the loop guard: a short phrase over and over keeps it once and
     expect(the?.h.text).toBe("we should move the.");
   });
 
+  test("[T4.37] a loop ending the sentence keeps its mark on the kept word, with that word's own times", () => {
+    const said = [...Array(8).fill("the"), "the."];
+    const words = said.map((x, i) => ({ w: x, t0: i * 0.3, t1: i * 0.3 + 0.2 }));
+    const cut = cutLoop({ engine: "e", text: said.join(" "), words, ms: 0 });
+    expect(cut?.h.text).toBe("the.");
+    expect(cut?.h.words.map((x) => x.w).join(" ")).toBe(cut?.h.text as string);
+    expect(cut?.h.words).toEqual([{ w: "the.", t0: 0, t1: 0.2 }]);
+  });
+
   test("[T4.37] Han text: 谢谢观看。 said six times is cut to one, and the words read as the text", () => {
     // Qwen's words are its text split on spaces, so Han text is one word holding the whole loop.
     const one = cutLoop({ engine: "e", text: THANKS, words: [{ w: THANKS, conf: 0.4 }], ms: 0 });

@@ -1646,7 +1646,16 @@ function wordsAfterCuts(
       pos = Math.max(pos, c.b);
     }
     if (pos < e) kept += text.slice(pos, e);
-    if (kept.trim() !== "") out.push(kept === w.w ? w : { ...w, w: kept.trim() });
+    const piece = kept.trim();
+    if (piece === "") continue;
+    const prev = out.at(-1);
+    // Punctuation left of a cut word ("the." of a loop's last repeat) ends the word before it: a
+    // word of its own would carry the removed repeat's times into a word-built cue.
+    if (piece !== w.w && loopNorm(piece) === "" && prev) {
+      out[out.length - 1] = { ...prev, w: prev.w + piece };
+      continue;
+    }
+    out.push(piece === w.w ? w : { ...w, w: piece });
   }
   return out;
 }
