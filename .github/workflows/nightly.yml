@@ -83,14 +83,16 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       # The recognizer's files are checked against their pins in src/main/asr/models.ts on every
-      # use, so a stale cache costs a download, never a wrong model. One cache for the three OSes:
-      # the files are the same ONNX downloads everywhere, and three copies of 2.4 GB plus three of
-      # the audio put the repository over its 10 GB cache quota, which evicted the audio nightly.
+      # use, so a stale cache costs a download, never a wrong model. One entry for the three OSes
+      # (enableCrossOsArchive, or Windows keeps its own): the files are the same ONNX downloads
+      # everywhere, and three copies of 2.4 GB plus three of the audio put the repository over its
+      # 10 GB cache quota, which evicted the audio nightly. release.yml restores the same entry.
       - name: the recognizer, cached by its pins
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: eval-models
           key: recognizer-${{ hashFiles('src/main/asr/models.ts') }}
+          enableCrossOsArchive: true
       - name: the Nemotron model, by its pinned SHA-256
         id: nemotron
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -113,6 +115,7 @@ jobs:
         with:
           path: eval-data
           key: eval-data-${{ hashFiles('scripts/eval/nightly.ts', 'docs/research/asr-benchmark.json') }}
+          enableCrossOsArchive: true
       # Qwen and its llama-server build (about 2.5 GB), and dictation's streaming model, are fetched
       # each night, outside the cached folders, so the recognizer's cache stays small enough for the
       # repository's cache quota.
