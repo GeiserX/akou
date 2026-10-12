@@ -10,13 +10,12 @@
  * where Qwen is on disk), and a fusion list. The noise is generated here. The fake VAD is an energy
  * gate, so it judges quiet room noise only; noise at -30 dBFS goes through the real Silero VAD,
  * which runs where its model is on disk (`AKOU_MODELS_DIR`, else the app's models folder) and is
- * skipped elsewhere. Speech for the real VAD comes from macOS `say`, written to a file, never
- * played.
+ * skipped elsewhere. Speech for the real VAD is the generated `fixtures/two-voices.wav`, read
+ * from its file, never played.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FinalEngine, Hypothesis } from "../src/main/asr/engine.ts";
 import {
@@ -46,7 +45,10 @@ const INVENTED = "thank you for watching";
 
 const MODELS_DIR = defaultModelsDir();
 const HAS_SILERO = existsSync(modelFile(MODELS_DIR, "silero-vad", "silero_vad.onnx"));
-const HAS_SAY = process.platform === "darwin" && spawnSync("which", ["say"]).status === 0;
+/** Where each sentence of `fixtures/two-voices.wav` starts and ends, seconds. */
+const TWO_VOICES = JSON.parse(
+  readFileSync(join(import.meta.dir, "fixtures", "two-voices.json"), "utf8"),
+) as { sentences: [number, number][] };
 
 const work = tempDir("akou-silence-");
 afterAll(() => work.cleanup());
@@ -245,41 +247,34 @@ describe.skipIf(!HAS_SILERO)(
       }
     });
 
-    test.skipIf(!HAS_SAY)(
-      "[T4.36] speech from `say` in -30 dBFS noise keeps its text, and its times in the file's clock (skipped without macOS say)",
-      async () => {
-        const wav = join(work.dir, "say.wav");
-        const said = spawnSync("say", [
-          "-o",
-          wav,
-          "--data-format=LEI16@16000",
-          "Hello world, this is a test.",
-        ]);
-        expect(said.status).toBe(0);
-        const speech = await readUploadAudio(wav);
-        const lead = 3;
-        const x = mix(pink(10, -30), concat(silence(lead), speech));
-        const q = stub(QWEN_ASR, () => ({ text: "hello world this is a test" }));
-        const models = modelSet("silero");
-        const r = await runJobPass(
-          { samples: x, diarize: false, decode: null },
-          models,
-          () => {},
-          q,
-        );
-        expect(r.note).toBeUndefined();
-        expect(r.segments.length).toBeGreaterThan(0);
-        for (const s of r.segments) expect(s.text).toBe("hello world this is a test");
-        // The leading and trailing noise were trimmed, and the times are the file's, not the trimmed
-        // audio's: the first segment starts near three seconds in, the last ends near the speech's end.
-        const end = lead + speech.length / RATE;
-        const slack = JOB_TRIM_PAD_SECONDS + 0.3;
-        expect(r.segments[0]?.s as number).toBeGreaterThan(lead - slack);
-        expect(r.segments[0]?.s as number).toBeLessThan(lead + 0.6);
-        expect(r.segments.at(-1)?.e as number).toBeLessThan(end + slack);
-        expect(r.segments.at(-1)?.e as number).toBeGreaterThan(end - 1);
-      },
-    );
+    test("[T4.36] speech in -30 dBFS noise keeps its text, and its times in the file's clock", async () => {
+      // The first sentence of the generated two-voice fixture, three seconds into ten of noise.
+      const fixture = await readUploadAudio(join(import.meta.dir, "fixtures", "two-voices.wav"));
+      const [said0, said1] = TWO_VOICES.sentences[0] as [number, number];
+      const speech = fixture.subarray(0, Math.round((said1 + 0.5) * RATE));
+      const lead = 3;
+      const x = mix(pink(15, -30), concat(silence(lead), speech));
+      const q = stub(QWEN_ASR, () => ({ text: "the first sentence" }));
+      const r = await runJobPass(
+        { samples: x, diarize: false, decode: null },
+        modelSet("silero"),
+        () => {},
+        q,
+      );
+      expect(r.note).toBeUndefined();
+      expect(r.segments.length).toBeGreaterThan(0);
+      for (const s of r.segments) expect(s.text).toBe("the first sentence");
+      // The leading and trailing noise were trimmed, and the times are the file's, not the
+      // trimmed audio's: the first segment starts near where the sentence starts, the last ends
+      // within the pad and Silero's short hold after the clip, seconds before the noise ends.
+      const start = lead + said0;
+      const clipEnd = lead + speech.length / RATE;
+      expect(r.segments[0]?.s as number).toBeGreaterThan(start - JOB_TRIM_PAD_SECONDS - 0.3);
+      expect(r.segments[0]?.s as number).toBeLessThan(start + 0.6);
+      expect(r.segments.at(-1)?.e as number).toBeGreaterThan(lead + said1 - 1);
+      expect(r.segments.at(-1)?.e as number).toBeLessThan(clipEnd + JOB_TRIM_PAD_SECONDS + 0.5);
+      expect(r.segments.at(-1)?.e as number).toBeLessThan(x.length / RATE - 4);
+    });
   },
 );
 
