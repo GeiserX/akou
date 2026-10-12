@@ -1,6 +1,6 @@
 # Server mode
 
-akou also runs as a self-hosted transcription server: one Docker image on linux/amd64 and linux/arm64, running the same core as the desktop app. A program uploads an audio file, gets a job id back at once, and reads one result with text, language, words, segments and the engine that made it, by long-poll, by an event feed, or by a signed webhook. The server also speaks the OpenAI transcription endpoint, `POST /v1/audio/transcriptions`, so a program written for OpenAI's speech-to-text can point at it instead. The Wyoming protocol, which Home Assistant speaks, and Bazarr's `/asr` are planned and not built yet. There is no akou cloud and no relay: the server is your own box, reached by your own programs.
+akou also runs as a self-hosted transcription server: one Docker image on linux/amd64 and linux/arm64, running the same core as the desktop app. A program uploads an audio file, gets a job id back at once, and reads one result with text, language, words, segments and the engine that made it, by long-poll, by an event feed, or by a signed webhook. The server also speaks the OpenAI transcription endpoint, `POST /v1/audio/transcriptions`, so a program written for OpenAI's speech-to-text can point at it instead. It also speaks the Wyoming protocol, for Home Assistant Assist, and Bazarr's `/asr`, each one setting away ([Home Assistant](#home-assistant), [Bazarr](#bazarr)). There is no akou cloud and no relay: the server is your own box, reached by your own programs.
 
 You do not need server mode to transcribe a file on your own Mac: the desktop app takes `akou transcribe FILE` with its own token ([Usage](usage.md#transcribing-a-file)). Server mode is for other programs and other machines, with keys.
 
@@ -132,6 +132,36 @@ There is no resume. A new socket is a new session: send `hello`, the OpusHead an
 `bun scripts/live-client.ts FILE --codec ogg-opus --pace realtime` streams a file the way a client records it and prints the words with their times, for a check against a server: `AKOU_URL` and `AKOU_API_KEY` name the server and the key, and `ffmpeg` converts a file that is not Ogg Opus.
 
 **The recording, kept.** At the end, upload the file as a job: `POST /v1/jobs` with `keep_audio=true`, an `Idempotency-Key` header of the recording's own id (a retried upload gets the first job back), and `metadata` for what the client files it under, such as `{"workspace": "home", "recording_id": "…"}`, which every job answer carries back. A kept job keeps its upload after it ends, `GET /v1/jobs/{id}/audio` serves it back byte for byte (with `Range`, so a player can seek), and `server.retain_days` never removes it: the job, its result, its events and its audio stay until a client deletes the job. The job's `keep_audio` says whether the server keeps it, so a client deletes its own copy only once it reads `true`. The words with times come from `GET /v1/jobs/{id}/result`.
+
+## Home Assistant
+
+Home Assistant's Wyoming integration adds akou as a speech-to-text engine for Assist, by host and port. Turn the listener on with `AKOU_WYOMING=true` (the `server.wyoming` setting), publish its port (`server.wyoming_port`, 10300) where Home Assistant can reach it, and add the Wyoming integration with akou's host and that port. The protocol has no key and no TLS, so keep the port on your own network. See `server.wyoming` in [Configuration](configuration.md) for how it binds.
+
+With `server.auto_download` on (the default), the first utterance after you turn on a preset that is not downloaded yet waits for the download, and Home Assistant may hit its 300-second pipeline timeout once. After a new preset is installed, reload the Wyoming entry in Home Assistant: it reads the list of languages once, at setup.
+
+## Bazarr
+
+Bazarr's Whisper provider sends each video's audio to `POST /v1/asr` and gets an SRT back, and asks `POST /v1/detect-language` which language a track is in. akou answers both once `server.bazarr` is on. Set it with `AKOU_BAZARR=true` on the container, or in the config file; the API cannot turn it on, since these two routes take jobs with no key. Off, both answer 404.
+
+In Bazarr, under Settings, Providers, Whisper, set the endpoint to **`http://akou:8476/v1`**, with the `/v1`. Without it the request goes to the web UI, not the API, and Bazarr shows "Invalid subtitle". Bazarr sends no key, and anyone who reaches the port can send jobs, so keep the port on your own network. A key sent as `Authorization: Bearer` is honoured, but Bazarr cannot send one.
+
+Bazarr sends `Host: akou:8476`. akou accepts that with `server.behind_proxy` on, as the container above has it, while `server.public_host` is empty. With `server.public_host` set to your proxy's name, other names get `403 bad_host`: set it to `akou:8476` instead, or point Bazarr at the public name.
+
+Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
+
+Three things do not work, on purpose:
+
+- **Translation.** Bazarr asks for `task=translate` when it wants English subtitles for audio in another language. akou transcribes only, so it answers 400 and writes a `bazarr:` warning line in its log.
+- **Language detection without Qwen.** `/detect-language` transcribes the first 30 seconds under the `best` preset, whose Qwen model names the language. That cap is on Bazarr's raw PCM: with `encode=true`, which Bazarr never sends, the whole file is decoded. The first call downloads Qwen (2.5 GB) unless `akou models pull best` ran first; with `server.auto_download` off and Qwen missing, akou answers 409 and Bazarr marks the detection failed.
+- **Test Connection.** Bazarr's button calls `GET /status` on the host, which akou does not answer, so it never turns green. Check the endpoint with a request of Bazarr's shape instead:
+
+```sh
+ffmpeg -i sample.mkv -f s16le -acodec pcm_s16le -ac 1 -ar 16000 sample.pcm
+curl -A Subliminal/2.1 -F "audio_file=@sample.pcm;filename=audio_file" \
+  "http://127.0.0.1:8476/v1/asr?task=transcribe&language=en&output=srt&encode=false"
+```
+
+Bazarr reads only the body of an answer, so any refusal (a full queue, a missing model, a file too long) becomes "Invalid subtitle" there. Each one is also a `bazarr:` warning line in akou's log, with the error code.
 
 ## A Mac as the server
 

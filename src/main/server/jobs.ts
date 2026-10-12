@@ -754,6 +754,11 @@ export class JobService {
     return this.audioDir;
   }
 
+  /** One line in the server's log: for a door whose client never reads the refusal (Bazarr). */
+  log(level: "info" | "warn" | "error", msg: string): void {
+    this.o.log(level, msg);
+  }
+
   /**
    * A new job, the key's existing one for the same idempotency key, file and options, a conflict
    * naming what differs when the same key comes with another file or options (SV-J2), or a refusal

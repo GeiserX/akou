@@ -237,6 +237,7 @@ const SUBS: Record<string, SubPage> = {
       },
       { title: "Home Assistant (Wyoming)", keys: ["server.wyoming", "server.wyoming_port"] },
       { title: "Other servers", keys: ["server.remotes", "server.remotes_overflow"] },
+      { title: "Bazarr", keys: ["server.bazarr"] },
     ],
   },
 };

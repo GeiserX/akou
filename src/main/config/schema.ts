@@ -228,6 +228,14 @@ export const SETTINGS = {
     apiWritable: false,
     doc: "A reverse proxy in front of akou terminates TLS. Required for any bind that is not loopback; with no `server.public_host`, any Host header is accepted.",
   },
+  "server.bazarr": {
+    type: "boolean",
+    default: false,
+    env: "AKOU_BAZARR",
+    // An open door that takes jobs with no key is opened in the file or the environment only.
+    apiWritable: false,
+    doc: "Bazarr's whisper endpoints, `POST /v1/asr` and `POST /v1/detect-language`, with no key: point Bazarr's whisperai endpoint at http://host:8476/v1. Applies at the next start.",
+  },
   "server.public_host": {
     type: "string",
     max: 253,

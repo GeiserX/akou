@@ -8,8 +8,9 @@
  *   `queue` is the job queue's settings, depth, throughput and ETA (SV-Q4), in both modes.
  * - `GET /v1/server`, no key: what this akou is and can do, and a link to the OpenAPI file (SV-C4),
  *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
- *   offering them. A capability is true only once its route exists, so the flags follow the code;
- *   a client ignores flags it does not know.
+ *   offering them. A capability is true only once its route exists, or, for the two dialects a
+ *   setting turns on, once that setting is on, so the flags follow the code; a client ignores
+ *   flags it does not know.
  *   `retain_days` is `server.retain_days` (SV-K1b), so a client knows when a job's result is gone.
  *   `default_diarize` is `server.default_diarize`, what a job that sends no `diarize` gets.
  *   The `auto` preset names what it resolves to (`resolves_to`) and is available when that is.
@@ -193,7 +194,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
           live: liveEngines.length > 0,
           // SV-C2: the Wyoming listener is up (server.wyoming), on `wyoming_port` of this answer.
           wyoming: (c.app.wyomingPort?.() ?? null) !== null,
-          bazarr: false,
+          // SV-C3: Bazarr's open routes answer only while `server.bazarr` is on.
+          bazarr: has("POST", "/asr") && c.app.config().settings["server.bazarr"] === true,
         },
         // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
         bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],

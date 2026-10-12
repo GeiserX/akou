@@ -102,8 +102,11 @@ async function walk(g?: Guard): Promise<{ wrong: string[]; walked: number }> {
   const wrong: string[] = [];
   let walked = 0;
   try {
-    for (const { method, path } of operations(committed())) {
-      const access = TABLE[key(method, path)] as Access;
+    for (const { method, path, op } of operations(committed())) {
+      // The walk's server runs in app mode, where a server-only route is an unknown path
+      // (UNKNOWN_ROUTE): any key. So an open one, such as Bazarr's (SV-C3), wants a key here.
+      const served = op["x-akou-modes"].includes("app");
+      const access = served ? (TABLE[key(method, path)] as Access) : "jobs";
       const url = `http://127.0.0.1:${server.port}${path.replace(/\{[^}]+\}/g, "x")}`;
       const upper = method.toUpperCase();
       const body = upper === "GET" ? undefined : "{}";
@@ -184,7 +187,10 @@ describe("[SV-T5] one table of who may call each route", () => {
     // route anonymous they answer 401 themselves, right for those two and wrong once, for the
     // admin token.
     const needsCaller = ["GET /v1/keys/me", "DELETE /v1/models/{id}"];
-    const open = Object.values(TABLE).filter((a) => a === "open").length;
+    // The open routes the app-mode walk serves: a server-only one is an unknown path there.
+    const open = operations(committed()).filter(
+      (o) => TABLE[key(o.method, o.path)] === "open" && o.op["x-akou-modes"].includes("app"),
+    ).length;
     expect(r.wrong.length).toBe(
       (Object.keys(TABLE).length - open - needsCaller.length) * 2 + needsCaller.length,
     );

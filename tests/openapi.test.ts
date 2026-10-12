@@ -335,7 +335,7 @@ describe("[SI-2] Executor's rules over the file", () => {
     expect(openApiProblems(doc)).toEqual(['GET /v1/openapi.json: x-akou-access "none"']);
   });
 
-  test("an operation is tagged `openai` exactly when it is a compatibility route", () => {
+  test("an operation is tagged `openai` or `bazarr` exactly when it is a compatibility route", () => {
     const broken = (mutate: (op: Record<string, unknown>) => void) => {
       const d = clone(fixtureDoc());
       mutate(d.paths["/v1/audio/transcriptions"]?.post as unknown as Record<string, unknown>);
@@ -352,7 +352,22 @@ describe("[SI-2] Executor's rules over the file", () => {
         op.operationId = "jobs.transcribe";
         op.tags = ["jobs"];
       }),
-    ).toEqual(["POST /v1/audio/transcriptions: x-akou-door: compat on tag jobs, not openai"]);
+    ).toEqual([
+      "POST /v1/audio/transcriptions: x-akou-door: compat on tag jobs, not one of openai, bazarr",
+    ]);
+    // [SV-C3] Bazarr's dialect is a compatibility route too: with its door it passes, without it
+    // it is reported, so its open routes never enter the `?scope=jobs` view.
+    const asBazarr = (op: Record<string, unknown>) => {
+      op.operationId = "bazarr.transcribe";
+      op.tags = ["bazarr"];
+    };
+    expect(broken(asBazarr)).toEqual([]);
+    expect(
+      broken((op) => {
+        asBazarr(op);
+        delete op["x-akou-door"];
+      }),
+    ).toEqual(["POST /v1/audio/transcriptions: tag bazarr without x-akou-door: compat"]);
   });
 
   test("the generator gives a route whose id is not <tag>.<verb> no tag, so the rules catch it", () => {

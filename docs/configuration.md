@@ -73,6 +73,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `server.enabled` (file only) | `false` | Server mode: per-key access instead of the one token, bound to `api.bind`, for other programs to call over the network. |
 | `server.behind_proxy` (file only) | `false` | A reverse proxy in front of akou terminates TLS. Required for any bind that is not loopback; with no `server.public_host`, any Host header is accepted. |
+| `server.bazarr` (file only) | `false` | Bazarr's whisper endpoints, `POST /v1/asr` and `POST /v1/detect-language`, with no key: point Bazarr's whisperai endpoint at http://host:8476/v1. Applies at the next start. |
 | `server.public_host` (file only) | `""` | The host name clients use (`akou.example`, or with a port). Set: server mode accepts that Host header and loopback only. |
 | `server.trusted_proxies` (file only) | `[]` | Addresses or CIDR blocks of the proxies whose X-Forwarded-For is believed for rate limits and audit. From any other peer the TCP address is the source. |
 | `server.max_upload_mb` | `512` | Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap. |
