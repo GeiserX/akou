@@ -155,6 +155,12 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `memo.provider` | `"auto"` | Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`. |
 
+### agent
+
+| Key | Default | What it does |
+|---|---|---|
+| `agent.summary_every_minutes` | `10` | How often an agent following a live call (the `akou` skill) may post a summary of it, in minutes: it reads this once when the call starts and never posts more often. 0: no summaries, only answers, health warnings and mentions of your name. |
+
 ### export
 
 | Key | Default | What it does |

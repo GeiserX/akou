@@ -48,11 +48,12 @@ export function parseValue(raw: string): unknown {
 
 const config: Command = {
   name: "config",
-  summary: "Show, set or unset a setting (validated by the settings registry)",
+  summary: "Show, get, set or unset a setting (validated by the settings registry)",
   usage:
-    "akou config show | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]",
+    "akou config show | akou config get KEY | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]",
   examples: [
     "akou config show",
+    "akou config get agent.summary_every_minutes",
     "akou config set asr.threads 4",
     "printf '%s' \"$KEY\" | akou config set provider.apiKey -",
     "akou config unset asr.threads",
@@ -69,6 +70,18 @@ const config: Command = {
         for (const i of b.issues ?? []) out.push(`refused: ${i.message}`);
         return [`# ${b.file}`, ...out].join("\n");
       });
+    }
+    if (sub === "get") {
+      if (!key || rest.length > 0) return usage(ctx, "config get needs one key");
+      if (!isSettingKey(key))
+        return usage(ctx, `${key} is not a setting; akou config show lists them`);
+      const r = await api(ctx, "GET", "/config");
+      if (r.status !== 200) return finish(ctx, r, () => "");
+      // A secret is never in the answer: `(set)`, as `config show` prints it.
+      const value = r.body.settings?.[key] ?? null;
+      if (ctx.json) ctx.io.out(JSON.stringify({ key, value }));
+      else ctx.io.out(typeof value === "string" ? value : JSON.stringify(value));
+      return EXIT.ok;
     }
     if (sub === "set") {
       if (!key || rest.length === 0) return usage(ctx, "config set needs a key and a value");
@@ -100,7 +113,7 @@ const config: Command = {
       const r = await api(ctx, "PATCH", "/config", { body: { [key]: null } });
       return finish(ctx, r, (b) => `${key} = ${JSON.stringify(b.settings[key])} (default)`);
     }
-    return usage(ctx, "config needs show, set or unset");
+    return usage(ctx, "config needs show, get, set or unset");
   },
 };
 

@@ -621,6 +621,14 @@ export const SETTINGS = {
     default: "auto",
     doc: "Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`.",
   },
+  "agent.summary_every_minutes": {
+    type: "integer",
+    min: 1,
+    max: 120,
+    also: [0],
+    default: 10,
+    doc: "How often an agent following a live call (the `akou` skill) may post a summary of it, in minutes: it reads this once when the call starts and never posts more often. 0: no summaries, only answers, health warnings and mentions of your name.",
+  },
   "export.dir": {
     type: "string",
     default: "",
