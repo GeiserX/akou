@@ -8,8 +8,9 @@
  * webview again.
  *
  * Only on macOS, where the window has a full-size content view (`hiddenInset`), so its frame is
- * its content. Loops are guarded: one nudge at a time, at most one a second, and never twice for
- * the same pair of sizes, so a mismatch a nudge cannot fix is tried once and left.
+ * its content. Loops are guarded: one nudge at a time, at most one a second, and never twice in a
+ * row for the same pair of sizes, so a mismatch a nudge cannot fix is tried once and left until
+ * the page fits again.
  */
 
 export interface Size {
@@ -52,7 +53,11 @@ export class Refit {
     const off =
       Math.abs(view.width - win.width) > REFIT_SLACK_PX ||
       Math.abs(view.height - win.height) > REFIT_SLACK_PX;
-    if (!off) return false;
+    if (!off) {
+      // It fits: a later mismatch, the same sizes included, is a new one worth a nudge.
+      this.tried = "";
+      return false;
+    }
     const pair = `${view.width}x${view.height}/${win.width}x${win.height}`;
     const now = this.d.now();
     if (now - this.last < REFIT_GAP_MS || pair === this.tried) return false;

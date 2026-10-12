@@ -73,6 +73,17 @@ describe("[DK-M7] A webview left at its old size: the page reports its viewport 
     expect(t.sizes).toEqual(["1281x820", "1280x820"]);
   });
 
+  test("once the page fits again, the same mismatch coming back is nudged again", () => {
+    const t = rig();
+    expect(t.r.check({ width: 1280, height: 540, dpr: 2 })).toBe(true);
+    t.tick();
+    t.advance(REFIT_GAP_MS);
+    expect(t.r.check({ width: 1280, height: 820, dpr: 2 })).toBe(false);
+    // A later display change leaves it behind at the same size.
+    expect(t.r.check({ width: 1280, height: 540, dpr: 2 })).toBe(true);
+    expect(t.sizes).toEqual(["1281x820", "1280x820", "1281x820"]);
+  });
+
   test("a closed window nudges nothing", () => {
     const t = rig(null);
     expect(t.r.check({ width: 1280, height: 540, dpr: 2 })).toBe(false);
