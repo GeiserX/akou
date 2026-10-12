@@ -170,7 +170,7 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     expect(result.words[2]?.s).toBeCloseTo(3.74, 1);
     for (const w of result.words) expect(w.c).toBe(0.9);
     // A refused span halved: the halves' words keep their own times. Five words in turn, so the
-    // loop guard ([T4.36]) has no short phrase said over and over to cut.
+    // loop guard ([T4.37]) has no short phrase said over and over to cut.
     const many = Array.from({ length: 70 }, (_, i) => CYCLE[i % CYCLE.length] as string);
     const halved = await job(speak(many, { gapSeconds: 0.05 }), { refuseOver: 12, words: true });
     expect(halved.result.words.length).toBe(70);

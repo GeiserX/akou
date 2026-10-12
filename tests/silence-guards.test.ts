@@ -1,5 +1,5 @@
 /**
- * [T4.36] An invented sentence on silence (docs/TRAPS.md, SV-R5): a model that hears noise and no
+ * [T4.37] An invented sentence on silence (docs/TRAPS.md, SV-R5): a model that hears noise and no
  * speech writes a sentence anyway ("thank you for watching", Qwen3-ASR before sherpa-onnx 1.13.8),
  * or loops on one word. Bazarr turns that into a wrong subtitle. Every job's pass runs the VAD
  * before any model loads, decodes nothing where it heard no speech, and cuts a decoder loop at its
@@ -212,14 +212,14 @@ function expectNoSpeech(r: {
   for (const l of r.lines) expect(l.msg).not.toContain(INVENTED);
 }
 
-describe("[T4.36] room noise through every preset's pass: empty text, no model asked", () => {
+describe("[T4.37] room noise through every preset's pass: empty text, no model asked", () => {
   for (const shape of SHAPES) {
-    test(`[T4.36] ten seconds of quiet room noise, ${shape.name}`, async () => {
+    test(`[T4.37] ten seconds of quiet room noise, ${shape.name}`, async () => {
       expectNoSpeech(await through(shape, white(10, -40), "fake"));
     });
   }
 
-  test("[T4.36] positive control: noise an energy gate calls speech reaches every engine, which invents", async () => {
+  test("[T4.37] positive control: noise an energy gate calls speech reaches every engine, which invents", async () => {
     // Pink noise at -30 dBFS is loud enough for the fake VAD, which measures energy only. So the
     // engines are handed it and write the invented sentence: what the real VAD keeps from them.
     for (const shape of SHAPES) {
@@ -230,7 +230,7 @@ describe("[T4.36] room noise through every preset's pass: empty text, no model a
     }
   });
 
-  test("[T4.36] digital silence is no_speech too, before the VAD runs", async () => {
+  test("[T4.37] digital silence is no_speech too, before the VAD runs", async () => {
     const m = modelSet("fake");
     const r = await runJobPass({ samples: silence(10), diarize: false, decode: null }, m);
     expect([r.text, r.segments, r.note]).toEqual(["", [], "no_speech"]);
@@ -239,15 +239,15 @@ describe("[T4.36] room noise through every preset's pass: empty text, no model a
 });
 
 describe.skipIf(!HAS_SILERO)(
-  "[T4.36] the real Silero VAD (skipped without silero-vad on disk)",
+  "[T4.37] the real Silero VAD (skipped without silero-vad on disk)",
   () => {
-    test("[T4.36] white and pink noise at -30 dBFS through every preset's pass: empty text, no model asked", async () => {
+    test("[T4.37] white and pink noise at -30 dBFS through every preset's pass: empty text, no model asked", async () => {
       for (const noise of [white(10, -30), pink(10, -30)]) {
         for (const shape of SHAPES) expectNoSpeech(await through(shape, noise, "silero"));
       }
     });
 
-    test("[T4.36] speech in -30 dBFS noise keeps its text, and its times in the file's clock", async () => {
+    test("[T4.37] speech in -30 dBFS noise keeps its text, and its times in the file's clock", async () => {
       // The first sentence of the generated two-voice fixture, three seconds into ten of noise.
       const fixture = await readUploadAudio(join(import.meta.dir, "fixtures", "two-voices.wav"));
       const [said0, said1] = TWO_VOICES.sentences[0] as [number, number];
@@ -278,10 +278,10 @@ describe.skipIf(!HAS_SILERO)(
   },
 );
 
-describe("[T4.36] the loop guard: one short phrase over and over is cut at its first repeat", () => {
+describe("[T4.37] the loop guard: one short phrase over and over is cut at its first repeat", () => {
   const LOOP = `we should move ${Array(12).fill("the").join(" ")}`;
 
-  test("[T4.36] loopCut finds the first repeat of a phrase of up to four words", () => {
+  test("[T4.37] loopCut finds the first repeat of a phrase of up to four words", () => {
     const w = (s: string) => s.split(" ");
     expect(loopCut(w("the the the the the the the the"))).toBe(1);
     expect(loopCut(w("hello world the the the the the the"))).toBe(3);
@@ -302,7 +302,7 @@ describe("[T4.36] the loop guard: one short phrase over and over is cut at its f
     expect(loopCut(w("well - - - - - - fine"))).toBeNull();
   });
 
-  test("[T4.36] cutLoop cuts the text and the words alike, and Han text with no spaces", () => {
+  test("[T4.37] cutLoop cuts the text and the words alike, and Han text with no spaces", () => {
     const words = LOOP.split(" ").map((x, i) => ({ w: x, t0: i * 0.3, t1: i * 0.3 + 0.2 }));
     const cut = cutLoop({ engine: "e", text: `${LOOP}.`, words, ms: 0 });
     expect(cut?.h.text).toBe("we should move the");
@@ -314,7 +314,7 @@ describe("[T4.36] the loop guard: one short phrase over and over is cut at its f
     expect(cutLoop({ engine: "e", text: "no, no, no, no", words: [], ms: 0 })).toBeNull();
   });
 
-  test("[T4.36] through a job's pass: the looping segment keeps its words before the loop and the phrase once", async () => {
+  test("[T4.37] through a job's pass: the looping segment keeps its words before the loop and the phrase once", async () => {
     const x = concat(silence(0.3), speak(["we", "should", "move"]), silence(0.5));
     const q = stub(QWEN_ASR, () => ({ text: LOOP }));
     // Positive control: the engine does loop when it is asked directly.
@@ -335,7 +335,7 @@ describe("[T4.36] the loop guard: one short phrase over and over is cut at its f
     expect(guard[0]?.msg).not.toContain("the the");
   });
 
-  test("[T4.36] speech that repeats itself a little is kept whole", async () => {
+  test("[T4.37] speech that repeats itself a little is kept whole", async () => {
     const x = concat(silence(0.3), speak(["no", "no", "no", "no"]), silence(0.5));
     const q = stub(QWEN_ASR, () => ({ text: "No, no, no, no." }));
     const r = await runJobPass(

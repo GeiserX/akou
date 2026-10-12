@@ -1557,7 +1557,7 @@ export const JOB_TRIM_PAD_SECONDS = 0.5;
 export type JobLogLevel = "debug" | "info" | "warn" | "error";
 
 /**
- * The repeat-loop guard (SV-R5, TRAPS [T4.36]): a phrase of at most `LOOP_MAX_WORDS` words said
+ * The repeat-loop guard (SV-R5, TRAPS [T4.37]): a phrase of at most `LOOP_MAX_WORDS` words said
  * `LOOP_MIN_REPEATS` times or more in a row is a decoder stuck in a loop, the way Qwen3-ASR answers
  * noise ("the the the ..."). Four in a row ("no, no, no, no") is still speech.
  */
@@ -1738,7 +1738,7 @@ export interface FusionPass {
 /**
  * The final pass over one channel. The same rules as a call's channel: energy before any model
  * loads, VAD cut points, pieces over the whole timeline, `prepareSpan`, and the halving of a span
- * the engine refuses. The rules that are the job's own (SV-R5, TRAPS [T4.36]):
+ * the engine refuses. The rules that are the job's own (SV-R5, TRAPS [T4.37]):
  *
  * - A file in which the VAD finds no speech at all loads no model and is not decoded: it is done
  *   with empty text and `note: no_speech`.

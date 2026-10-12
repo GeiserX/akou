@@ -121,7 +121,7 @@ describe("[SV-C3] Bazarr's /asr on a server with server.bazarr on", () => {
     expect(uploads(rig)).toEqual([]);
   });
 
-  test("[T4.36] a track of room noise gets a 200 and an empty subtitle, never an invented cue", async () => {
+  test("[T4.37] a track of room noise gets a 200 and an empty subtitle, never an invented cue", async () => {
     const r = await bazarr(
       rig,
       "/asr?task=transcribe&language=en&output=srt&encode=false",
@@ -283,7 +283,7 @@ describe("[SV-C3] /detect-language", () => {
     expect(uploads(rig)).toEqual([]);
   });
 
-  test("[T4.36] no speech in the first 30 s: 200 and unknown, never an invented language", async () => {
+  test("[T4.37] no speech in the first 30 s: 200 and unknown, never an invented language", async () => {
     // Room noise for the first 30 s, then speech the detection never reads.
     const track = pcm(concat(roomNoise(30), speak(["hello", "world"]), silence(5)));
     const r = await bazarr(rig, "/detect-language?encode=false", track);

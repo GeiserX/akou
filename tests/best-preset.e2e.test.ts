@@ -105,7 +105,7 @@ describe("akou-5an.93: preset best", () => {
     expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
   });
 
-  test("[T4.36] ten seconds of room noise on best: done, empty text, no_speech, and Qwen is never asked", async () => {
+  test("[T4.37] ten seconds of room noise on best: done, empty text, no_speech, and Qwen is never asked", async () => {
     const before = requests().length;
     const s = await submit(rig, key.key, monoWav(roomNoise(10)), {
       preset: "best",

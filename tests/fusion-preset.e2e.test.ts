@@ -102,7 +102,7 @@ describe("[akou-5an.41] preset fusion through the API, with fakes", () => {
     expect(result.segments.map((x: { speaker: string }) => x.speaker)).toEqual(["s0", "s1"]);
   });
 
-  test("[T4.36] ten seconds of room noise on fusion: done, empty text, no_speech, no engine ran", async () => {
+  test("[T4.37] ten seconds of room noise on fusion: done, empty text, no_speech, no engine ran", async () => {
     const s = await submit(rig, key.key, monoWav(roomNoise(10)), {
       preset: "fusion",
       diarize: "true",

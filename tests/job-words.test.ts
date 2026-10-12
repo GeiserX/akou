@@ -84,7 +84,7 @@ describe("akou-5an.24.1: words in a job's result", () => {
   });
 
   test("a halved span keeps its words in order, each half offset by its own start", async () => {
-    // Five words in turn: one short phrase over and over is a decoder loop the guard cuts ([T4.36]).
+    // Five words in turn: one short phrase over and over is a decoder loop the guard cuts ([T4.37]).
     const cycle = ["hello", "world", "we", "should", "move"];
     const words = Array.from({ length: 70 }, (_, i) => cycle[i % cycle.length] as string);
     const r = await job(speak(words, { gapSeconds: 0.05 }), { refuseOver: 12, words: true });

@@ -1476,7 +1476,7 @@ describe("SV-R5: silence through every preset", () => {
   const noise = monoWav(roomNoise(10));
 
   for (const preset of ["fast", "auto"]) {
-    test(`[T4.36] ten seconds of room noise through ${preset} return empty text, done, no_speech`, async () => {
+    test(`[T4.37] ten seconds of room noise through ${preset} return empty text, done, no_speech`, async () => {
       const k = await newKey(server, `r5-${preset}`);
       const { job, result } = await transcribe(server, k.key, noise, { preset });
       expect(job.status).toBe("done");
@@ -1488,7 +1488,7 @@ describe("SV-R5: silence through every preset", () => {
     });
   }
 
-  test("[T4.36] a file with speech carries no note", async () => {
+  test("[T4.37] a file with speech carries no note", async () => {
     const k = await newKey(server, "r5-speech");
     const { result } = await transcribe(server, k.key, NOTE, { preset: "fast" });
     expect(result.text).not.toBe("");
