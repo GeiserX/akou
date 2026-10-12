@@ -2,6 +2,28 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.1.0 — Home Assistant and Bazarr talk to the server, and the window behaves
+
+The server now speaks to two more things on a home network, and the desktop window stops scrolling past the app. The 8-hour soak that 1.0.0 shipped without ran for this release, on a build with every change but the window fix, with a busy process on every core: no hole in the audio, heap growth 0.16 MB, the event loop late by at most 186 ms, and nothing unreadable in the log ([docs/gates/soak-1.1.0.json](docs/gates/soak-1.1.0.json)).
+
+### Server
+- **Home Assistant's Assist can transcribe with akou over Wyoming** (#395). `server.wyoming` (default off, `AKOU_WYOMING=true` in the container) opens the Wyoming protocol on `server.wyoming_port` (10300), bound where the API binds. Add akou in Home Assistant as a Wyoming integration by host and port; the first utterance after turning on a preset that is not downloaded yet waits for the download. No key and no TLS on that port: keep it on your network. CI checks the round trip with the Wyoming client at 16 kHz. [server.md](docs/server.md#home-assistant) has the setup.
+- **Bazarr fetches subtitles from akou** (#396). `server.bazarr` (default off, `AKOU_BAZARR=true`) answers Bazarr's Whisper provider: `POST /v1/asr` returns an SRT and `POST /v1/detect-language` names the track's language, with no key. In Bazarr set the whisper endpoint to `http://akou:8476/v1`, with the `/v1`. Each `/asr` request is one job on `server.default_model`, deleted once the subtitle is sent; cues hold at most 42 characters, for timed and untimed segments alike. `/detect-language` transcribes the first 30 s under `best`, so it needs Qwen. Translation is refused with a 400 and a `bazarr:` warning line. [server.md](docs/server.md#bazarr) has the details and the traps.
+- The Docker Hub page is filled from the README by a workflow, with absolute image paths so the banner renders there (#389, #390). The docs no longer claim Wyoming or Bazarr ahead of the code (#389).
+
+### Desktop
+- **The window no longer scrolls far past the app** (#397). The page filled only the top of a tall window, with an empty area under it, because the shell's webview kept its old size after a display or scale change. The shell now re-fits the webview on macOS after those changes, with a settle guard, and the page itself never scrolls.
+- **A note or a line fix can be read whole while you edit it** (#397). Both boxes were one-line inputs that scrolled sideways. They are now textareas that wrap and grow with their text, up to 12 rows; Enter still adds the note or applies the fix, and the popover has a maximum height so a long fix stays on screen.
+- **An answer through Claude Code starts sooner** (#393). The ask box asks the app to start the harness when it gets focus (`POST /provider/warm`), so the harness does its start-up while the question is typed and the answer waits only for the model. A waiting harness is sent nothing until a question, stops after 60 s without one, at quit, and on its own when akou dies.
+
+### Transcription
+- **The first lines of a cold call stop waiting for the helper** (#394). The recognizer loads from the call's start, on `call.created`, with the call's words in the decode list it is built for, and TitaNet loads as the call channel's speech starts instead of on the first line. With `AKOU_LINE_TIMING=1` each load is timed. The first-line lateness of #378 is narrower, not closed: a fresh app still pays the model load on its first call.
+- **On four x64 cores a live line commits 0.4 s sooner, 1.60 s at worst** (#391, #379). A provisional re-decode on x64 now waits for new speech, so one that falls in the pause closing a segment no longer holds the decoder while the committed line waits. Six runs each way on a four-core Windows box: worst line 2.01 s to 1.60 s, 90th percentile 1.71 s to 1.37 s, every line still committed.
+
+### Behind the scenes
+- The watchdog's stray-launcher test waits for the launcher instead of sleeping (#392).
+- The nightly survives the AMI corpus mirror refusing one download, by asking again with growing waits, and times DC-R6's wall-clock bound on the least of three holds, so a stall on the shared runner no longer turns the night red (#399).
+
 ## 1.0.0 — the first stable release, with every M0 gate passed on what we can measure
 
 1.0.0 is the first stable release of akou. All eight M0 gates pass under the criteria recorded in [docs/gates/M0-results.md](docs/gates/M0-results.md): the window, tray, hotkey and login item on macOS, Windows and Linux (G1), recognition in a Worker of the packaged app on all three (G2), macOS permissions that name akou and survive an update (G3), the system audio and a separate microphone for an hour on a real Mac (G4), recovery from a hung or crashed capture helper (G5), live lines in time on an M-series Mac and on four x64 cores (G6), answers through Claude Code and Codex inside the packaged app (G7), and `akou start` within 3 s from cold (G8). We release with the guarantees we measured, and we write down what we could not guarantee instead of holding the release for it: drift between two separate device clocks is not measured, the first lines after a cold start can be late (#378), a line on four x64 cores can take about 2 s because the recognizer is busy for all of it (#379), and an answer through Claude Code can take about 10 s to start (#383). Since 0.6.5, akou also comes back when the watchdog ends a hung app, and a server with a large job history keeps answering its API.
