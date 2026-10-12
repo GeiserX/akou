@@ -92,7 +92,7 @@ export { DAY_MS };
 export const MAX_JOB_STARTS = 2;
 
 /** `server.model_idle_minutes`' default: an idle Worker keeps its models this long. */
-export const MODEL_IDLE_MINUTES = 60;
+export const MODEL_IDLE_MINUTES = 10;
 /**
  * How many times a queued job may be passed over for a job of its priority on a model an idle
  * Worker holds, so a steady stream on one model never starves a job on another.
