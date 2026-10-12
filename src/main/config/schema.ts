@@ -285,7 +285,7 @@ export const SETTINGS = {
     type: "integer",
     min: 0,
     max: 10080,
-    default: 60,
+    default: 10,
     doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. The desktop app keeps none: it lets a model go as soon as no queued job needs it. 0: let go as soon as no queued job needs it.",
   },
   "server.queue_max": {

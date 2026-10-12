@@ -461,7 +461,7 @@ describe("[SV-M4, SV-M5] the ledger, the worker that lets go, and the sweep", ()
     // Positive control: within the idle period the worker keeps it (akou-5an.104).
     rig.app.jobs()?.releaseIdle();
     expect(rig.app.jobs()?.workerModel()).toBe(B);
-    rig.clock.t += 61 * 60_000;
+    rig.clock.t += 11 * 60_000;
     rig.app.jobs()?.releaseIdle();
     expect(rig.app.jobs()?.workerModel()).toBeNull();
     rig.clock.t = T + DAY_MS;
