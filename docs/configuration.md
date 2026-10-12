@@ -134,6 +134,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | `asr.segmentPause` | `0.7` | Silence that closes a live segment, seconds. Must be below `asr.segmentWindow`. |
 | `asr.segmentWindow` | `12` | Longest live segment, seconds. |
 | `asr.modelIdleMinutes` | `5` | Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. What a dictation needs to start fast (its streaming model, or Parakeet when its text comes from Parakeet) is loaded again at once; the rest loads at its next use. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare. |
+| `asr.warmAtStart` | `"auto"` | Load the live recognizer when the app starts, so the first lines of a call never wait for it: `auto` loads it when at least 4 GB of memory is available, `on` always, `off` never (the call loads it). With the default models it holds about 3.7 GB: Parakeet and the streaming Nemotron. Once loaded, the memory is read every minute, and below 1.5 GB available the models are let go while no call or dictation uses them. Once let go, here or by `asr.modelIdleMinutes`, they load at their next use. Takes effect at the next start. |
 | `asr.qwenIdleMinutes` | `0` | Stop the Qwen3-ASR server kept warm for dictation after this many idle minutes, to get its memory back; the next dictation starts it again. 0: never. |
 
 ### provider

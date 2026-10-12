@@ -90,6 +90,8 @@ export interface RigOptions {
   liveReviewEveryMs?: number;
   /** The machine's memory in GB, which the second pass's Qwen is offered by; the test machine's by default. */
   memoryGb?: number;
+  /** Memory available now, bytes, for `asr.warmAtStart`. */
+  availableMemory?: () => number;
   /** `app.log` and the watchdog, as the entry points run the app (DK-M8). */
   supervise?: boolean;
   /** The window the app opens on `openWindow`; none by default (the rig is headless). */
@@ -170,6 +172,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
     ...(o.memoryGb ? { memoryGb: o.memoryGb } : {}),
+    ...(o.availableMemory ? { availableMemory: o.availableMemory } : {}),
     ...(o.supervise ? { supervise: true } : {}),
     ...(o.window ? { window: o.window } : {}),
     ...(o.quitStepMs ? { quitStepMs: o.quitStepMs } : {}),

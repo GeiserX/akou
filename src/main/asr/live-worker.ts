@@ -2247,23 +2247,44 @@ export class LiveAsr {
     const minutes = this.o.modelIdleMinutes?.();
     if (minutes === undefined || !this.used || this.closed || this.failed) return false;
     const idleMs = Math.max(0, minutes) * 60_000;
-    const busy =
-      this.current !== null ||
-      this.dstreams.size > 0 ||
-      this.decodes.size > 0 ||
-      this.speeches.size > 0 ||
-      // A warm-up still loading: a release now would undo it.
-      this.warms.size > 0;
+    const busy = this.busy();
     const left = busy ? idleMs : idleMs - (this.clock.now() - this.lastUse);
     if (busy || left > 0) {
       this.idleTimer = this.clock.setTimeout(() => this.releaseIdle(), Math.max(1000, left));
       return false;
     }
+    this.release(`after ${minutes} min with no call or dictation`);
+    return true;
+  }
+
+  /**
+   * Lets the Worker go of its models now, unless something uses them: a call on it, a dictation
+   * open or decoding, a warm-up loading. The app asks when memory runs short (`StartWarm`). Answers
+   * whether the models were let go.
+   */
+  releaseNow(why: string): boolean {
+    if (this.closed || this.failed || this.busy()) return false;
+    this.disarmIdle();
+    this.release(why);
+    return true;
+  }
+
+  private busy(): boolean {
+    return (
+      this.current !== null ||
+      this.dstreams.size > 0 ||
+      this.decodes.size > 0 ||
+      this.speeches.size > 0 ||
+      // A warm-up still loading: a release now would undo it.
+      this.warms.size > 0
+    );
+  }
+
+  private release(why: string): void {
     this.used = false;
     this.transport.post({ type: "release" });
-    this.log("info", `models unloaded after ${minutes} min with no call or dictation`);
+    this.log("info", `models unloaded ${why}`);
     this.o.onRelease?.();
-    return true;
   }
 
   /** A call or a dictation uses the models: the idle time starts again. */

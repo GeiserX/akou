@@ -31,6 +31,7 @@ import { enginesRefusal, FUSION_DEFAULT, FUSION_ENGINES, fuserRefusal } from "..
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
+import { WARM_SETTINGS } from "../asr/start-warm.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "../asr/upgrade.ts";
 import { parseCallMode } from "../capture/call-mode.ts";
 import { DICTATION_FINALS } from "../dictation/engines.ts";
@@ -799,6 +800,12 @@ export const SETTINGS = {
     max: 10080,
     default: 5,
     doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. What a dictation needs to start fast (its streaming model, or Parakeet when its text comes from Parakeet) is loaded again at once; the rest loads at its next use. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare.",
+  },
+  "asr.warmAtStart": {
+    type: "string",
+    values: WARM_SETTINGS,
+    default: "auto",
+    doc: "Load the live recognizer when the app starts, so the first lines of a call never wait for it: `auto` loads it when at least 4 GB of memory is available, `on` always, `off` never (the call loads it). With the default models it holds about 3.7 GB: Parakeet and the streaming Nemotron. Once loaded, the memory is read every minute, and below 1.5 GB available the models are let go while no call or dictation uses them. Once let go, here or by `asr.modelIdleMinutes`, they load at their next use. Takes effect at the next start.",
   },
   "asr.qwenIdleMinutes": {
     type: "integer",

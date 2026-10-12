@@ -23,6 +23,12 @@ import {
 } from "../src/main/asr/live-worker.ts";
 import { MIN_SPAN_SECONDS, padSpan, prepareSpan } from "../src/main/asr/pad.ts";
 import { GREEDY_NO_HOTWORDS } from "../src/main/asr/sherpa.ts";
+import {
+  StartWarm,
+  WARM_CHECK_MS,
+  WARM_MIN_FREE,
+  type WarmSetting,
+} from "../src/main/asr/start-warm.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList, type DecodeList } from "../src/main/vocab/decode-list.ts";
 import type { MergedEntry } from "../src/main/vocab/files.ts";
@@ -985,6 +991,117 @@ describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
     expect(r.models().releases).toBe(0);
     expect(r.logs.some((l) => l.msg === UNLOADED)).toBe(false);
   });
+});
+
+describe("asr.warmAtStart: the recognizer loaded at start, let go when memory runs short", () => {
+  const GB = 1024 ** 3;
+  const PARAKEET = "fake-parakeet";
+  const SHORT = "models unloaded with 1.0 GB of memory available, under 1.5 GB";
+
+  /** A rig whose `StartWarm` loads Parakeet as the app's does, with `free` bytes available. */
+  function warmRig(o: {
+    setting?: WarmSetting;
+    free: number;
+    inThread?: boolean;
+    loadMs?: number;
+  }) {
+    let warm: StartWarm | null = null;
+    const mem = { free: o.free };
+    const r = rig({
+      fake: { greedy: true, ...(o.loadMs ? { loadMs: o.loadMs } : {}) },
+      ...(o.inThread === false ? { inThread: false } : {}),
+      idleMinutes: 5,
+      onRelease: () => warm?.released(),
+    });
+    warm = new StartWarm({
+      setting: () => o.setting ?? "auto",
+      available: () => mem.free,
+      load: () => r.asr.warmDictation(null, true),
+      release: (why) => r.asr.releaseNow(`with ${why}`),
+      clock: r.clock,
+      log: (level, msg) => r.logs.push({ level, msg }),
+    });
+    return { r, warm, mem };
+  }
+
+  test("auto loads Parakeet at start with 4 GB available, and nothing with less", async () => {
+    const at = warmRig({ free: WARM_MIN_FREE });
+    await at.r.asr.ready;
+    expect(at.warm.start()).toBe(true);
+    await settle(at.r, () => at.r.models().loads[PARAKEET] === 1);
+
+    const under = warmRig({ free: WARM_MIN_FREE - 1 });
+    await under.r.asr.ready;
+    expect(under.warm.start()).toBe(false);
+    await flush();
+    expect(under.r.models().loads[PARAKEET]).toBeUndefined();
+    expect(under.r.logs.map((l) => l.msg)).toContain(
+      "the live recognizer is not loaded at start: 4.0 GB of memory available, under 4.0 GB",
+    );
+  });
+
+  test("off never loads, however much memory is available; on loads with little", async () => {
+    const off = warmRig({ setting: "off", free: 64 * GB });
+    await off.r.asr.ready;
+    expect(off.warm.start()).toBe(false);
+    await flush();
+    expect(off.r.models().loads[PARAKEET]).toBeUndefined();
+
+    const on = warmRig({ setting: "on", free: 1 * GB });
+    await on.r.asr.ready;
+    expect(on.warm.start()).toBe(true);
+    await settle(on.r, () => on.r.models().loads[PARAKEET] === 1);
+  });
+
+  test("idle with memory under 1.5 GB, the minute check lets the models go; above it, never", async () => {
+    const { r, warm, mem } = warmRig({ free: 8 * GB });
+    await r.asr.ready;
+    warm.start();
+    await settle(r, () => r.models().loads[PARAKEET] === 1);
+    // Memory to spare: an hour of checks keeps them.
+    await r.clock.advance(60 * WARM_CHECK_MS);
+    await flush();
+    expect(r.models().releases).toBe(0);
+    mem.free = 1 * GB;
+    await r.clock.advance(WARM_CHECK_MS + 1);
+    await settle(r, () => r.models().releases === 1);
+    expect(r.logs.map((l) => l.msg)).toContain(SHORT);
+    // Let go once: no further release however long memory stays short.
+    await r.clock.advance(60 * WARM_CHECK_MS);
+    await flush();
+    expect(r.models().releases).toBe(1);
+  });
+
+  test("a call keeps the models however short memory runs; the next check after its end lets them go", async () => {
+    const { r, warm, mem } = warmRig({ free: 8 * GB });
+    await r.asr.ready;
+    warm.start();
+    await settle(r, () => r.models().loads[PARAKEET] === 1);
+    await startCall(r);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    mem.free = 1 * GB;
+    await r.clock.advance(10 * WARM_CHECK_MS);
+    await flush();
+    expect(r.models().releases).toBe(0);
+    await r.mgr.stop();
+    await r.clock.advance(WARM_CHECK_MS + 1);
+    await settle(r, () => r.models().releases === 1);
+    expect(r.logs.map((l) => l.msg)).toContain(SHORT);
+    // The call used what was warm: one load.
+    expect(r.models().loads[PARAKEET]).toBe(1);
+  });
+
+  // On the real Worker the load holds the Worker's thread, so the call's messages queue behind it.
+  test("a call that starts while the load is in flight waits for it and loads nothing again", async () => {
+    const { r, warm } = warmRig({ free: 8 * GB, inThread: false, loadMs: 1500 });
+    await r.asr.ready;
+    warm.start();
+    await startCall(r);
+    r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
+    await r.mgr.stop();
+    expect(segs(r.events).map((x) => x.text)).toEqual(["hello world"]);
+    expect(r.asr.loads[PARAKEET]).toBe(1);
+  }, 20_000);
 });
 
 describe("the real Worker thread", () => {
