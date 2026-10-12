@@ -1192,7 +1192,7 @@ describe("DC-R6: a spoken session streams to the remote while the key is held", 
     expect(sent.some((c) => c.type === "insert")).toBe(false);
   });
 
-  test("against the server rig over a slow link, a 20 s hold sends no more after release than a 3 s hold; an engine that cannot stream does", async () => {
+  test("[T4.35] against the server rig over a slow link, a 20 s hold sends no more after release than a 3 s hold; an engine that cannot stream does", async () => {
     const rig = await appRig({
       settings: { ...SERVER },
       jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
