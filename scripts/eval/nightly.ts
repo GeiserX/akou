@@ -177,19 +177,55 @@ export const RTF_BUDGET_LINUX_X64 = 0.5;
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
-async function get(url: string, headers: Record<string, string> = {}): Promise<Uint8Array> {
-  const r = await fetch(url, { headers, redirect: "follow" });
-  if (!r.ok) throw new Error(`GET ${url}: HTTP ${r.status}`);
-  return new Uint8Array(await r.arrayBuffer());
+/**
+ * The waits before each retry of a download. The AMI mirror answered a runner's second meeting
+ * with HTTP 403 in the middle of a night the audio cache had been evicted from, while the other
+ * two runners fetched the same file at the same time; a status like that, a 429 or a 5xx, and a
+ * dropped connection, each get these three more tries. A 404 or a 401 is final.
+ */
+export const RETRY_WAITS_MS = [15_000, 45_000, 120_000] as const;
+
+const RETRIED_STATUS = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
+
+async function get(
+  url: string,
+  headers: Record<string, string> = {},
+  waits: readonly number[] = RETRY_WAITS_MS,
+): Promise<Uint8Array> {
+  for (let attempt = 0; ; attempt++) {
+    let why: string;
+    let again: boolean;
+    try {
+      const r = await fetch(url, { headers, redirect: "follow" });
+      if (r.ok) return new Uint8Array(await r.arrayBuffer());
+      why = `HTTP ${r.status}`;
+      again = RETRIED_STATUS.has(r.status);
+    } catch (e) {
+      why = e instanceof Error ? e.message : String(e);
+      again = true;
+    }
+    if (!again || attempt >= waits.length) throw new Error(`GET ${url}: ${why}`);
+    const wait = waits[attempt] ?? 0;
+    console.error(
+      `GET ${url}: ${why}; retry ${attempt + 1} of ${waits.length} in ${wait / 1000} s`,
+    );
+    await Bun.sleep(wait);
+  }
 }
 
 /**
  * A file fetched once into `path` and checked by SHA-256 every time it is used. A fresh download
  * reaches `path` only after its hash matches, so a truncated fetch never sits in the cache.
+ * `waits` are the pauses before each retry of the fetch (tests pass zeros).
  */
-export async function pinned(url: string, path: string, sha: string): Promise<Uint8Array> {
+export async function pinned(
+  url: string,
+  path: string,
+  sha: string,
+  waits: readonly number[] = RETRY_WAITS_MS,
+): Promise<Uint8Array> {
   const fresh = !existsSync(path);
-  const b = fresh ? await get(url) : new Uint8Array(readFileSync(path));
+  const b = fresh ? await get(url, {}, waits) : new Uint8Array(readFileSync(path));
   const got = sha256(b);
   if (got !== sha) throw new Error(`${url}: SHA-256 ${got}, pinned ${sha}`);
   if (fresh) {

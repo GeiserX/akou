@@ -1219,17 +1219,27 @@ describe("DC-R6: a spoken session streams to the remote while the key is held", 
       expect(inserted()?.text).toContain("hello world");
       return { ms: performance.now() - t0, after: link.sent() - at };
     };
-    const [s3, s20] = [await releaseToText(remote, 3), await releaseToText(remote, 20)];
+    /**
+     * The bytes of one hold, and the wall clock of the least of three: a shared runner's stall
+     * lands on one hold, so the least is the one a quiet machine would have measured (it read 229
+     * and 332 ms over the 200 ms bound on two nights, from a single hold each).
+     */
+    const best = async (e: DictationEngine, seconds: number) => {
+      const runs = [await releaseToText(e, seconds)];
+      while (TIMING && runs.length < 3) runs.push(await releaseToText(e, seconds));
+      return { after: runs[0]?.after ?? 0, ms: Math.min(...runs.map((r) => r.ms)) };
+    };
+    const [s3, s20] = [await best(remote, 3), await best(remote, 20)];
     // At release only the body's end is left, whatever the hold's length.
     expect(s20.after).toBe(s3.after);
     expect(s3.after).toBeLessThan(1024);
     // The positive control: the same engine without `open` sends the whole buffer at release.
     const atRelease: DictationEngine = { name: "remote", decode: (b, o) => remote.decode(b, o) };
-    const [o3, o20] = [await releaseToText(atRelease, 3), await releaseToText(atRelease, 20)];
+    const [o3, o20] = [await best(atRelease, 3), await best(atRelease, 20)];
     expect(o20.after - o3.after).toBeGreaterThanOrEqual(17 * 32_000);
     if (TIMING) {
       expect(Math.abs(s20.ms - s3.ms)).toBeLessThan(200);
       expect(o20.ms - o3.ms).toBeGreaterThan(200);
     }
-  });
+  }, 120_000);
 });
