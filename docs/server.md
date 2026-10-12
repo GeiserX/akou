@@ -168,7 +168,7 @@ Bazarr reads only the body of an answer, so any refusal (a full queue, a missing
 Docker on a Mac has no Metal, so on a Mac the server runs natively, from a source checkout at the release tag. The single-file `akou` CLI cannot transcribe, as above. You need [Bun](https://bun.sh) at the version in `.bun-version`, and ffmpeg for anything but a 16 kHz WAV (`brew install ffmpeg`):
 
 ```sh
-git clone --branch v1.0.0 https://github.com/GeiserX/akou.git && cd akou
+git clone --branch v1.1.0 https://github.com/GeiserX/akou.git && cd akou
 bun install --frozen-lockfile
 bun src/main/cli/cli.ts models pull fast
 bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-server, for the best preset
