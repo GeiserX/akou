@@ -192,6 +192,12 @@ export type AppToHelper =
    * `level` 20 times a second with no session.
    */
   | { type: "meter"; on: boolean }
+  /**
+   * Ask macOS for Accessibility with its own dialog, which also lists akou in the pane (T4.36):
+   * the one prompting call, sent at most once per install while dictation is on and the macOS
+   * helper reports the grant denied. The fake helper only records it.
+   */
+  | { type: "ask_accessibility" }
   | { type: "stop" };
 
 export function encodeCommand(c: AppToHelper): string {

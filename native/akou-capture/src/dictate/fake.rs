@@ -49,6 +49,8 @@ pub struct World {
     pub field_reads: Vec<Target>,
     /// `AXIsProcessTrusted`.
     pub trusted: bool,
+    /// How many times the prompting trust check was asked for (T4.36).
+    pub asks: u32,
 }
 
 pub type Shared = Rc<RefCell<World>>;
@@ -225,5 +227,10 @@ impl Targets for Screen {
     }
     fn trusted(&mut self) -> bool {
         self.0.borrow().trusted
+    }
+    fn ask_trust(&mut self) {
+        let mut w = self.0.borrow_mut();
+        w.asks += 1;
+        w.note(vec![("type", Json::str("ask_accessibility"))]);
     }
 }

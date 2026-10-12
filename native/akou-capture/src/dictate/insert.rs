@@ -144,6 +144,10 @@ pub trait Targets {
     /// The non-prompting trust check (macOS `AXIsProcessTrusted`, never the prompting variant).
     /// True where no grant exists.
     fn trusted(&mut self) -> bool;
+    /// The one prompting call (macOS `AXIsProcessTrustedWithOptions` with
+    /// `kAXTrustedCheckOptionPrompt`), only on the app's `ask_accessibility` (T4.36). Nothing
+    /// where no grant exists.
+    fn ask_trust(&mut self) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

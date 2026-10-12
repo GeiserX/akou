@@ -4,8 +4,9 @@
  *
  * - macOS: the microphone and system-audio grants belong to the akou app, which macOS asks the
  *   first time it records; the Accessibility grant is the global hotkey's (DK-K1). A command line
- *   is another process and cannot read another app's grants, so each reads `unknown`, and asking
- *   opens its pane in System Settings.
+ *   is another process and cannot read another app's grants, so each reads `unknown` here, and
+ *   asking opens its pane in System Settings. `doctor` fills the microphone and Accessibility from
+ *   the running app's dictation helper when one answers (T4.36).
  * - Windows: three registry switches can turn the microphone off: the device-wide one (HKLM), the
  *   user's, and the user's desktop apps (HKCU); asking opens its Settings page. System audio
  *   (loopback) needs no grant.

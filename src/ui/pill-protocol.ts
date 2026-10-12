@@ -19,11 +19,26 @@ export type PillKey = "escape" | "enter" | "shift-enter";
 export type PillAction = "retry" | "copy" | "open-draft" | "grant";
 
 /**
- * Why the dictation key does nothing now (DC-N1, DC-A2): `grant-lost` once macOS took back the
- * Accessibility grant, which kills the key tap; `secure-input` while Secure Input keeps a keyed
- * chord from the helper, though a modifier alone still reaches it.
+ * Why the dictation key does nothing now (DC-N1, DC-A2, T4.36): `grant-lost` once macOS took back
+ * the Accessibility grant, which kills the key tap; `grant-denied` while dictation is on and the
+ * helper reports Accessibility denied, so no key reaches it at all; `secure-input` while Secure
+ * Input keeps a keyed chord from the helper, though a modifier alone still reaches it.
  */
-export type PillNotice = "grant-lost" | "secure-input";
+export type PillNotice = "grant-lost" | "grant-denied" | "secure-input";
+
+/**
+ * The line the island and the Dictation page show while dictation is on and the helper reports
+ * Accessibility denied on macOS (T4.36): with no grant there is no key tap, so the key does nothing.
+ */
+export const A11Y_OFF = "Dictation is off: allow akou under Accessibility";
+
+/**
+ * The recovery under it. akou cannot read the switch in System Settings, and a row granted to an
+ * earlier build (an update, a re-signed app) reads on while macOS denies it (T4.36), so this is a
+ * hint, said whenever the grant is denied.
+ */
+export const A11Y_STALE =
+  "If akou already shows as on there, switch it off and on again, or remove it with the minus button and add it back.";
 
 /**
  * The language chip on the listening island (akou-5v8): the session's language, a BCP-47 tag, as a
