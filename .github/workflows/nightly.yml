@@ -27,8 +27,9 @@ name: nightly
 #   unusual time zones (TS-5), so a fixture pinned to the calendar, or code that assumes the zone,
 #   is red here before it turns a pull request red on its own a day later.
 # - dictation-timing: DC-R6's wall-clock bound, a 20 s hold's release-to-text within 200 ms of a
-#   3 s hold's over a slow link (`AKOU_TIMING=1`). The PR check counts the bytes sent after release
-#   instead, since a shared runner's stall moved the wall clock by up to 1.8 s.
+#   3 s hold's over a slow link (`AKOU_TIMING=1`), each the least of three holds, since one hold
+#   on this shared runner read 229 and 332 ms over the bound on two nights. The PR check counts
+#   the bytes sent after release instead, since a runner's stall moved the wall clock by up to 1.8 s.
 
 on:
   schedule:
