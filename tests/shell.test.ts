@@ -294,6 +294,33 @@ describe("the desktop shell over a fake NativeUi", () => {
     await shell.close();
   });
 
+  test("[DK-M7] A webview left at its old size: a report while a move is still settling nudges nothing; the same report once it settled does", async () => {
+    const f = fakeUi();
+    const a = fakeApp();
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    shell.show();
+    await f.boot();
+    const asked = () => f.log.filter((l) => l === "measure").length;
+    await until(() => asked() === 1, 2000, "the first measure");
+    const sizes = () => f.log.filter((l) => l.startsWith("size "));
+    // Mid-drag: the page's size lags the window's, and the report races the move.
+    f.moveWindow({ x: 10, y: 10, width: 1280, height: 820 });
+    await f.viewport({ width: 1280, height: 540, dpr: 2 });
+    await Bun.sleep(100);
+    expect(sizes()).toEqual([]);
+    // Settled: the shell asks, and the same report nudges.
+    await until(() => asked() === 2, 2000, "the settled measure");
+    await f.viewport({ width: 1280, height: 540, dpr: 2 });
+    await until(() => sizes().length === 2, 2000, "the nudge");
+    expect(sizes()).toEqual(["size 1281x820", "size 1280x820"]);
+    await shell.close();
+  });
+
   test("[DK-M7] A webview left at its old size: on macOS a move asks the page for its viewport, and a short page re-fits the window; elsewhere nothing", async () => {
     for (const platform of ["darwin", "linux"]) {
       const f = fakeUi();

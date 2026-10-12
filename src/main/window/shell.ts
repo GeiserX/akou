@@ -946,7 +946,11 @@ export class Shell implements WindowShell {
         () => this.onPageReady(),
         (id, go) => this.answerQuit(id, go),
         () => this.window?.zoom(),
-        (v) => this.refit?.check(v),
+        // A report while a move or resize is still settling is stale against a window that has moved
+        // on (a drag, a full-screen animation); the settled `measure` decides.
+        (v) => {
+          if (!this.measuring) this.refit?.check(v);
+        },
       );
       const frame = placeFrame(this.o.state?.load().window, this.ui.workAreas());
       // The title is never drawn on macOS, but the Window menu, Mission Control and VoiceOver read it.

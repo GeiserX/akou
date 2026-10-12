@@ -2655,6 +2655,9 @@ body:has(#player-bar:not([hidden])) #jump {
   position: fixed;
   z-index: 20;
   width: 330px;
+  /* A grown fix field never pushes it past a short window's edge: it scrolls inside instead. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--faint);
   border-radius: 10px;
