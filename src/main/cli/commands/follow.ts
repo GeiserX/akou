@@ -4,11 +4,12 @@
  * time from the API, never an offset.
  */
 
+import { mentions, nameWords } from "../../../core/mention.ts";
 import { type LearnedItem, learnedNote } from "../../../core/vocab/learned.ts";
 import { readSse } from "../../llm/provider.ts";
 import type { Parsed } from "../args.ts";
 import { bool, duration, int, str } from "../args.ts";
-import { EXIT } from "../client.ts";
+import { type ApiResponse, EXIT } from "../client.ts";
 import { SpeakerColors } from "../color.ts";
 import { api, type Body, type Command, type Ctx, callFlag, finish, ref } from "../context.ts";
 import { usage } from "./calls.ts";
@@ -128,18 +129,54 @@ const tail: Command = {
 /** The events that end a call: `events -f` stops after them. */
 const ENDS = ["call.ended", "call.failed"];
 
+/**
+ * `--mention`: reads the lines committed since `cursor` and prints a `mention` row for each line
+ * on the call channel that says one of `words`, once per line. The row names the line, its wall
+ * time and its speaker, never its text (PG-S4, PG-Z4). Returns the next line cursor, or an API
+ * error response.
+ */
+async function printMentions(
+  ctx: Ctx,
+  call: string,
+  cursor: number,
+  words: readonly string[],
+  seen: Set<string>,
+): Promise<number | ApiResponse> {
+  const r = await api(ctx, "GET", `/calls/${call}/transcript`, {
+    query: { format: "json", since: cursor, review: "skip" },
+    launch: false,
+  });
+  if (r.status !== 200) return r;
+  for (const l of r.body.lines as Body[]) {
+    // The mic channel is the user: their own name said by them is not a mention.
+    if (l.ch !== "call" || seen.has(l.id) || !mentions(String(l.text ?? ""), words)) continue;
+    seen.add(l.id);
+    const row = { type: "mention", call, seq: l.seq, line: l.id, time: l.time, w0: l.w0 };
+    ctx.io.out(JSON.stringify({ ...row, speaker: l.speaker }));
+  }
+  return r.body.cursor as number;
+}
+
 const events: Command = {
   name: "events",
   summary: "The call's log events as JSON lines, one object per line; -f follows until it ends",
-  usage: "akou events [-c CALL] [-f] [--type T,…] [--since SEQ]",
+  usage: "akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention]",
   flags: {
     call: callFlag("live"),
     follow: { type: "boolean", short: "f", desc: "keep printing until the call ends" },
     type: { type: "string", value: "T,…", desc: "only these event types: health,seg,answer" },
     since: { type: "string", value: "SEQ", desc: "events after this cursor (default: all)" },
+    mention: {
+      type: "boolean",
+      desc: "also a mention row when user.name is said on the call channel: time and speaker, never the text",
+    },
     json: { type: "boolean", desc: "accepted; the output is always JSON lines" },
   },
-  examples: ["akou events -f --type health,answer", "akou events -c last --since 120"],
+  examples: [
+    "akou events -f --type health,answer",
+    "akou events -c last --since 120",
+    "akou events -f --type health,share.started,share.stopped --mention",
+  ],
   run: async (ctx, p) => {
     if (p.positional.length > 0) return usage(ctx, "events takes no words; name the call with -c");
     const want = str(p, "type")
@@ -148,13 +185,17 @@ const events: Command = {
       .filter((t) => t !== "");
     const kept = want && want.length > 0 ? new Set(want) : null;
     // A follower asks for the ends too, to know when to stop; it prints only what was asked for.
+    // A mention watcher asks for `seg` too, to know when lines were committed, and prints none.
     const follow = bool(p, "follow");
-    const types = kept ? [...new Set([...kept, ...(follow ? ENDS : [])])].join(",") : undefined;
+    const mention = bool(p, "mention");
+    const extra = [...(follow ? ENDS : []), ...(mention ? ["seg"] : [])];
+    const types = kept ? [...new Set([...kept, ...extra])].join(",") : undefined;
+    const since = int(p, "since", 0, Number.MAX_SAFE_INTEGER) ?? 0;
     // Never launches the app: a stream of a call that is not running has nothing to say (PG-S3).
     let r: Body;
     try {
       // A one-off read answers at once; a follower may wait for the first event.
-      r = await nextEvents(ctx, ref(p), int(p, "since", 0, Number.MAX_SAFE_INTEGER) ?? 0, {
+      r = await nextEvents(ctx, ref(p), since, {
         types,
         launch: false,
         wait: follow ? 25 : 0,
@@ -167,11 +208,26 @@ const events: Command = {
     // Follow by id, so `live` cannot move to another call under us.
     const id = r.call as string;
     let cursor = r.cursor as number;
+    let words: string[] = [];
+    let lineCursor = since;
+    const seen = new Set<string>();
+    if (mention) {
+      const cfg = await api(ctx, "GET", "/config", { launch: false });
+      if (cfg.status !== 200) return finish(ctx, cfg, () => "");
+      words = nameWords(String(cfg.body.settings?.["user.name"] ?? ""));
+      if (words.length === 0)
+        ctx.io.err("akou: --mention needs your name: akou config set user.name NAME");
+    }
     for (;;) {
       let ended = false;
       for (const e of r.events as Body[]) {
         if (!kept || kept.has(e.type)) ctx.io.out(JSON.stringify(e));
         if (ENDS.includes(e.type)) ended = true;
+      }
+      if (words.length > 0 && (r.events as Body[]).some((e) => e.type === "seg")) {
+        const next = await printMentions(ctx, id, lineCursor, words, seen);
+        if (typeof next !== "number") return finish(ctx, next, () => "");
+        lineCursor = next;
       }
       if (!follow || ended || ctx.io.signal?.aborted) return EXIT.ok;
       try {
