@@ -120,6 +120,8 @@
  * A line from the app that asks for a permission prompt (`"prompt": true` anywhere in it) fails the
  * run: a `warn prompting-grant` line and exit 70, so the test that sent it fails. The helper only
  * ever asks the non-prompting checks, and no test may show a permission dialog (DC-N10, DC-N3).
+ * The one prompting call the app may ask for, `ask_accessibility` (T4.36), is only recorded in
+ * `--commands-log` like every command: the fake shows no dialog, so a test counts the asks.
  *
  * `session.start`, `session.stop` and `session.cancel` (the tray's and the CLI's door) run through
  * the same rule: a latched session from the key time reached so far, whose audio lasts as long as

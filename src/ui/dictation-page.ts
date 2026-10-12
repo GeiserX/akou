@@ -37,6 +37,7 @@ import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
 import { type JobModels, jobModelChoices, modelName } from "./models-rows.ts";
 import { message } from "./notepad.ts";
+import { A11Y_OFF, A11Y_STALE } from "./pill-protocol.ts";
 import type { Reply, Transport } from "./protocol.ts";
 import {
   backLink,
@@ -134,6 +135,9 @@ const REMOTE_KEYS = [
 /** The rows drawn by hand. */
 const MIC_GRANT = "#mic-grant";
 const A11Y_GRANT = "#accessibility-grant";
+
+/** How often the page reads the grant again while its Accessibility line shows (T4.36). */
+export const A11Y_POLL_MS = 2000;
 const SETUP = "#setup";
 const WHILE = "#while-listening";
 /** The rows, and `show`'s names, of the Words and History pages under this one. */
@@ -354,6 +358,8 @@ export class DictationPage {
   private meter: { close(): void } | null = null;
   /** The wait for the next dictation's app, for a per-app rule (DC-U9). */
   private waitApp: { stop(): void } | null = null;
+  /** Reads the grant again while the Accessibility line shows, so it goes once given (T4.36). */
+  private a11yPoll: ReturnType<typeof setInterval> | undefined;
   /** The words fixed while dictating, for the Learning section's count (DC-L5). */
   private review: DictationReview | null = null;
   /** Dictations served in the last hour, in server mode. */
@@ -460,6 +466,7 @@ export class DictationPage {
     this.stopRecording();
     this.stopMeter();
     this.stopNextApp();
+    clearInterval(this.a11yPoll);
     this.setup?.stop();
     this.setup = null;
   }
@@ -541,6 +548,7 @@ export class DictationPage {
     this.stopRecording();
     this.stopMeter();
     this.stopNextApp();
+    clearInterval(this.a11yPoll);
     this.recorders = [];
     this.shown = {};
     if (this.setup) {
@@ -580,6 +588,7 @@ export class DictationPage {
       this.col,
       head,
       this.mode === "server" ? this.serverNotes() : null,
+      this.sub === "advanced" ? null : this.a11yOff(),
       ...sections,
       sections.length === 0
         ? h(
@@ -856,6 +865,36 @@ export class DictationPage {
       },
       ok ? grantState(g) : this.paneButton("accessibility"),
     );
+  }
+
+  /**
+   * T4.36: dictation is on, and on macOS the helper reports Accessibility denied, so it has no key
+   * tap and the dictation key does nothing. A line above everything says so, with the pane's button
+   * and the recovery for a row that reads on in System Settings but belongs to an earlier build,
+   * which akou cannot see; the grant is read again every `A11Y_POLL_MS` and the line goes once it
+   * is given.
+   */
+  private a11yOff(): HTMLElement | null {
+    const g = this.grants;
+    if (this.mode !== "app" || !this.mac || this.settings[ENABLE_KEY] !== true) return null;
+    if (g?.accessibility !== "denied") return null;
+    // clock: reading the grant again while the user is in System Settings.
+    this.a11yPoll = setInterval(() => {
+      void this.readDictation()
+        .catch(() => null)
+        .then((d) => {
+          if (d?.grants && d.grants.accessibility !== "denied") void this.reread();
+        });
+    }, A11Y_POLL_MS);
+    const line = section(
+      "",
+      row(
+        { label: A11Y_OFF, help: A11Y_STALE, id: "dictation-a11y-off" },
+        this.paneButton("accessibility", "dictation-a11y-off-open"),
+      ),
+    );
+    line.setAttribute("role", "status");
+    return line;
   }
 
   /** A button that opens a privacy pane, or says to open it by hand where this page cannot. */

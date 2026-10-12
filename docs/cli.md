@@ -310,18 +310,20 @@ example: akou tail -f --last 2m
 ```text
 akou events: The call's log events as JSON lines, one object per line; -f follows until it ends
 
-usage: akou events [-c CALL] [-f] [--type T,…] [--since SEQ]
+usage: akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention]
 
   -c, --call CALL  live, last or a call id (default: live)
   -f, --follow     keep printing until the call ends
       --type T,…   only these event types: health,seg,answer
       --since SEQ  events after this cursor (default: all)
+      --mention    also a mention row when user.name is said on the call channel: time and speaker, never the text
       --json       accepted; the output is always JSON lines
   -h, --help       show this help
       --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou events -f --type health,answer
 example: akou events -c last --since 120
+example: akou events -f --type health,share.started,share.stopped --mention
 ```
 
 ## context
@@ -594,15 +596,16 @@ example: akou doctor --grant system-audio
 ## config
 
 ```text
-akou config: Show, set or unset a setting (validated by the settings registry)
+akou config: Show, get, set or unset a setting (validated by the settings registry)
 
-usage: akou config show | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]
+usage: akou config show | akou config get KEY | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]
 
       --json     print the answer as JSON, errors included
   -h, --help     show this help
       --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou config show
+example: akou config get agent.summary_every_minutes
 example: akou config set asr.threads 4
 example: printf '%s' "$KEY" | akou config set provider.apiKey -
 example: akou config unset asr.threads

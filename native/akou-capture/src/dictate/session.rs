@@ -561,6 +561,7 @@ impl Dictate {
                 }
             }
             Command::Focus { target } => self.targets.focus(&target),
+            Command::AskAccessibility => self.targets.ask_trust(),
             Command::SessionStart => self.act(t_ns, out, |a, acts| a.start(t_ns, acts)),
             Command::SessionStop => self.act(t_ns, out, |a, acts| a.end("tap", t_ns, acts)),
             Command::SessionCancel => self.act(t_ns, out, |a, acts| a.end("cancel", t_ns, acts)),
@@ -1800,6 +1801,23 @@ mod tests {
         assert_eq!(store.fn_usage(), Some(DO_NOTHING));
         assert!(!d.command(Command::Stop, 0, &mut out));
         assert_eq!(store.fn_usage(), Some(2));
+    }
+
+    /// [T4.36] Only the app's `ask_accessibility` reaches the prompting trust check, once per line:
+    /// starting, binding, a session and an insert never ask (the positive control is the line).
+    #[test]
+    fn t4_36_only_ask_accessibility_prompts() {
+        let w = World::new();
+        w.borrow_mut().trusted = false;
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", false, ("granted", "denied"), &mut out);
+        let rebind = Command::parse(r#"{"type":"rebind","hotkey":"RightCommand"}"#).unwrap();
+        d.command(rebind, 0, &mut out);
+        hold(&mut d, &mut out, 0);
+        assert_eq!(w.borrow().asks, 0);
+        d.command(Command::AskAccessibility, 0, &mut out);
+        assert_eq!(w.borrow().asks, 1);
     }
 
     /// A dictate over a fake player list, one playing and one paused, `pause_media` sent as

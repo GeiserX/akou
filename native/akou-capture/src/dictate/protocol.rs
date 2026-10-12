@@ -339,6 +339,10 @@ pub enum Command {
     Meter {
         on: bool,
     },
+    /// Ask macOS for the Accessibility grant with its own dialog, which also lists akou under
+    /// Accessibility (DC-N3, T4.36). The app sends it at most once per install, and only while
+    /// dictation is on and the grant is denied; nothing else here ever prompts.
+    AskAccessibility,
     Stop,
 }
 
@@ -450,6 +454,7 @@ impl Command {
                     .and_then(Value::as_bool)
                     .ok_or("meter needs on")?,
             },
+            "ask_accessibility" => Command::AskAccessibility,
             "stop" => Command::Stop,
             other => return Err(format!("unknown command {other}")),
         })
@@ -778,6 +783,7 @@ mod tests {
                 Command::PauseMedia { on: false },
             ),
             (r#"{"type":"meter","on":true}"#, Command::Meter { on: true }),
+            (r#"{"type":"ask_accessibility"}"#, Command::AskAccessibility),
             (r#"{"type":"stop","extra":[1,2.5,null,{}]}"#, Command::Stop),
         ];
         for (text, want) in cases {
@@ -1033,6 +1039,7 @@ mod tests {
                 Command::RecordKeys { on: true },
                 Command::PauseMedia { on: true },
                 Command::Meter { on: true },
+                Command::AskAccessibility,
                 Command::Stop,
             ]
         );

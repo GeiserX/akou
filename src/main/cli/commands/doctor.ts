@@ -20,8 +20,10 @@
  * - grants: the microphone, system-audio and (macOS) Accessibility grants, each with its state
  *   (`grants.ts`). With `--grant`, on a terminal, the first missing or unreadable one is asked
  *   for, or its settings pane is opened, and the rest wait for another run; `--grant NAME` asks
- *   for that one, which is how the later panes are reached on macOS, where every grant reads
- *   `unknown` (CLI-38); without a terminal nothing is asked.
+ *   for that one, which is how the later panes are reached on macOS, where this process can read
+ *   no grant (CLI-38); without a terminal nothing is asked. With the app running, the microphone
+ *   and Accessibility grants its dictation helper reports (`GET /v1/dictation`) replace `unknown`
+ *   (T4.36): the helper is spawned by the app, so it reads the app's own grants.
  *
  * Exit 0 when nothing failed, 69 otherwise. Not here yet: the 3 s capture test the design lists,
  * which needs the real helper.
@@ -212,6 +214,45 @@ export interface GrantState {
   next?: boolean;
 }
 
+/**
+ * The grants the running app's dictation helper reports (`GET /v1/dictation`, T4.36), or null with
+ * no local app answering. Never launches the app; a remote akou's grants are not this machine's.
+ * The app may run a probe of the helper to answer, which has 5 s.
+ */
+export async function appGrants(ctx: Ctx): Promise<Record<string, unknown> | null> {
+  if (remoteTarget(ctx.io.env)) return null;
+  try {
+    const r = await ctx.client.request("GET", "/dictation", { launch: false, timeoutMs: 7000 });
+    const g = r.status === 200 ? (r.body as { grants?: unknown } | null)?.grants : null;
+    return typeof g === "object" && g !== null ? (g as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `grants` with each one this process could not read (`unknown`) replaced by what the app's helper
+ * reports, where it says `granted` or `denied`. A denied Accessibility grant carries the recovery
+ * for a row that reads on in System Settings but belongs to an earlier build (T4.36).
+ */
+export function withAppGrants(grants: Grant[], app: Record<string, unknown> | null): Grant[] {
+  if (!app) return grants;
+  return grants.map((g): Grant => {
+    const said = app[g.name];
+    if (g.state !== "unknown" || (said !== "granted" && said !== "denied")) return g;
+    if (said === "granted")
+      return { ...g, state: "granted", detail: "as the running akou app reports it" };
+    return {
+      ...g,
+      state: "missing",
+      detail:
+        g.name === "accessibility"
+          ? "the dictation key does nothing without it, as the running akou app reports it; if akou already shows as on under Accessibility, switch it off and on again, or remove it and add it back"
+          : "as the running akou app reports it",
+    };
+  });
+}
+
 /** A grant's name as one word on the command line: `system audio` is `system-audio`. */
 export function grantWord(name: string): string {
   return name.replace(/ /g, "-");
@@ -221,12 +262,16 @@ export function grantWord(name: string): string {
  * Reads the grants; with `ask`, asks for the named one (`only`), or else the first one missing or
  * unreadable, and leaves the rest for another run. One per run, because asking can open a settings
  * pane and each pane opened replaces the one before: three in a row show only the last. On macOS
- * every grant reads `unknown` on every run, so a plain `--grant` always asks for the first; the
- * name is how the later ones are reached.
+ * this process reads no grant itself; with the app running, the microphone and Accessibility come
+ * from it (`appGrants`), and system audio stays `unknown`, so a plain `--grant` asks for the first
+ * one not known as given; the name is how the later ones are reached.
  */
 export async function grantStates(ctx: Ctx, ask: boolean, only?: string): Promise<GrantState[]> {
   const checker = ctx.grants ?? systemGrants;
-  const grants = await checker.check();
+  const local = await checker.check();
+  const grants = local.some((g) => g.state === "unknown")
+    ? withAppGrants(local, await appGrants(ctx))
+    : local;
   if (only !== undefined && !grants.some((g) => grantWord(g.name) === grantWord(only)))
     throw new UsageError(
       `${only} is not a grant; name one of ${grants.map((g) => grantWord(g.name)).join(", ")}`,

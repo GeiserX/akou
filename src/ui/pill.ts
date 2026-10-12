@@ -144,6 +144,7 @@ const WORD: Record<string, string> = {
   copied: "Copied",
   error: "Didn’t finish",
   "grant-lost": "Accessibility lost",
+  "grant-denied": "Dictation off",
   "secure-input": "Secure Input on",
   chip: "Vocabulary",
 };
