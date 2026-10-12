@@ -322,6 +322,8 @@ export interface SessionOptions extends TextRules {
    * tap without a word, so the dictation key does nothing until the grant is back.
    */
   onGrantLost?(name: string): void;
+  /** The helper said `ready`, its first or again once a grant arrived (akou-qpn, T4.36). */
+  onReady?(): void;
   /**
    * macOS Secure Input turned on or off (DC-N1, DC-A2): while it is on the OS hands no keyed chord
    * to the tap, and only a modifier alone still reaches it.
@@ -639,6 +641,11 @@ export class DictationSession {
     return true;
   }
 
+  /** Asks the helper for macOS's Accessibility dialog (T4.36); the service decides when, once. */
+  askAccessibility(): void {
+    this.o.send({ type: "ask_accessibility" });
+  }
+
   /** Sends the helper the microphone the settings pick (DC-U4, DC-N5); nothing before `ready`. */
   rebuildMic(): void {
     const m = this.o.mic?.();
@@ -783,6 +790,7 @@ export class DictationSession {
         this.pauseMedia();
         if (this.o.metering?.()) this.meter(true);
         if (this.o.recording?.()) this.recordKeys(true);
+        this.o.onReady?.();
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });

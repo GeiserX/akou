@@ -28,8 +28,8 @@
  * words to review (DC-O4). Its answers come back through `answerChip`.
  */
 
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ShortcutName } from "../../core/dictation/activation.ts";
 import type { DictationEvent, DictationItem, Target } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
@@ -92,6 +92,14 @@ export type Grants = { mic: Grant; accessibility: Grant };
  * `ready` again (the macOS helper, akou-qpn): the app never starts them again for that grant.
  */
 const RETAPS = new Set(["cgeventtap"]);
+
+/**
+ * The file in the dictation folder that says macOS's Accessibility dialog was asked for on this
+ * install (T4.36): its presence alone. The helper asks with the prompting call only on the app's
+ * `ask_accessibility`, sent once while dictation runs with the grant denied; deleting this file
+ * lets the next start ask again.
+ */
+export const A11Y_ASKED = "accessibility-asked";
 
 /** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
 const grantOk = (g: Grant) => g !== "denied";
@@ -918,6 +926,7 @@ export class DictationService {
       onCue: (m) => this.o.cue?.(m),
       onRecordedKey: (name) => this.recorder?.(name),
       onGrantLost: (name) => this.grantLost(h, name),
+      onReady: () => this.readied(session),
       onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
       onHotkey: (name, target) => this.lastHotkey(session, name, target),
@@ -1095,6 +1104,34 @@ export class DictationService {
     })();
     this.probed = { at, grants };
     return grants;
+  }
+
+  /**
+   * The helper said `ready` (T4.36). A macOS key source with Accessibility denied has no key tap,
+   * so the dictation key does nothing: the helper is asked once per install for macOS's own
+   * dialog, which also puts akou in the pane's list, and the pill and the page hear it, since a
+   * `ready` again once the grant arrives may leave the state as it was.
+   */
+  private readied(session: DictationSession): void {
+    const r = session.ready;
+    if (r && RETAPS.has(r.backend) && r.grants.accessibility === "denied") {
+      const asked = join(this.o.configDir, DICTATION_DIR, A11Y_ASKED);
+      if (!existsSync(asked)) {
+        try {
+          mkdirSync(dirname(asked), { recursive: true });
+          writeFileSync(asked, "");
+          session.askAccessibility();
+          this.o.onLog?.(
+            "info",
+            "dictation: Accessibility is denied; asked macOS to show its dialog",
+          );
+        } catch (err) {
+          // Not written means never asked: once per install must never become every start.
+          this.o.onLog?.("warn", `dictation: Accessibility not asked: ${(err as Error).message}`);
+        }
+      }
+    }
+    this.emit();
   }
 
   /**

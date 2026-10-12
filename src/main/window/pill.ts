@@ -39,6 +39,10 @@
  *   display of the window with the keyboard, when the helper can tell. A dropped press gives back
  *   the outcome or notice it took the island from, for the time that had left.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
+ * - `notice` with no time limit while dictation is on and the helper reports Accessibility denied
+ *   (macOS, T4.36): no key tap exists, so the key does nothing. It says so with a button to the
+ *   pane, comes back whenever the island would hide, and goes once the grant arrives (the helper
+ *   says `ready` again) or its button is clicked, until the grant is denied again.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
  *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
  *   session keeps its Stop and its outcome; or Secure Input turned on while the key is a keyed
@@ -61,7 +65,7 @@ import type {
   PillRpc,
   PillState,
 } from "../../ui/pill-protocol.ts";
-import { pillPreview } from "../../ui/pill-protocol.ts";
+import { A11Y_OFF, A11Y_STALE_SHORT, pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
 import type { Frame } from "../dictation/protocol.ts";
 import type { DictationFollow, ErrorAction } from "../dictation/service.ts";
@@ -88,6 +92,8 @@ export interface PillDictation {
     swallow_keys: boolean | null;
     /** The grants the running helper lost (DC-N1); absent, none. */
     lost?: readonly string[];
+    /** The running helper's Accessibility grant as its `ready` said (T4.36); absent, unknown. */
+    accessibility?: string | null;
   };
   /**
    * The log's events, the mic level and the engine's notices, from now on; the session's partials
@@ -135,7 +141,7 @@ export interface PillOptions {
   later?(ms: number, fn: () => void): () => void;
   /** The label for a binding (`Right ⌘`). */
   label(binding: string, platform: string): string;
-  /** Opens the Accessibility pane: the notice's button after the grant was lost (DC-N1). */
+  /** Opens the Accessibility pane: the notice's button, the grant lost or denied (DC-N1, T4.36). */
   grant?(): Promise<boolean>;
   /**
    * Moves the window to the display that holds `frame`, the window with the keyboard at the
@@ -264,6 +270,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
    * notice shows when the island would hide, if the grant is still lost then.
    */
   let grantPending = false;
+  /** The denied notice's button was clicked: it stays down until the grant is denied again. */
+  let deniedSeen = false;
   /** When the island's hide timer is due, so a press can hand an outcome back its time. */
   let hideAt = Number.POSITIVE_INFINITY;
   /**
@@ -274,6 +282,18 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
+  /** Dictation runs on macOS with Accessibility denied: no key reaches it (T4.36). */
+  const denied = () => o.platform === "darwin" && d.status().accessibility === "denied";
+
+  /** The denied line, in the island's notice sheet, with the pane's button; it has no time. */
+  const deniedNotice = (): PillState => ({
+    state: "notice",
+    reason: "grant-denied",
+    message: A11Y_OFF,
+    detail: A11Y_STALE_SHORT,
+    actions: o.grant ? ["grant"] : [],
+  });
+
   const put = (s: PillState) => {
     if (s.state === "hidden" && grantPending) {
       grantPending = false;
@@ -282,6 +302,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
     }
+    // While the grant is denied the island never hides: it says why the key does nothing.
+    if (s.state === "hidden" && !deniedSeen && denied()) s = deniedNotice();
     if (s.state !== "pressed") underPress = null;
     shown = s;
     send().state(s);
@@ -304,6 +326,11 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
 
   const update = () => {
     const st = d.status();
+    if (!denied()) {
+      // The grant arrived: the line goes, and comes back if it is ever denied again.
+      deniedSeen = false;
+      if (shown.state === "notice" && shown.reason === "grant-denied") put({ state: "hidden" });
+    }
     switch (st.state) {
       case "listening": {
         if (shown.state === "listening") return;
@@ -346,7 +373,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         )
           return;
         cancelHide();
-        if (shown.state !== "hidden") put({ state: "hidden" });
+        if (shown.state !== "hidden" || (!deniedSeen && denied())) put({ state: "hidden" });
         return;
       default:
         cancelHide();
@@ -623,7 +650,9 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         if (action === "language") return nextLanguage();
         if (ERROR_ACTIONS.includes(action)) return onError(action as ErrorAction);
         if (action === "grant") {
-          if (shown.state !== "notice" || shown.reason !== "grant-lost" || !o.grant) return false;
+          if (shown.state !== "notice" || shown.reason === "secure-input" || !o.grant) return false;
+          // The user is on the pane now; the page keeps the line while the grant is denied.
+          if (shown.reason === "grant-denied") deniedSeen = true;
           cancelHide();
           put({ state: "hidden" });
           return o.grant();

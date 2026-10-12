@@ -326,6 +326,7 @@ export function appForShell(app: AkouApp): ShellApp {
           state: s?.state ?? "off",
           loading: s?.loading ?? false,
           swallow_keys: s?.swallow_keys ?? null,
+          accessibility: s?.grants?.accessibility ?? null,
         };
       },
       control: async (action) => (await app.dictation()?.control(action))?.ok === true,
