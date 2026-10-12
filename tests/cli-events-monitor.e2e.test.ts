@@ -86,6 +86,11 @@ describe("[PG-S4] the mention match", () => {
     expect(mentions("ask GARCIA", w)).toBe(true);
     expect(mentions("Anabel will", w)).toBe(false);
     expect(mentions("anything", nameWords(""))).toBe(false);
+    // Particles are not the name: they are in most Spanish lines.
+    const particles = nameWords("María de la Fuente");
+    expect(particles).toEqual(["maria", "fuente"]);
+    expect(mentions("vamos de la casa", particles)).toBe(false);
+    expect(mentions("fuente", particles)).toBe(true);
   });
 });
 

@@ -9,9 +9,29 @@ function fold(s: string): string {
   return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
-/** The words of a name worth matching: two letters or more, folded. */
+/** Name particles: every line says them, so "María de la Fuente" is never mentioned by "de". */
+const PARTICLES = new Set([
+  "de",
+  "del",
+  "la",
+  "las",
+  "los",
+  "y",
+  "van",
+  "von",
+  "der",
+  "den",
+  "da",
+  "di",
+  "du",
+  "le",
+]);
+
+/** The words of a name worth matching: two letters or more, folded, no particles. */
 export function nameWords(name: string): string[] {
-  return [...new Set(fold(name).match(/[\p{L}\p{N}]+/gu) ?? [])].filter((w) => w.length >= 2);
+  return [...new Set(fold(name).match(/[\p{L}\p{N}]+/gu) ?? [])].filter(
+    (w) => w.length >= 2 && !PARTICLES.has(w),
+  );
 }
 
 /** True when `text` holds one of `words` (from `nameWords`) as a whole word. */
