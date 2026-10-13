@@ -82,12 +82,14 @@ export class StartWarm {
   private loading = false;
   /** The load ended and nothing has let the models go since. */
   private held = false;
+  /** The app is quitting: a load still running arms nothing when it ends. */
+  private stopped = false;
 
   constructor(private readonly d: StartWarmDeps) {}
 
   /** Loads the models once, when the setting and the memory allow. Answers whether it started. */
   start(): boolean {
-    if (this.loading || this.held) return false;
+    if (this.stopped || this.loading || this.held) return false;
     const setting = this.d.setting();
     if (setting === "off") return false;
     const free = this.d.available();
@@ -102,6 +104,7 @@ export class StartWarm {
     this.d.load(setting === "on").then(
       (loaded) => {
         this.loading = false;
+        if (this.stopped) return;
         this.held = loaded;
         this.arm();
       },
@@ -120,6 +123,7 @@ export class StartWarm {
   }
 
   stop(): void {
+    this.stopped = true;
     this.released();
   }
 

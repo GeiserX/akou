@@ -11,6 +11,7 @@ import {
   availableMemory,
   fromMeminfo,
   fromStatusLevel,
+  StartWarm,
   WARM_MIN_FREE,
 } from "../src/main/asr/start-warm.ts";
 import { SETTINGS } from "../src/main/config/schema.ts";
@@ -41,6 +42,39 @@ describe("the memory asr.warmAtStart reads", () => {
     } else {
       expect(Math.abs(here - freemem())).toBeLessThan(0.02 * totalmem());
     }
+  });
+});
+
+describe("StartWarm on quit", () => {
+  test("stop() during a pending load: the load ends with nothing held and no timer armed", async () => {
+    let finish!: (loaded: boolean) => void;
+    let armed = 0;
+    const w = new StartWarm({
+      setting: () => "on",
+      available: () => 8 * GB,
+      load: () =>
+        new Promise<boolean>((res) => {
+          finish = res;
+        }),
+      release: () => true,
+      clock: {
+        setTimeout: () => {
+          armed++;
+          return 1;
+        },
+        clearTimeout: () => {},
+      },
+      log: () => {},
+    });
+    expect(w.start()).toBe(true);
+    w.stop();
+    finish(true);
+    await flush();
+    expect((w as unknown as { held: boolean }).held).toBe(false);
+    expect(armed).toBe(0);
+    // Held, it would ask to arm again; asked to start after the quit, it does nothing.
+    expect(w.start()).toBe(false);
+    expect(armed).toBe(0);
   });
 });
 
