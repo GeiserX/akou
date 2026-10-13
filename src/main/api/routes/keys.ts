@@ -17,7 +17,7 @@
 import { SCOPES, type Scope } from "../access.ts";
 import type { RouteErrors } from "../errors.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
-import { KeyError, type KeyStore } from "../keys.ts";
+import { KeyError, type KeyStore, scopesOf } from "../keys.ts";
 import type { ApiApp } from "../server.ts";
 
 const KEY_ROUTE = { access: "admin", modes: ["server"] } as const;
@@ -35,16 +35,16 @@ function storeOf(c: RouteContext<ApiApp>): KeyStore {
   return keys;
 }
 
-/** The one scope a new key gets: `admin` includes `jobs`, so a list naming both is `admin`. */
-function scopeOf(scopes: readonly string[] | undefined): Scope {
-  if (scopes === undefined) return "jobs";
-  const unknown = scopes.find((s) => !(SCOPES as readonly string[]).includes(s));
-  if (scopes.length === 0 || unknown !== undefined) {
+/** A new key's scopes: `jobs` by default; `admin` includes the others (`scopesOf`). */
+function scopeOf(scopes: readonly string[] | undefined): Scope[] {
+  if (scopes === undefined) return ["jobs"];
+  try {
+    return scopesOf(scopes);
+  } catch {
     throw new HttpError(422, "bad_field", `scopes is a list of ${SCOPES.join(", ")}`, {
       field: "scopes",
     });
   }
-  return scopes.includes("admin") ? "admin" : "jobs";
 }
 
 function refused(err: unknown): never {
@@ -74,7 +74,7 @@ export function keyRoutes(r: Router<ApiApp>): void {
     "/keys",
     {
       id: "keys.create",
-      doc: "Create a key for a program. `scopes` is `jobs` (the default) or `admin`; `callback_hosts` are the hosts its callback URLs may name. The answer holds the `ak_` key and the `whsec_` webhook secret, shown this once only.",
+      doc: "Create a key for a program. `scopes` is a list of `jobs` (the default), `read` (every call, dictation and job, read only) and `admin` (everything; it includes the others); `callback_hosts` are the hosts its callback URLs may name. The answer holds the `ak_` key and the `whsec_` webhook secret, shown this once only.",
       ...KEY_ROUTE,
       body: { name: "string", "scopes?": "string[]", "callback_hosts?": "string[]" },
       ok: 201,

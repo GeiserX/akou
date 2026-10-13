@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { SCOPES, type Scope } from "../../api/access.ts";
 import { writePrivateFile } from "../../api/guard.ts";
-import { KeyError, KeyStore } from "../../api/keys.ts";
+import { KeyError, KeyStore, scopesOf } from "../../api/keys.ts";
 import { resolvePaths, validateSetting } from "../../config/schema.ts";
 import { repeated, str } from "../args.ts";
 import { EXIT } from "../client.ts";
@@ -30,12 +30,18 @@ function refused(ctx: Ctx, code: string, message: string, exit: number): number 
 
 const keys: Command = {
   name: "keys",
-  summary: "Create, list, update or revoke the API keys of server mode (no app needed)",
+  summary:
+    "Create, list, update or revoke the API keys of server mode and of the desktop app's network listener (no app needed)",
   usage:
-    "akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]",
+    "akou keys create --name NAME [--scope jobs|read|admin ...] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]",
   flags: {
     name: { type: "string", value: "NAME", desc: "create: who the key is for, shown in the audit" },
-    scope: { type: "string", value: "S", desc: "create: jobs (default) or admin" },
+    scope: {
+      type: "string",
+      repeat: true,
+      value: "S",
+      desc: "create: jobs (default: submit and read its own jobs), read (every call, dictation and job, read only) or admin; repeat it for several",
+    },
     "callback-host": {
       type: "string",
       repeat: true,
@@ -45,6 +51,7 @@ const keys: Command = {
   },
   examples: [
     "akou keys create --name archive --callback-host archive.lan",
+    "akou keys create --name phone --scope jobs --scope read",
     "akou keys list",
     "akou keys update key_0123abcd --callback-host archive.lan --callback-host viewer.lan",
     "akou keys revoke key_0123abcd",
@@ -54,14 +61,17 @@ const keys: Command = {
     if (sub === "create") {
       const name = str(p, "name");
       if (!name || id !== undefined) return usage(ctx, "keys create needs --name and nothing else");
-      const scope = str(p, "scope") ?? "jobs";
-      if (!(SCOPES as readonly string[]).includes(scope)) {
-        return usage(ctx, `--scope is one of ${SCOPES.join(", ")}`);
+      let scopes: Scope[];
+      try {
+        const asked = repeated(p, "scope");
+        scopes = scopesOf(asked.length > 0 ? asked : "jobs");
+      } catch {
+        return usage(ctx, `--scope is one of ${SCOPES.join(", ")}; repeat it for several`);
       }
       try {
         const k = store(ctx).create({
           name,
-          scope: scope as Scope,
+          scope: scopes,
           callbackHosts: repeated(p, "callback-host"),
         });
         if (ctx.json) ctx.io.out(JSON.stringify(k));

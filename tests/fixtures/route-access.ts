@@ -1,7 +1,8 @@
 /**
  * The one table of who may call each operation of the OpenAPI file (docs/ux/SERVER.md SV-K3 and
  * SV-T5), keyed `METHOD /v1/path` as the file writes paths. `open` needs no key, `jobs` a key with
- * the `jobs` scope (or more), `admin` only an `admin` key or the app's token. Written by hand, never
+ * the `jobs` scope, `read` one with the `read` scope, a list a key with any scope it names, and
+ * `admin` only an `admin` key or the app's token; an `admin` key reaches every row. Written by hand, never
  * read from the routes: `tests/scopes.test.ts` holds the file to it, and
  * `tests/server-access.e2e.test.ts` walks every row with real keys. Adding a route means adding its
  * row here.
@@ -27,9 +28,9 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/models/import": "admin",
   "DELETE /v1/models/{id}": "admin",
   "POST /v1/dictations": "admin",
-  "GET /v1/dictations": "admin",
-  "GET /v1/dictations/{id}": "admin",
-  "GET /v1/dictations/{id}/audio": "admin",
+  "GET /v1/dictations": "read",
+  "GET /v1/dictations/{id}": "read",
+  "GET /v1/dictations/{id}/audio": "read",
   "POST /v1/dictations/{id}/retry": "admin",
   "POST /v1/dictations/{id}/insert": "admin",
   "DELETE /v1/dictations": "admin",
@@ -41,15 +42,15 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/dictation/remote-test": "admin",
   "GET /v1/dictation/stream": "admin",
   "POST /v1/calls": "admin",
-  "GET /v1/calls": "admin",
-  "GET /v1/calls/{id}": "admin",
+  "GET /v1/calls": "read",
+  "GET /v1/calls/{id}": "read",
   "PATCH /v1/calls/{id}": "admin",
   "DELETE /v1/calls/{id}": "admin",
   "POST /v1/calls/{id}/restore": "admin",
   "PATCH /v1/calls/{id}/segments/{sid}": "admin",
   "GET /v1/devices": "admin",
   "GET /v1/apps": "admin",
-  "GET /v1/workspaces": "admin",
+  "GET /v1/workspaces": "read",
   "POST /v1/workspaces": "admin",
   "POST /v1/calls/{id}/stop": "admin",
   "POST /v1/calls/{id}/pause": "admin",
@@ -59,7 +60,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/calls/{id}/restart": "admin",
   "GET /v1/calls/{id}/events": "admin",
   "GET /v1/calls/{id}/stream": "admin",
-  "GET /v1/calls/{id}/transcript": "admin",
+  "GET /v1/calls/{id}/transcript": "read",
   "POST /v1/calls/{id}/context": "admin",
   "GET /v1/calls/{id}/search": "admin",
   "POST /v1/calls/{id}/ask": "admin",
@@ -67,13 +68,13 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/calls/{id}/speakers": "admin",
   "POST /v1/calls/{id}/speakers/merge": "admin",
   "POST /v1/calls/{id}/speakers/unmerge": "admin",
-  "GET /v1/calls/{id}/notes": "admin",
+  "GET /v1/calls/{id}/notes": "read",
   "POST /v1/calls/{id}/notes": "admin",
   "PATCH /v1/calls/{id}/notes/{nid}": "admin",
   "DELETE /v1/calls/{id}/notes/{nid}": "admin",
   "POST /v1/calls/{id}/remember": "admin",
   "DELETE /v1/calls/{id}/remember/{rid}": "admin",
-  "GET /v1/calls/{id}/memo": "admin",
+  "GET /v1/calls/{id}/memo": "read",
   "PUT /v1/calls/{id}/memo": "admin",
   "GET /v1/calls/{id}/vocab": "admin",
   "POST /v1/calls/{id}/vocab": "admin",
@@ -94,8 +95,8 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/calls/{id}/enhance": "admin",
   "GET /v1/calls/{id}/enhance/context": "admin",
   "PUT /v1/calls/{id}/enhanced": "admin",
-  "GET /v1/calls/{id}/enhanced": "admin",
-  "GET /v1/calls/{id}/audio/{part}": "admin",
+  "GET /v1/calls/{id}/enhanced": "read",
+  "GET /v1/calls/{id}/audio/{part}": "read",
   "POST /v1/calls/{id}/export": "admin",
   "POST /v1/calls/{id}/hooks": "admin",
   "POST /v1/import/hark-viewer": "admin",
@@ -103,7 +104,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   // Anonymous, like `/healthz` outside `/v1` (service-interface.md SI-2, SERVER.md SV-K1).
   "GET /v1/server": "open",
   // Any key, and the app's token (SI-3).
-  "GET /v1/keys/me": "jobs",
+  "GET /v1/keys/me": ["jobs", "read", "admin"],
   // Keys over HTTP, for the web UI's Keys page (SV-K7): admin only.
   "GET /v1/keys": "admin",
   "POST /v1/keys": "admin",
@@ -111,11 +112,11 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "DELETE /v1/keys/{id}": "admin",
   // Server mode's jobs, events and the OpenAI door: any key, each seeing its own (SV-K3).
   "POST /v1/jobs": "jobs",
-  "GET /v1/jobs": "jobs",
-  "GET /v1/jobs/{id}": "jobs",
+  "GET /v1/jobs": ["jobs", "read"],
+  "GET /v1/jobs/{id}": ["jobs", "read"],
   "PATCH /v1/jobs/{id}": "jobs",
-  "GET /v1/jobs/{id}/result": "jobs",
-  "GET /v1/jobs/{id}/audio": "jobs",
+  "GET /v1/jobs/{id}/result": ["jobs", "read"],
+  "GET /v1/jobs/{id}/audio": ["jobs", "read"],
   "DELETE /v1/jobs/{id}": "jobs",
   // The live door, a WebSocket: any key, the guard before the upgrade.
   "GET /v1/live": "jobs",

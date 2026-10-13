@@ -36,7 +36,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, totalmem } from "node:os";
+import { homedir, networkInterfaces, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
@@ -58,6 +58,7 @@ import {
   ensureToken,
   type Guard,
   makePrivateDir,
+  networkGuard,
   serverGuard,
   serverHostAllowed,
   TokenSource,
@@ -245,7 +246,7 @@ import {
 import { JOBS_DB, warmForIndexes } from "./server/store.ts";
 import { NotWritable, requireWritable } from "./server/writable.ts";
 import { WyomingServer } from "./server/wyoming.ts";
-import { LocalLink } from "./share/local-link.ts";
+import { chooseBind, LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
 import {
@@ -595,6 +596,8 @@ export class AkouApp implements ApiApp {
   /** Starts under way, which the watchdog counts as recording from before the helper spawns. */
   private starting = 0;
   server: ApiServer | null = null;
+  /** The desktop app's keyed listener on the network (`network.enabled`), while it is up. */
+  network: ApiServer | null = null;
   /** Home Assistant's Wyoming listener (SV-C2), while `server.wyoming` is on. */
   wyoming: WyomingServer | null = null;
   window: WindowShell | null = null;
@@ -691,6 +694,12 @@ export class AkouApp implements ApiApp {
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
   /**
+   * The keys of the app's network listener (`network.enabled`): the same `keys.json` as server
+   * mode's, read by the listener's guard only, so in the app no key signs a callback and the key
+   * routes stay server mode's.
+   */
+  private readonly networkKeys: KeyStore | null;
+  /**
    * File jobs (docs/ux/SERVER.md section 5), in both modes: in app mode the one token submits
    * them (`akou transcribe`) and owns every job, as the key id `app`.
    */
@@ -751,6 +760,14 @@ export class AkouApp implements ApiApp {
         ? new KeyStore(
             this.configDir,
             // clock: the key store's injected clock, real in the app.
+            () => Date.now(),
+            (line) => this.log("info", line),
+          )
+        : null;
+    this.networkKeys =
+      this.runMode === "app" && cfg.settings["network.enabled"]
+        ? new KeyStore(
+            this.configDir,
             () => Date.now(),
             (line) => this.log("info", line),
           )
@@ -4055,6 +4072,7 @@ export class AkouApp implements ApiApp {
           `${req.method} ${new URL(req.url).pathname}: ${(err as Error).stack ?? err}`,
         ),
     });
+    this.listenOnNetwork();
     this.writeRuntime();
     this.detectAccelerator();
     this.startJobs();
@@ -4077,6 +4095,71 @@ export class AkouApp implements ApiApp {
       .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
     if (!this.headless && this.o.window) this.window = await this.o.window(this);
     else if (!this.headless) this.log("info", "the window is not built yet; running headless");
+  }
+
+  /**
+   * The app's keyed listener on the network (`network.enabled`, app mode only): the app's routes on
+   * `network.bind`, for `ak_` keys only (`networkGuard`), so a phone reads the history with a
+   * `read` key. No tailnet address (or no LAN one) is one warning and no listener: the app runs
+   * as ever on 127.0.0.1. Plain HTTP: the tailnet encrypts; `lan` and a typed address warn.
+   */
+  private listenOnNetwork(): void {
+    const s = this.cfg.settings;
+    if (!s["network.enabled"]) return;
+    if (this.runMode === "server") {
+      this.log(
+        "warn",
+        "network.enabled applies in the desktop app only; server mode listens on api.bind",
+      );
+      return;
+    }
+    const keys = this.networkKeys;
+    if (!keys) return;
+    let bind: ReturnType<typeof chooseBind>;
+    try {
+      bind = chooseBind(s["network.bind"], (this.o.interfaces ?? networkInterfaces)());
+    } catch (err) {
+      const why: Record<string, string> = {
+        no_tailnet: "this machine has no tailnet address",
+        no_lan: "this machine has no private LAN address",
+      };
+      const code = err instanceof HttpError ? err.code : "";
+      this.log(
+        "warn",
+        `network: no listener; network.bind is ${s["network.bind"]} and ${why[code] ?? (err as Error).message}`,
+      );
+      return;
+    }
+    try {
+      this.network = startApiServer({
+        app: this,
+        port: s["network.port"],
+        hostname: bind.address,
+        maxUploadBytes: s["server.max_upload_mb"] * 1024 * 1024,
+        token: () => this.tokens.current(),
+        guard: networkGuard({
+          keys,
+          onRefused: (r) =>
+            this.log(
+              "warn",
+              `key.refused ${r.keyPrefix === "" ? "(not an akou key)" : `${r.keyPrefix}…`} from ${r.source} on ${r.path}`,
+            ),
+        }),
+        onError: (err, req) =>
+          this.log(
+            "error",
+            `${req.method} ${new URL(req.url).pathname}: ${(err as Error).stack ?? err}`,
+          ),
+      });
+    } catch (err) {
+      this.log(
+        "warn",
+        `network: no listener on ${bind.address}:${s["network.port"]}, ${(err as Error).message}`,
+      );
+      return;
+    }
+    this.log("info", `network: listening on ${this.network.url} (${bind.label}) for API keys`);
+    if (bind.warning) this.log("warn", `network: ${bind.warning}`);
   }
 
   /**
@@ -4206,6 +4289,7 @@ export class AkouApp implements ApiApp {
       await this.quitStep("the page server", () => this.page?.stop());
       // Before the API server: no Wyoming session holds the store when the job service closes.
       await this.quitStep("the Wyoming listener", () => this.wyoming?.stop());
+      await this.quitStep("the network listener", () => this.network?.stop());
       await this.quitStep("the API server", () => this.server?.stop());
       // After the API: no request is left holding the store. A running job is queued again at start.
       await this.quitStep("the job service", () => this.jobService?.close());

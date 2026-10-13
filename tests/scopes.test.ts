@@ -41,10 +41,18 @@ const HEADERS: Record<Credential, Record<string, string>> = {
   admin: { authorization: `Bearer ${TOKEN}` },
 };
 
+/** The scopes a row names: one, or a list. */
+const named = (access: Access): readonly string[] =>
+  typeof access === "string" ? [access] : access;
+
+/** A row as the file and the table write it, to compare and to show. */
+const shown = (access: Access | undefined): string =>
+  typeof access === "string" || access === undefined ? String(access) : JSON.stringify(access);
+
 /** What the table says a credential gets: refused with 401 or 403, or let through. */
-function expected(access: Access, cred: Credential | "jobs"): 401 | 403 | "allowed" {
+function expected(access: Access, cred: Credential | "jobs" | "read"): 401 | 403 | "allowed" {
   if (access === "open" || cred === "admin") return "allowed";
-  if (cred === "jobs") return access === "admin" ? 403 : "allowed";
+  if (cred === "jobs" || cred === "read") return named(access).includes(cred) ? "allowed" : 403;
   return 401;
 }
 
@@ -62,10 +70,10 @@ function rowDrift(doc: OpenApiDoc, table: Record<string, Access>) {
 /** Rows whose access disagrees with the access the route declares in the file. */
 function accessDrift(doc: OpenApiDoc, table: Record<string, Access>): string[] {
   return operations(doc)
-    .filter((o) => table[key(o.method, o.path)] !== o.op["x-akou-access"])
+    .filter((o) => shown(table[key(o.method, o.path)]) !== shown(o.op["x-akou-access"]))
     .map(
       (o) =>
-        `${key(o.method, o.path)}: table ${table[key(o.method, o.path)]}, file ${o.op["x-akou-access"]}`,
+        `${key(o.method, o.path)}: table ${shown(table[key(o.method, o.path)])}, file ${shown(o.op["x-akou-access"])}`,
     );
 }
 
@@ -106,7 +114,7 @@ async function walk(g?: Guard): Promise<{ wrong: string[]; walked: number }> {
       // The walk's server runs in app mode, where a server-only route is an unknown path
       // (UNKNOWN_ROUTE): any key. So an open one, such as Bazarr's (SV-C3), wants a key here.
       const served = op["x-akou-modes"].includes("app");
-      const access = served ? (TABLE[key(method, path)] as Access) : "jobs";
+      const access = served ? (TABLE[key(method, path)] as Access) : (["jobs", "read"] as const);
       const url = `http://127.0.0.1:${server.port}${path.replace(/\{[^}]+\}/g, "x")}`;
       const upper = method.toUpperCase();
       const body = upper === "GET" ? undefined : "{}";
@@ -147,6 +155,9 @@ describe("[SV-T5] one table of who may call each route", () => {
     const cfg = doc.paths["/v1/config"]?.patch;
     if (cfg) cfg["x-akou-access"] = "jobs";
     expect(accessDrift(doc, TABLE)).toEqual(["PATCH /v1/config: table admin, file jobs"]);
+    // And so does one that opens itself to `read` keys, as a list.
+    if (cfg) cfg["x-akou-access"] = ["read"];
+    expect(accessDrift(doc, TABLE)).toEqual(['PATCH /v1/config: table admin, file ["read"]']);
   });
 
   test("the jobs column is exactly the served ?scope=jobs view, compatibility routes, the WebSocket and the file aside", () => {

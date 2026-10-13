@@ -505,6 +505,12 @@ function waitParam(c: RoutedContext<ApiApp>): number {
 /** Every job route: any key in server mode, the one token in the desktop app. */
 const JOB_ROUTE = { access: "jobs", modes: ["app", "server"] } as const satisfies Partial<RouteDoc>;
 
+/** The job reads: a `jobs` key reads its own jobs, a `read` key every key's (as an admin does). */
+const JOB_READ = {
+  ...JOB_ROUTE,
+  access: ["jobs", "read"],
+} as const satisfies Partial<RouteDoc>;
+
 export function jobRoutes(r: Router<ApiApp>): void {
   r.add(
     "POST",
@@ -555,8 +561,8 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.list",
-      doc: "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
-      ...JOB_ROUTE,
+      doc: "The key's jobs, newest first (an admin or a `read` key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
+      ...JOB_READ,
       query: {
         status: { type: "string", values: JOB_STATES, doc: "Only jobs in this state." },
         q: {
@@ -565,7 +571,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
         },
         key: {
           type: "string",
-          doc: "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
+          doc: "Only the jobs of this key id. A key that is neither admin nor `read` sees its own jobs only.",
         },
         cursor: {
           type: "integer",
@@ -609,7 +615,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     {
       id: "jobs.get",
       doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s. A job running here answers `progress`: `stage` (`decode`, `diarize` or `transcribe`), `done_s` (how much of the work is done, in seconds of `total_s`; with several engines, every engine's pass over the file counts) and `total_s`; a done one answers `timings`, the wall seconds of each stage. akou keeps a job, its result and its events for `server.retain_days` (`retain_days` in `GET /v1/server`, default 7) from its creation; after that, or after a delete, the job's id answers 410 `gone` with `retain_days` in the body, and an id the server never held for this key answers 404.",
-      ...JOB_ROUTE,
+      ...JOB_READ,
       params: { id: JOB_ID },
       query: { wait: WAIT },
       ok: 200,
@@ -653,7 +659,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     {
       id: "jobs.result",
       doc: "The transcript of a done job: text, words with times and confidences, segments with speakers and times, and the engines that made it. `words` is every word in order as `{w, s, e, c}`: `s` and `e` are seconds into the file, null from an engine that gives no word times (Qwen on `best`); `c` is the word's confidence in 0..1 (clamped into it), null from one that gives none. `confidence` is the mean of the words' `c`, else the engine's own for the text, else null. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. `speakers` is `{asked, labelled, error}`: whether the job asked, whether the segments carry labels, and why the speaker model failed, else null; `warnings` says it in words; `skipped` lists `{s, e, reason}` for each span the engine refused even at 20 s, whose words are missing. `note` is `no_speech` when the file is silent or the VAD heard no speech in it: the text is empty on purpose and no model ran; absent otherwise. `format` picks `json` (this shape), `verbose_json` (the OpenAI shape), `text`, `srt` or `vtt` (cues of at most 42 characters from the timed words, else the segments). 409 `not_done` before the job is done; 410 `gone` once the job was deleted or passed `server.retain_days`.",
-      ...JOB_ROUTE,
+      ...JOB_READ,
       params: { id: JOB_ID },
       query: {
         format: {
@@ -686,7 +692,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     {
       id: "jobs.audio",
       doc: "The audio a job was submitted with, byte for byte, when it was submitted with `keep_audio=true`; honours `Range`. The content type follows the file (`audio/ogg` for Ogg Opus). 409 `not_kept` for a job that kept none: its upload was deleted when it ended; 410 `gone` when a kept file is no longer on disk. A kept job and its audio stay until `DELETE /v1/jobs/{id}`, whatever `server.retain_days` says.",
-      ...JOB_ROUTE,
+      ...JOB_READ,
       params: { id: JOB_ID },
       ok: 200,
       type: "audio",
