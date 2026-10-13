@@ -78,6 +78,7 @@ test("every command the app writes is the fixture's line, which the Rust helper 
     { type: "record_keys", on: true },
     { type: "pause_media", on: true },
     { type: "meter", on: true },
+    { type: "ask_accessibility" },
     { type: "stop" },
   ];
   expect(commands.map((c) => encodeCommand(c).trimEnd())).toEqual(read("app-lines.jsonl"));

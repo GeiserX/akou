@@ -12,8 +12,9 @@ import type { Page } from "playwright-core";
 import { hotkeyLabel } from "../../src/main/window/hotkey.ts";
 import { pillRpc } from "../../src/main/window/pill.ts";
 import { PILL_SIZE } from "../../src/main/window/shell.ts";
+import { A11Y_POLL_MS } from "../../src/ui/dictation-page.ts";
 import { FN_TEST_MS, NO_FN, NO_HELPER } from "../../src/ui/dictation-recorder.ts";
-import type { PillState } from "../../src/ui/pill-protocol.ts";
+import { A11Y_OFF, A11Y_STALE, type PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
   UI_TIMEOUT,
@@ -26,11 +27,15 @@ import {
 } from "./rig.ts";
 
 /** The notice the main side sends for `reason`, its words exactly as the app has them. */
-function realNotice(reason: "grant-lost" | "secure-input", hotkey: string): PillState {
+function realNotice(
+  reason: "grant-lost" | "grant-denied" | "secure-input",
+  hotkey: string,
+): PillState {
   let fn: ((m: { kind: string; name?: string; on?: boolean }) => void) | null = null;
+  const accessibility = reason === "grant-denied" ? "denied" : "granted";
   const p = pillRpc(
     {
-      status: () => ({ state: "idle", loading: false, swallow_keys: true }),
+      status: () => ({ state: "idle", loading: false, swallow_keys: true, accessibility }),
       follow: (f) => {
         fn = f as typeof fn;
         return () => {};
@@ -50,11 +55,13 @@ function realNotice(reason: "grant-lost" | "secure-input", hotkey: string): Pill
     },
   );
   const tell = fn as unknown as (m: { kind: string; name?: string; on?: boolean }) => void;
-  tell(
-    reason === "grant-lost"
-      ? { kind: "grant-lost", name: "accessibility" }
-      : { kind: "secure-input", on: true },
-  );
+  if (reason === "grant-denied") p.update();
+  else
+    tell(
+      reason === "grant-lost"
+        ? { kind: "grant-lost", name: "accessibility" }
+        : { kind: "secure-input", on: true },
+    );
   const shown = p.shown();
   p.close();
   return shown;
@@ -86,6 +93,7 @@ describe("DC-N1, DC-A2: the pill's notice sheet", () => {
       await p.setViewportSize(PILL_SIZE);
       for (const [reason, hotkey] of [
         ["grant-lost", "RightCommand"],
+        ["grant-denied", "RightCommand"],
         ["secure-input", "Command+Shift+D"],
       ] as const) {
         const s = realNotice(reason, hotkey);
@@ -245,6 +253,78 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
         );
       } finally {
         await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[T4.36] dictation on with Accessibility denied: a line at the top says it is off, with the pane's button and the stale-row recovery, until the grant arrives",
+    async () => {
+      const grants: { mic: "granted"; accessibility: "denied" | "granted" } = {
+        mic: "granted",
+        accessibility: "denied",
+      };
+      const w = await windowPage(rig, {
+        platform: "darwin",
+        grants,
+        settings: { "dictation.enabled": true },
+      });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-a11y-off");
+        expect(await text(p, "#dictation-a11y-off .pg-name")).toBe(A11Y_OFF);
+        expect(await text(p, "#dictation-a11y-off .pg-help")).toBe(A11Y_STALE);
+        // Above every panel of the page.
+        expect(
+          await p.$eval(
+            "#page-dictation section.pg-section",
+            (e) => e.querySelector("#dictation-a11y-off") !== null,
+          ),
+        ).toBe(true);
+        w.requests.length = 0;
+        await p.click("#dictation-a11y-off-open");
+        await until(
+          () => w.requests.some((r) => r.name === "openSettingsPane"),
+          5000,
+          "the pane asked for",
+        );
+        expect(w.requests.find((r) => r.name === "openSettingsPane")?.params).toEqual({
+          pane: "accessibility",
+        });
+        // The user turns akou on in System Settings: the page reads it again and the line goes.
+        grants.accessibility = "granted";
+        await p.waitForSelector("#dictation-a11y-off", {
+          state: "detached",
+          timeout: A11Y_POLL_MS * 3,
+        });
+      } finally {
+        await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[T4.36] mutated control: the grant given, or dictation off, shows no line",
+    async () => {
+      for (const o of [
+        {
+          grants: { mic: "granted", accessibility: "granted" },
+          settings: { "dictation.enabled": true },
+        },
+        { grants: { mic: "granted", accessibility: "denied" }, settings: {} },
+      ] as const) {
+        const w = await windowPage(rig, { platform: "darwin", ...o });
+        try {
+          const p = w.page;
+          await p.click("#dictation-open");
+          await p.waitForSelector("#dictation-grant-accessibility");
+          expect(await p.locator("#dictation-a11y-off").count()).toBe(0);
+        } finally {
+          await w.close();
+        }
       }
     },
     UI_TIMEOUT,

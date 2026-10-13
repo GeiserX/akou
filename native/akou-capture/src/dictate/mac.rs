@@ -4,8 +4,10 @@
 //! - **Grant.** The Accessibility grant belongs to the app bundle macOS holds responsible for this
 //!   process, which is the akou app that spawned it; a grant on the helper's own path does nothing
 //!   (docs/gates/dc-k1-accessibility-grant.md). The helper asks the non-prompting
-//!   `AXIsProcessTrusted` only; nothing here can show a permission dialog except opening the
-//!   microphone, which is the app's own first-use prompt.
+//!   `AXIsProcessTrusted`, except on the app's `ask_accessibility` (T4.36), which the app sends at
+//!   most once per install while dictation is on and the grant is denied: then the prompting call
+//!   shows macOS's dialog and lists akou in the pane. Opening the microphone is the only other
+//!   dialog, the app's own first-use prompt.
 //! - **The tap** is an active `CGEventTap` at the head of the session, on its own thread with its
 //!   own run loop. Its callback names the key (`mac_keys`), asks `tap::Gate` whether to swallow,
 //!   and returns: nothing else runs there. When macOS disables it (`TapDisabledByTimeout`,
@@ -49,7 +51,10 @@ use std::time::Duration;
 use objc2::msg_send;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject};
-use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
+use objc2_application_services::{
+    AXError, AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElement, AXValue, AXValueType,
+    kAXTrustedCheckOptionPrompt,
+};
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFNumber, CFPreferencesAppSynchronize,
     CFPreferencesCopyAppValue, CFPreferencesSetAppValue, CFRange, CFRetained, CFRunLoop, CFString,
@@ -99,10 +104,21 @@ unsafe extern "C" {}
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {}
 
-/// The non-prompting trust check (never `AXIsProcessTrustedWithOptions` with the prompt).
+/// The non-prompting trust check, which every read here uses.
 pub fn trusted() -> bool {
     // SAFETY: a query with no arguments.
     unsafe { AXIsProcessTrusted() }
+}
+
+/// The one prompting call (T4.36): macOS shows its Accessibility dialog and lists akou in the
+/// pane, off, so the user has a switch to turn on. Only on the app's `ask_accessibility`, which it
+/// sends at most once per install; the dialog comes asynchronously and the answer is ignored.
+fn ask_trust() {
+    // SAFETY: a static CFString key and a CFBoolean value, the types the function documents.
+    let key: &CFString = unsafe { kAXTrustedCheckOptionPrompt };
+    let opts = CFDictionary::<CFString, CFBoolean>::from_slices(&[key], &[CFBoolean::new(true)]);
+    // SAFETY: a dictionary of the documented key and value types.
+    let _ = unsafe { AXIsProcessTrustedWithOptions(Some(opts.as_opaque())) };
 }
 
 /// The microphone grant without asking (DC-N3).
@@ -430,6 +446,10 @@ impl Targets for Screen {
 
     fn trusted(&mut self) -> bool {
         trusted()
+    }
+
+    fn ask_trust(&mut self) {
+        ask_trust();
     }
 }
 

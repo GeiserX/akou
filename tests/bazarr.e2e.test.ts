@@ -17,7 +17,7 @@ import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { monoWav } from "./fixtures/audio.ts";
+import { monoWav, roomNoise } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
 import { clip, newKey, SERVER, submit } from "./server-helpers.ts";
@@ -119,6 +119,22 @@ describe("[SV-C3] Bazarr's /asr on a server with server.bazarr on", () => {
     // The job ran as Bazarr's stand-in, and is gone with its upload once the answer was sent.
     expect(created(rig).at(-1)).toEndWith(" key bazarr");
     expect(uploads(rig)).toEqual([]);
+  });
+
+  test("[T4.37] a track of room noise gets a 200 and an empty subtitle, never an invented cue", async () => {
+    const r = await bazarr(
+      rig,
+      "/asr?task=transcribe&language=en&output=srt&encode=false",
+      pcm(roomNoise(10)),
+    );
+    expect([r.status, r.text.trim()]).toEqual([200, ""]);
+    // Positive control: the same request with speech in it has a cue.
+    const said = await bazarr(
+      rig,
+      "/asr?task=transcribe&language=en&output=srt&encode=false",
+      LATE,
+    );
+    expect(srtCues(said.text).length).toBeGreaterThan(0);
   });
 
   test("[SV-C3] red controls: the SRT check fails on a JSON refusal; a part with no filename is no file", async () => {
@@ -265,6 +281,19 @@ describe("[SV-C3] /detect-language", () => {
     // The job decoded at most 30 s: 480 000 samples, not the 640 000 sent.
     expect(decoded.at(-1)).toBe(DETECT_PCM_BYTES / 2);
     expect(uploads(rig)).toEqual([]);
+  });
+
+  test("[T4.37] no speech in the first 30 s: 200 and unknown, never an invented language", async () => {
+    // Room noise for the first 30 s, then speech the detection never reads.
+    const track = pcm(concat(roomNoise(30), speak(["hello", "world"]), silence(5)));
+    const r = await bazarr(rig, "/detect-language?encode=false", track);
+    expect(`${r.status} ${r.text}`).toStartWith("200 ");
+    expect(JSON.parse(r.text)).toEqual({
+      detected_language: "unknown",
+      language_code: "und",
+      confidence: null,
+    });
+    expect(decoded.at(-1)).toBe(DETECT_PCM_BYTES / 2);
   });
 });
 

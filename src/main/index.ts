@@ -1263,8 +1263,10 @@ export class AkouApp implements ApiApp {
     this.log(level, msg);
   }
 
-  private log(level: "info" | "warn" | "error", msg: string): void {
+  private log(level: "debug" | "info" | "warn" | "error", msg: string): void {
     this.appLog?.line(level, msg);
+    // A debug line (a job guard's, SV-R5) is for the log file only, never a terminal or a host.
+    if (level === "debug") return;
     if (this.o.onLog) this.o.onLog(level, msg);
     // With app.log on, a line goes to the terminal only when there is one: launched by the CLI,
     // stderr is `launch.log`, which the CLI rotates only at a launch and must not grow for days.

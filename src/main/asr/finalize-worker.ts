@@ -1553,6 +1553,160 @@ export async function finalizeCall(
 /** Speech found by the VAD is kept with this much audio around it; the rest is trimmed (SV-R5). */
 export const JOB_TRIM_PAD_SECONDS = 0.5;
 
+/** A job's log takes `debug` too: a guard's line, which names times and counts, never text. */
+export type JobLogLevel = "debug" | "info" | "warn" | "error";
+
+/**
+ * The repeat-loop guard (SV-R5, TRAPS [T4.37]): a phrase of at most `LOOP_MAX_WORDS` words said
+ * over and over is a decoder stuck in a loop, the way Qwen3-ASR answers noise ("the the the ...").
+ * Speech repeats short phrases too ("No, no, no, no, no!", "Go! Go! Go!", 哈哈哈哈哈), so a phrase
+ * of one or two words is a loop only at `LOOP_MIN_REPEATS_SHORT` in a row, and one of three or four
+ * at `LOOP_MIN_REPEATS`. A real loop runs for dozens.
+ */
+export const LOOP_MAX_WORDS = 4;
+export const LOOP_MIN_REPEATS_SHORT = 8;
+export const LOOP_MIN_REPEATS = 5;
+
+/** Repeats in a row that make a loop of a phrase of `n` words. */
+export function loopMinRepeats(n: number): number {
+  return n <= 2 ? LOOP_MIN_REPEATS_SHORT : LOOP_MIN_REPEATS;
+}
+
+/** A word of the loop guard: a run of letters, or one Han or kana character (no spaces there). */
+const LOOP_TOKEN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+/gu;
+
+function loopNorm(w: string): string {
+  return w.toLowerCase().replace(/[\p{P}\p{S}]/gu, "");
+}
+
+/**
+ * The repeats of every loop in `words`, as `[from, to)` index ranges to remove: each loop keeps its
+ * phrase once, and the words before and after it stay. Words compare in lower case without
+ * punctuation, and a word that is punctuation alone ("-", "。") is passed over, so 谢谢观看。
+ * said over and over is a phrase of four words and "well - - - - fine" holds none.
+ */
+export function loopRuns(words: readonly string[]): { from: number; to: number }[] {
+  const at: number[] = [];
+  const w: string[] = [];
+  for (const [i, x] of words.entries()) {
+    const n = loopNorm(x);
+    if (n === "") continue;
+    at.push(i);
+    w.push(n);
+  }
+  const runs: { from: number; to: number }[] = [];
+  let i = 0;
+  next: while (i < w.length) {
+    for (let n = 1; n <= LOOP_MAX_WORDS; n++) {
+      const need = loopMinRepeats(n);
+      if (i + n * need > w.length) continue;
+      let reps = 1;
+      while (i + (reps + 1) * n <= w.length) {
+        let same = true;
+        for (let k = 0; k < n && same; k++) same = w[i + k] === w[i + reps * n + k];
+        if (!same) break;
+        reps++;
+      }
+      if (reps >= need) {
+        runs.push({
+          from: (at[i + n - 1] as number) + 1,
+          to: (at[i + reps * n - 1] as number) + 1,
+        });
+        i += reps * n;
+        continue next;
+      }
+    }
+    i++;
+  }
+  return runs;
+}
+
+/**
+ * Words as they read once the character ranges `cuts` (sorted) are taken out of `text`, or null
+ * when a word is not in `text`.
+ */
+function wordsAfterCuts(
+  text: string,
+  words: readonly WordHyp[],
+  cuts: readonly { a: number; b: number }[],
+): WordHyp[] | null {
+  const out: WordHyp[] = [];
+  let at = 0;
+  for (const w of words) {
+    const s = text.indexOf(w.w, at);
+    if (s < 0) return null;
+    const e = s + w.w.length;
+    at = e;
+    let kept = "";
+    let pos = s;
+    for (const c of cuts) {
+      if (c.b <= pos || c.a >= e) continue;
+      kept += text.slice(pos, Math.max(pos, c.a));
+      pos = Math.max(pos, c.b);
+    }
+    if (pos < e) kept += text.slice(pos, e);
+    const piece = kept.trim();
+    if (piece === "") continue;
+    const prev = out.at(-1);
+    // Punctuation left of a cut word ("the." of a loop's last repeat) ends the word before it: a
+    // word of its own would carry the removed repeat's times into a word-built cue.
+    if (piece !== w.w && loopNorm(piece) === "" && prev) {
+      out[out.length - 1] = { ...prev, w: prev.w + piece };
+      continue;
+    }
+    out.push(piece === w.w ? w : { ...w, w: piece });
+  }
+  return out;
+}
+
+function loopWords(text: string): number {
+  return [...text.matchAll(LOOP_TOKEN)].filter((m) => loopNorm(m[0]) !== "").length;
+}
+
+/**
+ * A hypothesis with every loop spliced out (`loopRuns`), or null when nothing loops. The text keeps
+ * each looped phrase once and everything around it, with its own spacing. The words lose the same
+ * characters as the text, so a whitespace-split word holding a Han loop is cut too; words that
+ * cannot be found in the text are matched on their own. `from` and `to` count the text's words.
+ */
+export function cutLoop(h: Hypothesis): { h: Hypothesis; from: number; to: number } | null {
+  const toks = [...h.text.matchAll(LOOP_TOKEN)];
+  const runs = loopRuns(toks.map((m) => m[0]));
+  const dropWords = (): WordHyp[] | null => {
+    const wr = loopRuns(h.words.map((x) => x.w));
+    if (wr.length === 0) return null;
+    return h.words.filter((_, i) => !wr.some((r) => i >= r.from && i < r.to));
+  };
+  const end = (m: RegExpMatchArray) => (m.index as number) + m[0].length;
+  if (runs.length === 0) {
+    const words = dropWords();
+    if (!words) return null;
+    return { h: { ...h, words }, from: h.words.length, to: words.length };
+  }
+  // A loop's last saying may carry the sentence's end ("the the the."): kept when the phrase kept
+  // has no punctuation of its own.
+  const cuts = runs.map((r) => {
+    const last = toks[r.to - 1] as RegExpMatchArray;
+    const tail = /[\p{P}\p{S}]+$/u.exec(last[0])?.[0] ?? "";
+    const kept = (toks[r.from - 1] as RegExpMatchArray)[0];
+    const keepTail = tail !== "" && !/[\p{P}\p{S}]$/u.test(kept);
+    return {
+      a: end(toks[r.from - 1] as RegExpMatchArray),
+      b: end(last) - (keepTail ? tail.length : 0),
+    };
+  });
+  let text = "";
+  let pos = 0;
+  for (const c of cuts) {
+    text += h.text.slice(pos, c.a);
+    pos = c.b;
+  }
+  text += h.text.slice(pos);
+  const words = wordsAfterCuts(h.text, h.words, cuts) ?? dropWords() ?? h.words;
+  return { h: { ...h, text, words }, from: loopWords(h.text), to: loopWords(text) };
+}
+
 export interface JobPassInput {
   /** 16 kHz mono. */
   samples: Float32Array;
@@ -1640,6 +1794,11 @@ export interface JobPassResult {
   /** The speaker model ran and answered: false when it failed, or the file had no speech for it. */
   diarized: boolean;
   /**
+   * `no_speech`: the file is silent, or the VAD heard no speech in it, so no model ran and the
+   * text is empty on purpose (SV-R5). Absent otherwise.
+   */
+  note?: "no_speech";
+  /**
    * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
    * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
    * With several engines, the VAD and every engine's decode time, summed.
@@ -1668,16 +1827,25 @@ export interface FusionPass {
 /**
  * The final pass over one channel. The same rules as a call's channel: energy before any model
  * loads, VAD cut points, pieces over the whole timeline, `prepareSpan`, and the halving of a span
- * the engine refuses. Two rules are the job's own (SV-R5): a file in which the VAD finds no speech
- * at all is not decoded, and the audio before the first and after the last speech the VAD finds
- * (less `JOB_TRIM_PAD_SECONDS`) is trimmed, so an engine never sees room noise on its own and
- * cannot invent a sentence from it. Inside the speech the whole-timeline rule holds, so a word the
- * VAD missed between two runs of speech is still decoded.
+ * the engine refuses. The rules that are the job's own (SV-R5, TRAPS [T4.37]):
+ *
+ * - A file in which the VAD finds no speech at all loads no model and is not decoded: it is done
+ *   with empty text and `note: no_speech`.
+ * - The audio before the first and after the last speech the VAD finds (less
+ *   `JOB_TRIM_PAD_SECONDS`) is trimmed, so an engine never sees room noise on its own and cannot
+ *   invent a sentence from it. The segment times stay in the file's clock.
+ * - A piece in which the VAD heard no speech is never decoded. Inside the speech the
+ *   whole-timeline rule holds, so a word the VAD missed between two runs of speech is still
+ *   decoded.
+ * - A decoded piece that says one short phrase over and over keeps it once and the words after
+ *   it (`cutLoop`).
+ *
+ * Each piece left undecoded and each loop cut is one `debug` line with its times, never its text.
  */
 export async function runJobPass(
   input: JobPassInput,
   models: ModelSet,
-  log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
+  log: (level: JobLogLevel, msg: string) => void = () => {},
   engine?: FinalEngine | FusionPass,
 ): Promise<JobPassResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
@@ -1702,7 +1870,19 @@ export async function runJobPass(
     speakers: { asked: input.diarize, labelled: false, error: null },
     diarized: false,
   };
-  if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
+  if (peak(x) < 10 ** (o.silenceDbfs / 20)) return { ...empty, note: "no_speech" };
+  // Until the pass has run, the model is the fused id over the whole list.
+  const ids = fusion ? fusion.engines.map((e) => e.id) : [one ? one.id : models.recognizerModel];
+  let modelId = ids.length > 1 ? fusionModelId(fusion?.fuser ?? "first", ids) : (ids[0] as string);
+  // The VAD before anything else loads: a file with no speech costs no recognizer and no engine.
+  const vadFrom = performance.now();
+  const { flags, window } = speechFlags(x, models);
+  const vadS = (performance.now() - vadFrom) / 1000;
+  const first = flags.indexOf(true);
+  if (first < 0) {
+    log("debug", `no-speech guard: the VAD heard no speech in ${duration_s} s, nothing decoded`);
+    return { ...empty, model: modelId, note: "no_speech" };
+  }
   // With an engine the model set's recognizer is never prepared, so it never loads; in a fusion
   // list it loads in its own turn.
   const hw = engine ? null : models.prepare(input.decode);
@@ -1710,19 +1890,8 @@ export async function runJobPass(
   const engines: readonly FinalEngine[] = fusion
     ? fusion.engines
     : [one ?? hotwordEngine(hw as PreparedHotwords)];
-  // Until the pass has run, the model is the fused id over the whole list.
-  let modelId =
-    engines.length > 1
-      ? fusionModelId(
-          fusion?.fuser ?? "first",
-          engines.map((e) => e.id),
-        )
-      : (engines[0] as FinalEngine).id;
-  const vadFrom = performance.now();
-  const { flags, window } = speechFlags(x, models);
-  const vadS = (performance.now() - vadFrom) / 1000;
-  const first = flags.indexOf(true);
-  if (first < 0) return { ...empty, model: modelId };
+  // The loaded recognizer's own name, as the lines of a call take it.
+  if (hw) modelId = hw.recognizer.model;
   const last = flags.lastIndexOf(true);
   const pad = Math.round((JOB_TRIM_PAD_SECONDS * ASR_RATE) / window);
   const w0 = Math.max(0, first - pad);
@@ -1760,9 +1929,19 @@ export async function runJobPass(
   // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
   // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a word
   // there that the plain run does not have.
-  const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) =>
-    heardSpeech.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true),
-  );
+  const at = (n: number) => round3((from + n) / ASR_RATE);
+  const pieces = timelinePieces(samples, kept, window, o, spans, heardSpeech).filter((piece) => {
+    const speech = heardSpeech
+      .slice(Math.floor(piece.from / window), Math.ceil(piece.to / window))
+      .includes(true);
+    if (!speech) {
+      log(
+        "debug",
+        `no-speech guard: ${at(piece.from)}-${at(piece.to)} s left undecoded, the VAD heard no speech there`,
+      );
+    }
+    return speech;
+  });
   const pass = await runEngines(
     engines,
     pieces.map((p) => ({ samples, from: p.from, to: p.to })),
@@ -1792,14 +1971,22 @@ export async function runJobPass(
     });
   }
   for (const [u, piece] of pieces.entries()) {
-    const r = pass.hyps[u] as Hypothesis;
+    let r = pass.hyps[u] as Hypothesis;
+    const loop = cutLoop(r);
+    if (loop) {
+      log(
+        "debug",
+        `loop guard: ${at(piece.from)}-${at(piece.to)} s repeats a phrase, its repeats spliced out (${loop.from} words to ${loop.to})`,
+      );
+      r = loop.h;
+    }
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
     for (const w of r.words) words.push(jobWord(w, offset));
     if (r.conf !== undefined) unitConfs.push(r.conf);
     segments.push({
-      s: round3((from + piece.from) / ASR_RATE),
-      e: round3((from + piece.to) / ASR_RATE),
+      s: at(piece.from),
+      e: at(piece.to),
       text: r.text,
       // A job's piece outside every turn takes the nearest turn's speaker, never `s?`, a label a
       // client would read as one more speaker (SV-J4); no turns at all is no labels.
@@ -1873,7 +2060,7 @@ type ToJob = {
 };
 
 type FromJob =
-  | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | { type: "log"; level: JobLogLevel; msg: string }
   | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
@@ -1955,7 +2142,7 @@ async function fusionEngines(
   spec: FusionSpec,
   models: ModelSet,
   decode: DecodeList | null,
-  reply: (r: Extract<FromJob, { type: "log" | "child" }>) => void,
+  reply: (r: Extract<FromFinal, { type: "log" | "child" }>) => void,
 ): Promise<FinalEngine[]> {
   const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
   const out: FinalEngine[] = [];
@@ -2078,7 +2265,7 @@ export class JobWorker {
 
   constructor(
     private readonly models: ModelSpec,
-    private readonly onLog?: (level: "info" | "warn" | "error", msg: string) => void,
+    private readonly onLog?: (level: JobLogLevel, msg: string) => void,
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {

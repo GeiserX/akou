@@ -29,7 +29,7 @@ docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:1.1.0 
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
 
-`best` is the other preset with an engine: Qwen3-ASR-1.7B, run by llama.cpp's `llama-server`, with the same speaker models when a job asks for speakers. `models pull best` fetches Qwen (2.5 GB), the llama-server build for this machine and the speaker models, and leaves Parakeet out. Without the pull, the first `best` job fetches them. See [The best preset](server-hardware.md#the-best-preset) for where it runs fast.
+`best` is the other preset with an engine: Qwen3-ASR-1.7B, run by llama.cpp's `llama-server`, with the same speaker models when a job asks for speakers. `models pull best` fetches Qwen (2.5 GB), the llama-server build for this machine and the speaker models, and leaves Parakeet out. Without the pull, the first `best` job fetches them. A model stays loaded for 10 minutes after its last job, so a run of jobs loads it once, and then its memory comes back; `server.model_idle_minutes` sets that time, and 0 lets it go once no queued job needs it. See [The best preset](server-hardware.md#the-best-preset) for where it runs fast.
 
 Inside a container akou listens on every address, and it refuses to start that way (exit 78) until you say a reverse proxy with TLS is in front of it, because akou has no TLS of its own. Say it with `AKOU_BEHIND_PROXY=true`, which sets `server.behind_proxy`, and publish the port on this machine's loopback only, for the proxy to reach:
 
@@ -147,7 +147,7 @@ In Bazarr, under Settings, Providers, Whisper, set the endpoint to **`http://ako
 
 Bazarr sends `Host: akou:8476`. akou accepts that with `server.behind_proxy` on, as the container above has it, while `server.public_host` is empty. With `server.public_host` set to your proxy's name, other names get `403 bad_host`: set it to `akou:8476` instead, or point Bazarr at the public name.
 
-Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
+Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A track with no speech, or a stretch of one, gets no cue: akou returns an empty subtitle rather than inventing a sentence from the noise. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
 
 Three things do not work, on purpose:
 

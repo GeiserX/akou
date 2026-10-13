@@ -1476,15 +1476,24 @@ describe("SV-R5: silence through every preset", () => {
   const noise = monoWav(roomNoise(10));
 
   for (const preset of ["fast", "auto"]) {
-    test(`ten seconds of room noise through ${preset} return empty text, done`, async () => {
+    test(`[T4.37] ten seconds of room noise through ${preset} return empty text, done, no_speech`, async () => {
       const k = await newKey(server, `r5-${preset}`);
       const { job, result } = await transcribe(server, k.key, noise, { preset });
       expect(job.status).toBe("done");
       expect(result.text).toBe("");
       expect(result.segments).toEqual([]);
+      expect(result.note).toBe("no_speech");
+      expect(RESULT.safeParse(result).error?.issues ?? []).toEqual([]);
       expect(result.duration_s).toBe(10);
     });
   }
+
+  test("[T4.37] a file with speech carries no note", async () => {
+    const k = await newKey(server, "r5-speech");
+    const { result } = await transcribe(server, k.key, NOTE, { preset: "fast" });
+    expect(result.text).not.toBe("");
+    expect(result.note).toBeUndefined();
+  });
 });
 
 describe("SV-D1: transcribing a file is a product feature", () => {

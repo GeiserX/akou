@@ -56,6 +56,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["none", "Nothing, the matching parts only"],
     ],
   },
+  "agent.summary_every_minutes": {
+    label: "An agent following a call sums it up every",
+    help: "Claude Code or Codex never posts a summary more often. 0: no summaries.",
+    unit: "minutes",
+  },
   "memo.provider": {
     label: "Rolling memo during a call",
     help: "Automatic is on for an API and off for Claude Code, so your subscription never runs on its own.",

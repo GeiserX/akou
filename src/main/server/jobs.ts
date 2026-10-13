@@ -38,6 +38,7 @@ import type { Identity } from "../api/access.ts";
 import { DecodeError } from "../asr/decode.ts";
 import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
 import {
+  type JobLogLevel,
   type JobPassResult,
   type JobProgress,
   type JobTimings,
@@ -92,7 +93,7 @@ export { DAY_MS };
 export const MAX_JOB_STARTS = 2;
 
 /** `server.model_idle_minutes`' default: an idle Worker keeps its models this long. */
-export const MODEL_IDLE_MINUTES = 60;
+export const MODEL_IDLE_MINUTES = 10;
 /**
  * How many times a queued job may be passed over for a job of its priority on a model an idle
  * Worker holds, so a steady stream on one model never starves a job on another.
@@ -236,7 +237,8 @@ export interface JobServiceOptions {
   decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
   now?: () => number;
-  log(level: "info" | "warn" | "error", msg: string): void;
+  /** The server's log; `debug` is a job guard's line (SV-R5), for the log file only. */
+  log(level: JobLogLevel, msg: string): void;
 }
 
 /**
@@ -364,6 +366,8 @@ export function jobResult(
     skipped: pass.skipped.map((x) => ({ s: x.s, e: x.e, reason: x.error })),
     speakers: pass.speakers,
     warnings: jobWarnings(pass),
+    // The text is empty on purpose: the file is silent or the VAD heard no speech (SV-R5).
+    ...(pass.note ? { note: pass.note } : {}),
     metadata: job.metadata,
     // Wall seconds per stage (akou-5an.115): reading the file, speaker labels, transcribing.
     ...(timings ? { timings } : {}),

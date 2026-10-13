@@ -113,7 +113,13 @@ const MAIN: Layout = [
   },
   {
     title: "Notes and AI",
-    items: ["provider.kind", ASSISTANT_USE, "memo.provider", ">assistant"],
+    items: [
+      "provider.kind",
+      ASSISTANT_USE,
+      "memo.provider",
+      "agent.summary_every_minutes",
+      ">assistant",
+    ],
   },
   { title: "Privacy and sharing", items: ["share.bind", AFTER_CALL] },
   { title: "Advanced", items: [">speech", ">capture", ">words", ">export", ">server", ">other"] },

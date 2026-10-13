@@ -138,7 +138,7 @@ describe("akou-5an.104: the model stays loaded between jobs, then lets go", () =
     ]);
   });
 
-  test("after server.model_idle_minutes with no job the Worker and its llama-server go", async () => {
+  test("after server.model_idle_minutes (default 10) with no job the Worker and its llama-server go", async () => {
     const line = w.rig.logs.find((l) => / ready on port /.test(l.msg))?.msg as string;
     const pid = Number(/llama-server (\d+) ready/.exec(line)?.[1]);
     expect(pid).toBeGreaterThan(0);
@@ -154,7 +154,7 @@ describe("akou-5an.104: the model stays loaded between jobs, then lets go", () =
       return !r.stdout.toString().trim().startsWith("Z");
     };
     // Positive control: before the idle period ends, the check keeps it.
-    w.clock.t += 59 * 60_000;
+    w.clock.t += 9 * 60_000;
     w.rig.app.jobs()?.releaseIdle();
     expect(w.rig.app.jobs()?.loaded()).toEqual([QWEN_ASR]);
     expect(alive()).toBe(true);
@@ -162,7 +162,7 @@ describe("akou-5an.104: the model stays loaded between jobs, then lets go", () =
     w.rig.app.jobs()?.releaseIdle();
     expect(w.rig.app.jobs()?.loaded()).toEqual([]);
     await until(() => !alive(), 10_000, "llama-server to stop");
-    expect(w.rig.logs.some((l) => l.msg.includes(`${QWEN_ASR} unloaded after 60 min`))).toBe(true);
+    expect(w.rig.logs.some((l) => l.msg.includes(`${QWEN_ASR} unloaded after 10 min`))).toBe(true);
     // The next job loads it again.
     await ended(w, await run(w, "best"));
     expect(starts(w.log)).toBe(2);
@@ -371,5 +371,57 @@ describe("akou-5an.104: the idle timer lets the model go on its own", () => {
     } finally {
       m.close();
     }
+  });
+
+  /** A best job ended, its Worker idle, and how many times the idle timer fired after that. */
+  async function pending(m: ReturnType<typeof metalService>) {
+    await m.ended([m.add()]);
+    expect(m.svc.loaded()).toHaveLength(1);
+    const pid = Number(
+      readFileSync(m.log, "utf8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as { pid?: number })
+        .find((l) => l.pid)?.pid,
+    );
+    expect(pid).toBeGreaterThan(0);
+    const fired = { n: 0 };
+    // The timer calls the instance's releaseIdle, so this counts every time it fires.
+    m.svc.releaseIdle = () => {
+      fired.n++;
+    };
+    return { pid, fired };
+  }
+
+  test("positive control: with the service open, the pending idle timer fires", async () => {
+    const m = metalService({ modelIdleMinutes: 0.05 });
+    try {
+      const { fired } = await pending(m);
+      await until(() => fired.n > 0, 10_000, "the idle timer to fire");
+    } finally {
+      m.close();
+    }
+  });
+
+  test("closing the service while the idle timer is pending stops llama-server, and the timer never fires", async () => {
+    const m = metalService({ modelIdleMinutes: 0.05 });
+    const { pid, fired } = await pending(m);
+    // The timer is still pending: 3 s from the job's end.
+    expect(fired.n).toBe(0);
+    m.close();
+    const alive = () => {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return false;
+      }
+      if (process.platform === "win32") return true;
+      const r = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]);
+      return !r.stdout.toString().trim().startsWith("Z");
+    };
+    await until(() => !alive(), 10_000, "llama-server to stop at close");
+    // Past the 3 s idle period: a timer left behind would have fired by now.
+    await Bun.sleep(3500);
+    expect(fired.n).toBe(0);
   });
 });
