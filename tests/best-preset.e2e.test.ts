@@ -14,7 +14,7 @@ import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { monoWav } from "./fixtures/audio.ts";
+import { monoWav, roomNoise } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { jsonLines, tempDir } from "./helpers.ts";
 import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helpers.ts";
@@ -103,6 +103,26 @@ describe("akou-5an.93: preset best", () => {
     expect(res.confidence).toBeGreaterThan(0);
     expect(res.confidence).toBeLessThanOrEqual(1);
     expect(res.speakers).toEqual({ asked: true, labelled: true, error: null });
+  });
+
+  test("[T4.37] ten seconds of room noise on best: done, empty text, no_speech, and Qwen is never asked", async () => {
+    const before = requests().length;
+    const s = await submit(rig, key.key, monoWav(roomNoise(10)), {
+      preset: "best",
+      diarize: "true",
+      language: "auto",
+    });
+    expect(s.status).toBe(202);
+    const res = await done(s.body.id);
+    expect([res.text, res.segments, res.words, res.language, res.note]).toEqual([
+      "",
+      [],
+      [],
+      null,
+      "no_speech",
+    ]);
+    expect(RESULT.safeParse(res).error?.issues ?? []).toEqual([]);
+    expect(requests().length).toBe(before);
   });
 
   test("[akou-5an.24.1] the words carry Qwen's confidences in 0..1, and no times, since Qwen gives none", async () => {

@@ -130,6 +130,8 @@ export const RESULT = z
       .object({ asked: z.boolean(), labelled: z.boolean(), error: z.string().nullable() })
       .strict(),
     warnings: z.array(z.string()),
+    // The text is empty on purpose: the file is silent or holds no speech (SV-R5).
+    note: z.literal("no_speech").optional(),
     metadata: z.unknown(),
     // Wall seconds per stage (akou-5an.115).
     timings: z
