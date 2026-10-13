@@ -13,8 +13,9 @@ import {
   fromStatusLevel,
   WARM_MIN_FREE,
 } from "../src/main/asr/start-warm.ts";
+import { SETTINGS } from "../src/main/config/schema.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
-import { until } from "./capture-helpers.ts";
+import { flush, until } from "./capture-helpers.ts";
 
 const GB = 1024 ** 3;
 
@@ -79,8 +80,21 @@ describe("the app loads the live recognizer at start", () => {
     expect(await parakeet(r)).toBe(1);
   });
 
+  test("off is the default: asked by the entry point with plenty of memory, it loads nothing", async () => {
+    expect(SETTINGS["asr.warmAtStart"].default).toBe("off");
+    const r = await appRig({ availableMemory: () => 64 * GB });
+    rig = r;
+    r.app.warmAtStart();
+    await flush();
+    expect(await parakeet(r)).toBe(0);
+    expect(r.logs.filter((l) => l.msg.includes("at start"))).toEqual([]);
+  });
+
   test("auto never loads Parakeet: with no streaming model here there is nothing to load", async () => {
-    const r = await appRig({ availableMemory: () => 8 * GB });
+    const r = await appRig({
+      availableMemory: () => 8 * GB,
+      settings: { "asr.warmAtStart": "auto" },
+    });
     rig = r;
     r.app.warmAtStart();
     await until(
@@ -92,7 +106,10 @@ describe("the app loads the live recognizer at start", () => {
   });
 
   test("with less than 4 GB available, auto loads nothing and says why", async () => {
-    const r = await appRig({ availableMemory: () => WARM_MIN_FREE / 2 });
+    const r = await appRig({
+      availableMemory: () => WARM_MIN_FREE / 2,
+      settings: { "asr.warmAtStart": "auto" },
+    });
     rig = r;
     r.app.warmAtStart();
     expect(r.logs.map((l) => l.msg)).toContain(
