@@ -66,6 +66,8 @@ try {
   });
   // Headless (the login item): the tray and the hotkey still, and no window until asked.
   await ensureShell(app);
+  // The window and the tray are up: the recognizer a call runs loads now, off this thread.
+  app.warmAtStart();
   await app.closed;
   ui.quit();
 } catch (err) {

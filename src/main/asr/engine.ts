@@ -228,6 +228,13 @@ export interface ModelSet {
    */
   prepare(list: DecodeList | null): PreparedHotwords;
   /**
+   * What `prepare` would answer for the list, without loading the recognizer, when the set can
+   * tell without it (greedy decoding takes no hotwords); null when it cannot (beam search checks
+   * the words against the loaded model's hotword file). A call whose lines come from a streaming
+   * engine records its `vocab.used` from this and loads no recognizer it does not decode on.
+   */
+  listOnly?(list: DecodeList | null): Omit<PreparedHotwords, "recognizer" | "arg"> | null;
+  /**
    * Whether the recognizer's files are here, so it can load. False when Parakeet was never
    * downloaded because no chosen setup uses it (model-set.ts): the live pass and dictation then
    * skip loading it ahead of time. Absent: always (a test's set).

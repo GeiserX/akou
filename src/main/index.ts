@@ -144,6 +144,7 @@ import {
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import { QwenEngine } from "./asr/qwen.ts";
+import { availableMemory, StartWarm, type WarmSetting } from "./asr/start-warm.ts";
 import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
@@ -439,6 +440,8 @@ export interface AppOptions {
   metalHolder?: (lockDir: string | undefined, except: number | null) => number | null;
   /** The machine's memory in GB, which `auto` reads before it runs Qwen in a call. Tests only. */
   memoryGb?: number;
+  /** Memory available now, bytes, which `asr.warmAtStart` reads. Tests only. */
+  availableMemory?: () => number;
   /** How often the in-call upgrade reviews a call's closed utterances, ms. Tests only. */
   liveReviewEveryMs?: number;
   version?: string;
@@ -717,6 +720,9 @@ export class AkouApp implements ApiApp {
   private dictationWarming = 0;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
+  /** The live models loaded at start (`asr.warmAtStart`), once the entry point asked for it. */
+  private startWarm: StartWarm | null = null;
+  private warmAsked = false;
   /**
    * Qwen's llama-server for the in-call upgrade when dictation keeps none warm, with the spec it
    * was made from. It gives way to a final pass on Metal, and stops when its call ends.
@@ -1337,7 +1343,10 @@ export class AkouApp implements ApiApp {
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
         modelIdleMinutes: () => this.cfg.settings["asr.modelIdleMinutes"],
         // What a dictation needs to start fast is loaded again; the rest waits for its next use.
-        onRelease: () => this.warmDictationModels(),
+        onRelease: () => {
+          this.startWarm?.released();
+          this.warmDictationModels();
+        },
       },
       (id) => this.manager.controller(id) as CallAccess | undefined,
     );
@@ -1346,6 +1355,8 @@ export class AkouApp implements ApiApp {
     // Dictation's models load first: the Worker runs this right after its start (DC-E7).
     this.warmDictationModels();
     if (this.runMode === "server") this.warmLive(asr);
+    // Recognizer files that landed after the entry point asked: loaded now.
+    if (this.warmAsked) this.warmAtStart();
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
@@ -2913,6 +2924,49 @@ export class AkouApp implements ApiApp {
   }
 
   /**
+   * App mode: loads the streaming model a call would run, once, so the first lines of a call never
+   * wait for it (`asr.warmAtStart`, #378), and Parakeet too with `on`. The entry point asks once
+   * the window and the tray are up. Dictation that keeps its own streaming model warm keeps it: a
+   * model set holds one, so the call's would push dictation's out. It runs on the Worker after
+   * dictation's warm-up, so nothing loads twice, and a call that starts meanwhile waits for it.
+   */
+  warmAtStart(): void {
+    this.warmAsked = true;
+    const asr = this.asr;
+    if (!asr || this.runMode !== "app" || this.quitting || this.startWarm) return;
+    this.startWarm = new StartWarm({
+      setting: () => this.cfg.settings["asr.warmAtStart"] as WarmSetting,
+      available: this.o.availableMemory ?? (() => availableMemory()),
+      load: async (recognizer) => {
+        const s = this.cfg.settings;
+        const dictationStream = s["dictation.enabled"] && s["dictation.engine"] !== "remote";
+        const choice = dictationStream ? null : chooseLiveSetup(this.liveContext()).choice;
+        const what = [choice?.engine, recognizer ? "Parakeet" : undefined].filter(Boolean);
+        if (what.length === 0) {
+          this.log(
+            "info",
+            "asr: nothing to load at start: dictation holds the streaming model, or none is downloaded",
+          );
+          return false;
+        }
+        const before = process.memoryUsage().rss;
+        const t = performance.now();
+        await asr.warmDictation(choice, recognizer);
+        const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
+        this.log(
+          "info",
+          `asr: loaded at start: ${what.join(" and ")} in ${Math.round(performance.now() - t)} ms, RSS ${gb(before)} GB before and ${gb(process.memoryUsage().rss)} GB after`,
+        );
+        return true;
+      },
+      release: (why) => this.asr?.releaseNow(`with ${why}`) ?? false,
+      clock: this.clock,
+      log: (level, msg) => this.log(level, `asr: ${msg}`),
+    });
+    this.startWarm.start();
+  }
+
+  /**
    * Server mode: the streaming model a `hello` with no language opens is loaded at start, when it
    * is on disk, so the first live session does not wait for it. Only at start: a model the Worker
    * let go of when idle loads again at the next session.
@@ -4143,6 +4197,7 @@ export class AkouApp implements ApiApp {
       await this.quitStep("the dictation cues", () => this.cuePlayer?.close());
       await this.quitStep("remote dictation", () => this.remoteDictation?.close());
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
+      this.startWarm?.stop();
       await this.quitStep("the best dictation engine", () => this.bestDictation?.stop());
       const liveQwen = this.liveQwen;
       this.liveQwen = null;
@@ -4263,6 +4318,7 @@ if (import.meta.main) {
   }
   for (const i of app.config().issues) console.error(`akou: setting refused: ${i.message}`);
   console.error(`akou ${app.version}: listening on ${app.server?.url} (pid ${process.pid})`);
+  app.warmAtStart();
   // ElectroBun's main script swallows these; in a plain Bun process they take the same quit path.
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
   await app.closed;

@@ -149,6 +149,15 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Frees their memory when no call or dictation used them. Dictation's own model loads back.",
     unit: "idle minutes",
   },
+  "asr.warmAtStart": {
+    label: "Load the live models at start",
+    help: "Holds the live model in memory between calls, about 1.9 GB. Leave it off unless it loads slowly here.",
+    choices: [
+      ["auto", "The live model, with 4 GB free"],
+      ["on", "The live model and Parakeet"],
+      ["off", "Nothing"],
+    ],
+  },
   "asr.segmentPause": {
     label: "Pause that ends a live line",
     help: "Must be shorter than the longest live line.",

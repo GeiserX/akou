@@ -525,6 +525,12 @@ export class FakeModels implements ModelSet {
     if (m === this.recognizerModel) busyWait(this.o.loadMs ?? 0);
   }
 
+  listOnly(list: DecodeList | null): Omit<PreparedHotwords, "recognizer" | "arg"> | null {
+    if (!this.o.greedy) return null;
+    const warnings = list?.entries.length ? [GREEDY_NO_HOTWORDS] : [];
+    return { entries: [], dropped: [], warnings, checks: [] };
+  }
+
   prepare(list: DecodeList | null): PreparedHotwords {
     if (this.o.greedy) {
       if (!this.rec) {

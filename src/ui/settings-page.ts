@@ -169,7 +169,10 @@ const SUBS: Record<string, SubPage> = {
       },
       { title: "Final transcript", keys: ["asr.final.model"] },
       { title: "Fusion", keys: ["asr.final.engines", "asr.fusion", "asr.memoryBudgetMb"] },
-      { title: "Engines", keys: ["asr.threads", "asr.modelIdleMinutes", "asr.modelsDir"] },
+      {
+        title: "Engines",
+        keys: ["asr.threads", "asr.warmAtStart", "asr.modelIdleMinutes", "asr.modelsDir"],
+      },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],
   },
