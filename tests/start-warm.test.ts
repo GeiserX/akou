@@ -19,7 +19,7 @@ import { until } from "./capture-helpers.ts";
 const GB = 1024 ** 3;
 
 describe("the memory asr.warmAtStart reads", () => {
-  test("[T4.36] on macOS it is the kernel's available memory, not os.freemem's free pages", () => {
+  test("[T4.38] on macOS it is the kernel's available memory, not os.freemem's free pages", () => {
     // `sysctl -n kern.memorystatus_level` on a 24 GB Mac whose os.freemem() read 0.19 GB.
     expect(fromStatusLevel("38\n", 24 * GB)).toBeCloseTo(0.38 * 24 * GB, 0);
     expect(fromStatusLevel("", 24 * GB)).toBeNull();
