@@ -768,6 +768,7 @@ export class AkouApp implements ApiApp {
       this.runMode === "app" && cfg.settings["network.enabled"]
         ? new KeyStore(
             this.configDir,
+            // clock: the key store's injected clock, real in the app.
             () => Date.now(),
             (line) => this.log("info", line),
           )
