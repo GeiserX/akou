@@ -137,7 +137,7 @@ There is no resume. A new socket is a new session: send `hello`, the OpusHead an
 
 The desktop app can let a phone, or another computer, read its calls, dictations and file jobs with an API key, as the window shows them. It is off until you turn it on. The network side takes keys only, so the app's own token never leaves the machine.
 
-1. Make a key on the Mac. `read` sees every call, dictation and job, with transcripts, summaries, notes and kept audio, and changes nothing. Add `--scope jobs` if the phone also uploads its own recordings:
+1. Make a key on the Mac. Give the phone a `read` key; add `jobs` only if it records to that machine; never `admin`. `read` sees every call, dictation and job, with transcripts, summaries, notes and kept audio, and changes nothing. A phone that also uploads its recordings here gets both:
 
    ```sh
    akou keys create --name iphone --scope read --scope jobs
@@ -151,7 +151,7 @@ The desktop app can let a phone, or another computer, read its calls, dictations
    { "network.enabled": true }
    ```
 
-   By default it listens on this Mac's tailnet address, port 8478, and the log says where (`network: listening on http://100.x.y.z:8478/v1`). The tailnet encrypts the traffic. With no tailnet address the app logs one line and opens nothing. Set `network.bind` to `lan` to listen on the Mac's private LAN address instead. That is plain HTTP, readable by anyone on that network. An IPv4 address names one address exactly. `network.port` moves the port.
+   By default it listens on this Mac's tailnet address, port 8478, and the log says where (`network: listening on http://100.x.y.z:8478/v1`). The tailnet encrypts the traffic. With no tailnet address yet, as when Tailscale starts after akou, the app logs one line and looks again every 30 s until it can listen. Set `network.bind` to `lan` to listen on the Mac's private LAN address instead. That is plain HTTP, readable by anyone on that network. An IPv4 address names one address exactly. `network.port` moves the port.
 
 3. On the phone, add the server as `http://<the Mac's tailnet name or address>:8478` with the key. `GET /v1/keys/me` tells a client which scopes its key holds, so it shows the history only to a key that may read it.
 

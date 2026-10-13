@@ -11,8 +11,9 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { writeFileSync } from "node:fs";
 import type { networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { NETWORK_RETRY_MS } from "../src/main/index.ts";
 import { type AppRig, appRig, waitState } from "./api-helpers.ts";
-import { until } from "./capture-helpers.ts";
+import { ManualClock, until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { clip } from "./server-helpers.ts";
 
@@ -318,10 +319,57 @@ describe("network.bind tailnet", () => {
       expect(warned).toEqual([
         {
           level: "warn",
-          msg: "network: no listener; network.bind is tailnet and this machine has no tailnet address",
+          msg: "network: no listener; network.bind is tailnet and this machine has no tailnet address; looking again every 30 s",
         },
       ]);
       expect((await r.api("GET", "/keys/me")).status).toBe(200);
+    } finally {
+      await r.close();
+    }
+  });
+
+  test("a tailnet address that comes up later is found by the next look; quit stops the looking", async () => {
+    const clock = new ManualClock();
+    let address = "192.168.1.20";
+    let looks = 0;
+    const r = await appRig({
+      settings: { "network.enabled": true, "network.port": 0 },
+      clock,
+      interfaces: () => {
+        looks++;
+        return ifaces(address)();
+      },
+    });
+    const network = () => r.logs.filter((l) => l.msg.startsWith("network:"));
+    try {
+      expect(r.app.network).toBeNull();
+      expect(network()).toHaveLength(1);
+      const first = looks;
+      // Still no tailnet address: one more look, and no second warning.
+      await clock.advance(NETWORK_RETRY_MS);
+      expect(looks).toBe(first + 1);
+      expect(network()).toHaveLength(1);
+      // Tailscale comes up: the next look takes its address. Nothing on a test machine owns
+      // 100.100.1.2, so the bind itself fails here; what this shows is the look choosing it.
+      address = "100.100.1.2";
+      await clock.advance(NETWORK_RETRY_MS);
+      expect(looks).toBe(first + 2);
+      const last = network().at(-1);
+      expect(last?.msg.startsWith("network: no listener on 100.100.1.2:0,")).toBe(true);
+      // An address was chosen, so the looking ends.
+      await clock.advance(NETWORK_RETRY_MS * 3);
+      expect(looks).toBe(first + 2);
+      expect(network()).toHaveLength(2);
+      // A second app that never finds one: its pending look is cleared at quit.
+      address = "192.168.1.20";
+      const q = await appRig({
+        settings: { "network.enabled": true, "network.port": 0 },
+        clock,
+        interfaces: ifaces(address),
+      });
+      const pending = clock.pendingTimers;
+      await q.close();
+      expect(clock.pendingTimers).toBe(pending - 1);
     } finally {
       await r.close();
     }

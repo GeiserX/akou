@@ -258,8 +258,12 @@ export interface ServerOptions {
    * Absent: 404.
    */
   page?(req: Request, srv: { timeout(req: Request, seconds: number): void }): Promise<Response>;
-  /** The token as of this request (it follows `akou token rotate`). */
-  token: () => string;
+  /**
+   * The token as of this request (it follows `akou token rotate`). Absent on the app's network
+   * listener, whose guard takes keys only: no token is compared there, and an empty one matches
+   * no bearer, since a bearer is never empty.
+   */
+  token?: () => string;
   /**
    * The guard. Only the security tests pass another one (`openGuard`, their positive control);
    * no setting, variable or argument reaches this.
@@ -445,7 +449,7 @@ export function startApiServer(o: ServerOptions): ApiServer {
       const source = sourceAddress(peer, req.headers.get("x-forwarded-for"), trusted);
       const g = check(req, {
         port: srv.port as number,
-        token: o.token(),
+        token: o.token?.() ?? "",
         route,
         maxUploadBytes,
         source,

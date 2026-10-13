@@ -74,7 +74,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | Key | Default | What it does |
 |---|---|---|
 | `network.enabled` (window or file) | `false` | The desktop app also listens on `network.bind` for API keys (`akou keys create`), so a phone or another computer reads what each key's scopes allow: a `read` key sees every call, dictation and job. The app's own token is refused there. Server mode ignores it. Applies at the next start. |
-| `network.bind` (window or file) | `"tailnet"` | Where the network listener listens: `tailnet` (the tailnet encrypts it; no tailnet address, no listener), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start. |
+| `network.bind` (window or file) | `"tailnet"` | Where the network listener listens: `tailnet` (the tailnet encrypts it; with no tailnet address yet, it looks again every 30 s), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start. |
 | `network.port` (window or file) | `8478` | Port of the network listener. 0 picks a free port. Applies at the next start. |
 
 ### server

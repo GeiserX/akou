@@ -227,7 +227,7 @@ export const SETTINGS = {
       /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(v as string)
         ? null
         : "tailnet, lan or an IPv4 address",
-    doc: "Where the network listener listens: `tailnet` (the tailnet encrypts it; no tailnet address, no listener), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start.",
+    doc: "Where the network listener listens: `tailnet` (the tailnet encrypts it; with no tailnet address yet, it looks again every 30 s), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start.",
   },
   "network.port": {
     type: "integer",
