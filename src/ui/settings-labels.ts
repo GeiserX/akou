@@ -151,7 +151,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "asr.warmAtStart": {
     label: "Load the live models at start",
-    help: "A call's first lines then come at once. Let go when memory runs short.",
+    help: "Holds the live model in memory between calls, about 1.9 GB. Leave it off unless it loads slowly here.",
     choices: [
       ["auto", "The live model, with 4 GB free"],
       ["on", "The live model and Parakeet"],
