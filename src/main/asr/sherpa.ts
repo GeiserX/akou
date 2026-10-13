@@ -520,6 +520,12 @@ export class SherpaModels implements ModelSet {
     };
   }
 
+  listOnly(list: DecodeList | null): Omit<PreparedHotwords, "recognizer" | "arg"> | null {
+    if (this.decoding !== "greedy") return null;
+    const warnings = list?.entries.length ? [GREEDY_NO_HOTWORDS] : [];
+    return { entries: [], dropped: [], warnings, checks: [] };
+  }
+
   prepare(list: DecodeList | null): PreparedHotwords {
     if (this.decoding === "greedy") {
       // Greedy takes no hotwords: nothing is tokenized, and `vocab.used` records an empty list.

@@ -54,8 +54,11 @@ describe("the app loads the live recognizer at start", () => {
   const parakeet = async (r: AppRig) =>
     ((await r.api("GET", "/status")).body as Status).asr?.loads?.["fake-parakeet"] ?? 0;
 
-  test("asked by the entry point with 8 GB available, it loads Parakeet and logs the RSS around it", async () => {
-    const r = await appRig({ availableMemory: () => 8 * GB });
+  test("asked by the entry point with on, it loads Parakeet and logs the RSS around it", async () => {
+    const r = await appRig({
+      availableMemory: () => 8 * GB,
+      settings: { "asr.warmAtStart": "on" },
+    });
     rig = r;
     // Nothing loads it before the entry point asks.
     expect(await parakeet(r)).toBe(0);
@@ -63,7 +66,11 @@ describe("the app loads the live recognizer at start", () => {
     await until(async () => (await parakeet(r)) === 1, 5000, "the load at start");
     await until(
       () =>
-        r.logs.some((l) => /^asr: the live recognizer loaded at start in \d+ ms, RSS /.test(l.msg)),
+        r.logs.some((l) =>
+          /^asr: loaded at start: Parakeet in \d+ ms, RSS [\d.]+ GB before and [\d.]+ GB after$/.test(
+            l.msg,
+          ),
+        ),
       5000,
       "the RSS line",
     );
@@ -72,12 +79,24 @@ describe("the app loads the live recognizer at start", () => {
     expect(await parakeet(r)).toBe(1);
   });
 
+  test("auto never loads Parakeet: with no streaming model here there is nothing to load", async () => {
+    const r = await appRig({ availableMemory: () => 8 * GB });
+    rig = r;
+    r.app.warmAtStart();
+    await until(
+      () => r.logs.some((l) => l.msg.startsWith("asr: nothing to load at start")),
+      5000,
+      "the reason",
+    );
+    expect(await parakeet(r)).toBe(0);
+  });
+
   test("with less than 4 GB available, auto loads nothing and says why", async () => {
     const r = await appRig({ availableMemory: () => WARM_MIN_FREE / 2 });
     rig = r;
     r.app.warmAtStart();
     expect(r.logs.map((l) => l.msg)).toContain(
-      "asr: the live recognizer is not loaded at start: 2.0 GB of memory available, under 4.0 GB",
+      "asr: the live models are not loaded at start: 2.0 GB of memory available, under 4.0 GB",
     );
     expect(await parakeet(r)).toBe(0);
   });

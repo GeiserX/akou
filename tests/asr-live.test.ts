@@ -9,6 +9,7 @@ import { join } from "node:path";
 import type { Channel, LogEvent, Seg } from "../src/core/log/events.ts";
 import { PROVISIONAL_TTL_MS } from "../src/core/log/fold.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
+import type { LiveChoice } from "../src/main/asr/live-engines.ts";
 import {
   type CallAccess,
   DEFAULT_LIVE,
@@ -17,6 +18,7 @@ import {
   LiveAsr,
   type LiveOut,
   LivePipeline,
+  type LiveReview,
   LOAD_TIMING,
   type VocabSource,
   WorkerSide,
@@ -469,6 +471,10 @@ function rig(
     flushMs?: number;
     idleMinutes?: number;
     onRelease?: () => void;
+    /** The calls' streaming engine; by default none (VAD windows re-decoded by the recognizer). */
+    live?: LiveChoice;
+    /** The calls' second pass. */
+    review?: LiveReview;
   } = {},
 ): Rig {
   const root =
@@ -512,6 +518,8 @@ function rig(
       onLog: (level, msg) => logs.push({ level, msg }),
       ...(o.idleMinutes !== undefined ? { modelIdleMinutes: () => o.idleMinutes as number } : {}),
       ...(o.onRelease ? { onRelease: o.onRelease } : {}),
+      ...(o.live ? { liveEngine: () => o.live as LiveChoice } : {}),
+      ...(o.review ? { review: () => o.review as LiveReview } : {}),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
   );
@@ -993,71 +1001,140 @@ describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
   });
 });
 
-describe("asr.warmAtStart: the recognizer loaded at start, let go when memory runs short", () => {
+describe("#378: a streaming call loads no recognizer it does not decode on", () => {
+  const LIVE: LiveChoice = { engine: "fake-nemotron", lang: "en" };
+  const HELLO = concat(silence(0.3), speak(["hello", "world"]), silence(1));
+  /** A second pass that never answers: only whether the call loads its recognizer matters here. */
+  const REVIEW: LiveReview = {
+    name: "Parakeet",
+    reviewer: { decode: () => new Promise(() => {}) },
+    everySeconds: 60,
+  };
+
+  test("a default call (stream engine, no second pass, greedy) never loads Parakeet, and still writes vocab.used", async () => {
+    const r = rig({ fake: { greedy: true }, live: LIVE });
+    await startCall(r);
+    r.engine.last.play(HELLO, silence(1.6));
+    await r.mgr.stop();
+    expect(segs(r.events).map((x) => [x.text, x.model])).toEqual([
+      ["hello world", "fake-nemotron"],
+    ]);
+    expect(r.models().loads["fake-nemotron"]).toBe(1);
+    expect(r.models().loads["fake-parakeet"]).toBeUndefined();
+    const used = ofType(r.events, "vocab.used");
+    expect(used.map((v) => [v.entries, v.model])).toEqual([[[], "fake-parakeet"]]);
+  });
+
+  test("control: the same call with a second pass loads Parakeet as it starts", async () => {
+    const r = rig({ fake: { greedy: true }, live: LIVE, review: REVIEW });
+    await startCall(r);
+    r.engine.last.play(HELLO, silence(1.6));
+    await settle(r, () => r.models().loads["fake-parakeet"] === 1);
+    await r.mgr.stop();
+    expect(ofType(r.events, "vocab.used")).toHaveLength(1);
+  });
+
+  test("control: under beam search, which checks the words against the loaded model, it loads Parakeet", async () => {
+    const r = rig({ live: LIVE });
+    await startCall(r);
+    r.engine.last.play(HELLO, silence(1.6));
+    await r.mgr.stop();
+    expect(r.models().loads["fake-parakeet"]).toBe(1);
+    expect(ofType(r.events, "vocab.used")).toHaveLength(1);
+  });
+
+  test("a word added mid-call writes a new vocab.used, still with no recognizer", async () => {
+    const r = rig({ fake: { greedy: true }, live: LIVE });
+    await startCall(r);
+    r.engine.last.play(silence(1), silence(1));
+    await settle(r, () => ofType(r.events, "vocab.used").length === 1);
+    r.mgr.live()?.record({
+      type: "vocab.add",
+      id: "v1",
+      rev: 1,
+      term: "Hetzner",
+      heard: [],
+      by: "user",
+    });
+    await settle(r, () => ofType(r.events, "vocab.used").length === 2);
+    await r.mgr.stop();
+    expect(r.models().loads["fake-parakeet"]).toBeUndefined();
+    expect(r.logs.some((l) => l.level === "warn" && l.msg === GREEDY_NO_HOTWORDS)).toBe(true);
+  });
+});
+
+describe("asr.warmAtStart: the live models loaded at start, let go when memory runs short", () => {
   const GB = 1024 ** 3;
-  const PARAKEET = "fake-parakeet";
+  const STREAM: LiveChoice = { engine: "fake-nemotron", lang: "en" };
   const SHORT = "models unloaded with 1.0 GB of memory available, under 1.5 GB";
 
-  /** A rig whose `StartWarm` loads Parakeet as the app's does, with `free` bytes available. */
+  /** A rig whose `StartWarm` loads what the app's does, with `free` bytes available. */
   function warmRig(o: {
     setting?: WarmSetting;
     free: number;
     inThread?: boolean;
-    loadMs?: number;
+    liveLoadMs?: number;
   }) {
     let warm: StartWarm | null = null;
     const mem = { free: o.free };
     const r = rig({
-      fake: { greedy: true, ...(o.loadMs ? { loadMs: o.loadMs } : {}) },
+      fake: { greedy: true, ...(o.liveLoadMs ? { liveLoadMs: o.liveLoadMs } : {}) },
       ...(o.inThread === false ? { inThread: false } : {}),
+      live: STREAM,
       idleMinutes: 5,
       onRelease: () => warm?.released(),
     });
     warm = new StartWarm({
       setting: () => o.setting ?? "auto",
       available: () => mem.free,
-      load: () => r.asr.warmDictation(null, true),
+      load: async (recognizer) => {
+        await r.asr.warmDictation(STREAM, recognizer);
+        return true;
+      },
       release: (why) => r.asr.releaseNow(`with ${why}`),
       clock: r.clock,
       log: (level, msg) => r.logs.push({ level, msg }),
     });
     return { r, warm, mem };
   }
+  const loads = (r: Rig) => r.models().loads;
 
-  test("auto loads Parakeet at start with 4 GB available, and nothing with less", async () => {
+  test("auto loads the streaming model, never Parakeet, with 4 GB available, and nothing with less", async () => {
     const at = warmRig({ free: WARM_MIN_FREE });
     await at.r.asr.ready;
     expect(at.warm.start()).toBe(true);
-    await settle(at.r, () => at.r.models().loads[PARAKEET] === 1);
+    await settle(at.r, () => loads(at.r)["fake-nemotron"] === 1);
+    expect(loads(at.r)["fake-parakeet"]).toBeUndefined();
 
     const under = warmRig({ free: WARM_MIN_FREE - 1 });
     await under.r.asr.ready;
     expect(under.warm.start()).toBe(false);
     await flush();
-    expect(under.r.models().loads[PARAKEET]).toBeUndefined();
+    expect(loads(under.r)["fake-nemotron"]).toBeUndefined();
     expect(under.r.logs.map((l) => l.msg)).toContain(
-      "the live recognizer is not loaded at start: 4.0 GB of memory available, under 4.0 GB",
+      "the live models are not loaded at start: 4.0 GB of memory available, under 4.0 GB",
     );
   });
 
-  test("off never loads, however much memory is available; on loads with little", async () => {
+  test("off never loads, however much memory is available; on loads Parakeet too, with little", async () => {
     const off = warmRig({ setting: "off", free: 64 * GB });
     await off.r.asr.ready;
     expect(off.warm.start()).toBe(false);
     await flush();
-    expect(off.r.models().loads[PARAKEET]).toBeUndefined();
+    expect(loads(off.r)).not.toHaveProperty("fake-nemotron");
 
     const on = warmRig({ setting: "on", free: 1 * GB });
     await on.r.asr.ready;
     expect(on.warm.start()).toBe(true);
-    await settle(on.r, () => on.r.models().loads[PARAKEET] === 1);
+    await settle(on.r, () => loads(on.r)["fake-parakeet"] === 1);
+    expect(loads(on.r)["fake-nemotron"]).toBe(1);
   });
 
   test("idle with memory under 1.5 GB, the minute check lets the models go; above it, never", async () => {
     const { r, warm, mem } = warmRig({ free: 8 * GB });
     await r.asr.ready;
     warm.start();
-    await settle(r, () => r.models().loads[PARAKEET] === 1);
+    await settle(r, () => loads(r)["fake-nemotron"] === 1);
     // Memory to spare: an hour of checks keeps them.
     await r.clock.advance(60 * WARM_CHECK_MS);
     await flush();
@@ -1076,7 +1153,7 @@ describe("asr.warmAtStart: the recognizer loaded at start, let go when memory ru
     const { r, warm, mem } = warmRig({ free: 8 * GB });
     await r.asr.ready;
     warm.start();
-    await settle(r, () => r.models().loads[PARAKEET] === 1);
+    await settle(r, () => loads(r)["fake-nemotron"] === 1);
     await startCall(r);
     r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
     mem.free = 1 * GB;
@@ -1087,20 +1164,21 @@ describe("asr.warmAtStart: the recognizer loaded at start, let go when memory ru
     await r.clock.advance(WARM_CHECK_MS + 1);
     await settle(r, () => r.models().releases === 1);
     expect(r.logs.map((l) => l.msg)).toContain(SHORT);
-    // The call used what was warm: one load.
-    expect(r.models().loads[PARAKEET]).toBe(1);
+    // The call ran on what was warm: one load.
+    expect(loads(r)["fake-nemotron"]).toBe(1);
   });
 
   // On the real Worker the load holds the Worker's thread, so the call's messages queue behind it.
   test("a call that starts while the load is in flight waits for it and loads nothing again", async () => {
-    const { r, warm } = warmRig({ free: 8 * GB, inThread: false, loadMs: 1500 });
+    const { r, warm } = warmRig({ free: 8 * GB, inThread: false, liveLoadMs: 1500 });
     await r.asr.ready;
     warm.start();
     await startCall(r);
     r.engine.last.play(concat(silence(0.3), speak(["hello", "world"]), silence(1)), silence(1.6));
     await r.mgr.stop();
     expect(segs(r.events).map((x) => x.text)).toEqual(["hello world"]);
-    expect(r.asr.loads[PARAKEET]).toBe(1);
+    expect(r.asr.loads["fake-nemotron"]).toBe(1);
+    expect(r.asr.loads["fake-parakeet"]).toBeUndefined();
   }, 20_000);
 });
 

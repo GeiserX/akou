@@ -1,9 +1,11 @@
 /**
- * The live recognizer loaded when the app starts (`asr.warmAtStart`, #378), so a call's first lines
- * never wait for a model load. A call loads the models it runs when it starts, and on a busy Mac
- * Parakeet fp32 alone takes several seconds, longer than a first sentence.
+ * The live models loaded when the app starts (`asr.warmAtStart`, #378), so a call's first lines
+ * never wait for a model load. A call loads the streaming model it runs when it starts, 1 to 2 s on
+ * a busy Mac, longer than a first word.
  *
- * `auto` loads only with `WARM_MIN_FREE` of memory available, `on` always, `off` never. While the
+ * `auto` loads the streaming model a default call runs, only with `WARM_MIN_FREE` of memory
+ * available. `on` loads it and Parakeet too, whatever the memory: Parakeet fp32 takes 8 to 15 s and
+ * about 2 GB, and a default call never decodes on it. `off` loads nothing. While the
  * load holds the models, the memory is read every `WARM_CHECK_MS`: below `WARM_RELEASE_FREE` the
  * models are let go if nothing uses them (no call, no dictation open or decoding), so a Mac that
  * gets busy gets the memory back. A call or a dictation then loads what it needs, as without this.
@@ -64,8 +66,11 @@ export interface StartWarmDeps {
   setting(): WarmSetting;
   /** Memory available now, bytes (`availableMemory`; tests pass their own). */
   available(): number;
-  /** Loads the models; resolves once they are loaded. */
-  load(): Promise<void>;
+  /**
+   * Loads the call's streaming model, and Parakeet with `recognizer`; resolves once they are loaded,
+   * to whether anything was loaded.
+   */
+  load(recognizer: boolean): Promise<boolean>;
   /** Lets the models go if nothing uses them; answers whether it did. */
   release(why: string): boolean;
   clock: Pick<Clock, "setTimeout" | "clearTimeout">;
@@ -89,20 +94,20 @@ export class StartWarm {
     if (setting === "auto" && free < WARM_MIN_FREE) {
       this.d.log(
         "info",
-        `the live recognizer is not loaded at start: ${gb(free)} GB of memory available, under ${gb(WARM_MIN_FREE)} GB`,
+        `the live models are not loaded at start: ${gb(free)} GB of memory available, under ${gb(WARM_MIN_FREE)} GB`,
       );
       return false;
     }
     this.loading = true;
-    this.d.load().then(
-      () => {
+    this.d.load(setting === "on").then(
+      (loaded) => {
         this.loading = false;
-        this.held = true;
+        this.held = loaded;
         this.arm();
       },
       (err: Error) => {
         this.loading = false;
-        this.d.log("warn", `the live recognizer was not loaded at start: ${err.message}`);
+        this.d.log("warn", `the live models were not loaded at start: ${err.message}`);
       },
     );
     return true;

@@ -720,7 +720,7 @@ export class AkouApp implements ApiApp {
   private dictationWarming = 0;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
-  /** The live recognizer loaded at start (`asr.warmAtStart`), once the entry point asked for it. */
+  /** The live models loaded at start (`asr.warmAtStart`), once the entry point asked for it. */
   private startWarm: StartWarm | null = null;
   private warmAsked = false;
   /**
@@ -2922,11 +2922,11 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * App mode: loads the live recognizer a call would run, once, so the first lines of a call never
-   * wait for it (`asr.warmAtStart`, #378). The entry point asks once the window and the tray are up.
-   * Parakeet, and the call's streaming model unless dictation keeps its own warm: a model set holds
-   * one, so the call's would push dictation's out. It runs on the Worker after dictation's warm-up,
-   * so nothing loads twice, and a call that starts meanwhile waits for it there.
+   * App mode: loads the streaming model a call would run, once, so the first lines of a call never
+   * wait for it (`asr.warmAtStart`, #378), and Parakeet too with `on`. The entry point asks once
+   * the window and the tray are up. Dictation that keeps its own streaming model warm keeps it: a
+   * model set holds one, so the call's would push dictation's out. It runs on the Worker after
+   * dictation's warm-up, so nothing loads twice, and a call that starts meanwhile waits for it.
    */
   warmAtStart(): void {
     this.warmAsked = true;
@@ -2935,18 +2935,27 @@ export class AkouApp implements ApiApp {
     this.startWarm = new StartWarm({
       setting: () => this.cfg.settings["asr.warmAtStart"] as WarmSetting,
       available: this.o.availableMemory ?? (() => availableMemory()),
-      load: async () => {
+      load: async (recognizer) => {
         const s = this.cfg.settings;
         const dictationStream = s["dictation.enabled"] && s["dictation.engine"] !== "remote";
         const choice = dictationStream ? null : chooseLiveSetup(this.liveContext()).choice;
+        const what = [choice?.engine, recognizer ? "Parakeet" : undefined].filter(Boolean);
+        if (what.length === 0) {
+          this.log(
+            "info",
+            "asr: nothing to load at start: dictation holds the streaming model, or none is downloaded",
+          );
+          return false;
+        }
         const before = process.memoryUsage().rss;
         const t = performance.now();
-        await asr.warmDictation(choice, true);
+        await asr.warmDictation(choice, recognizer);
         const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
         this.log(
           "info",
-          `asr: the live recognizer loaded at start${choice ? ` with ${choice.engine}` : ""} in ${Math.round(performance.now() - t)} ms, RSS ${gb(before)} GB before and ${gb(process.memoryUsage().rss)} GB after`,
+          `asr: loaded at start: ${what.join(" and ")} in ${Math.round(performance.now() - t)} ms, RSS ${gb(before)} GB before and ${gb(process.memoryUsage().rss)} GB after`,
         );
+        return true;
       },
       release: (why) => this.asr?.releaseNow(`with ${why}`) ?? false,
       clock: this.clock,

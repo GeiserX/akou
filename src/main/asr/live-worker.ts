@@ -349,6 +349,8 @@ export class LivePipeline {
   private readonly chans: ReadonlyMap<Channel, ChannelState>;
   private list: DecodeList | null = null;
   private listVersion = 0;
+  /** The list version last reported as `vocab`, so a later load for it reports nothing twice. */
+  private vocabShown = -1;
   private prepared: PreparedHotwords | null = null;
   private speakers = new LiveSpeakers();
   private embedder: Embedder | null = null;
@@ -439,6 +441,8 @@ export class LivePipeline {
     this.speakers.restore(state);
     for (const id of state.ids ?? []) this.speakers.noteId(id);
     for (const st of this.chans.values()) this.resetChannel(st, null, 0);
+    // The host numbers each call's lists from 1 again.
+    this.vocabShown = -1;
     this.startEngine(state.live);
     this.upgrade = this.engine !== null && state.upgrade === true;
     // The new call's stream starts afresh: its speakers take the call's labels by centroid, or
@@ -496,13 +500,19 @@ export class LivePipeline {
   /**
    * The call's decode list. Takes effect for the next stream; loads the recognizer now, when its
    * files are here: a machine that never downloaded Parakeet (no chosen setup uses it) loads it only
-   * if a decode ever asks for it.
+   * if a decode ever asks for it. A call whose lines come from a streaming engine, with no second
+   * pass, decodes nothing on the recognizer: its `vocab.used` comes from the list alone when the
+   * model set can tell without the model (#378), and the recognizer loads only if a dictation or
+   * a fallback ever decodes on it. Loaded for nothing, it held the call's first lines back by its
+   * whole load, 8 to 15 s for Parakeet fp32 on a busy Mac.
    */
   setDecodeList(list: DecodeList | null, version: number): void {
     this.list = list;
     this.listVersion = version;
     this.prepared = null;
-    if (this.models.recognizerHere?.() !== false) this.hot("decode-list");
+    const only = this.engine && !this.upgrade ? (this.models.listOnly?.(list) ?? null) : null;
+    if (only) this.vocabOut({ ...only, model: this.models.recognizerModel });
+    else if (this.models.recognizerHere?.() !== false) this.hot("decode-list");
   }
 
   unmerge(from: string, into: string): void {
@@ -601,18 +611,27 @@ export class LivePipeline {
       };
       this.emit({ type: "log", level: "info", msg: `${LOAD_TIMING} ${JSON.stringify(load)}` });
     }
+    this.vocabOut({ ...p, model: p.recognizer.model });
+    return p;
+  }
+
+  /** The list as decoding uses it, once per version: the host writes it as `vocab.used`. */
+  private vocabOut(
+    p: Pick<PreparedHotwords, "entries" | "dropped" | "warnings"> & { model: string },
+  ) {
+    if (this.vocabShown === this.listVersion) return;
+    this.vocabShown = this.listVersion;
     for (const d of p.dropped) {
       this.emit({ type: "log", level: "error", msg: `hotword "${d.term}" dropped: ${d.reason}` });
     }
     this.emit({
       type: "vocab",
       version: this.listVersion,
-      model: p.recognizer.model,
+      model: p.model,
       entries: p.entries,
       dropped: p.dropped,
       warnings: p.warnings,
     });
-    return p;
   }
 
   private resetChannel(st: ChannelState, part: number | null, pos: number): void {

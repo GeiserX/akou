@@ -805,7 +805,7 @@ export const SETTINGS = {
     type: "string",
     values: WARM_SETTINGS,
     default: "auto",
-    doc: "Load the live recognizer when the app starts, so the first lines of a call never wait for it: `auto` loads it when at least 4 GB of memory is available, `on` always, `off` never (the call loads it). With the default models it holds about 3.7 GB: Parakeet and the streaming Nemotron. Once loaded, the memory is read every minute, and below 1.5 GB available the models are let go while no call or dictation uses them. Once let go, here or by `asr.modelIdleMinutes`, they load at their next use. Takes effect at the next start.",
+    doc: "Load the live models when the app starts, so the first lines of a call never wait for them. `auto` loads the streaming model a call runs (Nemotron, about 1.5 GB) when at least 4 GB of memory is available. `on` loads it and Parakeet too (about 2 GB more), whatever the memory; a call decodes on Parakeet only with Parakeet as its live model or its second pass. `off` loads nothing, and a call loads what it runs when it starts. Once loaded, the memory is read every minute, and below 1.5 GB available the models are let go while no call or dictation uses them. Once let go, here or by `asr.modelIdleMinutes`, they load at their next use. Takes effect at the next start.",
   },
   "asr.qwenIdleMinutes": {
     type: "integer",
