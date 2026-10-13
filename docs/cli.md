@@ -716,18 +716,19 @@ not built yet: self-update exists only in the Linux CLI tarball (M4), which is n
 ## keys
 
 ```text
-akou keys: Create, list, update or revoke the API keys of server mode (no app needed)
+akou keys: Create, list, update or revoke the API keys of server mode and of the desktop app's network listener (no app needed)
 
-usage: akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]
+usage: akou keys create --name NAME [--scope jobs|read|admin ...] [--callback-host HOST ...] | akou keys list | akou keys update ID --callback-host HOST ... | akou keys revoke ID   [--json]
 
       --name NAME           create: who the key is for, shown in the audit
-      --scope S             create: jobs (default) or admin
+      --scope S             create: jobs (default: submit and read its own jobs), read (every call, dictation and job, read only) or admin; repeat it for several
       --callback-host HOST  create, update: a host its callback URLs may name; repeat it, or `*` for any public host
       --json                print the answer as JSON, errors included
   -h, --help                show this help
       --restart             if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 example: akou keys create --name archive --callback-host archive.lan
+example: akou keys create --name phone --scope jobs --scope read
 example: akou keys list
 example: akou keys update key_0123abcd --callback-host archive.lan --callback-host viewer.lan
 example: akou keys revoke key_0123abcd

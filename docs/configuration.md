@@ -10,6 +10,8 @@ akou config unset user.name             # back to the default
 
 A key that is unknown, of the wrong type or out of range is refused with a message, and its default is used; the rest of the file still applies. A file that is not JSON is refused whole. Some settings take effect at the next start of akou, and `akou config set` says so when it saves one of them.
 
+The `network.*` settings put the desktop app's history within reach of a phone with an API key; [Server mode](server.md#the-desktop-apps-history-on-your-phone) walks through it.
+
 Keys marked *file only* name a program akou runs or an address your audio or transcripts go to. They are read from the file and never written over the local API, so the API token cannot become a way to run a chosen command or send your calls elsewhere. Keys marked *window or file* can also be set on the Settings page. Secrets, such as `provider.apiKey`, are never shown back; on macOS the API key is kept in the Keychain.
 
 ## Environment variables

@@ -269,6 +269,18 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     ],
   },
   "share.port": { label: "Share link port", help: "0 picks a free one." },
+  "network.enabled": {
+    label: "Let my devices read this app's history",
+    help: "A phone reads calls with a key from akou keys create. Applies when akou opens again.",
+  },
+  "network.bind": {
+    label: "My devices reach it on",
+    choices: [
+      ["tailnet", "My devices (Tailscale)"],
+      ["lan", "My local network"],
+    ],
+  },
+  "network.port": { label: "Port for my devices", help: "0 picks a free one." },
   "api.port": { label: "Local API port", help: "0 picks a free one." },
   "webhook.secret": {
     label: "Webhook signing secret",
