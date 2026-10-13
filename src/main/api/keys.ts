@@ -133,6 +133,20 @@ function hostsOf(list: readonly string[]): string[] {
   return hosts;
 }
 
+/**
+ * A new key's scopes, once each in the order of `SCOPES`: `admin` alone when it is named, since it
+ * reaches every route. A list that is empty or names an unknown scope is refused.
+ */
+export function scopesOf(scope: string | readonly string[]): Scope[] {
+  const asked = typeof scope === "string" ? [scope] : scope;
+  const unknown = asked.find((s) => !(SCOPES as readonly string[]).includes(s));
+  if (asked.length === 0 || unknown !== undefined) {
+    throw new KeyError(`the scope is one or more of ${SCOPES.join(", ")}`, "scope");
+  }
+  if (asked.includes("admin")) return ["admin"];
+  return SCOPES.filter((s) => asked.includes(s));
+}
+
 export class KeyStore {
   readonly path: string;
   readonly usedPath: string;
@@ -257,7 +271,8 @@ export class KeyStore {
 
   create(o: {
     name: string;
-    scope?: Scope;
+    /** One scope or several (`jobs` and `read`); `admin` includes the others. Default `jobs`. */
+    scope?: Scope | readonly Scope[];
     callbackHosts?: readonly string[];
     /** Where the edit came from, for the audit: a client's address. */
     from?: string;
@@ -269,10 +284,7 @@ export class KeyStore {
         "name",
       );
     }
-    const scope = o.scope ?? "jobs";
-    if (!(SCOPES as readonly string[]).includes(scope)) {
-      throw new KeyError(`the scope is one of ${SCOPES.join(", ")}`, "scope");
-    }
+    const scopes = scopesOf(o.scope ?? "jobs");
     const hosts = hostsOf(o.callbackHosts ?? []);
     return this.edit((keys) => {
       if (keys.some((k) => k.name === name))
@@ -285,7 +297,7 @@ export class KeyStore {
       const record: KeyRecord = {
         id,
         name,
-        scopes: [scope],
+        scopes,
         callback_hosts: hosts,
         created_at: this.now(),
         sha256: hashKey(key),

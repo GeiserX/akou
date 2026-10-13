@@ -154,7 +154,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     {
       id: "dictations.list",
       doc: "The dictation log, newest first: each dictation's state, the app it went to (`app`, its id, and `app_name`, its name as people know it where the OS gives one, else null), its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       query: {
         q: { type: "string", doc: "Keep dictations whose text holds this, in any case." },
@@ -198,7 +198,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     {
       id: "dictations.get",
       doc: "One dictation: its state, the app it went to, the raw and inserted text, the language, per-word times and confidences where the engine gives them, the engine and the decode time.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,
@@ -216,7 +216,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     {
       id: "dictations.audio",
       doc: "A spoken dictation's audio as mono Ogg Opus (a 16 kHz WAV, `audio/wav`, for one kept before akou kept Opus), kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
       ok: 200,

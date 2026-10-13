@@ -325,14 +325,22 @@ describe("[SI-2] Executor's rules over the file", () => {
     ).toContain("GET /v1/calls: operationId calls.list twice");
   });
 
-  test("x-akou-access is `open` or one of the scopes the keys carry, one vocabulary with access.ts", () => {
-    expect(SCOPES).toEqual(["jobs", "admin"]);
+  test("x-akou-access is `open`, one of the scopes the keys carry or a list of them, one vocabulary with access.ts", () => {
+    expect(SCOPES).toEqual(["jobs", "read", "admin"]);
     const doc = clone(fixtureDoc());
     expect(openApiProblems(doc)).toEqual([]);
-    // Positive control: the old name for a route with no key is not a level any key or guard knows.
+    // A list of scopes is a level: the job reads name `jobs` and `read`.
     const spec = doc.paths["/v1/openapi.json"]?.get as unknown as Record<string, unknown>;
+    spec["x-akou-access"] = ["jobs", "read"];
+    expect(openApiProblems(doc)).toEqual([]);
+    // Positive control: the old name for a route with no key is not a level any key or guard knows,
+    // nor is an empty list, nor a list naming one.
     spec["x-akou-access"] = "none";
     expect(openApiProblems(doc)).toEqual(['GET /v1/openapi.json: x-akou-access "none"']);
+    spec["x-akou-access"] = [];
+    expect(openApiProblems(doc)).toEqual(["GET /v1/openapi.json: x-akou-access []"]);
+    spec["x-akou-access"] = ["jobs", "none"];
+    expect(openApiProblems(doc)).toEqual(['GET /v1/openapi.json: x-akou-access ["jobs","none"]']);
   });
 
   test("an operation is tagged `openai` or `bazarr` exactly when it is a compatibility route", () => {

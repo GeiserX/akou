@@ -31,6 +31,7 @@ import {
 import { chooseTemplate, type Template, TemplateError } from "../../notes/templates.ts";
 import { reasonText } from "../../query/ask.ts";
 import type { CallQuery } from "../../query/context.ts";
+import type { Access } from "../access.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -132,8 +133,8 @@ export function fileResponse(req: Request, path: string, type: string, what: str
   });
 }
 
-/** A route of this file: app mode, admin, on one call. */
-function doc(d: Omit<RouteDoc, "access" | "modes">): RouteDoc {
+/** A route of this file: app mode, on one call; admin unless it names its `access`. */
+function doc(d: Omit<RouteDoc, "access" | "modes"> & { access?: Access }): RouteDoc {
   return { access: "admin", modes: ["app"], ...d, params: { id: CALL_ID, ...d.params } };
 }
 
@@ -344,6 +345,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     "/calls/:id/enhanced",
     doc({
       id: "enhanced.get",
+      access: "read",
       doc: "The call's enhanced notes as Markdown, the latest revision or the one `rev` names, with the list of revisions.",
       query: {
         rev: { type: "integer", min: 1, max: 1_000_000, doc: "One revision; default: the latest." },
@@ -388,6 +390,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     "/calls/:id/audio/:part",
     doc({
       id: "audio.get",
+      access: "read",
       doc: "The audio of one part of the call, as Ogg. Honours `Range`.",
       params: { part: "The part number, from 1." },
       ok: 200,

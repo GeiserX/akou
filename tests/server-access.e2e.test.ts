@@ -33,17 +33,19 @@ const TABLE: Record<string, Access> = {
   ),
 };
 
-type Caller = "jobs" | "admin" | "revoked" | "none";
+type Caller = "jobs" | "read" | "admin" | "revoked" | "none";
 
 /**
  * What each caller gets: `ok` is any answer from past the guard (a route's own 200, 404 or 400,
- * or the 415 of the wrong Content-Type), never 401 or 403.
+ * or the 415 of the wrong Content-Type), never 401 or 403. An `admin` key reaches every row; a
+ * `jobs` or `read` key the rows that name its scope.
  */
 function expected(access: Access, who: Caller): 401 | 403 | "ok" {
   if (access === "open") return "ok";
   if (who === "revoked" || who === "none") return 401;
-  if (access === "admin" && who === "jobs") return 403;
-  return "ok";
+  if (who === "admin") return "ok";
+  const named: readonly string[] = typeof access === "string" ? [access] : access;
+  return named.includes(who) ? "ok" : 403;
 }
 
 /** Routes with no row, and rows with no route. */
@@ -55,7 +57,13 @@ function drift(routes: readonly string[]): { missing: string[]; stale: string[] 
 }
 
 let rig: AppRig;
-const keys: Record<Caller, string | null> = { jobs: null, admin: null, revoked: null, none: null };
+const keys: Record<Caller, string | null> = {
+  jobs: null,
+  read: null,
+  admin: null,
+  revoked: null,
+  none: null,
+};
 
 async function create(name: string, scope: string): Promise<{ id: string; key: string }> {
   const r = await cli({ ...process.env, ...rig.env }, [
@@ -74,6 +82,7 @@ async function create(name: string, scope: string): Promise<{ id: string; key: s
 beforeAll(async () => {
   rig = await appRig({ settings: { "server.enabled": true, "api.bind": "127.0.0.1" } });
   keys.jobs = (await create("scoped-jobs", "jobs")).key;
+  keys.read = (await create("scoped-read", "read")).key;
   keys.admin = (await create("scoped-admin", "admin")).key;
   const gone = await create("scoped-gone", "jobs");
   keys.revoked = gone.key;
@@ -115,7 +124,7 @@ describe("SV-K3: scopes over every route", () => {
     }
   });
 
-  for (const who of ["jobs", "admin", "revoked", "none"] as const) {
+  for (const who of ["jobs", "read", "admin", "revoked", "none"] as const) {
     test(`a ${who === "none" ? "request with no" : `${who}`} key gets what the table says on every route`, async () => {
       const wrong: string[] = [];
       for (const [route, access] of Object.entries(TABLE)) {

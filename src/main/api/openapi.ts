@@ -11,7 +11,7 @@
  *   Executor names its tools and derives its one auth template.
  */
 
-import { type Access, SCOPES, type Scope } from "./access.ts";
+import { type Access, reaches, SCOPES, type Scope } from "./access.ts";
 import { ERROR_CODES, type ErrorCode, errorsOf, type RouteErrors } from "./errors.ts";
 import {
   type BodySpec,
@@ -290,7 +290,7 @@ function operation(
     // An anonymous route overrides the file's one security requirement with none.
     ...(d.access === "open" ? { security: [] } : {}),
     "x-akou-modes": [...d.modes],
-    "x-akou-access": d.access,
+    "x-akou-access": typeof d.access === "string" ? d.access : [...d.access],
     ...(d.door ? { "x-akou-door": d.door } : {}),
     ...(d.upgrade ? { "x-akou-upgrade": d.upgrade } : {}),
   };
@@ -323,7 +323,7 @@ export function buildOpenApi(
       title: "akou",
       version: o.version,
       description:
-        "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
+        "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`: `open`, a scope, or the list of scopes that reach it; an `admin` key reaches every operation). Generated from the route table; do not edit by hand.",
       license: { name: "GPL-3.0-or-later", identifier: "GPL-3.0-or-later" },
     },
     servers: [{ url: o.serverUrl ?? LOCAL_SERVER }],
@@ -376,7 +376,7 @@ export function buildOpenApi(
  */
 function inJobsView(op: OpenApiOperation): boolean {
   return (
-    op["x-akou-access"] !== "admin" &&
+    reaches(["jobs"], op["x-akou-access"]) &&
     op["x-akou-door"] === undefined &&
     op["x-akou-upgrade"] === undefined
   );
@@ -510,7 +510,7 @@ export function errorProblems(doc: OpenApiDoc): string[] {
  * The rules of service-interface.md section 2, as a list of what breaks them (empty when the file
  * keeps them all): version 3.1.0; exactly one security scheme, `http` bearer; on every operation
  * one tag, a description, an `operationId` `<tag>.<verb>` unique in the file, `x-akou-modes`, an
- * `x-akou-access` of `open` or a scope, an `x-akou-door` only of `compat` or `spec`, `compat`
+ * `x-akou-access` of `open`, a scope or a list of scopes, an `x-akou-door` only of `compat` or `spec`, `compat`
  * exactly on the `openai` and `bazarr` tags; and every multipart file field `format: binary`.
  */
 export function openApiProblems(doc: OpenApiDoc): string[] {
@@ -554,7 +554,9 @@ export function openApiProblems(doc: OpenApiDoc): string[] {
       problems.push(`${where}: x-akou-modes ${JSON.stringify(modes)} is not a list of modes`);
     }
     const access = op["x-akou-access"];
-    if (access !== "open" && !(SCOPES as readonly string[]).includes(access)) {
+    const isScope = (a: unknown) => (SCOPES as readonly unknown[]).includes(a);
+    const named = Array.isArray(access) ? access : [access];
+    if (access !== "open" && (named.length === 0 || !named.every(isScope))) {
       problems.push(`${where}: x-akou-access ${JSON.stringify(access)}`);
     }
     const door = op["x-akou-door"];

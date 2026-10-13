@@ -241,6 +241,10 @@ const SUBS: Record<string, SubPage> = {
       },
       { title: "Models", keys: ["server.auto_download"] },
       {
+        title: "This app's history on your phone",
+        keys: ["network.enabled", "network.bind", "network.port"],
+      },
+      {
         title: "Dictation for other computers",
         keys: ["server.dictation_slots", "server.dictation_engine"],
       },

@@ -404,6 +404,14 @@ export interface RemoteChoice {
   source: ModelSource;
 }
 
+/**
+ * Whether a caller sees every key's jobs: an admin always, a `read` key for a read only (SV-K3).
+ * Anyone else sees its own.
+ */
+function seesAll(who: Identity, write: boolean): boolean {
+  return who.scopes.includes("admin") || (!write && who.scopes.includes("read"));
+}
+
 export class JobService {
   readonly store: JobStore;
   private readonly deliverer: Deliverer;
@@ -797,10 +805,13 @@ export class JobService {
     return r;
   }
 
-  /** The job, when the caller may see it: its own, or any for an admin. */
-  get(who: Identity, id: string): Job | null {
+  /**
+   * The job, when the caller may see it: its own, or any for an admin or a `read` key. With
+   * `write` (a rename, a delete), its own or any for an admin: a `read` key changes nothing.
+   */
+  get(who: Identity, id: string, o: { write?: boolean } = {}): Job | null {
     const j = this.store.job(id);
-    return j && this.visible(who, j.key_id) ? j : null;
+    return j && this.visible(who, j.key_id, o.write) ? j : null;
   }
 
   /**
@@ -818,21 +829,21 @@ export class JobService {
     return this.o.retainDays();
   }
 
-  private visible(who: Identity, key: string): boolean {
-    return who.scopes.includes("admin") || who.id === key;
+  private visible(who: Identity, key: string, write = false): boolean {
+    return seesAll(who, write) || who.id === key;
   }
 
   /**
-   * The key's jobs (every key's for an admin, or the one `key` names), newest first. A key that is
-   * not admin sees its own only, whatever `key` names.
+   * The key's jobs (every key's for an admin or a `read` key, or the one `key` names), newest
+   * first. Any other key sees its own only, whatever `key` names.
    */
   list(
     who: Identity,
     o: { key?: string; status?: JobStatus; q?: string; before?: number; limit: number },
   ): Job[] {
-    const admin = who.scopes.includes("admin");
-    if (!admin && o.key !== undefined && o.key !== who.id) return [];
-    return this.store.list({ ...o, key: admin ? (o.key ?? null) : who.id });
+    const all = seesAll(who, false);
+    if (!all && o.key !== undefined && o.key !== who.id) return [];
+    return this.store.list({ ...o, key: all ? (o.key ?? null) : who.id });
   }
 
   /**
@@ -840,7 +851,7 @@ export class JobService {
    * id. The name is the job's own: the result, the feed and a remote's copy never carry it.
    */
   rename(who: Identity, id: string, title: string): Job | null {
-    const j = this.get(who, id);
+    const j = this.get(who, id, { write: true });
     if (!j || !this.store.rename(j.id, title)) return null;
     return this.store.job(j.id);
   }
@@ -888,7 +899,7 @@ export class JobService {
    * finished one's result goes. The feed keeps the id and the final state.
    */
   remove(who: Identity, id: string): { id: string; status: JobStatus } | null {
-    const j = this.get(who, id);
+    const j = this.get(who, id, { write: true });
     if (!j) return null;
     return this.drop(j.id);
   }

@@ -14,7 +14,7 @@ export function workspaceRoutes(r: Router<ApiApp>): void {
     {
       id: "workspaces.list",
       doc: "Every workspace, by name, with how many calls it holds: the folders under the recordings folder, empty ones included, and the workspace of every call.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       ok: 200,
     },
