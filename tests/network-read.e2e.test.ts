@@ -11,14 +11,15 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { writeFileSync } from "node:fs";
 import type { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, waitState } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { clip } from "./server-helpers.ts";
 
 setDefaultTimeout(30_000);
 
-const T0 = Date.UTC(2026, 0, 5, 9, 0, 0);
+/** The wall clock that went by during the call's pause, as the line after it says. */
+const PAUSED_MS = 60_000;
 const NETWORK = { "network.enabled": true, "network.bind": "127.0.0.1", "network.port": 0 };
 
 let rig: AppRig;
@@ -83,11 +84,10 @@ beforeAll(async () => {
   key.both = await create("phone-and-recorder", "jobs", "read");
   // A call with two generated lines on it, then stopped, with a known part file to fetch.
   call = await rig.startCall({ title: "Planning" });
-  for (const [sid, text] of [
-    ["l900001", "ship the release on monday"],
-    ["l900002", "and write the notes after"],
-  ] as const) {
-    await rig.app.write(call, {
+  await waitState(rig, call, "recording");
+  const wallStart = (await rig.api("GET", `/calls/${call}`)).body.parts[0].wallStart as number;
+  const line = (sid: string, text: string, a0: number, w0: number) =>
+    rig.app.write(call, {
       type: "seg",
       id: sid,
       rev: 1,
@@ -95,14 +95,19 @@ beforeAll(async () => {
       part: 1,
       ch: "call",
       spk: "c1",
-      a0: 1,
-      a1: 2,
-      w0: T0 + Number(sid.slice(1)),
-      w1: T0 + Number(sid.slice(1)) + 900,
+      a0,
+      a1: a0 + 1,
+      w0,
+      w1: w0 + 1000,
       text,
       model: "fake",
     } as never);
-  }
+  await line("l900001", "ship the release on monday", 1, wallStart + 1000);
+  // A pause: the part's audio stops while the wall clock runs on, so the line after it is 3 s
+  // into the audio and 63 s after the start (PAUSED_MS of wall clock went by with no audio).
+  expect((await rig.api("POST", `/calls/${call}/pause`)).status).toBe(200);
+  expect((await rig.api("POST", `/calls/${call}/resume`)).status).toBe(200);
+  await line("l900002", "and write the notes after", 3, wallStart + 3000 + PAUSED_MS);
   expect((await rig.api("POST", `/calls/${call}/stop`)).status).toBe(200);
   await until(
     async () => (await rig.api("GET", `/calls/${call}`)).body.state === "ended",
@@ -141,6 +146,24 @@ describe("a phone reads the desktop app's history with a read key", () => {
     const text = await transcript.text();
     expect(text).toContain("ship the release on monday");
     expect(text).toContain("and write the notes after");
+    // Each line says where its audio is: seconds into its part, which a pause does not move on.
+    const json = await body(await get(`/calls/${call}/transcript`, key.read));
+    const lines = json.lines as {
+      text: string;
+      part: number;
+      a0: number;
+      a1: number;
+      w0: number;
+    }[];
+    const after = lines.find((l) => l.text === "and write the notes after");
+    expect(after).toMatchObject({ part: 1, a0: 3, a1: 4 });
+    const wallStart = (await rig.api("GET", `/calls/${call}`)).body.parts[0].wallStart as number;
+    // The wall-clock offset is 63 s: seeking by it would land a minute past this line's audio.
+    expect(((after?.w0 as number) - wallStart) / 1000).toBe(3 + PAUSED_MS / 1000);
+    expect(lines.find((l) => l.text === "ship the release on monday")).toMatchObject({
+      a0: 1,
+      a1: 2,
+    });
     for (const path of ["notes", "memo", "enhanced"]) {
       expect(`${path} ${(await get(`/calls/${call}/${path}`, key.read)).status}`).toBe(
         `${path} 200`,
