@@ -40,6 +40,7 @@ export class KeysPage implements ServerScreen {
     "select",
     { id: "key-scope" },
     h("option", { value: "jobs" }, "jobs: submit and read its own jobs"),
+    h("option", { value: "read" }, "read: every call, dictation and job, read only"),
     h("option", { value: "admin" }, "admin: everything, this page included"),
   );
   private readonly hosts = h("input", {

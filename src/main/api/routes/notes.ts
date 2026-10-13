@@ -9,6 +9,7 @@
 import type { EventDraft } from "../../../core/log/events.ts";
 import { NoteError, noteDeleteDraft, noteDraft, noteEditDraft } from "../../notes/notepad.ts";
 import { memoDraft } from "../../query/memo.ts";
+import type { Access } from "../access.ts";
 import { errorsOf, type RouteErrors } from "../errors.ts";
 import { HttpError, json, type RouteDoc, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -56,8 +57,8 @@ function writes(own: RouteErrors): RouteErrors {
   return errorsOf(LIVE_REF_ERRORS, WRITE_ERRORS, own);
 }
 
-/** A route of this file: app mode, admin, on one call. */
-function doc(d: Omit<RouteDoc, "access" | "modes">): RouteDoc {
+/** A route of this file: app mode, on one call; admin unless it names its `access`. */
+function doc(d: Omit<RouteDoc, "access" | "modes"> & { access?: Access }): RouteDoc {
   return { access: "admin", modes: ["app"], ...d, params: { id: CALL_ID, ...d.params } };
 }
 
@@ -133,6 +134,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
     "/calls/:id/notes",
     doc({
       id: "notes.list",
+      access: "read",
       doc: "The call's notepad lines, each with its time and author.",
       ok: 200,
       errors: CALL_REF_ERRORS,
@@ -275,6 +277,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
     "/calls/:id/memo",
     doc({
       id: "memo.get",
+      access: "read",
       doc: "The call's running memo, the log position it covers, and the current cursor, so a reader can tell whether it is stale.",
       ok: 200,
       errors: CALL_REF_ERRORS,

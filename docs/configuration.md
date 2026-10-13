@@ -10,6 +10,8 @@ akou config unset user.name             # back to the default
 
 A key that is unknown, of the wrong type or out of range is refused with a message, and its default is used; the rest of the file still applies. A file that is not JSON is refused whole. Some settings take effect at the next start of akou, and `akou config set` says so when it saves one of them.
 
+The `network.*` settings put the desktop app's history within reach of a phone with an API key; [Server mode](server.md#the-desktop-apps-history-on-your-phone) walks through it.
+
 Keys marked *file only* name a program akou runs or an address your audio or transcripts go to. They are read from the file and never written over the local API, so the API token cannot become a way to run a chosen command or send your calls elsewhere. Keys marked *window or file* can also be set on the Settings page. Secrets, such as `provider.apiKey`, are never shown back; on macOS the API key is kept in the Keychain.
 
 ## Environment variables
@@ -66,6 +68,14 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `share.bind` | `"tailnet"` | Where a share link listens: `tailnet`, `lan` (plain HTTP, visible to that network) or an IPv4 address. Never every interface unless you type `0.0.0.0`. |
 | `share.port` | `8477` | Port of the read-only share link. 0 picks a free port. |
+
+### network
+
+| Key | Default | What it does |
+|---|---|---|
+| `network.enabled` (window or file) | `false` | The desktop app also listens on `network.bind` for API keys (`akou keys create`), so a phone or another computer reads what each key's scopes allow: a `read` key sees every call, dictation and job. The app's own token is refused there. Server mode ignores it. Applies at the next start. |
+| `network.bind` (window or file) | `"tailnet"` | Where the network listener listens: `tailnet` (the tailnet encrypts it; with no tailnet address yet, it looks again every 30 s), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start. |
+| `network.port` (window or file) | `8478` | Port of the network listener. 0 picks a free port. Applies at the next start. |
 
 ### server
 

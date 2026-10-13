@@ -453,8 +453,8 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
-      access: "admin",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`. In the JSON answer each line has `part` and `a0`/`a1`, its start and end in seconds into that part's audio (`GET /v1/calls/{id}/audio/{part}`): seek a player there, not by the wall-clock `w0`, which keeps running through a pause while the audio does not.",
+      access: "read",
       modes: ["app"],
       params: { id: CALL_ID },
       query: {
@@ -674,6 +674,10 @@ export function followRoutes(r: Router<ApiApp>): void {
           w0: l.w0,
           w1: l.w1,
           part: l.part,
+          // Seconds into the part's audio: where a player seeks, since a pause stops the audio
+          // while the wall clock runs on.
+          a0: l.a0,
+          a1: l.a1,
           ch: l.ch,
           spk: l.spk,
           speaker: l.speaker,

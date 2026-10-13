@@ -25,7 +25,7 @@
  *   a `hello` can name; `capabilities.live` is true while there is one.
  *   `wyoming_port` is the Wyoming listener's port (SV-C2) while `server.wyoming` has it up, else
  *   null; `capabilities.wyoming` is true while it is.
- * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
+ * - `GET /v1/keys/me`, any key whatever its scopes: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
 
@@ -34,6 +34,7 @@ import { RECOGNIZER } from "../../asr/models.ts";
 import type { QueueStats } from "../../server/jobs.ts";
 import { hardwareChoice, type ModelChoice } from "../../server/model-store.ts";
 import { PRESET_NAMES, PRESETS } from "../../server/presets.ts";
+import { SCOPES } from "../access.ts";
 import { caller } from "../caller.ts";
 import { json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -212,8 +213,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/keys/me",
     {
       id: "keys.me",
-      doc: "The calling key: its id, name, scopes and creation time. The app's own token answers as `app` with the `admin` scope. Executor's health check calls it.",
-      access: "jobs",
+      doc: "The calling key: its id, name, scopes and creation time. Any key may call it, whatever its scopes; the app's own token answers as `app` with the `admin` scope. Executor's health check calls it, and a client reads what its key may see from it.",
+      access: SCOPES,
       modes: ["app", "server"],
       ok: 200,
     },

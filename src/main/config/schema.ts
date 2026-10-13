@@ -205,6 +205,40 @@ export const SETTINGS = {
     default: 8477,
     doc: "Port of the read-only share link. 0 picks a free port.",
   },
+  "network.enabled": {
+    type: "boolean",
+    default: false,
+    // Putting the history on the network is the user's call, in the window or the file; the API
+    // token must not become a way to do it.
+    apiWritable: false,
+    windowWritable: true,
+    doc: "The desktop app also listens on `network.bind` for API keys (`akou keys create`), so a phone or another computer reads what each key's scopes allow: a `read` key sees every call, dictation and job. The app's own token is refused there. Server mode ignores it. Applies at the next start.",
+  },
+  "network.bind": {
+    type: "string",
+    min: 1,
+    max: 45,
+    default: "tailnet",
+    apiWritable: false,
+    windowWritable: true,
+    check: (v) =>
+      v === "tailnet" ||
+      v === "lan" ||
+      /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(v as string)
+        ? null
+        : "tailnet, lan or an IPv4 address",
+    doc: "Where the network listener listens: `tailnet` (the tailnet encrypts it; with no tailnet address yet, it looks again every 30 s), `lan` (plain HTTP, visible to that network) or an IPv4 address. Applies at the next start.",
+  },
+  "network.port": {
+    type: "integer",
+    min: 1024,
+    max: 65535,
+    also: [0],
+    default: 8478,
+    apiWritable: false,
+    windowWritable: true,
+    doc: "Port of the network listener. 0 picks a free port. Applies at the next start.",
+  },
   "api.bind": {
     type: "string",
     max: 45,

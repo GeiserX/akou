@@ -100,6 +100,8 @@ export interface RigOptions {
   quitStepMs?: number;
   /** The macOS bundle the app takes itself to run from; none by default (a test runs from source). */
   bundle?: string | null;
+  /** The machine's network interfaces, for a share's or the network listener's address. */
+  interfaces?: AppOptions["interfaces"];
   /**
    * The real models in `asr.modelsDir` and this machine's own GPU, as an install runs them: no fake
    * recognizer and no stand-in for the accelerator probe. Only model-gated tests set it.
@@ -177,6 +179,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.window ? { window: o.window } : {}),
     ...(o.quitStepMs ? { quitStepMs: o.quitStepMs } : {}),
     ...(o.bundle !== undefined ? { bundle: o.bundle } : {}),
+    ...(o.interfaces ? { interfaces: o.interfaces } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

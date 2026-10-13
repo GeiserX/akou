@@ -3,7 +3,7 @@
   "info": {
     "title": "akou",
     "version": "1.2.0",
-    "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
+    "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`: `open`, a scope, or the list of scopes that reach it; an `admin` key reaches every operation). Generated from the route table; do not edit by hand.",
     "license": {
       "name": "GPL-3.0-or-later",
       "identifier": "GPL-3.0-or-later"
@@ -1285,7 +1285,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       }
     },
     "/v1/calls/{id}": {
@@ -1339,7 +1339,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "patch": {
         "operationId": "calls.rename",
@@ -2241,7 +2241,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "post": {
         "operationId": "workspaces.add",
@@ -2498,7 +2498,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`. In the JSON answer each line has `part` and `a0`/`a1`, its start and end in seconds into that part's audio (`GET /v1/calls/{id}/audio/{part}`): seek a player there, not by the wall-clock `w0`, which keeps running through a pause while the audio does not.",
         "parameters": [
           {
             "name": "id",
@@ -2664,7 +2664,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       }
     },
     "/v1/calls/{id}/context": {
@@ -3281,7 +3281,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "post": {
         "operationId": "notes.add",
@@ -3760,7 +3760,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "put": {
         "operationId": "memo.put",
@@ -5221,7 +5221,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "delete": {
         "operationId": "dictations.clear",
@@ -5319,7 +5319,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       },
       "delete": {
         "operationId": "dictations.delete",
@@ -5429,7 +5429,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       }
     },
     "/v1/dictations/{id}/retry": {
@@ -6326,7 +6326,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       }
     },
     "/v1/calls/{id}/audio/{part}": {
@@ -6393,7 +6393,7 @@
         "x-akou-modes": [
           "app"
         ],
-        "x-akou-access": "admin"
+        "x-akou-access": "read"
       }
     },
     "/v1/calls/{id}/export": {
@@ -6673,7 +6673,7 @@
         "tags": [
           "keys"
         ],
-        "description": "The calling key: its id, name, scopes and creation time. The app's own token answers as `app` with the `admin` scope. Executor's health check calls it.",
+        "description": "The calling key: its id, name, scopes and creation time. Any key may call it, whatever its scopes; the app's own token answers as `app` with the `admin` scope. Executor's health check calls it, and a client reads what its key may see from it.",
         "responses": {
           "200": {
             "description": "OK",
@@ -6705,7 +6705,11 @@
           "app",
           "server"
         ],
-        "x-akou-access": "jobs"
+        "x-akou-access": [
+          "jobs",
+          "read",
+          "admin"
+        ]
       }
     },
     "/v1/jobs": {
@@ -6848,7 +6852,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
+        "description": "The key's jobs, newest first (an admin or a `read` key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
         "parameters": [
           {
             "name": "status",
@@ -6879,7 +6883,7 @@
             "name": "key",
             "in": "query",
             "required": false,
-            "description": "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
+            "description": "Only the jobs of this key id. A key that is neither admin nor `read` sees its own jobs only.",
             "schema": {
               "type": "string"
             }
@@ -6945,7 +6949,10 @@
           "app",
           "server"
         ],
-        "x-akou-access": "jobs"
+        "x-akou-access": [
+          "jobs",
+          "read"
+        ]
       }
     },
     "/v1/jobs/{id}": {
@@ -7018,7 +7025,10 @@
           "app",
           "server"
         ],
-        "x-akou-access": "jobs"
+        "x-akou-access": [
+          "jobs",
+          "read"
+        ]
       },
       "patch": {
         "operationId": "jobs.rename",
@@ -7242,7 +7252,10 @@
           "app",
           "server"
         ],
-        "x-akou-access": "jobs"
+        "x-akou-access": [
+          "jobs",
+          "read"
+        ]
       }
     },
     "/v1/jobs/{id}/audio": {
@@ -7307,7 +7320,10 @@
           "app",
           "server"
         ],
-        "x-akou-access": "jobs"
+        "x-akou-access": [
+          "jobs",
+          "read"
+        ]
       }
     },
     "/v1/events": {
@@ -7442,7 +7458,7 @@
         "tags": [
           "keys"
         ],
-        "description": "Create a key for a program. `scopes` is `jobs` (the default) or `admin`; `callback_hosts` are the hosts its callback URLs may name. The answer holds the `ak_` key and the `whsec_` webhook secret, shown this once only.",
+        "description": "Create a key for a program. `scopes` is a list of `jobs` (the default), `read` (every call, dictation and job, read only) and `admin` (everything; it includes the others); `callback_hosts` are the hosts its callback URLs may name. The answer holds the `ak_` key and the `whsec_` webhook secret, shown this once only.",
         "requestBody": {
           "required": true,
           "content": {

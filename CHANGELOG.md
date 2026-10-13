@@ -2,6 +2,13 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## Unreleased
+
+### Desktop
+- **A phone can read the desktop app's history with its own key.** A new key scope, `read`, sees every call, dictation and file job on one akou: the call list, each call's transcript, summary, notes and memo, its audio (with `Range`), the dictations and their audio, and every key's jobs. It writes nothing and reaches no setting, model, key, share, window or quit. A key can hold several scopes: `akou keys create --name iphone --scope read --scope jobs`. `GET /v1/keys/me` answers any key, so a client learns what its key may see.
+- **The desktop app can listen on your tailnet for keys, when you turn it on.** `network.enabled` (off by default) opens a second listener on `network.bind` (`tailnet`, `lan` or an IPv4 address) and `network.port` (8478). It takes `ak_` keys only: the app's own token is refused there, so it never crosses the network, and a refused key is a `key.refused` line in the log. With no tailnet address yet the app logs one line, looks again every 30 s, and opens the listener once Tailscale is up. Server mode ignores these settings. [server.md](docs/server.md#the-desktop-apps-history-on-your-phone) walks through it.
+- **A phone seeks a call's audio to the right place after a pause.** Each line of `GET /v1/calls/{id}/transcript` now carries `part`, `a0` and `a1`, its start and end in seconds into that part's audio (`GET /v1/calls/{id}/audio/{part}`), as the window seeks by. The wall-clock `w0` keeps running through a pause while the audio does not, so a player that seeked by it landed late.
+
 ## 1.1.0 — Home Assistant and Bazarr talk to the server, and the window behaves
 
 The server now speaks to two more things on a home network, and the desktop window stops scrolling past the app. The 8-hour soak that 1.0.0 shipped without ran for this release, on a build with every change but the window fix, with a busy process on every core: no hole in the audio, heap growth 0.16 MB, the event loop late by at most 186 ms, and nothing unreadable in the log ([docs/gates/soak-1.1.0.json](docs/gates/soak-1.1.0.json)).

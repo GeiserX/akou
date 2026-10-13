@@ -133,6 +133,30 @@ There is no resume. A new socket is a new session: send `hello`, the OpusHead an
 
 **The recording, kept.** At the end, upload the file as a job: `POST /v1/jobs` with `keep_audio=true`, an `Idempotency-Key` header of the recording's own id (a retried upload gets the first job back), and `metadata` for what the client files it under, such as `{"workspace": "home", "recording_id": "…"}`, which every job answer carries back. A kept job keeps its upload after it ends, `GET /v1/jobs/{id}/audio` serves it back byte for byte (with `Range`, so a player can seek), and `server.retain_days` never removes it: the job, its result, its events and its audio stay until a client deletes the job. The job's `keep_audio` says whether the server keeps it, so a client deletes its own copy only once it reads `true`. The words with times come from `GET /v1/jobs/{id}/result`.
 
+## The desktop app's history on your phone
+
+The desktop app can let a phone, or another computer, read its calls, dictations and file jobs with an API key, as the window shows them. It is off until you turn it on. The network side takes keys only, so the app's own token never leaves the machine.
+
+1. Make a key on the Mac. Give the phone a `read` key; add `jobs` only if it records to that machine; never `admin`. `read` sees every call, dictation and job, with transcripts, summaries, notes and kept audio, and changes nothing. A phone that also uploads its recordings here gets both:
+
+   ```sh
+   akou keys create --name iphone --scope read --scope jobs
+   ```
+
+   It prints the `ak_` key once. The key lives in `keys.json` beside the app's settings, and `akou keys list` and `akou keys revoke ID` manage it as on a server.
+
+2. Turn the listener on in the window's settings (Advanced, Server mode) or in `~/.config/akou/config.json`, then quit and open akou again. [Configuration](configuration.md#network) lists the three settings.
+
+   ```json
+   { "network.enabled": true }
+   ```
+
+   By default it listens on this Mac's tailnet address, port 8478, and the log says where (`network: listening on http://100.x.y.z:8478/v1`). The tailnet encrypts the traffic. With no tailnet address yet, as when Tailscale starts after akou, the app logs one line and looks again every 30 s until it can listen. Set `network.bind` to `lan` to listen on the Mac's private LAN address instead. That is plain HTTP, readable by anyone on that network. An IPv4 address names one address exactly. `network.port` moves the port.
+
+3. On the phone, add the server as `http://<the Mac's tailnet name or address>:8478` with the key. `GET /v1/keys/me` tells a client which scopes its key holds, so it shows the history only to a key that may read it.
+
+A `read` key on any route that changes something, or on settings, keys, models or quit, gets 403. The app's own token gets 401 there. A refused key is a `key.refused` line in the app's log, with the key's first characters and the address it came from. The listener stops when the app quits. In server mode the `network.*` settings do nothing, since the server already listens where `api.bind` says.
+
 ## Home Assistant
 
 Home Assistant's Wyoming integration adds akou as a speech-to-text engine for Assist, by host and port. Turn the listener on with `AKOU_WYOMING=true` (the `server.wyoming` setting), publish its port (`server.wyoming_port`, 10300) where Home Assistant can reach it, and add the Wyoming integration with akou's host and that port. The protocol has no key and no TLS, so keep the port on your own network. See `server.wyoming` in [Configuration](configuration.md) for how it binds.

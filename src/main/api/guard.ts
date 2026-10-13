@@ -42,7 +42,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_IDENTITY, allows, type GuardRoute, type Identity } from "./access.ts";
+import { APP_IDENTITY, accessLabel, allows, type GuardRoute, type Identity } from "./access.ts";
 
 export const TOKEN_FILE = "token";
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -110,7 +110,7 @@ function scopeRule(
   return refuse(
     403,
     "forbidden",
-    `this key's scope does not reach ${req.method} ${new URL(req.url).pathname}; it needs ${ctx.route.access}`,
+    `this key's scope does not reach ${req.method} ${new URL(req.url).pathname}; it needs ${accessLabel(ctx.route.access)}`,
   );
 }
 
@@ -224,6 +224,38 @@ export function serverGuard(o: ServerGuardOptions): Guard {
         if (identity) o.keys.touch(identity.id);
       }
     }
+    if (identity === null && ctx.route.access !== "open") {
+      if (given !== null) {
+        o.onRefused?.({
+          source: ctx.source,
+          keyPrefix: given.startsWith("ak_") ? given.slice(0, 7) : "",
+          path: new URL(req.url).pathname,
+        });
+      }
+      return unauthorized();
+    }
+    return scopeRule(req, identity, ctx) ?? bodyRule(req, ctx) ?? { identity };
+  };
+}
+
+/**
+ * The guard of the desktop app's network listener (`network.enabled`): keys only. The app's own
+ * token is never compared, so it is refused there like any secret akou does not know, and never
+ * worth sending over the network. Any Host is accepted, since phones and other computers name the
+ * machine as they like: the attack the Host rule stops, DNS rebinding, runs in a browser, and a
+ * browser's requests are refused by their headers (rule 2) before any key is read. Then the scope
+ * and body rules as everywhere, and a refused key is audited as in server mode (SV-K6).
+ */
+export function networkGuard(o: Pick<ServerGuardOptions, "keys" | "onRefused">): Guard {
+  return (req, ctx) => {
+    for (const h of BROWSER_HEADERS) {
+      if (req.headers.has(h)) {
+        return refuse(403, "browser_request", `requests from a browser are refused (${h})`);
+      }
+    }
+    const given = bearerOf(req);
+    const identity = given === null ? null : o.keys.authenticate(given);
+    if (identity) o.keys.touch(identity.id);
     if (identity === null && ctx.route.access !== "open") {
       if (given !== null) {
         o.onRefused?.({

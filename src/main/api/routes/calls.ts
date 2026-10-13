@@ -310,7 +310,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     {
       id: "calls.list",
       doc: "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content. `updatedAt` is when the call's transcript, notes, names, title, workspace or vocabulary corrections last changed. With `updatedAfter` or `cursor`, the list is for an indexer instead: only the calls changed after that point, oldest change first, with the `cursor` to keep for the next request and `more` when a page was left out.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       query: {
         limit: { type: "integer", min: 1, max: 1000, default: 50, doc: "At most this many calls." },
@@ -363,7 +363,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     {
       id: "calls.get",
       doc: "One call: its title, workspace, state, parts, speakers, health, the final pass and the log cursor.",
-      access: "admin",
+      access: "read",
       modes: ["app"],
       params: { id: CALL_ID },
       ok: 200,

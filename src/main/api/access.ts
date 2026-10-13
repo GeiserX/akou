@@ -4,11 +4,14 @@
  * table and checked in one place (the guard, fed by `startApiServer`) before any handler runs.
  *
  * - `open`: no key at all (`/healthz`, `GET /v1/server`, `GET /v1/openapi.json`, the admin login).
- * - `jobs`: any key. A `jobs` key reads and writes its own jobs, events and results, and
- *   `GET /v1/keys/me` (SV-K3).
- * - `admin`: an `admin` key, the app's own token, or an admin session. Every call route is
- *   `admin`: a `jobs` key has no business with calls, settings or quit.
+ * - `jobs`: a `jobs` key reads and writes its own jobs, events and results (SV-K3).
+ * - `read`: a `read` key reads the history: every call, dictation and job, with transcripts,
+ *   summaries, notes and kept audio. It writes nothing, and never reaches settings, models, keys,
+ *   devices, share, window or quit.
+ * - `admin`: an `admin` key, the app's own token, or an admin session, reaches every route.
  *
+ * A route reached by several scopes names them all (`["jobs", "read"]` on the job reads, `SCOPES`
+ * on `GET /v1/keys/me`, which any key may call); `admin` reaches every route whatever it names.
  * Every route states its level in its `RouteDoc`; there is no default to forget.
  *
  * This module imports only `net.ts`, which imports nothing of akou's: the guard needs it, and the
@@ -17,11 +20,11 @@
 
 import { isNonPublicHost } from "./net.ts";
 
-export const SCOPES = ["jobs", "admin"] as const;
+export const SCOPES = ["jobs", "read", "admin"] as const;
 export type Scope = (typeof SCOPES)[number];
 
-/** Who may call a route: anyone, any key, or admin only. */
-export type Access = "open" | Scope;
+/** Who may call a route: anyone, or a key holding a scope it names (`admin` reaches every route). */
+export type Access = "open" | Scope | readonly Scope[];
 
 /**
  * What the guard needs to know about a route. A route's `RouteDoc` extends it, so the route table
@@ -45,7 +48,7 @@ export interface GuardRoute extends RouteMeta {
  * request with none is 401 before any 404, and a valid key then gets the 404 or 405 it earned,
  * not a 403 that says the typo needs admin.
  */
-export const UNKNOWN_ROUTE: GuardRoute = { access: "jobs", upload: false };
+export const UNKNOWN_ROUTE: GuardRoute = { access: SCOPES, upload: false };
 
 export interface Identity {
   /** The key id, or `app` for the app's token, or `session` for an admin login. */
@@ -66,12 +69,23 @@ export const APP_IDENTITY: Identity = {
   callbackHosts: ["*"],
 };
 
-/** Does this identity reach a route of this level? `admin` includes `jobs`. */
+/** Do these scopes reach a route of this level? `admin` reaches every route. */
+export function reaches(scopes: readonly Scope[], access: Access): boolean {
+  if (access === "open") return true;
+  if (scopes.includes("admin")) return true;
+  const named: readonly Scope[] = typeof access === "string" ? [access] : access;
+  return scopes.some((s) => named.includes(s));
+}
+
+/** Does this identity reach a route of this level? */
 export function allows(identity: Identity | null, access: Access): boolean {
   if (access === "open") return true;
-  if (!identity) return false;
-  if (identity.scopes.includes("admin")) return true;
-  return access === "jobs" && identity.scopes.includes("jobs");
+  return identity !== null && reaches(identity.scopes, access);
+}
+
+/** A level in words, for a refusal: `admin`, or `jobs or read`. */
+export function accessLabel(access: Access): string {
+  return typeof access === "string" ? access : access.join(" or ");
 }
 
 /**
