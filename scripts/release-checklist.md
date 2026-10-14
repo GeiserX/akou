@@ -31,12 +31,14 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
 5. Before a stable release (1.0.0 or later), on the reference Mac: the 8-hour soak, at real time, with a busy process on every core, through the Rust helper in file mode, which writes a real Opus file and opens no device (TS-24, [TRAPS](../docs/TRAPS.md) T3.8):
 
    ```sh
-   cargo build --release --manifest-path native/akou-capture/Cargo.toml
+   helper=$(cargo build --release --manifest-path native/akou-capture/Cargo.toml --message-format=json \
+     | jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' | grep akou-capture | tail -1)
+   "$helper" --version   # must say the version step 3 stamped
    bun scripts/soak.ts --speed 1 --minutes 480 --burner \
-     --helper native/akou-capture/target/release/akou-capture --out "docs/gates/soak-$(bun -p "require('./package.json').version").json"
+     --helper "$helper" --out "docs/gates/soak-$(bun -p "require('./package.json').version").json"
    ```
 
-   Every check prints `ok`. The JSON is named after the version step 3 stamped; commit it with the release. A runner job cannot do this: its limit is 6 hours.
+   Take the helper's path from cargo, never from `native/akou-capture/target/release`: a box with `CARGO_TARGET_DIR` set (the reference Mac sends every build to `/Volumes/Data/cargo-targets`) leaves whatever was last copied under `target/`, and the 1.2.0 soak first started with a 1.0.0 helper that way. Every check prints `ok`. The JSON is named after the version step 3 stamped; commit it with the release. A runner job cannot do this: its limit is 6 hours.
 
 ## The tag
 
