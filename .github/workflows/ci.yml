@@ -114,7 +114,7 @@ jobs:
         run: bun run check:coverage
       # The JUnit file for the trap check (the `traps` job) and, from Linux, the lcov file.
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-check-${{ runner.os }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
@@ -175,7 +175,7 @@ jobs:
           AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && matrix.browser == 'chromium' && 'ui-shots' || '' }}
       - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-ui-${{ matrix.browser }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
@@ -185,7 +185,7 @@ jobs:
           retention-days: 14
       - id: shots
         if: always() && hashFiles('ui-shots/*.png') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-screenshots
           path: ui-shots/*.png
@@ -858,7 +858,7 @@ jobs:
       # With both binaries set every test runs: the floor allows no skip.
       - run: bun scripts/ci/test-floor.ts capture-e2e .junit-capture-e2e.xml
       - if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: junit-capture-e2e-${{ runner.os }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
@@ -1835,7 +1835,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: junit-*
           path: junit
