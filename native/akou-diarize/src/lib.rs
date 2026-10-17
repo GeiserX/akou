@@ -208,6 +208,8 @@ impl Steps {
 /// non-contiguous layout"), when a whole stream, or a live flush's remainder, is one chunk whose
 /// mel frame count (`n / 160 + 1`) is a multiple of 8. Padding up to the next hop, at most 160
 /// samples (10 ms) of silence, moves the count off the multiple. Turns are clipped back to the real audio.
+/// 0.4.0 passes the chunk in the standard layout, so the refusal is gone upstream; the padding stays
+/// until a run against the real model shows every length decides without it.
 pub fn whole_chunk_pad(n: usize) -> usize {
     if (n / HOP + 1).is_multiple_of(SUBSAMPLING) {
         HOP - n % HOP

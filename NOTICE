@@ -201,7 +201,7 @@ is in its source package at the repository given.
   onig_sys v69.9.3                          MIT                                https://github.com/rust-onig/rust-onig
   ort v2.0.0-rc.13                          MIT OR Apache-2.0                  https://github.com/pykeio/ort
   ort-sys v2.0.0-rc.13                      MIT OR Apache-2.0                  https://github.com/pykeio/ort
-  parakeet-rs v0.3.8                        MIT OR Apache-2.0                  https://github.com/altunenes/parakeet-rs
+  parakeet-rs v0.4.0                        MIT OR Apache-2.0                  https://github.com/altunenes/parakeet-rs
   pin-project-lite v0.2.17                  Apache-2.0 OR MIT                  https://github.com/taiki-e/pin-project-lite
   ppv-lite86 v0.2.21                        MIT OR Apache-2.0                  https://github.com/cryptocorrosion/cryptocorrosion
   primal-check v0.3.4                       MIT OR Apache-2.0                  https://github.com/huonw/primal
