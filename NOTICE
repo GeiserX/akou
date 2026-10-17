@@ -117,7 +117,7 @@ its source package at the repository given.
   tracing-core v0.1.36           MIT                                https://github.com/tokio-rs/tracing
   unicode-ident v1.0.26          (MIT OR Apache-2.0) AND Unicode-3.0  https://github.com/dtolnay/unicode-ident
   uuid v1.26.1                   Apache-2.0 OR MIT                  https://github.com/uuid-rs/uuid
-  wasapi v0.25.0                 MIT                                https://github.com/HEnquist/wasapi-rs
+  wasapi v0.26.0                 MIT                                https://github.com/HEnquist/wasapi-rs
   windowfunctions v0.1.1         MIT                                https://github.com/HEnquist/windowfunctions-rs
   windows v0.62.2                MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
   windows-collections v0.3.2     MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
