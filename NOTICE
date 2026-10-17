@@ -220,7 +220,7 @@ is in its source package at the repository given.
   ryu v1.0.23                               Apache-2.0 OR BSL-1.0              https://github.com/dtolnay/ryu
   serde v1.0.229                            MIT OR Apache-2.0                  https://github.com/serde-rs/serde
   serde_core v1.0.229                       MIT OR Apache-2.0                  https://github.com/serde-rs/serde
-  serde_json v1.0.151                       MIT OR Apache-2.0                  https://github.com/serde-rs/json
+  serde_json v1.0.154                       MIT OR Apache-2.0                  https://github.com/serde-rs/json
   smallvec v1.16.1                          MIT OR Apache-2.0                  https://github.com/servo/rust-smallvec
   spm_precompiled v0.1.4                    Apache-2.0                         https://github.com/huggingface/spm_precompiled
   static_assertions v1.1.0                  MIT OR Apache-2.0                  https://github.com/nvzqz/static-assertions-rs
