@@ -3349,7 +3349,7 @@ describe("DC-H1: the History page", () => {
       expect(await heights()).toEqual(still);
 
       // The last row at the bottom of the window: Delete stays on screen.
-      await page.$eval(row("d012"), (el) => el.scrollIntoView({ block: "end" }));
+      await page.$eval(row("d012"), (el) => el.scrollIntoView({ block: "end", behavior: "instant" }));
       await page.click(`${row("d012")} .hist-more`);
       const box = await page.$eval(`${row("d012")} .hist-menu`, (m) => {
         const r = m.getBoundingClientRect();
@@ -3358,7 +3358,7 @@ describe("DC-H1: the History page", () => {
       expect(box.up).toBe(true);
       expect(box.bottom).toBeLessThanOrEqual(box.view);
       // A row near the top still opens its menu below the button.
-      await page.$eval(row("d001"), (el) => el.scrollIntoView({ block: "start" }));
+      await page.$eval(row("d001"), (el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
       await page.click(`${row("d001")} .hist-more`);
       expect(await page.$eval(`${row("d001")} .hist-menu`, (m) => m.classList.contains("up"))).toBe(
         false,

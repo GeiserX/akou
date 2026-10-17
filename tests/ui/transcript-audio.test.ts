@@ -491,7 +491,7 @@ describe("[W4.4] the line menu stays with its line", () => {
               s.scrollTo({ top: s.scrollTop + d, behavior: "instant" });
             }, dy);
           const open = async () => {
-            await page.$eval(row, (el) => el.scrollIntoView({ block: "center" }));
+            await page.$eval(row, (el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
             await page.click(`${row} .text`, { button: "right" });
             expect((await state()).open).toBe(true);
           };
