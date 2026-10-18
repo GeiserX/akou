@@ -1364,11 +1364,8 @@ export class AkouApp implements ApiApp {
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
         modelIdleMinutes: () => this.cfg.settings["asr.modelIdleMinutes"],
-        // What a dictation needs to start fast is loaded again; the rest waits for its next use.
-        onRelease: () => {
-          this.startWarm?.released();
-          this.warmDictationModels();
-        },
+        // Nothing is loaded again: each model waits for its next use, so an idle app holds none.
+        onRelease: () => this.startWarm?.released(),
       },
       (id) => this.manager.controller(id) as CallAccess | undefined,
     );
@@ -2973,7 +2970,8 @@ export class AkouApp implements ApiApp {
         }
         const before = process.memoryUsage().rss;
         const t = performance.now();
-        await asr.warmDictation(choice, recognizer);
+        // Not a use: the idle time leaves what the setting loads alone, memory alone lets it go.
+        await asr.warmDictation(choice, recognizer, false);
         const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
         this.log(
           "info",
@@ -2996,8 +2994,9 @@ export class AkouApp implements ApiApp {
   private warmLive(asr: LiveAsr): void {
     const { choice } = chooseLiveEngine("auto", [], this.liveContext().present);
     if (!choice) return;
+    // Not a use: a server keeps it ready for the first session; idle time counts from a session.
     asr
-      .warmDictation(choice, false)
+      .warmDictation(choice, false, false)
       .catch((err: Error) =>
         this.log("warn", `live: ${choice.engine} not loaded ahead: ${err.message}`),
       );
@@ -3580,8 +3579,9 @@ export class AkouApp implements ApiApp {
    * Loads what the next dictation needs on the live Worker (DC-E7): the dictation VAD, the
    * streaming model its words come from, and Parakeet only when the text comes from it (`fast`, or
    * no streaming model), so the first press after launch waits for none of them. Runs when the
-   * recognizer starts, ahead of anything else on its Worker, again whenever dictation warms (turned
-   * on, a model landed, a language changed), and after the Worker let go of idle models.
+   * recognizer starts, ahead of anything else on its Worker, and again whenever dictation warms
+   * (turned on, a model landed, a language changed). Not after the Worker let go of idle models:
+   * what a warm-up loads counts as a use, so `asr.modelIdleMinutes` lets it go too.
    */
   private warmDictationModels(): void {
     const asr = this.asr;

@@ -4,7 +4,7 @@
  *
  * - **Warm.** `warm()` starts the server when `dictation.engine` resolves to `best` and dictation
  *   is on, so the first press does not pay a cold start; it stays up until `stop()`, or until
- *   `asr.qwenIdleMinutes` pass with no dictation (0: never). A dictation while it is starting keeps
+ *   `asr.qwenIdleMinutes` (10 by default) pass with no dictation (0: never). A dictation while it is starting keeps
  *   its audio and is decoded once health answers.
  * - **One request per dictation**, greedy, with no context: learned words reach the recognizer
  *   only through DC-L7's measured gate, which is not built. A dictation longer than

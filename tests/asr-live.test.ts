@@ -991,6 +991,24 @@ describe("asr.modelIdleMinutes: an idle Worker lets go of its models", () => {
     expect(told).toBe(1);
   }, 20_000);
 
+  test("what a dictation warm-up loaded goes after the idle time, with no use, and stays gone", async () => {
+    let told = 0;
+    const r = rig({ idleMinutes: 5, onRelease: () => told++ });
+    await r.asr.ready;
+    // The app warms dictation at start and after a call: no press follows here.
+    await r.asr.warmDictation({ engine: "nemotron-en-560", lang: "en" });
+    await r.clock.advance(4 * MIN);
+    expect(told).toBe(0);
+    await r.clock.advance(1 * MIN + 1000);
+    expect(told).toBe(1);
+    await settle(r, () => r.models().releases === 1);
+    expect(r.logs.some((l) => l.msg === UNLOADED)).toBe(true);
+    await r.clock.advance(60 * MIN);
+    await flush();
+    expect(told).toBe(1);
+    expect(r.models().releases).toBe(1);
+  });
+
   test("positive control: without the setting nothing is let go", async () => {
     const r = rig();
     await oneCall(r);
@@ -1088,7 +1106,7 @@ describe("asr.warmAtStart: the live models loaded at start, let go when memory r
       setting: () => o.setting ?? "auto",
       available: () => mem.free,
       load: async (recognizer) => {
-        await r.asr.warmDictation(STREAM, recognizer);
+        await r.asr.warmDictation(STREAM, recognizer, false);
         return true;
       },
       release: (why) => r.asr.releaseNow(`with ${why}`),
