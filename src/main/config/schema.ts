@@ -841,7 +841,7 @@ export const SETTINGS = {
     min: 0,
     max: 10080,
     default: 5,
-    doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. What a dictation needs to start fast (its streaming model, or Parakeet when its text comes from Parakeet) is loaded again at once; the rest loads at its next use. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare.",
+    doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. Each loads again at its next use: the first dictation after that waits about 1 to 2 s for its streaming model. A model a dictation warm-up loaded at start or after a call goes the same way. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare.",
   },
   "asr.warmAtStart": {
     type: "string",
@@ -853,8 +853,8 @@ export const SETTINGS = {
     type: "integer",
     min: 0,
     max: 1440,
-    default: 0,
-    doc: "Stop the Qwen3-ASR server kept warm for dictation after this many idle minutes, to get its memory back; the next dictation starts it again. 0: never.",
+    default: 10,
+    doc: "Stop the Qwen3-ASR server kept warm for dictation after this many idle minutes, to get its memory back (about 3 GB); the next dictation starts it again and waits a few seconds for it. 0: never.",
   },
   "dictation.language": {
     type: "string",

@@ -1656,7 +1656,7 @@ export interface LiveAsrOptions {
    * no dictation has used them for this long (0: as soon as none does). Absent: they stay loaded.
    */
   modelIdleMinutes?(): number;
-  /** The Worker let go of its models: the host loads again what a dictation needs to start fast. */
+  /** The Worker let go of its models; nothing is loaded again until its next use. */
   onRelease?(): void;
 }
 
@@ -1882,7 +1882,10 @@ export class LiveAsr {
   /** Dictation streams open on the Worker, by token (DC-E5 live words). */
   private readonly dstreams = new Map<number, HostDictationStream>();
   /** Warm-ups of a dictation's models on the Worker, by token (DC-E7). */
-  private readonly warms = new Map<number, { resolve(): void; reject(e: Error): void }>();
+  private readonly warms = new Map<
+    number,
+    { resolve(): void; reject(e: Error): void; use: boolean }
+  >();
   private failed: string | null = null;
   private closed = false;
   /** A call or a dictation used the Worker's models since they were last let go. */
@@ -2014,14 +2017,20 @@ export class LiveAsr {
    * Loads a dictation's models on the Worker before its first press (DC-E7): its VAD, the
    * streaming model on `choice` unless a call runs one, and the recognizer when the dictation's
    * text comes from it (`recognizer`; by default only with no streaming model). Sent before the
-   * Worker is ready, it runs right after the Worker's start, ahead of anything asked later.
+   * Worker is ready, it runs right after the Worker's start, ahead of anything asked later. Once
+   * loaded it counts as a use (`use`), so `modelIdleMinutes` lets go of what it loaded; the
+   * `asr.warmAtStart` load passes false to keep its models while memory allows.
    */
-  warmDictation(choice: LiveChoice | null, recognizer = choice === null): Promise<void> {
+  warmDictation(
+    choice: LiveChoice | null,
+    recognizer = choice === null,
+    use = true,
+  ): Promise<void> {
     if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
     if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
     const token = ++this.decodeToken;
     return new Promise<void>((resolve, reject) => {
-      this.warms.set(token, { resolve, reject });
+      this.warms.set(token, { resolve, reject, use });
       this.transport.post({
         type: "dwarm",
         token,
@@ -2257,9 +2266,10 @@ export class LiveAsr {
 
   /**
    * Lets the Worker go of its models once nothing has used them for `modelIdleMinutes`: no call
-   * on it, no dictation open or decoding, no warm-up loading. What a dictation needs to start fast
-   * is loaded again at once (`onRelease`); everything else waits for its next use. The idle timer
-   * calls it; a test with its own clock calls it too. Answers whether the models were let go.
+   * on it, no dictation open or decoding, no warm-up loading. A finished warm-up counts as a use,
+   * so what it loaded goes too; every model waits for its next use (`onRelease` only tells the
+   * host). The idle timer calls it; a test with its own clock calls it too. Answers whether the
+   * models were let go.
    */
   releaseIdle(): boolean {
     this.disarmIdle();
@@ -2537,6 +2547,9 @@ export class LiveAsr {
       case "dwarmed": {
         const w = this.warms.get(m.token);
         this.warms.delete(m.token);
+        // What a dictation's warm-up loaded goes after the idle time like a use's, never held for
+        // good; `asr.warmAtStart`'s load keeps its models.
+        if (!m.error && w?.use) this.touch();
         if (m.error) w?.reject(new Error(m.error));
         else w?.resolve();
         return;
