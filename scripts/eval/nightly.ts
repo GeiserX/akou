@@ -1260,11 +1260,15 @@ async function main(argv: string[]): Promise<number> {
   if (only.has("qwen")) {
     const accelerator = flag("--accelerator");
     // Windows runs Qwen by hand only, with its backend named (the gate, ASR-12), not each night.
-    if (platform.startsWith("win32") && !accelerator)
+    // It still fetches the silence set's audio: the eval-data cache is shared across systems and
+    // saved once by whichever runner finishes first, and a Windows save without ES2004b left the
+    // other two fetching it from the AMI mirror every night (issue 417).
+    if (platform.startsWith("win32") && !accelerator) {
+      await silence(dataDir);
       notes.push(
         "Qwen3-ASR: not run on Windows each night; the Windows gate (ASR-12) runs it by hand with --accelerator",
       );
-    else
+    } else
       await qwenStage(
         flag("--qwen-models") ?? modelsDir,
         dataDir,
