@@ -4,7 +4,7 @@ All notable changes to akou. Versions follow [semantic versioning](https://semve
 
 ## 1.2.1 — an idle akou gives back about 5 GB
 
-akou kept several GB of memory long after the last dictation or call. Nothing leaked: two models stayed loaded so the next dictation would start at once, and neither was ever let go. Now both go after an idle stretch, and the first dictation after one waits a second or two for its model.
+akou kept several GB of memory long after the last dictation or call. Nothing leaked: two models stayed loaded so the next dictation would start at once, and neither was ever let go. Now both go after an idle stretch, and the first dictation after one waits a second or two for its model. The 8-hour soak ran for this release on the reference Mac, with a busy process on every core and the release's own capture helper in file mode: no hole in the audio, heap growth 0.02 MB, the event loop late by at most 135 ms, and nothing unreadable in the log ([docs/gates/soak-1.2.1.json](docs/gates/soak-1.2.1.json)).
 
 ### Desktop
 - **Qwen's server for `best` dictation stops after 10 idle minutes** (#419). `asr.qwenIdleMinutes` now defaults to 10 instead of never. The server holds about 3 GB, and on the reference Mac it had stayed up for 13 and 18 hours, until the app quit. The next dictation starts it again and waits a few seconds for it. 0 still keeps it up.
