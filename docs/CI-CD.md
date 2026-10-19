@@ -52,7 +52,7 @@ changes ─┬─ lint ───────────────────
 
 ### 2.2 Nightly: `nightly.yml`
 
-Scheduled once a week on `main` (Monday 03:17 UTC), plus dispatch. It ran daily until 2026-10-19; akou changes rarely, so most red nights came from outside servers, not the code. Today `nightly.yml` holds `models-nightly` and the accelerated `soak` (TS-24); the WebKit window leg (TS-14) runs in `ci.yml`'s `ui` job under `ci-ok`. `models-nightly` scores the default recognizer, and Qwen3-ASR on macOS and Linux (ASR-5); the five-engine floor, language id, streaming and the vocabulary evaluation are still missing, and wait on their engines and set.
+Scheduled once a week on `main` (Monday 03:17 UTC), plus dispatch. Weekly, because akou changes rarely: a daily run mostly tested outside servers, not the code. Today `nightly.yml` holds `models-nightly` and the accelerated `soak` (TS-24); the WebKit window leg (TS-14) runs in `ci.yml`'s `ui` job under `ci-ok`. `models-nightly` scores the default recognizer, and Qwen3-ASR on macOS and Linux (ASR-5); the five-engine floor, language id, streaming and the vocabulary evaluation are still missing, and wait on their engines and set.
 
 - `models-nightly` on three OSes: every engine in the registry with the five-engine floor, the evaluation sets, WER, diarization error, language id, streaming numbers, latency percentiles, the replay recall floor, the vocabulary evaluation with its positive control ([TESTING §4.5](TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization)). Speed budgets gate the default engines only.
 - `clock-shift`: the unit and e2e suites a year in the future and in two unusual time zones. The zone runs are held to check's Linux floor; the year-ahead run to that floor moved by the tests a shifted clock skips.
