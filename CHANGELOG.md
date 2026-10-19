@@ -2,6 +2,18 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.1 — an idle akou gives back about 5 GB
+
+akou kept several GB of memory long after the last dictation or call. Nothing leaked: two models stayed loaded so the next dictation would start at once, and neither was ever let go. Now both go after an idle stretch, and the first dictation after one waits a second or two for its model. The 8-hour soak ran for this release on the reference Mac, with a busy process on every core and the release's own capture helper in file mode: no hole in the audio, heap growth 0.02 MB, the event loop late by at most 135 ms, and nothing unreadable in the log ([docs/gates/soak-1.2.1.json](docs/gates/soak-1.2.1.json)).
+
+### Desktop
+- **Qwen's server for `best` dictation stops after 10 idle minutes** (#419). `asr.qwenIdleMinutes` now defaults to 10 instead of never. The server holds about 3 GB, and on the reference Mac it had stayed up for 13 and 18 hours, until the app quit. The next dictation starts it again and waits a few seconds for it. 0 still keeps it up.
+- **The streaming model is no longer loaded straight back after an idle release** (#419). After `asr.modelIdleMinutes` (5) the app let go of its models, then reloaded the dictation's streaming model at once, about 1.9 GB, and nothing ever let that one go. Now nothing reloads, and a model that a dictation warm-up loads, at launch or after a call, goes after the idle time too. The first press after an idle stretch waits about 1 to 2 s for the streaming model. As before, what `asr.warmAtStart` or a server loads ahead stays until a call or dictation uses it, and only then goes after the idle time; `asr.warmAtStart` also lets memory pressure free it.
+
+### Behind the scenes
+- The nightly no longer downloads an AMI meeting from the Edinburgh mirror every night (#418). The Windows runner, which skips Qwen, had saved the shared evaluation cache without the silence set's audio, so macOS and Linux fetched it each night, and the night the mirror was down the nightly went red.
+- Dependencies: parakeet-rs 0.4.0 in the diarization helper, which fixes Sortformer's non-contiguous layout upstream (#415); wasapi 0.26.0 in the Windows capture helper (#413); serde_json 1.0.154 (#412); transcribe-cpp 0.4.0, zod 4.6.7 and Playwright 1.64 (#414); upload-artifact 7.0.2 and download-artifact 8.0.2 in CI (#416). Playwright 1.64's WebKit animates `scrollIntoView` under `scroll-behavior: smooth`, so two window tests now scroll with `behavior: "instant"`.
+
 ## 1.2.0 — your phone reads the Mac's history, and a call's first line comes in about a second
 
 The desktop app can now be read from another device with a key that sees history and changes nothing, so the phone shows the Mac's old calls and transcripts the way the desktop window does. A default call's first line no longer waits for a model the call never uses: 1.3 s instead of 6 to 8 s on a busy Mac. The server gives an idle model's memory back sooner and stops inventing subtitles on silence, and the dictation key says why it does nothing when Accessibility is missing. The 8-hour soak ran for this release on the reference Mac, with a busy process on every core and the release's own capture helper in file mode: no hole in the audio, heap growth 0.17 MB, the event loop late by at most 227 ms, and nothing unreadable in the log ([docs/gates/soak-1.2.0.json](docs/gates/soak-1.2.0.json)).
