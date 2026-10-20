@@ -36,6 +36,7 @@ import { vocab } from "./commands/vocab.ts";
 import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
 import type { Command, Ctx, GrantChecker, Io, Keys } from "./context.ts";
+import { installTrust } from "../tls-trust.ts";
 import { commandHelp } from "./help.ts";
 
 const mcp: Command = {
@@ -243,6 +244,7 @@ function stdinKeys(): Keys {
 }
 
 if (import.meta.main) {
+  installTrust();
   // A reader that closed stdout (`akou events -f | head -3`) has what it wanted: stop, exit 0.
   process.stdout.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "EPIPE") process.exit(EXIT.ok);
