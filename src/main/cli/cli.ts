@@ -18,6 +18,7 @@
 
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
+import { installTrust } from "../tls-trust.ts";
 import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
@@ -36,7 +37,6 @@ import { vocab } from "./commands/vocab.ts";
 import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
 import type { Command, Ctx, GrantChecker, Io, Keys } from "./context.ts";
-import { installTrust } from "../tls-trust.ts";
 import { commandHelp } from "./help.ts";
 
 const mcp: Command = {
