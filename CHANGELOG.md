@@ -2,6 +2,14 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.2 — akou stops trusting certificates made with the leaked eMudhra keys
+
+Eight eMudhra (emSign) intermediate certificates had private keys anyone could recover, and were revoked on 2026-10-18. Anyone can make a certificate for any site under them, and nothing checks the revocation. Bun, which akou runs on, trusted them whatever we set, so akou would have sent a remote server's key, an Anthropic or OpenAI API key, or a model download to whoever held such a certificate. This release stops that on the desktop app, the CLI and the server image. The 8-hour soak did not run for this release: the change touches only outbound TLS, nothing in capture or transcription.
+
+### Security
+- **akou no longer trusts emSign ECC Root CA - G3 or AAA Certificate Services for outbound TLS** (#422). At start, the app and the CLI take the process's default store, drop those roots, and pass the result on every request. `NODE_EXTRA_CA_CERTS` and `--use-system-ca` keep working. Before, `AKOU_URL=https://dv-g3b-emudhra.we-have-a-problem.com akou jobs list` connected and printed `No jobs`. Now it fails with `unable to get local issuer certificate`, and github.com, Hugging Face, Anthropic and OpenAI still connect.
+- The diarization helper's `webpki-root-certs` goes to 1.0.10, which drops the same root (#422).
+
 ## 1.2.1 — an idle akou gives back about 5 GB
 
 akou kept several GB of memory long after the last dictation or call. Nothing leaked: two models stayed loaded so the next dictation would start at once, and neither was ever let go. Now both go after an idle stretch, and the first dictation after one waits a second or two for its model. The 8-hour soak ran for this release on the reference Mac, with a busy process on every core and the release's own capture helper in file mode: no hole in the audio, heap growth 0.02 MB, the event loop late by at most 135 ms, and nothing unreadable in the log ([docs/gates/soak-1.2.1.json](docs/gates/soak-1.2.1.json)).
