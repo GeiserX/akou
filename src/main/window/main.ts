@@ -16,6 +16,7 @@ import { BUNDLE_ID } from "../app-info.ts";
 import { loadConfig } from "../config/schema.ts";
 import { systemSecrets } from "../config/secrets.ts";
 import { type AkouApp, AlreadyRunningError, startApp } from "../index.ts";
+import { installTrust } from "../tls-trust.ts";
 import { Bridge } from "./bridge.ts";
 import { BUNDLED_CLI, installCli, nodeOps } from "./install-cli.ts";
 import { loginProgram, setLoginItem } from "./login-item.ts";
@@ -23,6 +24,7 @@ import { electrobunUi } from "./native.ts";
 import { appForShell, Shell } from "./shell.ts";
 import { fileState } from "./state.ts";
 
+installTrust();
 const ui = electrobunUi();
 let shell: Shell | null = null;
 

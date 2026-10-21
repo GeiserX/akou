@@ -18,6 +18,7 @@
 
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
+import { installTrust } from "../tls-trust.ts";
 import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
@@ -243,6 +244,7 @@ function stdinKeys(): Keys {
 }
 
 if (import.meta.main) {
+  installTrust();
   // A reader that closed stdout (`akou events -f | head -3`) has what it wanted: stop, exit 0.
   process.stdout.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "EPIPE") process.exit(EXIT.ok);
