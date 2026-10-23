@@ -123,6 +123,8 @@ interface Remote {
   error: string | null;
   inFlight: number;
   probing: boolean;
+  /** The jobs it reported stalled at its last probe (`queue.stalled`, #407): none is sent to it. */
+  stalled: number;
 }
 
 export interface RemotesOptions {
@@ -157,6 +159,8 @@ interface Offer {
   offers: Set<string>;
   presets: string[];
   version: string | null;
+  /** Its `queue.stalled`, 0 from a server that does not report it. */
+  stalled: number;
 }
 
 export class Remotes {
@@ -189,6 +193,7 @@ export class Remotes {
           error: null,
           inFlight: 0,
           probing: false,
+          stalled: 0,
         };
         this.remotes.set(e.url, r);
       }
@@ -275,7 +280,7 @@ export class Remotes {
     // that failed while the probe was out marked the remote down (`failed`), and a probe that
     // ends `up` must say so, or the queue is never told the remote came back and a job routed to
     // it is never sent.
-    const before = JSON.stringify([r.state, [...r.offers]]);
+    const before = JSON.stringify([r.state, [...r.offers], r.stalled > 0]);
     if (found instanceof RemoteError) {
       r.state = found.kind === "refused" ? "refused" : "down";
       r.error = found.message;
@@ -283,17 +288,21 @@ export class Remotes {
       r.offers = found.offers;
       r.presets = found.presets;
       r.version = found.version;
+      r.stalled = found.stalled;
       r.state = "up";
       r.seen = true;
       r.error = null;
     }
     r.checkedAt = this.now();
-    if (JSON.stringify([r.state, [...r.offers]]) !== before) {
+    if (JSON.stringify([r.state, [...r.offers], r.stalled > 0]) !== before) {
+      const stalled = r.state === "up" && r.stalled > 0;
       this.o.log(
-        r.state === "up" ? "info" : "warn",
-        r.state === "up"
-          ? `remote.up ${r.entry.url} offers ${[...r.offers].join(", ") || "nothing"}`
-          : `remote.${r.state} ${r.entry.url}: ${r.error}`,
+        r.state === "up" && !stalled ? "info" : "warn",
+        stalled
+          ? `remote.stalled ${r.entry.url}: ${r.stalled} job(s) running past their time there, so no job is sent to it`
+          : r.state === "up"
+            ? `remote.up ${r.entry.url} offers ${[...r.offers].join(", ") || "nothing"}`
+            : `remote.${r.state} ${r.entry.url}: ${r.error}`,
       );
       this.o.onChange?.();
     }
@@ -325,6 +334,7 @@ export class Remotes {
       offers: new Set([...presets, ...engines]),
       presets,
       version: typeof s.body.version === "string" ? s.body.version : null,
+      stalled: Math.max(0, Number(s.body.queue?.stalled) || 0),
     };
   }
 
@@ -376,6 +386,8 @@ export class Remotes {
         continue;
       }
       if (r.state !== "up" || !names.some((n) => r.offers.has(n))) continue;
+      // A remote with a job stuck at running (#407) would hold a new one the same way.
+      if (r.stalled > 0) continue;
       if (r.inFlight >= REMOTE_IN_FLIGHT) {
         busy = true;
         continue;
@@ -459,7 +471,11 @@ export class Remotes {
     id: string,
     waitS: number,
     signal?: AbortSignal,
-  ): Promise<{ status: string; error?: { code: string; message: string } }> {
+  ): Promise<{
+    status: string;
+    error?: { code: string; message: string };
+    progress?: { total_s?: number | null };
+  }> {
     const r = this.remote(url);
     const res = await this.request(r, `/jobs/${encodeURIComponent(id)}?wait=${waitS}`, {
       signal,
