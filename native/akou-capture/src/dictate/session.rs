@@ -149,6 +149,16 @@ impl Dictate {
     }
 
     /// The backend binds the key itself, and is told every binding (DC-N1).
+    /// The dictation key reaches the helper under Secure Input: a key alone, or a chord the OS
+    /// holds as a registered hotkey (DC-A2).
+    fn key_works(&self) -> bool {
+        self.hotkey.is_modifier_only()
+            || self
+                .binder
+                .as_ref()
+                .is_some_and(|b| b.holds_under_secure_input())
+    }
+
     pub fn set_binder(&mut self, binder: Box<dyn Binder>) {
         self.binder = Some(binder);
     }
@@ -290,12 +300,7 @@ impl Dictate {
             let on = self.targets.secure_input();
             if on != self.secure_on {
                 self.secure_on = on;
-                let works = self.hotkey.is_modifier_only()
-                    || self
-                        .binder
-                        .as_ref()
-                        .is_some_and(|b| b.holds_under_secure_input());
-                out.line(p::secure_input(on, works));
+                out.line(p::secure_input(on, self.key_works()));
             }
         }
         if let Some((r, _)) = self.snapshot_at.take_if(|(_, at)| t_ns >= *at) {
@@ -500,6 +505,10 @@ impl Dictate {
                             a.bind_more(draft, shortcuts);
                         });
                         out.line(p::rebound(&hotkey));
+                        // A rebind under Secure Input can change whether the new key works.
+                        if self.secure_on {
+                            out.line(p::secure_input(true, self.key_works()));
+                        }
                     }
                     Err(e) => out.line(p::rebind_failed(&hotkey, &e)),
                 }
@@ -1477,6 +1486,16 @@ mod tests {
             w.borrow_mut().secure_input = true;
             run(&mut d, &mut out, 0, 600);
             let works = held == Some(true);
+            // A rebind to a key alone under Secure Input says at once that the key works now.
+            d.command(
+                Command::parse(r#"{"type":"rebind","hotkey":"RightCommand","draft":"","fixLast":"","pasteLast":"","activation":"hold-or-toggle"}"#).unwrap(),
+                600 * MS,
+                &mut out,
+            );
+            assert_eq!(
+                out.lines.last().map(String::as_str),
+                Some(r#"{"type":"secure_input","on":true,"key_works":true}"#)
+            );
             assert!(
                 out.lines.contains(&format!(
                     r#"{{"type":"secure_input","on":true,"key_works":{works}}}"#

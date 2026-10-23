@@ -13,6 +13,7 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::keys::Hotkey;
 use super::mac_keys;
@@ -47,6 +48,13 @@ const PRESSED: u32 = 5;
 const RELEASED: u32 = 6;
 /// `'akou'`, the signature of the one hotkey this process registers.
 const SIGNATURE: u32 = 0x616B_6F75;
+/// `kEventParamDirectObject` (`'----'`) and `typeEventHotKeyID` (`'hkid'`).
+const DIRECT_OBJECT: u32 = 0x2D2D_2D2D;
+const HOTKEY_ID: u32 = 0x686B_6964;
+
+/// The id of the registration in force. Every bind takes a new one, so a press of the old chord
+/// still queued when the binding moved is never taken for the new chord.
+static GENERATION: AtomicU32 = AtomicU32::new(0);
 
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
@@ -70,6 +78,15 @@ unsafe extern "C" {
     ) -> OsStatus;
     fn UnregisterEventHotKey(hotkey: EventHotKeyRef) -> OsStatus;
     fn GetEventKind(event: EventRef) -> u32;
+    fn GetEventParameter(
+        event: EventRef,
+        name: u32,
+        desired: u32,
+        actual: *mut u32,
+        size: usize,
+        actual_size: *mut usize,
+        data: *mut c_void,
+    ) -> OsStatus;
     fn ReceiveNextEvent(
         count: usize,
         list: *const EventTypeSpec,
@@ -94,6 +111,25 @@ unsafe extern "C" fn on_hotkey(
         RELEASED => false,
         _ => return 0,
     };
+    let mut id = EventHotKeyId {
+        signature: 0,
+        id: 0,
+    };
+    // SAFETY: reads the event's hotkey id into a local of exactly that type's size.
+    let status = unsafe {
+        GetEventParameter(
+            event,
+            DIRECT_OBJECT,
+            HOTKEY_ID,
+            ptr::null_mut(),
+            size_of::<EventHotKeyId>(),
+            ptr::null_mut(),
+            (&raw mut id).cast(),
+        )
+    };
+    if status != 0 || id.signature != SIGNATURE || id.id != GENERATION.load(Ordering::Relaxed) {
+        return 0;
+    }
     gate.event(TapEvent::Hotkey {
         down,
         t_ns: clock::now().awake_ns,
@@ -163,10 +199,12 @@ impl Binder for OsHotkey {
     /// it) still works through the tap whenever Secure Input is off.
     fn bind(&mut self, hotkey: &Hotkey) -> Result<(), String> {
         self.release();
+        // Even with nothing registered after this, a queued press of the old chord is stale.
+        let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
         if let Some((code, modifiers)) = mac_keys::carbon_chord(hotkey) {
             let id = EventHotKeyId {
                 signature: SIGNATURE,
-                id: 1,
+                id: generation,
             };
             let mut out: EventHotKeyRef = ptr::null_mut();
             // SAFETY: plain values and an out pointer to a local.

@@ -231,6 +231,9 @@ describe("DC-A2: Secure Input keeps a keyed chord from the tap", () => {
     const refused = pill({ hotkey: "Option+Space" });
     refused.tell({ kind: "secure-input", on: true, keyWorks: false });
     expect(refused.states.map((s) => s.state)).toEqual(["notice"]);
+    // A rebind under Secure Input to a key that works takes the notice away at once.
+    refused.tell({ kind: "secure-input", on: true, keyWorks: true });
+    expect(refused.p.shown()).toEqual({ state: "hidden" });
   });
 
   test("a key alone still works under Secure Input, so it gets no notice", () => {

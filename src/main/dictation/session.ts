@@ -547,6 +547,7 @@ export class DictationSession {
   private early: Early = { chunks: [], samples: 0 };
   /** macOS Secure Input, as the helper last reported it. */
   private secureInput = false;
+  private secureKeyWorks: boolean | undefined;
   /** The grants the helper said were taken back since its `ready` (DC-N1). */
   readonly lost = new Set<string>();
   /** Dictations waiting for their insert's result, by the helper's session id. */
@@ -807,8 +808,10 @@ export class DictationSession {
         this.o.onHotkey?.(m.name, m.target);
         return;
       case "secure_input":
-        if (m.on === this.secureInput) return;
+        // A rebind under Secure Input repeats the line with only `key_works` changed.
+        if (m.on === this.secureInput && m.key_works === this.secureKeyWorks) return;
         this.secureInput = m.on;
+        this.secureKeyWorks = m.key_works;
         this.o.onSecureInput?.(m.on, m.key_works);
         return;
       case "grant.lost": {
