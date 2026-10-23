@@ -51,6 +51,7 @@ import {
 } from "./engine.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveEngineInfo } from "./live-engines.ts";
 import { modelEntry, modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
+import { nativeLoad } from "./native-guard.ts";
 import { warmNativeLoad } from "./native-warm.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
@@ -63,7 +64,8 @@ function sherpa(): Sherpa {
     const req = createRequire(import.meta.url);
     // On Windows the first load happens in a child, so this thread never holds the loader lock long.
     warmNativeLoad(req.resolve("sherpa-onnx-node"));
-    sherpaModule = req("sherpa-onnx-node");
+    // Every native load runs under the guard: a Worker is never terminated inside one (#408).
+    sherpaModule = nativeLoad(() => req("sherpa-onnx-node"));
   }
   return sherpaModule;
 }
@@ -512,7 +514,7 @@ export class SherpaModels implements ModelSet {
     // Drop the previous recognizer before creating the next, so two never sit in memory at once.
     this.rec = null;
     Bun.gc(true);
-    const rec = new (sherpa().OfflineRecognizer)(config);
+    const rec = nativeLoad(() => new (sherpa().OfflineRecognizer)(config));
     this.count(RECOGNIZER);
     return {
       r: new SherpaRecognizer(RECOGNIZER, rec, this.decoding),
@@ -565,21 +567,24 @@ export class SherpaModels implements ModelSet {
   }
 
   vad(): Vad {
-    const v = new (sherpa().Vad)(
-      {
-        sileroVad: {
-          model: this.file("silero-vad", "silero_vad.onnx"),
-          threshold: 0.5,
-          minSpeechDuration: 0.1,
-          minSilenceDuration: 0.1,
-          maxSpeechDuration: 30,
-          windowSize: 512,
-        },
-        sampleRate: ASR_RATE,
-        debug: false,
-        numThreads: 1,
-      },
-      VAD_RESET_AFTER_SECONDS * 2,
+    const v = nativeLoad(
+      () =>
+        new (sherpa().Vad)(
+          {
+            sileroVad: {
+              model: this.file("silero-vad", "silero_vad.onnx"),
+              threshold: 0.5,
+              minSpeechDuration: 0.1,
+              minSilenceDuration: 0.1,
+              maxSpeechDuration: 30,
+              windowSize: 512,
+            },
+            sampleRate: ASR_RATE,
+            debug: false,
+            numThreads: 1,
+          },
+          VAD_RESET_AFTER_SECONDS * 2,
+        ),
     );
     this.count("silero-vad");
     return new SherpaVad(v);
@@ -588,11 +593,14 @@ export class SherpaModels implements ModelSet {
   embedder(): Embedder {
     if (!this.emb) {
       this.emb = new SherpaEmbedder(
-        new (sherpa().SpeakerEmbeddingExtractor)({
-          model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
-          numThreads: this.threads,
-          debug: 0,
-        }),
+        nativeLoad(
+          () =>
+            new (sherpa().SpeakerEmbeddingExtractor)({
+              model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
+              numThreads: this.threads,
+              debug: 0,
+            }),
+        ),
       );
       this.count("titanet-small");
     }
@@ -605,8 +613,9 @@ export class SherpaModels implements ModelSet {
     // Drop the previous engine before loading the next, so two never sit in memory at once.
     this.live = null;
     Bun.gc(true);
-    const rec = new (sherpa().OnlineRecognizer)(
-      onlineConfig((name) => this.file(id, name), this.threads),
+    const rec = nativeLoad(
+      () =>
+        new (sherpa().OnlineRecognizer)(onlineConfig((name) => this.file(id, name), this.threads)),
     );
     this.count(id);
     this.live = new SherpaLiveEngine(id, rec, LIVE_ENGINES[id]);
@@ -639,21 +648,24 @@ export class SherpaModels implements ModelSet {
       this.dia = new NemotronDiarizer(this.nemotron(), () => this.count(NEMOTRON));
     } else if (!this.dia) {
       this.dia = new SherpaDiarizer(
-        new (sherpa().OfflineSpeakerDiarization)({
-          segmentation: {
-            pyannote: { model: this.file("pyannote-segmentation-3.0", "model.onnx") },
-            numThreads: this.threads,
-            debug: 0,
-          },
-          embedding: {
-            model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
-            numThreads: this.threads,
-            debug: 0,
-          },
-          clustering: { numClusters: -1, threshold: 0.5 },
-          minDurationOn: 0.2,
-          minDurationOff: 0.5,
-        }),
+        nativeLoad(
+          () =>
+            new (sherpa().OfflineSpeakerDiarization)({
+              segmentation: {
+                pyannote: { model: this.file("pyannote-segmentation-3.0", "model.onnx") },
+                numThreads: this.threads,
+                debug: 0,
+              },
+              embedding: {
+                model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
+                numThreads: this.threads,
+                debug: 0,
+              },
+              clustering: { numClusters: -1, threshold: 0.5 },
+              minDurationOn: 0.2,
+              minDurationOff: 0.5,
+            }),
+        ),
       );
       this.count("pyannote-segmentation-3.0");
     }
