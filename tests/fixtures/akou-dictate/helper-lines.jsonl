@@ -20,7 +20,7 @@
 {"type":"edit","id":"1","hunks":[{"inserted":"cooper netties","now":"Kubernetes","at":2}]}
 {"type":"edit.unreadable","id":"1","reason":"not-read"}
 {"type":"grant.lost","name":"accessibility"}
-{"type":"secure_input","on":true}
+{"type":"secure_input","on":true,"key_works":false}
 {"type":"rebound","hotkey":"RightShift"}
 {"type":"rebind.failed","hotkey":"LeftOption+RightOption","reason":"x"}
 {"type":"warn","code":"usage","msg":"m"}

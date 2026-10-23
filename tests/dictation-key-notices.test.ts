@@ -223,6 +223,19 @@ describe("DC-A2: Secure Input keeps a keyed chord from the tap", () => {
     expect(f.p.shown()).toEqual({ state: "hidden" });
   });
 
+  test("a chord macOS holds as a registered hotkey still works, so the helper's word wins", () => {
+    const held = pill({ hotkey: "Option+Space" });
+    held.tell({ kind: "secure-input", on: true, keyWorks: true });
+    expect(held.states).toEqual([]);
+    // Positive control: the same chord macOS could not register gets the notice.
+    const refused = pill({ hotkey: "Option+Space" });
+    refused.tell({ kind: "secure-input", on: true, keyWorks: false });
+    expect(refused.states.map((s) => s.state)).toEqual(["notice"]);
+    // A rebind under Secure Input to a key that works takes the notice away at once.
+    refused.tell({ kind: "secure-input", on: true, keyWorks: true });
+    expect(refused.p.shown()).toEqual({ state: "hidden" });
+  });
+
   test("a key alone still works under Secure Input, so it gets no notice", () => {
     for (const hotkey of ["RightCommand", "Fn"]) {
       const f = pill({ hotkey });
@@ -350,12 +363,17 @@ async function pillApp(settings: Record<string, unknown>, args: string[]) {
   return { r, dir: t.dir, states, control, panes };
 }
 
-describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifiers only", () => {
+describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifiers and registered chords", () => {
   /**
    * `hotkey` bound, Secure Input turned on at key time `secureAt` (none: never), and `keys` held
    * from 0.9 s to 2.0 s, played after the test's own `rebind`, once the pill follows.
    */
-  async function press(hotkey: string, keys: string[], secureAt: number | null) {
+  async function press(
+    hotkey: string,
+    keys: string[],
+    secureAt: number | null,
+    more: string[] = [],
+  ) {
     const t = tempDir("akou-dict-secure-");
     cleanups.push(t.cleanup);
     const script: KeyInput[] = [
@@ -373,6 +391,7 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
       "--tap-log",
       tap,
       ...(secureAt === null ? [] : ["--secure-input-at", String(secureAt)]),
+      ...more,
     ]);
     const d = a.r.app.dictation();
     expect(await d?.rebind()).toEqual({ ok: true });
@@ -382,8 +401,18 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
 
   // Keys played in real time from 0.9 s to 2 s after a whole app starts: about 2.5 s on every OS,
   // and the waits allow 10 s, so bun's 5 s default was never these tests' budget.
-  test("a keyed chord starts nothing and the island says why", async () => {
+  test("a chord macOS registered starts a session under Secure Input, with no notice", async () => {
     const s = await press("Command+Shift+D", ["LeftCommand", "LeftShift", "D"], 0);
+    await until(() => s.states.some((x) => x.state === "done"), 10_000, "the dictation done");
+    expect(s.states.some((x) => x.state === "notice")).toBe(false);
+    expect(s.tap.some((k) => k.lost === "secure-input")).toBe(false);
+    expect(s.states.at(-1)).toEqual({ state: "done", how: "copied", note: "⌘V" });
+  }, 20_000);
+
+  test("a keyed chord macOS could not register starts nothing and the island says why", async () => {
+    const s = await press("Command+Shift+D", ["LeftCommand", "LeftShift", "D"], 0, [
+      "--os-hotkey-refused",
+    ]);
     await until(() => s.states.some((x) => x.state === "notice"), 5000, "the notice");
     expect(s.states.find((x) => x.state === "notice")).toMatchObject({
       reason: "secure-input",

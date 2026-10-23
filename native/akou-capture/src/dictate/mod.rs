@@ -43,6 +43,8 @@ pub mod live;
 #[cfg(target_os = "macos")]
 pub mod mac;
 #[cfg(target_os = "macos")]
+pub mod mac_hotkey;
+#[cfg(target_os = "macos")]
 pub mod mac_insert;
 pub mod mac_keys;
 pub mod media;

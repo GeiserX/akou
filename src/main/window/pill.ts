@@ -433,9 +433,14 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     hideAfter(NOTICE_MS);
   };
 
-  /** Secure Input changed: a keyed chord is dead while it is on (DC-A2). */
-  const secureInput = (on: boolean) => {
-    if (!on) {
+  /**
+   * Secure Input changed: a keyed chord is dead while it is on unless macOS holds it as a
+   * registered hotkey, which the helper says in `keyWorks` (DC-A2).
+   */
+  const secureInput = (on: boolean, keyWorks?: boolean) => {
+    const works = keyWorks ?? !keyedChord(o.hotkey());
+    // Off, or on with a key that works (a rebind under Secure Input can make it so): no notice.
+    if (!on || works) {
       if (underPress?.s.state === "notice" && underPress.s.reason === "secure-input")
         underPress = null;
       if (shown.state === "notice" && shown.reason === "secure-input") {
@@ -444,14 +449,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       }
       return;
     }
-    // Only when it matters (a keyed chord), with nothing else on the island, and not every time.
-    if (
-      o.platform !== "darwin" ||
-      !keyedChord(o.hotkey()) ||
-      shown.state !== "hidden" ||
-      chipUp !== null
-    )
-      return;
+    // Only when it matters (a dead chord), with nothing else on the island, and not every time.
+    if (o.platform !== "darwin" || shown.state !== "hidden" || chipUp !== null) return;
 
     if (o.now() - secureAt < SECURE_REPEAT_MS) return;
     secureAt = o.now();
@@ -546,7 +545,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
       if (m.kind === "secure-input") {
-        secureInput(m.on);
+        secureInput(m.on, m.keyWorks);
         return;
       }
       if (m.kind === "press") {

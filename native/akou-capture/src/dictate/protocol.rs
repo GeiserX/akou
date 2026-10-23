@@ -23,7 +23,7 @@
 //! | `insert.failed` | `id`, `reason`: `focus-changed`, `not-editable`, `field-unknown` (DC-N9: the app opens the draft box), `no-receipt` (the target never read in 8 s), `clipboard-changed` (another writer took the clipboard before the target read), `no-v-key`, `no-inserter`, or the backend's error |
 //! | `edit` | `id`, `hunks: [{inserted, now, at}]`: each run of words the user changed in the field after the insert (`inserted` the words akou inserted there, `now` what the field holds there now, `at` the index of the hunk's first inserted word); empty when nothing changed (DC-L2) |
 //! | `edit.unreadable` | `id`, `reason`: `unreadable` (the field could not be read), `lost` (the pasted text is gone or the field was cleared), `too-long`, `not-read` (a secure field, Secure Input, a terminal or no grant: nothing was read) |
-//! | `secure_input` | `on` |
+//! | `secure_input` | `on`, `key_works` (the dictation key still reaches akou: a key alone, or a chord macOS holds as a registered hotkey, DC-A2) |
 //! | `mic` | `open`: the stream opened or closed (the warm mic of DC-N4) |
 //! | `rebound` / `rebind.failed` | `hotkey` / `hotkey`, `reason` (the answer to `rebind`, DC-A7) |
 //! | `warn` | `code`, `msg` |
@@ -245,8 +245,13 @@ pub fn grant_lost(name: &str) -> String {
     line("grant.lost", vec![("name", Json::str(name))])
 }
 
-pub fn secure_input(on: bool) -> String {
-    line("secure_input", vec![("on", Json::Bool(on))])
+/// `key_works`: the dictation key still reaches akou while Secure Input is on, as a key alone
+/// does and a chord macOS holds as a registered hotkey does (DC-A2).
+pub fn secure_input(on: bool, key_works: bool) -> String {
+    line(
+        "secure_input",
+        vec![("on", Json::Bool(on)), ("key_works", Json::Bool(key_works))],
+    )
 }
 
 pub fn edit(id: &str, hunks: &[super::readback::Hunk]) -> String {
@@ -883,7 +888,7 @@ mod tests {
             (stopped("stop"), "stopped"),
             (warn("usage", "m"), "warn"),
             (grant_lost("accessibility"), "grant.lost"),
-            (secure_input(true), "secure_input"),
+            (secure_input(true, false), "secure_input"),
             (edit("1", &[]), "edit"),
             (edit_unreadable("1", "lost"), "edit.unreadable"),
         ] {
@@ -977,7 +982,7 @@ mod tests {
             ),
             edit_unreadable("1", "not-read"),
             grant_lost("accessibility"),
-            secure_input(true),
+            secure_input(true, false),
             rebound("RightShift"),
             rebind_failed("LeftOption+RightOption", "x"),
             warn("usage", "m"),

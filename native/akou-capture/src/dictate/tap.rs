@@ -77,6 +77,8 @@ pub enum TapEvent<'a> {
     Disabled { t_ns: u64, held: &'a [String] },
     /// The GlobalShortcuts portal's `Activated` (`active`) or `Deactivated` for the binding.
     Portal { active: bool, t_ns: u64 },
+    /// macOS's registered hotkey for the dictation chord went down or up (DC-A2).
+    Hotkey { down: bool, t_ns: u64 },
 }
 
 /// The tap's handle. Cheap to clone; one per tap thread.
@@ -153,6 +155,10 @@ impl Gate {
                 }
                 TapEvent::Portal { active, t_ns } => {
                     s.act.trigger(active, t_ns, &mut acts);
+                    (t_ns, None)
+                }
+                TapEvent::Hotkey { down, t_ns } => {
+                    s.act.bound(down, t_ns, &mut acts);
                     (t_ns, None)
                 }
             };

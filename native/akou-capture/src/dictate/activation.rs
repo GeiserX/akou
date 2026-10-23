@@ -420,6 +420,27 @@ impl Activation {
         }
     }
 
+    /// The dictation chord went down or up as macOS's registered hotkey reports it, which it does
+    /// under Secure Input, where the tap hears only the modifiers (DC-A2). macOS has matched the
+    /// modifiers already. The tap may report the same press too, in either order: the first one
+    /// decides, and the other is a repeat (a down while the key is held, an up once it is not).
+    pub fn bound(&mut self, down: bool, t_ns: u64, out: &mut Vec<Action>) -> bool {
+        let name = self.hotkey.trigger().to_string();
+        let held = self.held.iter().any(|k| keys::same(k, &name));
+        if down == held {
+            return false;
+        }
+        if !down || self.record {
+            return self.key(down, &name, t_ns, out);
+        }
+        self.held.push(name.clone());
+        let swallow = self.key_down(&name, Press::Dictate, t_ns, out);
+        if swallow {
+            self.swallowed.push(name);
+        }
+        swallow
+    }
+
     fn key_up(&mut self, name: &str, t_ns: u64, out: &mut Vec<Action>) -> bool {
         if let State::Shortcut { name: n } = self.state {
             let mine = self
@@ -958,6 +979,103 @@ mod tests {
                 Action::End { reason: "release" }
             ]
         );
+    }
+
+    /// DC-A2 under Secure Input: the tap hears Option but never Space, and the registered
+    /// hotkey alone runs the session.
+    #[test]
+    fn dc_a2_the_registered_hotkey_runs_a_chord_the_tap_never_hears() {
+        let mut a = Activation::new(Hotkey::parse("Option+Space").unwrap(), Mode::HoldOrToggle);
+        let mut out = Vec::new();
+        a.key(true, "LeftOption", 0, &mut out);
+        assert!(
+            a.bound(true, 10 * MS, &mut out),
+            "the press is the session's"
+        );
+        a.tick(500 * MS, &mut out);
+        a.bound(false, 900 * MS, &mut out);
+        a.key(false, "LeftOption", 950 * MS, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Action::Arm { t_ns: 10 * MS },
+                Action::Start { t_ns: 10 * MS },
+                Action::End { reason: "release" }
+            ]
+        );
+    }
+
+    /// DC-A2 without Secure Input the tap and the hotkey both report the press, in either order:
+    /// one session, whose end is the first release.
+    #[test]
+    fn dc_a2_the_tap_and_the_hotkey_together_are_one_press() {
+        for hotkey_first in [false, true] {
+            let mut a = Activation::new(Hotkey::parse("Option+Space").unwrap(), Mode::HoldOrToggle);
+            let mut out = Vec::new();
+            a.key(true, "LeftOption", 0, &mut out);
+            if hotkey_first {
+                a.bound(true, 10 * MS, &mut out);
+                assert!(a.key(true, "Space", 12 * MS, &mut out), "still swallowed");
+            } else {
+                assert!(a.key(true, "Space", 10 * MS, &mut out));
+                a.bound(true, 12 * MS, &mut out);
+            }
+            a.tick(500 * MS, &mut out);
+            if hotkey_first {
+                a.bound(false, 900 * MS, &mut out);
+                a.key(false, "Space", 902 * MS, &mut out);
+            } else {
+                a.key(false, "Space", 900 * MS, &mut out);
+                a.bound(false, 902 * MS, &mut out);
+            }
+            assert_eq!(
+                sessions(&out.iter().map(|x| (0, x.clone())).collect::<Vec<_>>()),
+                vec![
+                    (0, Action::Start { t_ns: 10 * MS }),
+                    (0, Action::End { reason: "release" })
+                ],
+                "hotkey first: {hotkey_first}"
+            );
+        }
+    }
+
+    /// A tap of the chord latches; its release reported twice must not end the latched session,
+    /// and the next press, reported twice in either order, ends it once (no `still transcribing`).
+    #[test]
+    fn dc_a2_a_press_or_release_reported_twice_counts_once() {
+        let mut a = Activation::new(Hotkey::parse("Option+Space").unwrap(), Mode::HoldOrToggle);
+        let mut out = Vec::new();
+        a.key(true, "LeftOption", 0, &mut out);
+        a.key(true, "Space", 10 * MS, &mut out);
+        a.bound(true, 11 * MS, &mut out);
+        a.key(false, "Space", 100 * MS, &mut out);
+        a.bound(false, 101 * MS, &mut out);
+        assert!(out.contains(&Action::Latched));
+        assert!(!out.iter().any(|x| matches!(x, Action::End { .. })));
+        a.bound(true, 3000 * MS, &mut out);
+        assert_eq!(out.last(), Some(&Action::End { reason: "tap" }));
+        // The tap's report of that same press is no second press while transcribing.
+        assert!(a.key(true, "Space", 3002 * MS, &mut out), "still swallowed");
+        assert_eq!(out.last(), Some(&Action::End { reason: "tap" }));
+        // And the other order: a press the tap reported first, then the hotkey.
+        let mut b = Activation::new(Hotkey::parse("Option+Space").unwrap(), Mode::HoldOrToggle);
+        let mut out = Vec::new();
+        b.key(true, "LeftOption", 0, &mut out);
+        b.key(true, "Space", 10 * MS, &mut out);
+        b.key(false, "Space", 100 * MS, &mut out);
+        b.key(true, "Space", 3000 * MS, &mut out);
+        b.bound(true, 3002 * MS, &mut out);
+        assert_eq!(out.last(), Some(&Action::End { reason: "tap" }));
+    }
+
+    /// The recorder still hears the chord when only the hotkey reports it.
+    #[test]
+    fn dc_a2_the_recorder_hears_a_hotkey_press() {
+        let mut a = Activation::new(Hotkey::parse("Option+Space").unwrap(), Mode::HoldOrToggle);
+        a.record_keys(true);
+        let mut out = Vec::new();
+        a.bound(true, 0, &mut out);
+        assert_eq!(out, vec![Action::Key("Space".into())]);
     }
 
     #[test]

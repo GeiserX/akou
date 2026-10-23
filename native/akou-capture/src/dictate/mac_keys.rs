@@ -13,6 +13,8 @@
 //!   side buttons (`Mouse4`, `Mouse5`). Left and right never reach a binding (DC-A6).
 
 /// `kVK_*` key codes and their `keys` names. Modifiers are in `MODIFIERS`.
+use super::keys::{Hotkey, Mod, Side};
+
 const KEYS: [(u16, &str); 105] = [
     (0x00, "A"),
     (0x01, "S"),
@@ -215,10 +217,49 @@ pub fn mouse_name(button: i64) -> Option<&'static str> {
     }
 }
 
+/// What `RegisterEventHotKey` takes for a chord: its key code and Carbon's modifier bits
+/// (`cmdKey`, `shiftKey`, `optionKey`, `controlKey`). `None` for what Carbon cannot hold: a key
+/// alone, `Fn`, a side-specific modifier (Carbon matches either side) or a key with no code, which
+/// stay with the tap alone (DC-A2).
+pub fn carbon_chord(hotkey: &Hotkey) -> Option<(u32, u32)> {
+    let Hotkey::Chord { mods, key } = hotkey else {
+        return None;
+    };
+    let mut bits = 0;
+    for (m, side) in mods {
+        if *side != Side::Either {
+            return None;
+        }
+        bits |= match m {
+            Mod::Command => 1 << 8,
+            Mod::Shift => 1 << 9,
+            Mod::Option => 1 << 11,
+            Mod::Control => 1 << 12,
+            Mod::Fn => return None,
+        };
+    }
+    key_code(key).map(|c| (u32::from(c), bits))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::keys::{self, Hotkey};
     use super::*;
+
+    /// DC-A2: the chords macOS can hold as a registered hotkey, and the ones left to the tap.
+    #[test]
+    fn carbon_holds_chords_of_either_side_modifiers_only() {
+        let c = |s: &str| carbon_chord(&Hotkey::parse(s).unwrap());
+        assert_eq!(c("Option+Space"), Some((0x31, 1 << 11)));
+        assert_eq!(c("Alt+Space"), Some((0x31, 1 << 11)));
+        assert_eq!(
+            c("Control+Shift+Command+D"),
+            Some((0x02, (1 << 12) | (1 << 9) | (1 << 8)))
+        );
+        assert_eq!(c("RightCommand"), None, "a key alone stays with the tap");
+        assert_eq!(c("LeftOption+Space"), None, "Carbon cannot tell the sides");
+        assert_eq!(c("Fn+Space"), None);
+    }
 
     #[test]
     fn every_code_has_one_name_and_every_name_one_code() {

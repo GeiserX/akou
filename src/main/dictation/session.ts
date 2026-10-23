@@ -326,9 +326,10 @@ export interface SessionOptions extends TextRules {
   onReady?(): void;
   /**
    * macOS Secure Input turned on or off (DC-N1, DC-A2): while it is on the OS hands no keyed chord
-   * to the tap, and only a modifier alone still reaches it.
+   * to the tap; a modifier alone and a chord the helper registered as a hotkey still reach it,
+   * which `keyWorks` says (absent from a helper before 1.2.3).
    */
-  onSecureInput?(on: boolean): void;
+  onSecureInput?(on: boolean, keyWorks?: boolean): void;
   /**
    * The dictation key went down (`on`), with the frame of the window that has the keyboard where
    * the helper can read it, or the press was dropped before it became a session (DC-O1): the
@@ -546,6 +547,7 @@ export class DictationSession {
   private early: Early = { chunks: [], samples: 0 };
   /** macOS Secure Input, as the helper last reported it. */
   private secureInput = false;
+  private secureKeyWorks: boolean | undefined;
   /** The grants the helper said were taken back since its `ready` (DC-N1). */
   readonly lost = new Set<string>();
   /** Dictations waiting for their insert's result, by the helper's session id. */
@@ -806,9 +808,11 @@ export class DictationSession {
         this.o.onHotkey?.(m.name, m.target);
         return;
       case "secure_input":
-        if (m.on === this.secureInput) return;
+        // A rebind under Secure Input repeats the line with only `key_works` changed.
+        if (m.on === this.secureInput && m.key_works === this.secureKeyWorks) return;
         this.secureInput = m.on;
-        this.o.onSecureInput?.(m.on);
+        this.secureKeyWorks = m.key_works;
+        this.o.onSecureInput?.(m.on, m.key_works);
         return;
       case "grant.lost": {
         const r = this.ready;

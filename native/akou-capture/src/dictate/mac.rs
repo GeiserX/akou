@@ -72,11 +72,12 @@ use super::globe::{Globe, Prefs};
 use super::inputs::{Input, Transport};
 use super::insert::{Inserter, Os, Targets};
 use super::live::{self, Device, Stdio};
+use super::mac_hotkey;
 use super::mac_insert::{self, Events, Pasteboard};
 use super::mac_keys;
 use super::protocol::{self as p, Target};
 use super::readback::{Field, char_index};
-use super::session::{Config, Dictate, Out};
+use super::session::{Binder, Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use crate::clock;
 use crate::macos::mic::MicWorker;
@@ -790,11 +791,17 @@ pub fn run(cfg: Config) -> i32 {
         _ => None,
     };
     let no_inserter = inserter.is_none();
+    let hotkey = cfg.hotkey.clone();
     let mut d = Dictate::new(cfg, Box::new(Screen), inserter);
     d.set_globe(Globe::new(Box::new(CfPrefs)));
     let (mic, ax) = grants();
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
+    // The chord as a registered hotkey too, which Secure Input does not silence (DC-A2).
+    if let Some(mut os) = mac_hotkey::OsHotkey::install(gate.clone()) {
+        let _ = os.bind(&hotkey);
+        d.set_binder(Box::new(os));
+    }
     // Without the grant the tap thread waits for it, and the tap comes up once it is given.
     let tapped = start_tap(gate, tx.clone());
     // With no tap nothing is swallowed, so the app shows no Enter hint (DC-A4).

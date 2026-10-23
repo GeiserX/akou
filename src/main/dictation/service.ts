@@ -321,7 +321,7 @@ export type DictationFollow =
   /** The helper lost a grant it started with (DC-N1): on macOS the key tap is dead. */
   | { kind: "grant-lost"; name: string }
   /** macOS Secure Input turned on or off: a keyed chord cannot reach the helper while it is on. */
-  | { kind: "secure-input"; on: boolean }
+  | { kind: "secure-input"; on: boolean; keyWorks?: boolean }
   /**
    * The dictation key went down, with the frame of the window that has the keyboard where the
    * helper can read it, or the press was dropped before it became a session (DC-O1).
@@ -927,7 +927,7 @@ export class DictationService {
       onRecordedKey: (name) => this.recorder?.(name),
       onGrantLost: (name) => this.grantLost(h, name),
       onReady: () => this.readied(session),
-      onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
+      onSecureInput: (on, keyWorks) => this.tell({ kind: "secure-input", on, keyWorks }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
       onHotkey: (name, target) => this.lastHotkey(session, name, target),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
