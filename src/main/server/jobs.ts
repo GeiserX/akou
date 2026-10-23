@@ -121,6 +121,17 @@ export const MEAN_OF_JOBS = 50;
 export const RETRY_AFTER_DEFAULT_S = 30;
 export const RETRY_AFTER_MAX_S = 3600;
 
+/**
+ * A running job is stalled (#407) once it has run `STALL_BASE_MS` plus `STALL_PER_AUDIO` times its
+ * audio's length: far past a cold model load on a slow disk, diarization, and the slowest engine
+ * measured off a Mac. A stalled job is reported (`/healthz` 503, `queue.stalled`, one log line),
+ * never killed: a model load starved of disk IO finishes once the IO comes back.
+ */
+export const STALL_BASE_MS = 300_000;
+export const STALL_PER_AUDIO = 5;
+/** How often the queue looks for stalled jobs, so each is logged once even when nobody asks. */
+export const STALL_CHECK_MS = 30_000;
+
 /** The queue as `GET /v1/server` and `GET /healthz` report it (SV-Q4). */
 export interface QueueStats {
   /** `server.concurrency`. */
@@ -143,6 +154,8 @@ export interface QueueStats {
   eta_seconds: number | null;
   /** The recognizers a job Worker holds loaded now, so a client can batch its jobs by them. */
   loaded: string[];
+  /** Running jobs past their time (`STALL_BASE_MS`, #407); `/healthz` answers 503 while any is. */
+  stalled: number;
 }
 
 /** A submit refused because the queue is full (SV-Q3). */
@@ -198,6 +211,8 @@ export interface JobServiceOptions {
   /** Test seams: how often the remotes are probed, and their network. */
   remoteProbeMs?: number;
   remoteFetch?: typeof fetch;
+  /** Test seam: how often stalled jobs are looked for. Default `STALL_CHECK_MS`. */
+  stallCheckMs?: number;
   /** `server.concurrency`: jobs run at once. Default 1. */
   concurrency?(): number;
   /**
@@ -441,8 +456,22 @@ export class JobService {
   private readonly passedOver = new Map<string, number>();
   /** The other akou servers jobs are sent to (section 14). */
   readonly remotes: Remotes;
-  /** The jobs out on a remote now, and how to stop following one. */
-  private readonly sent = new Map<string, { url: string; abort: AbortController }>();
+  /**
+   * The jobs out on a remote now, and how to stop following one; when the remote first said it
+   * runs the job (the service's clock) and the seconds of audio it reported, for the stall check.
+   */
+  private readonly sent = new Map<
+    string,
+    { url: string; abort: AbortController; runningAt: number | null; audioS: number | null }
+  >();
+  /**
+   * A local job whose stall clock does not start at `running_at`: null while it waits for the GPU
+   * line's turn (the desktop app's final pass may hold it), then the time the turn came.
+   */
+  private readonly stallFrom = new Map<string, number | null>();
+  /** The stalled jobs already logged, so each is logged once. */
+  private readonly stallLogged = new Set<string>();
+  private stallTimer: ReturnType<typeof setInterval> | null = null;
   /** A job a remote turned away waits until then (monotonic ms) before it is sent again. */
   private readonly heldUntil = new Map<string, number>();
   private dispatching = false;
@@ -516,6 +545,9 @@ export class JobService {
     this.sweep();
     // clock: retention runs hourly; each run reads the store's own times.
     this.retention = setInterval(() => this.sweep(), RETENTION_SWEEP_MS);
+    // clock: a stalled job's Worker is busy, so neither the idle nor the retention timer wakes.
+    this.stallTimer = setInterval(() => this.stalled(), this.o.stallCheckMs ?? STALL_CHECK_MS);
+    this.stallTimer.unref?.();
     this.deliverer.kick();
     this.remotes.start();
     this.dispatch();
@@ -603,8 +635,41 @@ export class JobService {
       audio_seconds_last_hour: Math.round(this.ended.reduce((a, e) => a + e.audio_s, 0)),
       mean_job_seconds: mean === null ? null : Math.round(mean / 100) / 10,
       loaded: this.loaded(),
+      stalled: this.stalled(),
       eta_seconds: depth === 0 ? 0 : this.secondsFor(depth),
     };
+  }
+
+  /**
+   * How many running jobs are past their time (#407), logging each new one once: a local job from
+   * `running_at` (or from its GPU turn), a job out on a remote from when the remote ran it. The
+   * budget is `STALL_BASE_MS` plus `STALL_PER_AUDIO` times the audio, when its length is known.
+   */
+  private stalled(): number {
+    if (this.closed) return 0;
+    const now = this.now();
+    const seen = new Set<string>();
+    for (const job of this.store.running()) {
+      const remote = this.sent.get(job.id);
+      const p = this.progress.get(job.id);
+      const turn = this.stallFrom.get(job.id);
+      const from = remote ? remote.runningAt : turn !== undefined ? turn : job.running_at;
+      if (from === null) continue;
+      const audioS = remote ? remote.audioS : (p?.total_s ?? null);
+      const ran = now - from;
+      if (ran <= STALL_BASE_MS + STALL_PER_AUDIO * (audioS ?? 0) * 1000) continue;
+      seen.add(job.id);
+      if (this.stallLogged.has(job.id)) continue;
+      this.stallLogged.add(job.id);
+      const audio = audioS === null ? "audio of unknown length" : `${audioS} s of audio`;
+      const where = remote ? `on ${remote.url}` : `stage ${p?.stage ?? "start"}`;
+      this.o.log(
+        "warn",
+        `job.stalled ${job.id} key ${job.key_id} model ${this.modelOf(job)} running ${Math.round(ran / 1000)} s on ${audio}, ${where}`,
+      );
+    }
+    for (const id of this.stallLogged) if (!seen.has(id)) this.stallLogged.delete(id);
+    return seen.size;
   }
 
   /**
@@ -1317,7 +1382,10 @@ export class JobService {
       // A llama-server engine waits for the owner's GPU line (the desktop app's final passes),
       // whether it is the job's one final engine or one engine of a fused pass.
       if (takesGpuTurn(spec) && this.o.gpuTurn) {
+        // The wait is not the job's: its stall clock starts once the turn comes (#407).
+        this.stallFrom.set(job.id, null);
         release = await this.o.gpuTurn(job.id, abort.signal);
+        this.stallFrom.set(job.id, this.now());
         if (abort.signal.aborted) return;
       }
       const pass = await this.workerFor(slot, spec, model).run({
@@ -1365,6 +1433,7 @@ export class JobService {
       release?.();
       this.o.shelf.touch(needs);
       this.progress.delete(job.id);
+      this.stallFrom.delete(job.id);
     }
     this.conclude(job, end);
   }
@@ -1453,7 +1522,7 @@ export class JobService {
         this.heldUntil.delete(j.id);
         const abort = new AbortController();
         this.remotes.hold(r.url);
-        this.sent.set(j.id, { url: r.url, abort });
+        this.sent.set(j.id, { url: r.url, abort, runningAt: null, audioS: null });
         this.notify(j.id, "running");
         void this.runRemote({ ...j, status: "running" }, r.url, abort);
       }
@@ -1492,6 +1561,14 @@ export class JobService {
       }
       for (;;) {
         const s = await this.remotes.job(url, rid, REMOTE_WAIT_S, abort.signal);
+        // The stall clock of a job out on a remote starts when the remote runs it, not while it
+        // waits in the remote's queue (#407).
+        const out = this.sent.get(job.id);
+        if (out && s.status === "running") {
+          out.runningAt ??= this.now();
+          const total = s.progress?.total_s;
+          if (typeof total === "number" && Number.isFinite(total)) out.audioS = total;
+        }
         if (s.status === "done") {
           const result = await this.remotes.result(url, rid, abort.signal);
           if (abort.signal.aborted) return;
@@ -1589,6 +1666,7 @@ export class JobService {
     this.remotes.close();
     for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
+    if (this.stallTimer) clearInterval(this.stallTimer);
     if (this.sweepMore) clearTimeout(this.sweepMore);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.deliverer.close();
