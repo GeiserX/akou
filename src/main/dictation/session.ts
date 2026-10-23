@@ -326,9 +326,10 @@ export interface SessionOptions extends TextRules {
   onReady?(): void;
   /**
    * macOS Secure Input turned on or off (DC-N1, DC-A2): while it is on the OS hands no keyed chord
-   * to the tap, and only a modifier alone still reaches it.
+   * to the tap; a modifier alone and a chord the helper registered as a hotkey still reach it,
+   * which `keyWorks` says (absent from a helper before 1.2.3).
    */
-  onSecureInput?(on: boolean): void;
+  onSecureInput?(on: boolean, keyWorks?: boolean): void;
   /**
    * The dictation key went down (`on`), with the frame of the window that has the keyboard where
    * the helper can read it, or the press was dropped before it became a session (DC-O1): the
@@ -808,7 +809,7 @@ export class DictationSession {
       case "secure_input":
         if (m.on === this.secureInput) return;
         this.secureInput = m.on;
-        this.o.onSecureInput?.(m.on);
+        this.o.onSecureInput?.(m.on, m.key_works);
         return;
       case "grant.lost": {
         const r = this.ready;

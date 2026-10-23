@@ -120,7 +120,11 @@ export type HelperToApp =
   | { type: "insert.failed"; id: string; reason: string }
   | { type: "edit"; id: string; hunks: EditHunk[] }
   | { type: "edit.unreadable"; id: string; reason: string }
-  | { type: "secure_input"; on: boolean }
+  /**
+   * `key_works`: the dictation key still reaches akou, as a key alone does and a chord macOS holds
+   * as a registered hotkey does (DC-A2). A helper before 1.2.3 never says it.
+   */
+  | { type: "secure_input"; on: boolean; key_works?: boolean }
   /** The warm stream opened or closed (DC-N4). */
   | { type: "mic"; open: boolean }
   | { type: "warn"; code: string; msg: string }
@@ -300,7 +304,9 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
     case "edit.unreadable":
       return isId(o.id) && isStr(o.reason) ? null : "edit.unreadable";
     case "secure_input":
-      return isBool(o.on) ? null : "secure_input";
+      return isBool(o.on) && (o.key_works === undefined || isBool(o.key_works))
+        ? null
+        : "secure_input";
     case "mic":
       return isBool(o.open) ? null : "mic";
     case "warn":

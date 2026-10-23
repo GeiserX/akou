@@ -31,6 +31,12 @@ pub const SECURE_POLL_MS: u64 = 250;
 /// every binding before it takes effect; `Err` refuses it, with the reason, and the old one stays.
 pub trait Binder {
     fn bind(&mut self, hotkey: &Hotkey) -> Result<(), String>;
+
+    /// The OS holds the bound chord itself, so it reaches the helper under macOS Secure Input,
+    /// where the tap hears only modifiers (DC-A2).
+    fn holds_under_secure_input(&self) -> bool {
+        false
+    }
 }
 
 /// Where the protocol goes: JSON lines to stderr, packets to stdout.
@@ -284,7 +290,12 @@ impl Dictate {
             let on = self.targets.secure_input();
             if on != self.secure_on {
                 self.secure_on = on;
-                out.line(p::secure_input(on));
+                let works = self.hotkey.is_modifier_only()
+                    || self
+                        .binder
+                        .as_ref()
+                        .is_some_and(|b| b.holds_under_secure_input());
+                out.line(p::secure_input(on, works));
             }
         }
         if let Some((r, _)) = self.snapshot_at.take_if(|(_, at)| t_ns >= *at) {
@@ -1432,10 +1443,48 @@ mod tests {
         assert_eq!(
             lines,
             [
-                r#"{"type":"secure_input","on":true}"#,
-                r#"{"type":"secure_input","on":false}"#
+                r#"{"type":"secure_input","on":true,"key_works":true}"#,
+                r#"{"type":"secure_input","on":false,"key_works":true}"#
             ]
         );
+    }
+
+    /// DC-A2: a chord dies under Secure Input unless the OS holds it as a registered hotkey; the
+    /// line says which (positive control: the same chord without the binder says false).
+    #[test]
+    fn secure_input_says_whether_a_chord_still_reaches_akou() {
+        struct Held(bool);
+        impl Binder for Held {
+            fn bind(&mut self, _: &Hotkey) -> Result<(), String> {
+                Ok(())
+            }
+            fn holds_under_secure_input(&self) -> bool {
+                self.0
+            }
+        }
+        for held in [None, Some(false), Some(true)] {
+            let w = World::new();
+            let mut d = dictate(&w);
+            if let Some(h) = held {
+                d.set_binder(Box::new(Held(h)));
+            }
+            let mut out = Rec::default();
+            d.command(
+                Command::parse(r#"{"type":"rebind","hotkey":"Option+Space","draft":"","fixLast":"","pasteLast":"","activation":"hold-or-toggle"}"#).unwrap(),
+                0,
+                &mut out,
+            );
+            w.borrow_mut().secure_input = true;
+            run(&mut d, &mut out, 0, 600);
+            let works = held == Some(true);
+            assert!(
+                out.lines.contains(&format!(
+                    r#"{{"type":"secure_input","on":true,"key_works":{works}}}"#
+                )),
+                "{held:?}: {:?}",
+                out.lines
+            );
+        }
     }
 
     /// A session that captured the fake Slack and ended at 100 ms; the app's commands follow.

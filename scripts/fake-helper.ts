@@ -59,7 +59,12 @@
  *   --secure-input-at MS    macOS Secure Input turns on at key time MS: `secure_input {on: true}`,
  *                           and from then on every key that is not a modifier is lost before the
  *                           activation rule, as macOS hands the tap no keyed event while a password
- *                           field holds the keyboard; a modifier alone still arrives (DC-A2)
+ *                           field holds the keyboard; a modifier alone still arrives (DC-A2), and
+ *                           so does the dictation chord's key when macOS can hold the chord as a
+ *                           registered hotkey (modifiers of either side, no Fn), as the real helper
+ *                           registers it; `key_works` on the line says which
+ *   --os-hotkey-refused     macOS holds no registered hotkey (another app has the chord): under
+ *                           Secure Input the chord is lost like any key
  *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
  *                           the helper reports every key while the recorder is open (DC-U3)
  *
@@ -523,6 +528,12 @@ async function runDictate(): Promise<void> {
   let tapDisabled = tapDisabledAt !== undefined;
   const secureAt = num("--secure-input-at");
   let secure = false;
+  /** The dictation key in force, which macOS holds as a registered hotkey when `osHolds`. */
+  let bound: Hotkey | null = null;
+  const osHolds = (h: Hotkey | null): boolean =>
+    h?.kind === "chord" &&
+    !flag("--os-hotkey-refused") &&
+    h.mods.every(([m, side]) => side === "Either" && m !== "Fn");
   let played = false;
   let rebinds = 0;
   const playAfter = num("--play-after-rebinds") ?? 1;
@@ -615,10 +626,16 @@ async function runDictate(): Promise<void> {
       }
       if (secureAt !== undefined && !secure && k.at >= secureAt) {
         secure = true;
-        say({ type: "secure_input", on: true });
+        say({
+          type: "secure_input",
+          on: true,
+          key_works: bound?.kind === "modifier" || osHolds(bound),
+        });
       }
-      // Secure Input: macOS hands the tap no keyed event, only the modifiers' flags (DC-A2).
-      if (secure && !isModifier(k.key)) {
+      // Secure Input: macOS hands the tap no keyed event, only the modifiers' flags (DC-A2), and
+      // the registered hotkey still brings the chord's key.
+      const registered = osHolds(bound) && k.key.toLowerCase() === bound?.key.toLowerCase();
+      if (secure && !isModifier(k.key) && !registered) {
         log(opt("--tap-log"), { key: k.key, down: k.down, lost: "secure-input" });
         continue;
       }
@@ -680,6 +697,7 @@ async function runDictate(): Promise<void> {
           return;
         }
         machine = m;
+        bound = parseBinding(c.hotkey);
         say({ type: "rebound", hotkey: c.hotkey });
         playNow();
         return;

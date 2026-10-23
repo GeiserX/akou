@@ -433,8 +433,11 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     hideAfter(NOTICE_MS);
   };
 
-  /** Secure Input changed: a keyed chord is dead while it is on (DC-A2). */
-  const secureInput = (on: boolean) => {
+  /**
+   * Secure Input changed: a keyed chord is dead while it is on unless macOS holds it as a
+   * registered hotkey, which the helper says in `keyWorks` (DC-A2).
+   */
+  const secureInput = (on: boolean, keyWorks?: boolean) => {
     if (!on) {
       if (underPress?.s.state === "notice" && underPress.s.reason === "secure-input")
         underPress = null;
@@ -447,7 +450,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     // Only when it matters (a keyed chord), with nothing else on the island, and not every time.
     if (
       o.platform !== "darwin" ||
-      !keyedChord(o.hotkey()) ||
+      (keyWorks ?? !keyedChord(o.hotkey())) ||
       shown.state !== "hidden" ||
       chipUp !== null
     )
@@ -546,7 +549,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
       if (m.kind === "secure-input") {
-        secureInput(m.on);
+        secureInput(m.on, m.keyWorks);
         return;
       }
       if (m.kind === "press") {
