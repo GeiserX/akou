@@ -87,6 +87,7 @@ import { DEFAULT_FINAL, timelinePieces } from "./finalize-worker.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveChoice, streamLanguage } from "./live-engines.ts";
 import { CausalGain, StreamChannel, type StreamLine } from "./live-stream.ts";
 import { RECOGNIZER } from "./models.ts";
+import { type NativeFlag, nativeFlag, stopWorker, useNativeFlag } from "./native-guard.ts";
 import { gainFor, prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
 import {
@@ -1258,7 +1259,13 @@ function streamRange(
 // Messages between the host and the Worker
 
 export type ToWorker =
-  | { type: "init"; models: ModelSpec; live: Partial<LiveOptions> }
+  | {
+      type: "init";
+      models: ModelSpec;
+      live: Partial<LiveOptions>;
+      /** The Worker's native-load flag (`native-guard.ts`); absent in-thread. */
+      native?: NativeFlag;
+    }
   | {
       type: "call";
       id: string;
@@ -1607,7 +1614,10 @@ if (!Bun.isMainThread && workerData === LIVE_WORKER_NAME) {
   console.warn = toLog("warn");
   console.error = toLog("error");
   const side = new WorkerSide(post);
-  self.onmessage = (e: MessageEvent<ToWorker>) => side.handle(e.data);
+  self.onmessage = (e: MessageEvent<ToWorker>) => {
+    if (e.data.type === "init") useNativeFlag(e.data.native);
+    side.handle(e.data);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1916,6 +1926,7 @@ export class LiveAsr {
   private spawn(): Transport {
     const onMessage = (m: FromWorker) => this.onWorker(m);
     let t: Transport;
+    let native: NativeFlag | undefined;
     if (this.o.inThread) {
       const side = new WorkerSide((m) => queueMicrotask(() => onMessage(m)));
       t = { post: (m) => side.handle(m), close: () => side.close() };
@@ -1923,6 +1934,8 @@ export class LiveAsr {
       const w = new Worker(siblingModule(import.meta.url, "live-worker"), {
         workerData: LIVE_WORKER_NAME,
       } as WorkerOptions);
+      const flag = nativeFlag();
+      native = flag;
       let dead = false;
       const died = (error: string) => {
         if (dead) return;
@@ -1943,11 +1956,12 @@ export class LiveAsr {
         },
         close: () => {
           dead = true;
-          w.terminate();
+          // Never inside a model load: Bun aborts the process on that (#408).
+          stopWorker(w, flag);
         },
       };
     }
-    t.post({ type: "init", models: this.o.models, live: this.o.live ?? {} });
+    t.post({ type: "init", models: this.o.models, live: this.o.live ?? {}, native });
     return t;
   }
 
