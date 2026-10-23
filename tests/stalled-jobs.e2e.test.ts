@@ -183,6 +183,37 @@ describe("#407: /healthz says so while a job is stuck at running", () => {
     expect(late.body.queue.stalled).toBe(1);
     expect(stallLines(r)[0]?.msg).toContain(`on ${total} s of audio, stage ${progress?.stage}`);
   });
+
+  test("a job logged stalled, back under its budget once its audio is known, is not logged twice", async () => {
+    // Held in its decode past the base, then into a transcribe stage that never ends.
+    const r = await rig(["--fake-hang"]);
+    r.hold();
+    const s = await submit(r.rig, r.key.key, NOTE, { preset: "best" });
+    expect(s.status).toBe(202);
+    const id = s.body.id as string;
+    await until(() => r.decodes === 1, 10_000, "the decode to start");
+    const started = r.clock.t;
+    r.clock.t = started + STALL_BASE_MS + 1_000;
+    expect((await health(r)).body.queue.stalled).toBe(1);
+    expect(stallLines(r)).toHaveLength(1);
+    r.open();
+    let total = 0;
+    await until(
+      async () => {
+        const p = (await asKey(r.rig, r.key.key, "GET", `/jobs/${id}`)).body.progress;
+        total = p?.total_s ?? 0;
+        return p !== undefined && p.stage !== "decode" && p.total_s !== null;
+      },
+      20_000,
+      "the job to reach its transcribe stage",
+    );
+    // Its length known, the budget grew past the time it has run: not stalled now.
+    expect((await health(r)).body.queue.stalled).toBe(0);
+    // Past the longer budget it is stalled again, and still logged once.
+    r.clock.t = started + STALL_BASE_MS + STALL_PER_AUDIO * total * 1000 + 1_000;
+    expect((await health(r)).body.queue.stalled).toBe(1);
+    expect(stallLines(r)).toHaveLength(1);
+  });
 });
 
 function shelf(dir: string): ModelStore {

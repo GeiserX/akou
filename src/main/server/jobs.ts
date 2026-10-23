@@ -649,7 +649,9 @@ export class JobService {
     if (this.closed) return 0;
     const now = this.now();
     const seen = new Set<string>();
+    const running = new Set<string>();
     for (const job of this.store.running()) {
+      running.add(job.id);
       const remote = this.sent.get(job.id);
       const p = this.progress.get(job.id);
       const turn = this.stallFrom.get(job.id);
@@ -668,7 +670,9 @@ export class JobService {
         `job.stalled ${job.id} key ${job.key_id} model ${this.modelOf(job)} running ${Math.round(ran / 1000)} s on ${audio}, ${where}`,
       );
     }
-    for (const id of this.stallLogged) if (!seen.has(id)) this.stallLogged.delete(id);
+    // Forgotten once the job stops running, not when it drops back under its budget (a decode
+    // that ends makes the audio's length known and the budget longer): a job is logged once.
+    for (const id of this.stallLogged) if (!running.has(id)) this.stallLogged.delete(id);
     return seen.size;
   }
 
