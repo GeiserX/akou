@@ -2103,10 +2103,12 @@ async function releaseJobModels(reply: (r: FromJob) => void): Promise<void> {
   jobModels = null;
   jobEngine = null;
   await engine?.engine.unload().catch(() => {});
+  // A set whose load failed is cleared by the job that saw it fail, so a rejection here is the
+  // release itself: said, and the host terminates the Worker as it would anyway.
   try {
     await (await held?.set)?.release?.();
-  } catch {
-    // A set that failed to load holds nothing.
+  } catch (err) {
+    reply({ type: "log", level: "warn", msg: `model release failed: ${(err as Error).message}` });
   }
   reply({ type: "released" });
 }
