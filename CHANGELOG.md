@@ -2,6 +2,25 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.4 — akou gives its memory back once it is done with a model
+
+akou held memory after it had finished with a model: about 900 MB on a server after every live session, 650 MB on the Mac app after every dictation or job, and 2.2 GB more for every file job someone cancelled. The dictation lane's Qwen server and the live model warmed at start were never let go at all. Now each of these goes back to the system once its idle time is up, and an idle server or app falls back to within a few MB of its size at start. The next use after an idle stretch loads its model again, about 1.5 s for the live model and about 10 s for Parakeet on a server CPU. The 8-hour soak did not run for this release. Instead we measured the memory on every path this release changes, on a Linux server and on a Mac, before and after the fix.
+
+### Server
+- **A finished job or live session hands its model memory back** (#431). On Linux the released memory stayed in the C library's heaps and the server kept about 2.3 GB after a Parakeet job and about 680 MB after a live session. It now falls to about 45 MB, its size at start.
+- **A cancelled job no longer keeps its models** (#434). Every job cancelled while it ran kept about 2.2 GB until the server restarted. A DELETE, a client hanging up on the OpenAI route, Bazarr timing out on a long film and the Wyoming routes all cancel this way. The job now stops at its next piece and the Worker frees its models before it goes.
+- **The dictation lane's Qwen server and the live model warmed at start now go after their idle time** (#432). Before, nothing ever let them go.
+- **`server.model_idle_minutes` and `asr.modelIdleMinutes` now go up to 1440 (one day)** (#432). A larger stored value is refused with a `setting refused` line at start, and the default is used instead (10 and 5 minutes).
+- **`/healthz` answers 503 while a job is stuck** (#428). A job that has run longer than 300 s plus five times its audio length counts as stalled, in the new `queue.stalled`, and `/healthz` says `ok: false` until it ends. Before, a server whose every job hung at `running` still said `ok`.
+- **A job cancelled while its model loads no longer takes the server down** (#429). Bun aborts the whole process when a Worker is terminated inside a native model load, so a caller hanging up during a long Parakeet load crashed the server. The Worker is now terminated only once the load returns.
+
+### Desktop
+- **The Mac app gives back the memory of a released model** (#430, #431). It kept about 650 MB after every dictation or file job. macOS keeps freed large blocks in a cache unless the process starts with `MallocLargeCache=0`, so the app now sets it in its bundle, and on a three-job run its memory stays flat at about its size at launch.
+- **The same holds when the app starts at login, and for `akou serve` on a Mac** (#434, #433). The login item now sets `MallocLargeCache=0`, and a server started without it starts itself again once with it, on the same pid.
+
+### Behind the scenes
+- Dependencies: libc 0.2.191 and pulseaudio 0.3.2 in the native helpers (#427).
+
 ## 1.2.3 — Option+Space dictates again while macOS Secure Input is on
 
 On macOS, a chord dictation key such as Option+Space did nothing at all while Secure Input was on, and the one warning akou gave was easy to miss. Secure Input is on whenever a password field or a terminal's secure entry has the keyboard, and macOS sometimes leaves it on after you unlock, until you log out. While it is on, macOS sends akou's key tap only the modifier keys, so akou saw Option and never Space. akou now also registers the chord with macOS as a system hotkey, which macOS delivers even under Secure Input. The 8-hour soak did not run for this release: the soak never starts the dictation helper, the only native code this changes. Instead an idle helper ran side by side with the old one for two minutes: about 0.5% of a core for each, and about 7 MB more memory, flat.
