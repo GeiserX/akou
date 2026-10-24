@@ -18,6 +18,7 @@
  * is not a transducer: sherpa-onnx exits the process on that call.
  */
 
+import { dlopen, FFIType } from "bun:ffi";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -318,6 +319,41 @@ interface OnlineResult {
   ys_probs?: readonly number[];
   start_time?: number;
   num_trailing_blanks?: number;
+}
+
+/** Frames `scrubStack` goes down: hundreds of KB of stack, in well under a millisecond. */
+const STACK_SCRUB_DEPTH = 4000;
+
+/**
+ * Writes plain numbers over the stack below the caller. JavaScriptCore scans the stack
+ * conservatively, so a native handle a decode left in a dead stack slot still looks like a
+ * reference to the next collection, and keeps the whole model alive. On macOS, 2 of 3 job
+ * releases freed nothing without this; with it every one did.
+ */
+function scrubStack(depth: number): number {
+  const slots = [depth, depth, depth, depth, depth, depth, depth, depth];
+  return depth > 0 ? scrubStack(depth - 1) + slots.length : 0;
+}
+
+/** glibc's `malloc_trim`, opened once; null off Linux, or where libc has none (musl). */
+let trim: (() => void) | null | undefined;
+
+/** Returns the free memory the C heap holds to the system (Linux, glibc); elsewhere nothing. */
+function mallocTrim(): void {
+  if (trim === undefined) {
+    trim = null;
+    if (process.platform === "linux") {
+      try {
+        const libc = dlopen("libc.so.6", {
+          malloc_trim: { args: [FFIType.u64], returns: FFIType.i32 },
+        });
+        trim = () => void libc.symbols.malloc_trim(0);
+      } catch {
+        // No glibc: nothing to trim.
+      }
+    }
+  }
+  trim?.();
 }
 
 /**
@@ -638,9 +674,13 @@ export class SherpaModels implements ModelSet {
     // one finalizer lets go of waits for the next collection: on Bun 1.4.2 the first collection
     // freed under a quarter of a pass's memory and the second the rest. Four leave room.
     for (let i = 0; i < 4; i++) {
+      scrubStack(STACK_SCRUB_DEPTH);
       Bun.gc(true);
       await Bun.sleep(0);
     }
+    // glibc keeps what the models freed in its per-thread heaps, about 850 MB after a live
+    // session, and never hands it back on its own: give it back to the system.
+    mallocTrim();
   }
 
   diarizer(): Diarizer {
