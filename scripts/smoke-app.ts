@@ -63,6 +63,8 @@ import { sourceVersion } from "./stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const USAGE_KEYS = ["NSMicrophoneUsageDescription", "NSAudioCaptureUsageDescription"];
+/** Turns off libmalloc's large-allocation cache, which kept a released model's memory (patch-plist.sh). */
+const MALLOC_LARGE_CACHE = "MallocLargeCache";
 const MAC = process.platform === "darwin";
 const EXE = process.platform === "win32" ? ".exe" : "";
 const SHERPA_PLATFORM = `sherpa-onnx-${process.platform === "win32" ? "win" : process.platform}-${process.arch}`;
@@ -105,6 +107,13 @@ function checkPlist(app: string, label: string, version: string): void {
   }
   const min = plistValue(plist, "LSMinimumSystemVersion");
   check(min === MIN_MACOS, `${label} LSMinimumSystemVersion is ${MIN_MACOS}`, `found ${min}`);
+  // Both bundles carry it, so bun gets it whichever one LaunchServices opens.
+  const cache = plistValue(plist, `LSEnvironment.${MALLOC_LARGE_CACHE}`);
+  check(
+    cache === "0",
+    `${label} Info.plist LSEnvironment ${MALLOC_LARGE_CACHE} is 0`,
+    `found ${cache}`,
+  );
   // The app icon Hutch builds from `build.mac.icons` (scripts/app-icon.ts).
   const icon = plistValue(plist, "CFBundleIconFile");
   const icns =
