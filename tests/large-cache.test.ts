@@ -26,6 +26,11 @@ describe("a macOS server turns the large-allocation cache off", () => {
     expect(r?.env).toContain("HOME=/Users/a");
   });
 
+  test("Bun's own flags before the entry are kept", () => {
+    const r = largeCacheReexec({ ...base, execArgv: ["--smol"] });
+    expect(r?.args).toEqual(["/opt/bun", "--smol", "/src/main/cli/cli.ts", "serve", "--json"]);
+  });
+
   test("a compiled akou does not pass its own virtual entry on", () => {
     const r = largeCacheReexec({
       ...base,

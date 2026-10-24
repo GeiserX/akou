@@ -17,13 +17,20 @@ export function largeCacheReexec(o: {
   platform: string;
   env: Record<string, string | undefined>;
   argv: readonly string[];
+  /** Bun's own flags before the entry (`--smol`), which `argv` does not carry. */
+  execArgv?: readonly string[];
   execPath: string;
   compiled: boolean;
 }): { path: string; args: string[]; env: string[] } | null {
   if (o.platform !== "darwin" || o.env.MallocLargeCache === "0") return null;
   if (o.argv[2] !== "serve") return null;
   // A compiled program's argv[1] is its own virtual entry, which `execve` must not pass on.
-  const args = [o.execPath, ...(o.compiled ? [] : o.argv.slice(1, 2)), ...o.argv.slice(2)];
+  const args = [
+    o.execPath,
+    ...(o.execArgv ?? []),
+    ...(o.compiled ? [] : o.argv.slice(1, 2)),
+    ...o.argv.slice(2),
+  ];
   const env = Object.entries({ ...o.env, MallocLargeCache: "0" }).flatMap(([k, v]) =>
     v === undefined ? [] : [`${k}=${v}`],
   );

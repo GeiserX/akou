@@ -251,6 +251,7 @@ if (import.meta.main) {
     platform: process.platform,
     env: process.env,
     argv: process.argv,
+    execArgv: process.execArgv,
     execPath: process.execPath,
     compiled: isCompiled(),
   });
