@@ -1371,7 +1371,8 @@ if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
-  self.onmessage = (e: MessageEvent<ToFinal | ToJob>) => {
+  self.onmessage = (e: MessageEvent<ToFinal | ToJob | ToJobRelease>) => {
+    if (e.data.type === "release") return void releaseJobModels(post);
     useNativeFlag(e.data.native);
     void (e.data.type === "job" ? runJobInWorker(e.data, post) : runInWorker(e.data, post));
   };
@@ -2074,8 +2075,13 @@ type ToJob = {
   native?: NativeFlag;
 };
 
+/** Asks an idle job Worker to free its models before the host terminates it. */
+type ToJobRelease = { type: "release" };
+
 type FromJob =
   | { type: "log"; level: JobLogLevel; msg: string }
+  /** The answer to `release`: the models are freed, the Worker may be terminated. */
+  | { type: "released" }
   | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
@@ -2086,6 +2092,24 @@ type FromJob =
 let jobModels: { key: string; set: Promise<ModelSet> } | null = null;
 /** And its llama-server engine, kept running between jobs, keyed by its own spec. */
 let jobEngine: { key: string; engine: FinalEngine } | null = null;
+
+/**
+ * Frees the models and the engine the Worker keeps, then says so. A terminated Worker never runs
+ * the native finalizers, so a model still held then stays in the process until it exits.
+ */
+async function releaseJobModels(reply: (r: FromJob) => void): Promise<void> {
+  const held = jobModels;
+  const engine = jobEngine;
+  jobModels = null;
+  jobEngine = null;
+  await engine?.engine.unload().catch(() => {});
+  try {
+    await (await held?.set)?.release?.();
+  } catch {
+    // A set that failed to load holds nothing.
+  }
+  reply({ type: "released" });
+}
 
 async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEngine | undefined> {
   const spec = m.models.final;
@@ -2271,7 +2295,8 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
  * One job at a time. `cancel` terminates the Worker (a decode stuck in a native call answers
  * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6). A Worker
  * inside a model load is terminated only once the load returns (`native-guard.ts`, #408); the job
- * still ends at once.
+ * still ends at once. `close` of an idle Worker first has it free its models, or a terminated
+ * Worker would keep them (Parakeet is about 2.2 GB) for the life of the process.
  */
 export class JobWorker {
   private w: Worker | null = null;
@@ -2285,6 +2310,8 @@ export class JobWorker {
   constructor(
     private readonly models: ModelSpec,
     private readonly onLog?: (level: JobLogLevel, msg: string) => void,
+    /** How long `close` waits for an idle Worker to free its models before it terminates it. */
+    private readonly releaseMs = 15_000,
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
@@ -2322,6 +2349,7 @@ export class JobWorker {
           else this.kids.delete(r.pid);
           return;
         }
+        if (r.type === "released") return;
         this.lastLoads = r.loads;
         done();
         if (r.type === "job.done") resolve(r.result);
@@ -2391,7 +2419,50 @@ export class JobWorker {
     return { ...this.lastLoads };
   }
 
+  /**
+   * Ends the Worker. A busy one, or one inside a model load, is cancelled as `cancel` does. An idle
+   * one frees its models first and is terminated on its answer, or after `releaseMs` without one.
+   */
   close(): void {
-    this.cancel("the job Worker closed");
+    const w = this.w;
+    const native = this.native;
+    if (!w || !native || this.busy || inNativeLoad(native)) {
+      this.cancel("the job Worker closed");
+      return;
+    }
+    this.w = null;
+    // The Worker's own children, followed until it is gone: the next Worker's are not these.
+    const kids = new Set(this.kids);
+    this.kids.clear();
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(timer);
+      w.onmessage = null;
+      w.onerror = null;
+      for (const pid of kids) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // Already gone.
+        }
+      }
+      stopWorker(w, native);
+    };
+    // clock: a real-time cap on a Worker that may never answer the release.
+    const timer = setTimeout(end, this.releaseMs);
+    w.onmessage = (e: MessageEvent<FromJob>) => {
+      const r = e.data;
+      if (r.type === "log") return this.onLog?.(r.level, r.msg);
+      if (r.type === "child") {
+        if (r.alive) kids.add(r.pid);
+        else kids.delete(r.pid);
+        return;
+      }
+      if (r.type === "released") end();
+    };
+    w.onerror = end;
+    w.postMessage({ type: "release" } satisfies ToJobRelease);
   }
 }
