@@ -7,7 +7,12 @@
 # - CFBundleShortVersionString, copied from the CFBundleVersion Hutch writes, so Finder and the About
 #   panel show the version;
 # - LSMinimumSystemVersion 14.4 (MIN_MACOS in build-app.ts), so an older Mac refuses the app with its
-#   own "requires macOS 14.4" dialog instead of opening it and failing at the first recording.
+#   own "requires macOS 14.4" dialog instead of opening it and failing at the first recording;
+# - LSEnvironment MallocLargeCache=0, in the app's plist and the wrapper's, so whichever bundle
+#   LaunchServices opens hands it down through the launcher to bun. Without it macOS libmalloc keeps
+#   the large blocks a released model freed in its large-allocation cache: about 555 MB stayed in
+#   the app's footprint after every model unload, for as long as the system had free memory. With it
+#   those blocks go straight back to the system.
 #
 # With "wrapper" as the second argument, for the release wrapper that unpacks the app on its first
 # open, it also writes LSEnvironment ELECTROBUN_INSTALLER_UI_AUTOCLOSE=1 (TRAPS "Minutes to start").
@@ -51,7 +56,10 @@ fi
 /usr/bin/plutil -replace LSMinimumSystemVersion -string "$MIN_MACOS" "$plist"
 if [ "$kind" = wrapper ]; then
   /usr/bin/plutil -replace LSEnvironment -json '{"ELECTROBUN_INSTALLER_UI_AUTOCLOSE":"1"}' "$plist"
+elif ! /usr/bin/plutil -extract LSEnvironment xml1 -o /dev/null "$plist" 2>/dev/null; then
+  /usr/bin/plutil -replace LSEnvironment -json '{}' "$plist"
 fi
+/usr/bin/plutil -replace LSEnvironment.MallocLargeCache -string 0 "$plist"
 /usr/bin/plutil -lint "$plist" >/dev/null
 
 for key in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription CFBundleShortVersionString LSMinimumSystemVersion; do
@@ -63,6 +71,10 @@ done
 if [ "$kind" = wrapper ] &&
   [ "$(/usr/bin/plutil -extract LSEnvironment.ELECTROBUN_INSTALLER_UI_AUTOCLOSE raw "$plist" 2>/dev/null)" != 1 ]; then
   echo "patch-plist: LSEnvironment ELECTROBUN_INSTALLER_UI_AUTOCLOSE is still missing from $plist" >&2
+  exit 70
+fi
+if [ "$(/usr/bin/plutil -extract LSEnvironment.MallocLargeCache raw "$plist" 2>/dev/null)" != 0 ]; then
+  echo "patch-plist: LSEnvironment MallocLargeCache is still missing from $plist" >&2
   exit 70
 fi
 echo "patch-plist: usage strings, version $VERSION and macOS $MIN_MACOS written to $plist"

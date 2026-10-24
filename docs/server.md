@@ -227,6 +227,7 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
   <dict>
     <key>HOME</key><string>/Users/YOU</string>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>MallocLargeCache</key><string>0</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -235,7 +236,7 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 </plist>
 ```
 
-`KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good. Started this way, with no one logged in, it still runs `best` on Metal: `GET /v1/server` shows `accelerator.active` as `metal`. After a reboot, check it came back with:
+`MallocLargeCache` set to `0` turns off macOS's large-allocation cache, which otherwise keeps about 550 MB of a released model in the server's memory after every unload; the desktop app sets the same in its `Info.plist`. `KeepAlive` starts it again if it stops; `sudo launchctl bootout system/io.github.geiserx.akou.serve` stops it for good. Started this way, with no one logged in, it still runs `best` on Metal: `GET /v1/server` shows `accelerator.active` as `metal`. After a reboot, check it came back with:
 
 ```sh
 curl -s http://127.0.0.1:8476/healthz
