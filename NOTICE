@@ -75,7 +75,7 @@ its source package at the repository given.
   futures-task v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
   futures-util v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
   hex v0.4.3                     MIT OR Apache-2.0                  https://github.com/KokaKiwi/rust-hex
-  libc v0.2.190                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  libc v0.2.191                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
   linux-raw-sys v0.12.1          Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/sunfishcode/linux-raw-sys
   log v0.4.34                    MIT OR Apache-2.0                  https://github.com/rust-lang/log
   mach2 v0.6.0                   BSD-2-Clause OR MIT OR Apache-2.0  https://github.com/JohnTitor/mach2
@@ -102,7 +102,7 @@ its source package at the repository given.
   piper v0.2.5                   MIT OR Apache-2.0                  https://github.com/smol-rs/piper
   polling v3.11.0                Apache-2.0 OR MIT                  https://github.com/smol-rs/polling
   proc-macro2 v1.0.107           MIT OR Apache-2.0                  https://github.com/dtolnay/proc-macro2
-  pulseaudio v0.3.1              MIT                                https://github.com/colinmarc/pulseaudio-rs
+  pulseaudio v0.3.2              MIT                                https://github.com/colinmarc/pulseaudio-rs
   quote v1.0.47                  MIT OR Apache-2.0                  https://github.com/dtolnay/quote
   rubato v5.0.1                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
   rustix v1.1.5                  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/bytecodealliance/rustix
@@ -184,7 +184,7 @@ is in its source package at the repository given.
   indenter v0.3.4                           MIT OR Apache-2.0                  https://github.com/yaahc/indenter
   itertools v0.14.0                         MIT OR Apache-2.0                  https://github.com/rust-itertools/itertools
   itoa v1.0.18                              MIT OR Apache-2.0                  https://github.com/dtolnay/itoa
-  libc v0.2.190                             MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  libc v0.2.191                             MIT OR Apache-2.0                  https://github.com/rust-lang/libc
   log v0.4.34                               MIT OR Apache-2.0                  https://github.com/rust-lang/log
   macro_rules_attribute v0.2.3              Apache-2.0 OR MIT OR Zlib          https://github.com/danielhenrymantilla/macro_rules_attribute-rs
   matrixmultiply v0.3.11                    MIT/Apache-2.0                     https://github.com/bluss/matrixmultiply/
