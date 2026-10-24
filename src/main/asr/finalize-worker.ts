@@ -2073,6 +2073,8 @@ type ToJob = {
   options?: Partial<FinalOptions>;
   /** The Worker's native-load flag (`native-guard.ts`). */
   native?: NativeFlag;
+  /** Set to 1 by the host to stop the job between two pieces (`JobWorker.cancel`). */
+  abort?: Int32Array;
 };
 
 /** Asks an idle job Worker to free its models before the host terminates it. */
@@ -2258,6 +2260,10 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         languages: m.languages,
         options: m.options,
         progress: (p) => {
+          // A cancelled job stops at the next piece, so the Worker can free its models and go.
+          if (m.abort && Atomics.load(m.abort, 0) === 1) {
+            throw Object.assign(new Error("the job was cancelled"), { code: "cancelled" });
+          }
           // A new stage always goes; within one, at most once a second, and the last figure.
           const now = performance.now();
           if (
@@ -2294,16 +2300,19 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
 
 /**
  * One long-lived finalize Worker for file jobs: the models load once and serve every job after.
- * One job at a time. `cancel` terminates the Worker (a decode stuck in a native call answers
- * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6). A Worker
- * inside a model load is terminated only once the load returns (`native-guard.ts`, #408); the job
- * still ends at once. `close` of an idle Worker first has it free its models, or a terminated
- * Worker would keep them (Parakeet is about 2.2 GB) for the life of the process.
+ * One job at a time. `cancel` ends the job in it at once and retires the Worker, so the next job
+ * starts a fresh one (SV-J6). A retired Worker frees its models before it is terminated, or it
+ * would keep them (Parakeet is about 2.2 GB) for the life of the process: a terminated Bun Worker
+ * never runs the native finalizers, and each cancelled job left one more copy. A Worker that does
+ * not answer in time (a decode stuck in a native call) is terminated as it is, and one inside a
+ * model load only once the load returns (`native-guard.ts`, #408).
  */
 export class JobWorker {
   private w: Worker | null = null;
   /** The native-load flag of the newest Worker, kept past its cancel for `loading`. */
   private native: NativeFlag | null = null;
+  /** The newest Worker's stop flag: set, its job stops at the next piece (`ToJob.abort`). */
+  private abort: Int32Array | null = null;
   private busy: { reject(e: Error): void } | null = null;
   private lastLoads: Record<string, number> = {};
   /** Child processes the Worker runs (llama-server): killed with it, never left behind. */
@@ -2324,9 +2333,11 @@ export class JobWorker {
         workerData: FINALIZE_WORKER_NAME,
       } as WorkerOptions);
       this.native = nativeFlag();
+      this.abort = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     }
     const w = this.w;
     const native = this.native;
+    const abort = this.abort ?? undefined;
     return new Promise<JobPassResult>((resolve, reject) => {
       const done = () => {
         this.busy = null;
@@ -2376,6 +2387,7 @@ export class JobWorker {
         languages: input.languages,
         options: input.options,
         native,
+        abort,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
       w.postMessage(msg, [input.samples.buffer as ArrayBuffer]);
@@ -2383,15 +2395,11 @@ export class JobWorker {
   }
 
   /**
-   * Stops the job in flight: `run` rejects with `reason` at once, and the Worker is terminated now,
-   * or right after the model load it is in returns.
+   * Stops the job in flight: `run` rejects with `reason` at once, and the Worker is retired: it
+   * stops the job at its next piece, frees its models and is terminated (`retire`).
    */
   cancel(reason = "cancelled"): void {
-    const w = this.w;
-    this.w = null;
-    this.killChildren();
-    this.busy?.reject(new Error(reason));
-    if (w && this.native) stopWorker(w, this.native);
+    this.retire(reason);
   }
 
   /** Whether the newest Worker is inside a native model load now, cancelled or not. */
@@ -2421,28 +2429,29 @@ export class JobWorker {
     return { ...this.lastLoads };
   }
 
-  /**
-   * Ends the Worker. A busy one, or one inside a model load, is cancelled as `cancel` does. An idle
-   * one frees its models first and is terminated on its answer, or after `releaseMs` without one.
-   */
+  /** Ends the Worker, as `cancel` does, without leaving its models behind. */
   close(): void {
+    this.retire("the job Worker closed");
+  }
+
+  /**
+   * Ends the Worker and frees what it holds. A busy one is told to stop its job, which it does at
+   * the next piece; once it answers, or at once when idle, it frees its models and is terminated
+   * on its `released`. With no answer in `releaseMs` it is terminated as it is, after any model
+   * load it is in returns.
+   */
+  private retire(reason: string): void {
     const w = this.w;
     const native = this.native;
-    if (!w || !native || this.busy || inNativeLoad(native)) {
-      this.cancel("the job Worker closed");
-      return;
-    }
+    const abort = this.abort;
+    const busy = this.busy !== null;
     this.w = null;
     // The Worker's own children, followed until it is gone: the next Worker's are not these.
     const kids = new Set(this.kids);
     this.kids.clear();
-    let ended = false;
-    const end = () => {
-      if (ended) return;
-      ended = true;
-      clearTimeout(timer);
-      w.onmessage = null;
-      w.onerror = null;
+    this.busy?.reject(new Error(reason));
+    if (!w || !native) return;
+    const kill = () => {
       for (const pid of kids) {
         try {
           process.kill(pid, "SIGTERM");
@@ -2450,10 +2459,23 @@ export class JobWorker {
           // Already gone.
         }
       }
+      kids.clear();
+    };
+    // A job's llama-server goes now, so a decode waiting on it fails at once instead of finishing.
+    if (busy) kill();
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(timer);
+      w.onmessage = null;
+      w.onerror = null;
+      kill();
       stopWorker(w, native);
     };
-    // clock: a real-time cap on a Worker that may never answer the release.
+    // clock: a real-time cap on a Worker that may never answer.
     const timer = setTimeout(end, this.releaseMs);
+    const release = () => w.postMessage({ type: "release" } satisfies ToJobRelease);
     w.onmessage = (e: MessageEvent<FromJob>) => {
       const r = e.data;
       if (r.type === "log") return this.onLog?.(r.level, r.msg);
@@ -2462,9 +2484,12 @@ export class JobWorker {
         else kids.delete(r.pid);
         return;
       }
-      if (r.type === "released") end();
+      if (r.type === "released") return end();
+      // The stopped job's answer: the Worker is between jobs now, so its models can go.
+      if (r.type === "job.done" || r.type === "job.failed") release();
     };
     w.onerror = end;
-    w.postMessage({ type: "release" } satisfies ToJobRelease);
+    if (busy && abort) Atomics.store(abort, 0, 1);
+    else release();
   }
 }
