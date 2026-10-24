@@ -1158,12 +1158,12 @@ export class JobService {
   }
 
   /**
-   * Closes the idle Workers whose time is up: an idle Worker keeps its models while a queued job
-   * needs them, and where idle Workers are kept warm (a server) for `server.model_idle_minutes`
-   * after its last job; at most as many Workers as `server.concurrency` stay. So consecutive jobs
-   * reuse one model load, and an idle box gets its memory back. The desktop app keeps no idle
-   * Worker: one no queued job needs is closed at once. The idle timer calls it; a test with its own
-   * clock calls it too.
+   * Closes the idle Workers whose time is up, the queue's and the dictation lane's: an idle Worker
+   * keeps its models while a queued job needs them, and where idle Workers are kept warm (a server)
+   * for `server.model_idle_minutes` after its last job; at most as many queue Workers as
+   * `server.concurrency` stay. So consecutive jobs reuse one model load, and an idle box gets its
+   * memory back. The desktop app keeps no idle Worker: one no queued job needs is closed at once.
+   * The idle timer calls it; a test with its own clock calls it too.
    */
   releaseIdle(): void {
     if (this.closed) return;
@@ -1185,6 +1185,23 @@ export class JobService {
         continue;
       }
       if (!needed && s.model !== null && idleMs > 0 && left <= 0) {
+        this.o.log("info", `jobs: ${s.model} unloaded after ${idleMs / 60_000} min with no job`);
+      }
+      s.worker.close();
+      s.worker = null;
+      s.spec = "";
+      s.model = null;
+    }
+    // The dictation lane's Workers follow the same idle rule: warm for the idle minutes after
+    // their last dictation, then closed with their model and llama-server.
+    for (const s of this.laneSlots) {
+      if (s.job || !s.worker) continue;
+      const left = idleMs - (now - (s.idleSince ?? now));
+      if (warm && s.model !== null && left > 0) {
+        wake = Math.min(wake, left);
+        continue;
+      }
+      if (s.model !== null && idleMs > 0 && left <= 0) {
         this.o.log("info", `jobs: ${s.model} unloaded after ${idleMs / 60_000} min with no job`);
       }
       s.worker.close();
@@ -1277,7 +1294,7 @@ export class JobService {
     return null;
   }
 
-  /** Starts interactive jobs while a lane Worker is free; idle lane Workers keep their model. */
+  /** Starts interactive jobs while a lane Worker is free; `releaseIdle` lets an idle one's model go. */
   private pumpLane(): void {
     const size = this.laneSize();
     while (this.laneSlots.filter((s) => s.job).length < size) {

@@ -319,9 +319,9 @@ export const SETTINGS = {
   "server.model_idle_minutes": {
     type: "integer",
     min: 0,
-    max: 10080,
+    max: 1440,
     default: 10,
-    doc: "Minutes an idle file-job Worker keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. The desktop app keeps none: it lets a model go as soon as no queued job needs it. 0: let go as soon as no queued job needs it.",
+    doc: "Minutes an idle file-job Worker, a dictation lane's included, keeps its model loaded after its last job, so consecutive jobs pay one model load; then it lets the model and its memory go. A long value keeps a 1 to 3 GB process (Qwen3-ASR's llama-server, or the Worker's models) resident all that time with nothing queued. The desktop app keeps none: it lets a model go as soon as no queued job needs it. 0: let go as soon as no queued job needs it. At most 1440 (a day); a larger value in config.json is refused and the default is used.",
   },
   "server.queue_max": {
     type: "integer",
@@ -839,9 +839,9 @@ export const SETTINGS = {
   "asr.modelIdleMinutes": {
     type: "integer",
     min: 0,
-    max: 10080,
+    max: 1440,
     default: 5,
-    doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. Each loads again at its next use: the first dictation after that waits about 1 to 2 s for its streaming model. A model a dictation warm-up loaded at start or after a call goes the same way. 0: as soon as nothing uses them; up to 10080 (a week) keeps them loaded on a Mac with memory to spare.",
+    doc: "Let go of the speech models the live recognizer loaded after this many minutes with no call and no dictation, to get their memory back. Each loads again at its next use: the first dictation after that waits about 1 to 2 s for its streaming model. A model a dictation warm-up loaded at start or after a call goes the same way. On a server the streaming model loaded at start goes the same way when no live client comes. A long value keeps about 1 to 2 GB resident with nothing in use. 0: as soon as nothing uses them; at most 1440 (a day), and a larger value in config.json is refused and the default is used.",
   },
   "asr.warmAtStart": {
     type: "string",
