@@ -2,6 +2,17 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.3 — Option+Space dictates again while macOS Secure Input is on
+
+On macOS, a chord dictation key such as Option+Space did nothing at all while Secure Input was on, and the one warning akou gave was easy to miss. Secure Input is on whenever a password field or a terminal's secure entry has the keyboard, and macOS sometimes leaves it on after you unlock, until you log out. While it is on, macOS sends akou's key tap only the modifier keys, so akou saw Option and never Space. akou now also registers the chord with macOS as a system hotkey, which macOS delivers even under Secure Input. The 8-hour soak did not run for this release: the soak never starts the dictation helper, the only native code this changes. Instead an idle helper ran side by side with the old one for two minutes: about 0.5% of a core for each, and about 7 MB more memory, flat.
+
+### Desktop
+- **A chord dictation key works under Secure Input on macOS** (#424). The helper registers the dictation chord with `RegisterEventHotKey` beside its key tap, and moves it on every rebind. When the tap reports the same press, the press counts once. On a Mac whose login window held Secure Input, the 1.2.0 helper bound to Option+Space ignored the press. The new one started a session. A key on its own, such as Right Command, already worked and is unchanged. macOS cannot register a chord that names a side (`LeftOption+Space`) or uses `Fn`, or one another app has taken, so those still work only while Secure Input is off.
+- The "cannot reach akou while Secure Input is on" notice now shows only when the key really cannot get through, and goes away when a rebind fixes that (#424).
+
+### Behind the scenes
+- The terms check of 2026-10-23 is in [docs/providers.md](docs/providers.md). Anthropic's terms are unchanged. OpenAI published new Usage Policies, effective 20 November 2026; none of the changes touches anything akou does.
+
 ## 1.2.2 — akou stops trusting certificates made with the leaked eMudhra keys
 
 Eight eMudhra (emSign) intermediate certificates had private keys anyone could recover, and were revoked on 2026-10-18. Anyone can make a certificate for any site under them, and nothing checks the revocation. Bun, which akou runs on, trusted them whatever we set, so akou would have sent a remote server's key, an Anthropic or OpenAI API key, or a model download to whoever held such a certificate. This release stops that on the desktop app, the CLI and the server image. The 8-hour soak did not run for this release: the change touches only outbound TLS, nothing in capture or transcription.

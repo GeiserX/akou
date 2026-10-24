@@ -8,9 +8,9 @@ The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many
 
 | GPU | Image | Add to `docker run` |
 |---|---|---|
-| None | `drumsergio/akou:1.2.2` | Nothing |
-| Intel (integrated or Arc) or AMD | `drumsergio/akou:1.2.2-vulkan` | `--device /dev/dri/renderD128 --group-add $(stat -c %g /dev/dri/renderD128)`, with the GPU's own render node |
-| NVIDIA | `drumsergio/akou:1.2.2-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
+| None | `drumsergio/akou:1.2.3` | Nothing |
+| Intel (integrated or Arc) or AMD | `drumsergio/akou:1.2.3-vulkan` | `--device /dev/dri/renderD128 --group-add $(stat -c %g /dev/dri/renderD128)`, with the GPU's own render node |
+| NVIDIA | `drumsergio/akou:1.2.3-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
 | Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself ([A Mac as the server](server.md#a-mac-as-the-server)); it uses Metal |
 
 Pass one render node, the GPU's own, not the whole `/dev/dri`. llama-server picks among the render nodes it can open by its own device order, not by path. An iGPU with SR-IOV virtual functions shows several nodes (`ls /dev/dri`): on an Intel UHD 770 with two virtual functions, llama-server opened a virtual function instead of the GPU akou had detected, and the GPU hung. Mesa could pin llama-server to the detected GPU by its PCI bus address, which a virtual function does not share, but akou does not do that yet: it needs a run on a box with virtual functions. When akou can open more than one node, `accelerator.reason` lists them and names the one to pass.
@@ -91,7 +91,9 @@ curl -s http://127.0.0.1:8476/v1/server | jq .queue
 ```json
 { "concurrency": 4, "max": 1000, "max_per_key": 500, "depth": 212, "queued": 208, "running": 4,
   "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "eta_seconds": 1246,
-  "loaded": ["qwen3-asr-1.7b"] }
+  "loaded": ["qwen3-asr-1.7b"], "stalled": 0 }
 ```
 
 `audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `eta_seconds` is the time left at the pace of the last 50 jobs, and `null` until one has ended since the server started.
+
+`stalled` counts the running jobs that have run more than 300 s plus 5 times their audio's length, for example a model load starved of disk IO. While it is above 0, `/healthz` answers 503 with `ok: false`, the log has one `job.stalled` line per job naming its stage and how long it has run, and a server that sends jobs to this one stops sending it new ones. akou does not stop the job: look at what else is reading the disk.

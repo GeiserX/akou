@@ -423,7 +423,7 @@ export interface AppOptions {
    */
   jobs?: Pick<
     JobServiceOptions,
-    "decode" | "delivery" | "now" | "remoteProbeMs" | "remoteFetch"
+    "decode" | "delivery" | "now" | "remoteProbeMs" | "remoteFetch" | "stallCheckMs"
   > & {
     modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
   };

@@ -71,6 +71,13 @@ import {
 import type { FinalStep } from "./final-text.ts";
 import { type BuiltFuser, fusionModelId } from "./fusion.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
+import {
+  inNativeLoad,
+  type NativeFlag,
+  nativeFlag,
+  stopWorker,
+  useNativeFlag,
+} from "./native-guard.ts";
 import { peak, prepareSpan } from "./pad.ts";
 import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
@@ -1258,6 +1265,8 @@ type ToFinal = {
   decode: DecodeList | null;
   files: { path: string; sha256: string }[];
   options?: Partial<FinalOptions>;
+  /** The Worker's native-load flag (`native-guard.ts`); absent when the pass runs in-thread. */
+  native?: NativeFlag;
 };
 
 type FromFinal =
@@ -1362,8 +1371,10 @@ if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
-  self.onmessage = (e: MessageEvent<ToFinal | ToJob>) =>
+  self.onmessage = (e: MessageEvent<ToFinal | ToJob>) => {
+    useNativeFlag(e.data.native);
     void (e.data.type === "job" ? runJobInWorker(e.data, post) : runInWorker(e.data, post));
+  };
 }
 
 /** What the host needs of a call: its folder, its writer, and a hold on it past the call's end. */
@@ -1490,6 +1501,7 @@ export async function finalizeCall(
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
+      const native = nativeFlag();
       /** llama-server processes the Worker runs: a terminated Worker cannot stop them. */
       const kids = new Set<number>();
       const onAbort = () => finish(quit);
@@ -1498,7 +1510,8 @@ export async function finalizeCall(
         settled = true;
         o.signal?.removeEventListener("abort", onAbort);
         clock.clearTimeout(timer);
-        w?.terminate();
+        // Never inside a model load: Bun aborts the process on that (#408).
+        if (w) stopWorker(w, native);
         for (const pid of kids) {
           try {
             process.kill(pid, "SIGTERM");
@@ -1540,7 +1553,7 @@ export async function finalizeCall(
       } as WorkerOptions);
       w.onmessage = (e: MessageEvent<FromFinal>) => onReply(e.data);
       w.onerror = (e) => failWith("worker", e.message);
-      w.postMessage(msg);
+      w.postMessage({ ...msg, native } satisfies ToFinal);
     });
   } finally {
     release();
@@ -2057,6 +2070,8 @@ type ToJob = {
   glossary?: readonly string[];
   languages?: readonly string[];
   options?: Partial<FinalOptions>;
+  /** The Worker's native-load flag (`native-guard.ts`). */
+  native?: NativeFlag;
 };
 
 type FromJob =
@@ -2254,10 +2269,14 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
 /**
  * One long-lived finalize Worker for file jobs: the models load once and serve every job after.
  * One job at a time. `cancel` terminates the Worker (a decode stuck in a native call answers
- * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6).
+ * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6). A Worker
+ * inside a model load is terminated only once the load returns (`native-guard.ts`, #408); the job
+ * still ends at once.
  */
 export class JobWorker {
   private w: Worker | null = null;
+  /** The native-load flag of the newest Worker, kept past its cancel for `loading`. */
+  private native: NativeFlag | null = null;
   private busy: { reject(e: Error): void } | null = null;
   private lastLoads: Record<string, number> = {};
   /** Child processes the Worker runs (llama-server): killed with it, never left behind. */
@@ -2271,10 +2290,14 @@ export class JobWorker {
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
     const onProgress = input.progress;
     if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
-    this.w ??= new Worker(siblingModule(import.meta.url, "finalize-worker"), {
-      workerData: FINALIZE_WORKER_NAME,
-    } as WorkerOptions);
+    if (!this.w || !this.native) {
+      this.w = new Worker(siblingModule(import.meta.url, "finalize-worker"), {
+        workerData: FINALIZE_WORKER_NAME,
+      } as WorkerOptions);
+      this.native = nativeFlag();
+    }
     const w = this.w;
+    const native = this.native;
     return new Promise<JobPassResult>((resolve, reject) => {
       const done = () => {
         this.busy = null;
@@ -2307,9 +2330,9 @@ export class JobWorker {
       w.onerror = (e) => {
         // A Worker that died is not reused, and nor is anything it started.
         this.w = null;
-        w.terminate();
         this.killChildren();
         done();
+        stopWorker(w, native);
         reject(new Error(e.message));
       };
       const msg: ToJob = {
@@ -2322,19 +2345,28 @@ export class JobWorker {
         glossary: input.glossary,
         languages: input.languages,
         options: input.options,
+        native,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
       w.postMessage(msg, [input.samples.buffer as ArrayBuffer]);
     });
   }
 
-  /** Stops the job in flight: the Worker is terminated and `run` rejects with `reason`. */
+  /**
+   * Stops the job in flight: `run` rejects with `reason` at once, and the Worker is terminated now,
+   * or right after the model load it is in returns.
+   */
   cancel(reason = "cancelled"): void {
     const w = this.w;
     this.w = null;
-    w?.terminate();
     this.killChildren();
     this.busy?.reject(new Error(reason));
+    if (w && this.native) stopWorker(w, this.native);
+  }
+
+  /** Whether the newest Worker is inside a native model load now, cancelled or not. */
+  loading(): boolean {
+    return inNativeLoad(this.native);
   }
 
   /** The child processes the Worker runs now. */
