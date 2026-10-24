@@ -109,7 +109,11 @@ function checkPlist(app: string, label: string, version: string): void {
   check(min === MIN_MACOS, `${label} LSMinimumSystemVersion is ${MIN_MACOS}`, `found ${min}`);
   // Both bundles carry it, so bun gets it whichever one LaunchServices opens.
   const cache = plistValue(plist, `LSEnvironment.${MALLOC_LARGE_CACHE}`);
-  check(cache === "0", `${label} Info.plist LSEnvironment ${MALLOC_LARGE_CACHE} is 0`, `found ${cache}`);
+  check(
+    cache === "0",
+    `${label} Info.plist LSEnvironment ${MALLOC_LARGE_CACHE} is 0`,
+    `found ${cache}`,
+  );
   // The app icon Hutch builds from `build.mac.icons` (scripts/app-icon.ts).
   const icon = plistValue(plist, "CFBundleIconFile");
   const icns =
