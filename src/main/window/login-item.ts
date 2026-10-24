@@ -3,7 +3,10 @@
  * with no window when the user logs in, so the tray and the hotkey are always there. The login
  * launch sets `AKOU_HEADLESS=1` in the environment (never an argument, which the launcher drops).
  *
- * - macOS: a LaunchAgent in `~/Library/LaunchAgents`, loaded by launchd at the next login.
+ * - macOS: a LaunchAgent in `~/Library/LaunchAgents`, loaded by launchd at the next login. It also
+ *   sets `MallocLargeCache=0`: launchd starts the launcher straight from the agent, so the bundle's
+ *   LSEnvironment never applies, and without it macOS keeps about 550 MB of every released model
+ *   (#433). The app writes the agent again at every start, so an older one gets the key too.
  * - Linux: an XDG autostart entry in `~/.config/autostart`.
  * - Windows: the current user's `Run` key, through `reg.exe`.
  *
@@ -59,6 +62,8 @@ export function launchAgentPlist(program: string): string {
   <dict>
     <key>AKOU_HEADLESS</key>
     <string>1</string>
+    <key>MallocLargeCache</key>
+    <string>0</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

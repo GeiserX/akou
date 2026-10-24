@@ -20,7 +20,7 @@ import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
 import { installTrust } from "../tls-trust.ts";
 import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
-import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
+import { ApiClient, EXIT, isCompiled, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { dictateCommand, dictationsCommand } from "./commands/dictate.ts";
 import { doctorCommand } from "./commands/doctor.ts";
@@ -38,6 +38,7 @@ import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
 import type { Command, Ctx, GrantChecker, Io, Keys } from "./context.ts";
 import { commandHelp } from "./help.ts";
+import { execve, largeCacheReexec } from "./large-cache.ts";
 
 const mcp: Command = {
   name: "mcp",
@@ -244,6 +245,16 @@ function stdinKeys(): Keys {
 }
 
 if (import.meta.main) {
+  // A macOS server started without MallocLargeCache=0 starts itself again with it, before it
+  // opens anything (`large-cache.ts`). Should that fail, it runs on as it is.
+  const again = largeCacheReexec({
+    platform: process.platform,
+    env: process.env,
+    argv: process.argv,
+    execPath: process.execPath,
+    compiled: isCompiled(),
+  });
+  if (again) execve(again.path, again.args, again.env);
   installTrust();
   // A reader that closed stdout (`akou events -f | head -3`) has what it wanted: stop, exit 0.
   process.stdout.on("error", (e: NodeJS.ErrnoException) => {
