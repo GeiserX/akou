@@ -321,6 +321,20 @@ interface OnlineResult {
   num_trailing_blanks?: number;
 }
 
+/** Frames `scrubStack` goes down: hundreds of KB of stack, in well under a millisecond. */
+const STACK_SCRUB_DEPTH = 4000;
+
+/**
+ * Writes plain numbers over the stack below the caller. JavaScriptCore scans the stack
+ * conservatively, so a native handle a decode left in a dead stack slot still looks like a
+ * reference to the next collection, and keeps the whole model alive. On macOS, 2 of 3 job
+ * releases freed nothing without this; with it every one did.
+ */
+function scrubStack(depth: number): number {
+  const slots = [depth, depth, depth, depth, depth, depth, depth, depth];
+  return depth > 0 ? scrubStack(depth - 1) + slots.length : 0;
+}
+
 /** glibc's `malloc_trim`, opened once; null off Linux, or where libc has none (musl). */
 let trim: (() => void) | null | undefined;
 
@@ -660,6 +674,7 @@ export class SherpaModels implements ModelSet {
     // one finalizer lets go of waits for the next collection: on Bun 1.4.2 the first collection
     // freed under a quarter of a pass's memory and the second the rest. Four leave room.
     for (let i = 0; i < 4; i++) {
+      scrubStack(STACK_SCRUB_DEPTH);
       Bun.gc(true);
       await Bun.sleep(0);
     }
