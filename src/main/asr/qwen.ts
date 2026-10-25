@@ -22,7 +22,9 @@
  *   still sent, empty: without it Qwen names a language (Chinese "嗯", Portuguese "Sim") on
  *   silence instead of None, and lidc forces those into words.
  * - **Word confidence** is exp of the lowest log-probability of the word's tokens, as for sherpa.
- *   Qwen gives no word times.
+ *   Qwen gives no word times. With an aligner (aligner.ts, a job on `best` where CrispASR runs),
+ *   each unit's words are timed on the audio Qwen decoded, in the aligner's 11 languages; a unit it
+ *   cannot time keeps null times and says why in `untimed`.
  *
  * - **No request is longer than `QWEN_MAX_REQUEST_SECONDS`.** A longer unit (a whole dictation, a
  *   file through the API) is cut at its quietest tenth of a second before the limit, each piece is
@@ -33,6 +35,8 @@
  * `engine_unavailable` and marked `fatal`, so the pass fails the job instead of dropping the text.
  */
 
+import type { Aligner } from "./aligner.ts";
+import { ALIGNER_LANGUAGES } from "./aligner-catalog.ts";
 import type { FinalEngine, FinalUnit, Hypothesis, WordHyp } from "./engine.ts";
 import { ASR_RATE } from "./engine.ts";
 import { QWEN_LANGUAGE_CODES } from "./llama-catalog.ts";
@@ -229,6 +233,10 @@ export interface QwenOptions {
    * `QWEN_MAX_REQUEST_SECONDS`; only the nightly's uncut control raises it.
    */
   maxSeconds?: number;
+  /** Times the words of each unit (a job on `best`); absent, the words keep none. */
+  aligner?: Aligner;
+  /** Why the words keep no times when there is no aligner, set on every unit with words. */
+  untimed?: string;
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -242,8 +250,22 @@ export class QwenEngine implements FinalEngine {
   readonly id: string;
   readonly features = { confidence: true, timestamps: false, glossary: true, languageId: true };
 
+  private aligner: Aligner | undefined;
+  private untimed: string | undefined;
+
   constructor(private readonly o: QwenOptions) {
     this.id = o.id;
+    this.aligner = o.aligner;
+    this.untimed = o.untimed;
+  }
+
+  /**
+   * The aligner for the next units, or why there is none. A job Worker keeps one engine between
+   * jobs and sets this per job, so a job without the aligner (a dictation) never restarts Qwen.
+   */
+  setAligner(aligner: Aligner | undefined, untimed?: string): void {
+    this.aligner = aligner;
+    this.untimed = untimed;
   }
 
   async load(): Promise<void> {
@@ -259,18 +281,39 @@ export class QwenEngine implements FinalEngine {
     if (pieces.length === 1) return await this.decodeWhole(unit);
     const t = performance.now();
     const hs: Hypothesis[] = [];
-    for (const samples of pieces) hs.push(await this.decodeWhole({ ...unit, samples }));
+    const words: WordHyp[] = [];
+    let at = 0;
+    for (const samples of pieces) {
+      const x = await this.decodeWhole({ ...unit, samples });
+      hs.push(x);
+      // A piece's word times are seconds into the piece; the unit's are seconds into the unit.
+      const shift = at / ASR_RATE;
+      for (const w of x.words) {
+        words.push({
+          ...w,
+          ...(w.t0 === undefined ? {} : { t0: w.t0 + shift }),
+          ...(w.t1 === undefined ? {} : { t1: w.t1 + shift }),
+        });
+      }
+      at += samples.length;
+    }
     const h: Hypothesis = {
       engine: this.id,
       text: hs
         .map((x) => x.text)
         .filter(Boolean)
         .join(" "),
-      words: hs.flatMap((x) => x.words),
+      words,
       ms: performance.now() - t,
     };
     const lang = hs.find((x) => x.text !== "" && x.lang)?.lang ?? hs.find((x) => x.lang)?.lang;
     if (lang) h.lang = lang;
+    const untimed = hs.find((x) => x.untimed)?.untimed;
+    // A unit is timed only when every piece was: half-timed words would read as all timed.
+    if (untimed) {
+      h.untimed = untimed;
+      h.words = words.map(({ t0: _, t1: __, ...w }) => w);
+    } else if (hs.some((x) => x.aligner)) h.aligner = hs.find((x) => x.aligner)?.aligner as string;
     return h;
   }
 
@@ -304,7 +347,36 @@ export class QwenEngine implements FinalEngine {
     const code = a.lang ? CODE_OF[a.lang] : undefined;
     if (code) h.lang = code;
     if (h.text !== "" && a.conf !== undefined) h.conf = a.conf;
+    if (h.words.length > 0) await this.time(h, unit);
     return h;
+  }
+
+  /** Puts the aligner's times on the unit's words, or says in `untimed` why there are none. */
+  private async time(h: Hypothesis, unit: FinalUnit): Promise<void> {
+    const aligner = this.aligner;
+    if (!aligner) {
+      if (this.untimed) h.untimed = this.untimed;
+      return;
+    }
+    const lang = h.lang ?? (unit.lang === "auto" ? undefined : unit.lang.split(/[-_]/)[0]);
+    if (!lang || !ALIGNER_LANGUAGES.includes(lang.toLowerCase())) {
+      h.untimed = `the aligner does not cover ${lang ? `language ${lang}` : "a unit whose language is unknown"}`;
+      return;
+    }
+    const r = await aligner.align(
+      unit.samples,
+      h.words.map((w) => w.w),
+    );
+    if ("error" in r) {
+      this.o.log?.("warn", `${aligner.id}: a unit keeps no word times: ${r.error}`);
+      h.untimed = "the aligner failed";
+      return;
+    }
+    h.words = h.words.map((w, i) => {
+      const [t0, t1] = r.times[i] as [number, number];
+      return { ...w, t0, t1 };
+    });
+    h.aligner = aligner.id;
   }
 
   /** One decode, forced into `forced` (Qwen's name) or auto. Retried once on a fresh server. */

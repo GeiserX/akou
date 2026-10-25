@@ -219,6 +219,8 @@ export function renderResult(job: Job, format: ResultFormat): Response {
 
 interface Rendered {
   segments: JobSegment[];
+  /** The job's words (SV-J4), for `verbose_json`'s `words`. */
+  words?: JobWord[];
   text: string;
   language: string | null;
   duration: number;
@@ -228,6 +230,7 @@ function rendered(job: Job): Rendered {
   const r = job.result as Record<string, unknown>;
   return {
     segments: (r.segments ?? []) as JobSegment[],
+    words: (r.words ?? []) as JobWord[],
     text: (r.text ?? "") as string,
     language: (r.language ?? null) as string | null,
     duration: (r.duration_s ?? 0) as number,
@@ -235,6 +238,14 @@ function rendered(job: Job): Rendered {
 }
 
 const usage = (seconds: number) => ({ type: "duration", seconds });
+
+/** A job's words in OpenAI's `{word, start, end}`, or none when any word has no time. */
+export function openaiWords(
+  words: readonly JobWord[],
+): { word: string; start: number; end: number }[] {
+  if (words.some((w) => w.s === null || w.e === null)) return [];
+  return words.map((w) => ({ word: w.w, start: w.s as number, end: w.e as number }));
+}
 
 /** The answer in the format asked for. */
 export function renderOpenAI(
@@ -258,9 +269,9 @@ export function renderOpenAI(
         language: r.language ?? "und",
         duration: r.duration,
         text: r.text,
-        // This door does not carry the engine's words yet (akou-5an.84): asked-for words are an
-        // empty list, never guesses.
-        ...(granularities.includes("word") ? { words: [] } : {}),
+        // The job's words with their times (akou-5an.84), when every word has them: Parakeet's,
+        // and Qwen's where the aligner timed them. Otherwise an empty list, never guesses.
+        ...(granularities.includes("word") ? { words: openaiWords(r.words ?? []) } : {}),
         ...(granularities.includes("segment")
           ? {
               segments: r.segments.map((s, id) => ({
@@ -466,7 +477,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `words` is an empty list even when `timestamp_granularities[]` asks for `word`, since this door does not carry the engine's words yet (akou-5an.84). `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `timestamp_granularities[]` with `word` gives `words` as `{word, start, end}` when every word has a time (Parakeet's, and Qwen's where the word-time aligner ran), else an empty list, never guessed times. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
       access: "jobs",
       modes: ["server"],
       door: "compat",

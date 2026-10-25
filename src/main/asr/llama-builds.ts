@@ -8,7 +8,14 @@
 
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { LLAMA_BUILDS, LLAMA_RELEASE, type LlamaBuild, llamaUrl } from "./llama-catalog.ts";
+import { crispasrBuild, crispasrName, crispasrUrl } from "./aligner-catalog.ts";
+import {
+  LLAMA_BUILDS,
+  LLAMA_RELEASE,
+  type LlamaAsset,
+  type LlamaBuild,
+  llamaUrl,
+} from "./llama-catalog.ts";
 import {
   ACCELERATORS,
   type Accelerator,
@@ -96,11 +103,16 @@ export async function fetchLlamaBuild(
   build: LlamaBuild,
   dir: string,
   o: FetchOptions = {},
+  /** The program the build must hold, and where its release lives: CrispASR's for the aligner. */
+  what: { name: string; url(a: LlamaAsset): string } = {
+    name: llamaServerName(build.platform),
+    url: llamaUrl,
+  },
 ): Promise<string> {
   const download = join(dir, ".download");
   const files: string[] = [];
   for (const a of build.assets) {
-    const url = o.base ? `${o.base}/${a.name}` : llamaUrl(a);
+    const url = o.base ? `${o.base}/${a.name}` : what.url(a);
     const path = join(download, a.name);
     await downloadFile("llama-server", { ...a, url }, path, o);
     files.push(path);
@@ -113,9 +125,31 @@ export async function fetchLlamaBuild(
     rmSync(tmp, { recursive: true, force: true });
   }
   rmSync(download, { recursive: true, force: true });
-  const bin = join(dir, llamaServerName(build.platform));
-  if (!existsSync(bin))
-    throw new Error(`${build.assets[0]?.name} holds no ${llamaServerName(build.platform)}`);
+  const bin = join(dir, what.name);
+  if (!existsSync(bin)) throw new Error(`${build.assets[0]?.name} holds no ${what.name}`);
+  return bin;
+}
+
+/**
+ * The word-time aligner's CrispASR for this machine and `accelerator`, fetched into `dir`, or null
+ * where none runs (aligner-catalog.ts): the Dockerfile's llama stage runs it for every variant, and
+ * only the Vulkan one on x64 gets a build. `dir` is made either way, so the image copies it.
+ */
+export async function fetchAlignerForHost(
+  accelerator: string | undefined,
+  dir: string,
+): Promise<string | null> {
+  mkdirSync(dir, { recursive: true });
+  const build = crispasrBuild(hostPlatform(), accelerator ?? "");
+  if (!build) return null;
+  const bin = await fetchLlamaBuild(
+    build,
+    dir,
+    {},
+    { name: crispasrName(build.platform), url: (a) => crispasrUrl(a.name) },
+  );
+  // The quantizer ships beside it and is never run: 71 MB the image does not need.
+  rmSync(join(dir, "crispasr-quantize"), { force: true });
   return bin;
 }
 

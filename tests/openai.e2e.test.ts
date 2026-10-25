@@ -11,6 +11,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CUE_CHARS,
+  openaiWords,
   promptTerms,
   RESPONSE_FORMATS,
   renderResult,
@@ -209,14 +210,14 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
     expect(check(OK["application/json"].schema, { ...b, segments: [seg] })).not.toEqual([]);
   });
 
-  test("[SV-C1] verbose_json with no language anywhere says und, never unknown; words stay empty", async () => {
+  test("[SV-C1] verbose_json with no language anywhere says und, never unknown", async () => {
     // The fake engine, as Parakeet, names no language: only the request's hint could.
     const r = await post([
       ["response_format", "verbose_json"],
       ["timestamp_granularities[]", "word"],
     ]);
     const b = JSON.parse(r.text);
-    expect([b.language, b.words]).toEqual(["und", []]);
+    expect(b.language).toBe("und");
     expect(check(OK["application/json"].schema, b)).toEqual([]);
     // Positive control: a hint is the language when the engine names none.
     const es = await post([
@@ -382,6 +383,19 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const r = await post([["model", "whisper-1"]], monoWav(silence(61)));
     expect(r.status).toBe(422);
     expect(JSON.parse(r.text)).toMatchObject({ error: "too_long" });
+  });
+
+  test("[akou-5an.84] verbose_json words: every word with its time, or none at all, never a guess", () => {
+    const timed = [
+      { w: "a", s: 0.1, e: 0.3, c: 1 },
+      { w: "b", s: 0.4, e: 0.6, c: null },
+    ];
+    expect(openaiWords(timed)).toEqual([
+      { word: "a", start: 0.1, end: 0.3 },
+      { word: "b", start: 0.4, end: 0.6 },
+    ]);
+    // Positive control: one untimed word (Qwen without the aligner) empties the list.
+    expect(openaiWords([...timed, { w: "c", s: null, e: null, c: 0.9 }])).toEqual([]);
   });
 
   test("[SV-J5] cues from timed words: at most 42 characters, never across a segment", () => {

@@ -155,7 +155,9 @@ describe("the catalog pins Qwen3-ASR and one llama-server build per platform and
     expect(llamaBuild("linux-arm64", "vulkan")).toBeDefined();
     // Metal is Apple's: no Linux build claims it.
     expect(llamaBuild("linux-x64", "metal")).toBeUndefined();
-    const builds = MODELS.filter((m) => m.serves.includes("runtime"));
+    const builds = MODELS.filter(
+      (m) => m.serves.includes("runtime") && m.runtime === "llama-server",
+    );
     expect(builds.length).toBeGreaterThanOrEqual(9);
     for (const b of builds) {
       expect(b.runtime).toBe("llama-server");

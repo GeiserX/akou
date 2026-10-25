@@ -286,6 +286,35 @@ describe("[SV-M1] a missing model is fetched once, whoever waits on it", () => {
     }
   });
 
+  test("[akou-chp.15] the word-time aligner is an extra: never needed, fetched only under auto_download", async () => {
+    const withAligner = [...catalog, reg.entry("aligner-x", ["al.gguf"])];
+    const r = rig({
+      catalog: () => withAligner,
+      extras: (id) => (id === B ? ["aligner-x"] : []),
+      installed: [RECOGNIZER, B, "silero-vad", NEMOTRON],
+    });
+    try {
+      expect(r.store.needs(B)).not.toContain("aligner-x");
+      expect(r.store.extras(B)).toEqual(["aligner-x"]);
+      expect(r.store.extras(RECOGNIZER)).toEqual([]);
+      // auto_download off: a job on B is admitted, and the aligner is not fetched for it.
+      r.settings.autoDownload = false;
+      expect(() => r.store.admit(r.store.needs(B))).not.toThrow();
+      r.store.fetchExtras(B);
+      expect(r.store.downloading()).toEqual([]);
+      // Positive control: were it required, the same job would be refused.
+      expect(() => r.store.admit([...r.store.needs(B), "aligner-x"])).toThrow(
+        "server.auto_download is off",
+      );
+      // auto_download on: fetched in the background.
+      r.settings.autoDownload = true;
+      r.store.fetchExtras(B);
+      await until(async () => r.store.state("aligner-x") === "ready", 5000, "the aligner");
+    } finally {
+      r.cleanup();
+    }
+  });
+
   test("needs() is the recognizer with the helpers, never the other recognizer", () => {
     const r = rig();
     try {

@@ -38,6 +38,8 @@ import {
 import { createServer } from "node:net";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { confirmAccelerator, listDevices } from "./accelerator.ts";
+import { Aligner } from "./aligner.ts";
+import { crispasrName } from "./aligner-catalog.ts";
 import type { LlamaEngineSpec } from "./engine.ts";
 import { llamaBuildId } from "./llama-catalog.ts";
 import { type Accelerator, type CatalogEntry, MODELS } from "./models.ts";
@@ -178,11 +180,17 @@ function findFile(dir: string, name: string): string | null {
 }
 
 /**
- * Unpacks a build's archives into `<dir>/bin` once and returns the llama-server path. The marker
+ * Unpacks a build's archives into `<dir>/bin` once and returns the path of `name` in it
+ * (llama-server, or CrispASR for the aligner). The marker
  * holds each archive's name, size and modification time; a verified archive replaced by a new one
  * is unpacked again. `tar` reads `.tar.gz` everywhere and `.zip` through Windows' own bsdtar.
  */
-export function extractBuild(dir: string, archives: readonly string[], platform: string): string {
+export function extractBuild(
+  dir: string,
+  archives: readonly string[],
+  platform: string,
+  name = binaryName(platform),
+): string {
   const bin = join(dir, "bin");
   const stamp = JSON.stringify(
     archives.map((a) => {
@@ -190,7 +198,6 @@ export function extractBuild(dir: string, archives: readonly string[], platform:
       return [basename(a), st.size, st.mtimeMs];
     }),
   );
-  const name = binaryName(platform);
   if (existsSync(join(bin, MARKER)) && readFileSync(join(bin, MARKER), "utf8") === stamp) {
     const found = findFile(bin, name);
     if (found) return found;
@@ -560,7 +567,41 @@ export function createLlamaEngine(
   hooks: Pick<LlamaServerOptions, "onChild" | "log"> = {},
 ): QwenEngine {
   const server = createLlamaServer(spec, hooks);
-  return new QwenEngine({ id: spec.engine, server, allowed: spec.languages, log: hooks.log });
+  return new QwenEngine({
+    id: spec.engine,
+    server,
+    allowed: spec.languages,
+    log: hooks.log,
+    ...alignerOf(spec, hooks),
+  });
+}
+
+/** The aligner a spec names (aligner.ts), or why its words keep no times. */
+export function alignerOf(
+  spec: Pick<LlamaEngineSpec, "aligner" | "untimed">,
+  hooks: Pick<LlamaServerOptions, "onChild"> = {},
+): { aligner?: Aligner; untimed?: string } {
+  const a = spec.aligner;
+  if (!a) return spec.untimed ? { untimed: spec.untimed } : {};
+  const build = a.build;
+  if (!a.command && !build) return { untimed: "there is no CrispASR to run the aligner" };
+  return {
+    aligner: new Aligner({
+      id: a.engine,
+      model: a.model,
+      command:
+        a.command ??
+        (() => [
+          extractBuild(
+            build?.dir as string,
+            build?.archives ?? [],
+            build?.platform ?? "",
+            crispasrName(build?.platform ?? ""),
+          ),
+        ]),
+      onChild: hooks.onChild,
+    }),
+  };
 }
 
 /** The supervised llama-server a `LlamaEngineSpec` names; nothing starts until `url()`. */

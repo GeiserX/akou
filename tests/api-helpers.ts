@@ -64,6 +64,8 @@ export interface RigOptions {
    * sherpa waits for the real ones.
    */
   modelRegistry?: readonly ModelSpecEntry[];
+  /** CrispASR for the word-time aligner (a fake), run whatever the accelerator. */
+  aligner?: readonly string[];
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   home?: string;
   provider?: Provider;
@@ -160,6 +162,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
         ? o.models
         : { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
     modelRegistry: o.modelRegistry,
+    ...(o.aligner ? { aligner: o.aligner } : {}),
     asrInThread: o.asrInThread ?? true,
     finalAudio: o.finalAudio,
     guard: o.guard,

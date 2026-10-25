@@ -267,3 +267,9 @@ transcribe-cpp 0.4.0 (MIT), https://github.com/handy-computer/transcribe.cpp
   npm package and its per-platform native package (@transcribe-cpp/<platform>) ship
   transcribe.cpp's library with ggml (MIT) and miniz (MIT); their licence texts are in the
   package's licenses folder. It loads them through koffi 3.3.2 (MIT), https://github.com/Koromix/koffi.
+
+CrispASR v0.8.44 (MIT), https://github.com/CrispStrobe/CrispASR
+  Runs the word-time aligner, Qwen3-ForcedAligner-0.6B, on the best preset's words
+  (src/main/asr/aligner.ts). Its release build is a download pinned by SHA-256, like the models
+  (src/main/asr/aligner-catalog.ts); the -vulkan image carries the Linux build in /opt/crispasr with
+  its LICENSE and THIRD_PARTY_NOTICES.txt.

@@ -22,8 +22,8 @@
  *
  * Every score is clamped to 0..100 and rounded. The reference machine is `REFERENCE_MACHINE`.
  *
- * Keyed by catalog id. The llama-server builds (`serves: ["runtime"]`) are programs, not models,
- * and are answered by `scoresOf` without a row here.
+ * Keyed by catalog id. The llama-server and CrispASR builds (`serves: ["runtime"]`) are programs,
+ * not models, and are answered by `scoresOf` without a row here.
  */
 
 import type { CatalogEntry, ModelSpecEntry } from "./models.ts";
@@ -66,6 +66,9 @@ const REQS = "docs/REQUIREMENTS.md";
 function perHour(minutes: number): number {
   return Math.round((60 / minutes) * 10) / 10;
 }
+
+/** The aligner's speed: audio seconds per wall second, model load included (RTF 0.051). */
+const ALIGNER_RTFX = 19.6;
 
 export const SCORES: Readonly<Record<string, ModelScores>> = {
   "parakeet-tdt-0.6b-v3-fp32": {
@@ -216,6 +219,18 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: { notMeasured: "finds speech, writes no words: no WER or DER applies" },
     speed: { notMeasured: "no speed figure for the VAD on its own has been recorded" },
   },
+  "qwen3-forced-aligner-0.6b": {
+    accuracy: {
+      notMeasured:
+        "times words, writes none: no WER applies; its start error is in docs/research/asr-architecture.md",
+    },
+    speed: {
+      metric: "rtfx",
+      value: ALIGNER_RTFX,
+      what: `q4_k through CrispASR v0.8.44 on Metal, one unit per process (the model load included), on the ${REFERENCE_MACHINE}`,
+      source: `${ARCH}#word-times-for-qwen`,
+    },
+  },
 };
 
 const RUNTIME: ModelScores = {
@@ -223,12 +238,18 @@ const RUNTIME: ModelScores = {
   speed: { notMeasured: "its speed is Qwen3-ASR's, on that row" },
 };
 
+const ALIGNER_RUNTIME: ModelScores = {
+  accuracy: { notMeasured: "a program that runs the word-time aligner, not a model" },
+  speed: { notMeasured: "its speed is the aligner's, on that row" },
+};
+
 /** The scores of one catalog entry, or null for an entry with no row (a test catalog's). */
 export function scoresOf(m: ModelSpecEntry): ModelScores | null {
   const row = SCORES[m.id];
   if (row) return row;
   const serves = (m as Partial<CatalogEntry>).serves;
-  return serves?.length === 1 && serves[0] === "runtime" ? RUNTIME : null;
+  if (serves?.length !== 1 || serves[0] !== "runtime") return null;
+  return (m as Partial<CatalogEntry>).runtime === "crispasr" ? ALIGNER_RUNTIME : RUNTIME;
 }
 
 const RAW: Readonly<Record<Metric, (v: number) => number>> = {

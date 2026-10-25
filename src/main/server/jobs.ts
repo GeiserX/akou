@@ -341,14 +341,28 @@ export function registryKnows(id: string): boolean {
 }
 
 /** What a client is told about a result that is less than it asked for. */
-export function jobWarnings(pass: Pick<JobPassResult, "speakers" | "segments">): string[] {
+export function jobWarnings(
+  pass: Pick<JobPassResult, "speakers" | "segments" | "untimed">,
+): string[] {
+  const out: string[] = [];
   const { asked, labelled, error } = pass.speakers;
-  if (!asked || labelled || pass.segments.length === 0) return [];
-  return [
-    error === null
-      ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
-      : `speaker labels were asked for and failed: every speaker is null (${error})`,
-  ];
+  if (asked && !labelled && pass.segments.length > 0) {
+    out.push(
+      error === null
+        ? "speaker labels were asked for, but the speaker model found no turns: every speaker is null"
+        : `speaker labels were asked for and failed: every speaker is null (${error})`,
+    );
+  }
+  // Qwen's words with no times: every piece, or some, and why (aligner.ts).
+  const n = pass.segments.length;
+  for (const u of pass.untimed ?? []) {
+    out.push(
+      u.units >= n
+        ? `word times unavailable: ${u.reason}`
+        : `word times unavailable on ${u.units} of ${n} pieces: ${u.reason}`,
+    );
+  }
+  return out;
 }
 
 /** The result of a job (SV-J4). */
@@ -366,14 +380,18 @@ export function jobResult(
     language: pass.language ?? (job.language === "auto" ? null : job.language),
     language_confidence: null,
     duration_s: pass.duration_s,
-    // Parakeet gives word times; Qwen gives none, so its words' `s` and `e` are null.
+    // Parakeet gives word times; Qwen's come from the aligner where it runs, else `s` and `e` are
+    // null and `warnings` says why.
     words: pass.words,
     segments: pass.segments,
     engine: {
       name: "akou",
       version: engine.version,
       preset: job.preset,
-      models: engine.models,
+      // The aligner, right after the recognizer whose words it timed.
+      models: pass.aligner
+        ? [...engine.models.slice(0, 1), pass.aligner, ...engine.models.slice(1)]
+        : engine.models,
       // The N-engine pass: which engines decoded, which were left out and why (ASR-6).
       ...(pass.fusion ? { fusion: pass.fusion } : {}),
     },
@@ -1125,7 +1143,12 @@ export class JobService {
   // The runner
 
   private workerFor(slot: Slot, spec: ModelSpec, recognizer: string): JobWorker {
-    const key = JSON.stringify(spec);
+    // The word-time aligner is set per job (`run`'s `models`): a Worker is never rebuilt for it.
+    const key = JSON.stringify(
+      spec.final
+        ? { ...spec, final: { ...spec.final, aligner: undefined, untimed: undefined } }
+        : spec,
+    );
     if (!slot.worker || slot.spec !== key) {
       slot.worker?.close();
       slot.worker = new JobWorker(spec, (level, msg) => this.o.log(level, `job: ${msg}`));
@@ -1348,13 +1371,25 @@ export class JobService {
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError };
     const model = this.modelOf(job);
-    const needs = this.o.shelf.needs(model, job);
+    // The word-time aligner is used when it is here, and fetched for the next job when it is not.
+    const extras = this.o.shelf.extras(model);
+    this.o.shelf.fetchExtras(model);
+    const absent = this.o.shelf.missing(extras);
+    const needs = [
+      ...this.o.shelf.needs(model, job),
+      ...extras.filter((id) => !absent.includes(id)),
+    ];
     // A model is used when a job on it starts and when it ends (SV-M4).
     this.o.shelf.touch(needs);
     // The GPU line's turn, once taken (`gpuTurn`); given back however the run ends.
     let release: (() => void) | null = null;
     try {
-      const spec = this.o.models(model);
+      let spec = this.o.models(model);
+      // A dictation does not wait for word times: its words keep none, and the result says so.
+      if (job.interactive && spec?.final?.aligner) {
+        const { aligner: _, ...final } = spec.final;
+        spec = { ...spec, final: { ...final, untimed: "a dictation's words are not aligned" } };
+      }
       if (!spec)
         throw Object.assign(
           new Error("the speech models are not downloaded; run `akou models pull`"),
@@ -1410,6 +1445,7 @@ export class JobService {
         if (abort.signal.aborted) return;
       }
       const pass = await this.workerFor(slot, spec, model).run({
+        models: spec,
         samples,
         diarize: job.diarize,
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
