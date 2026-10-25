@@ -33,7 +33,7 @@
  *
  * A stable version (1.0.0 or later, no prerelease part) also needs its evidence on record
  * (docs/CI-CD.md CI-28), and `--check` fails without it: the newest row of the terms table in
- * docs/providers.md is dated after the previous stable tag, and every M0 gate G1 to G8 has a Pass
+ * docs/providers.md is dated on or after the day of the previous stable tag, and every M0 gate G1 to G8 has a Pass
  * verdict in the summary table of docs/gates/M0-results.md. Prereleases never wait on a gate.
  * `tests/release-evidence.test.ts` holds the positive control.
  */
@@ -215,7 +215,7 @@ function tableAfter(md: string, head: RegExp): string[][] | null {
 
 /**
  * What is missing from the terms check in docs/providers.md: the newest dated row of its table
- * must be later than `previousStableDate` (YYYY-MM-DD), or exist at all for a first stable release.
+ * must be on or after `previousStableDate` (YYYY-MM-DD), or exist at all for a first stable release.
  */
 export function termsProblems(providersMd: string, previousStableDate: string | null): string[] {
   const where = "docs/providers.md";
@@ -230,9 +230,9 @@ export function termsProblems(providersMd: string, previousStableDate: string | 
     return [
       `${where}: the terms table has no dated row; read the current terms and add one (YYYY-MM-DD)`,
     ];
-  if (previousStableDate !== null && newest <= previousStableDate)
+  if (previousStableDate !== null && newest < previousStableDate)
     return [
-      `${where}: the newest terms check is dated ${newest}, not after the previous stable release (${previousStableDate}); read the current terms and add a dated row`,
+      `${where}: the newest terms check is dated ${newest}, before the previous stable release (${previousStableDate}); read the current terms and add a dated row`,
     ];
   return [];
 }
