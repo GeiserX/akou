@@ -71,10 +71,18 @@ import {
 import type { FinalStep } from "./final-text.ts";
 import { type BuiltFuser, fusionModelId } from "./fusion.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
+import {
+  inNativeLoad,
+  type NativeFlag,
+  nativeFlag,
+  stopWorker,
+  useNativeFlag,
+} from "./native-guard.ts";
 import { peak, prepareSpan } from "./pad.ts";
 import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
+import { CRASHED, RELEASED, reportCrashes, retireWorker } from "./worker-retire.ts";
 
 export interface FinalOptions {
   /** Audio read per step, seconds (no temporary WAV, no whole file in memory for the energy scan). */
@@ -1258,6 +1266,10 @@ type ToFinal = {
   decode: DecodeList | null;
   files: { path: string; sha256: string }[];
   options?: Partial<FinalOptions>;
+  /** The Worker's native-load flag (`native-guard.ts`); absent when the pass runs in-thread. */
+  native?: NativeFlag;
+  /** Set to 1 by the host to stop the pass at its next piece (a pass past its budget, a quit). */
+  abort?: Int32Array;
 };
 
 type FromFinal =
@@ -1266,6 +1278,8 @@ type FromFinal =
   | { type: "progress"; done_s: number; total_s: number; step: FinalStep }
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
+  /** An uncaught error in the Worker (`reportCrashes`): the host retires it. */
+  | { type: typeof CRASHED; error: string }
   | { type: "done"; result: FinalResult; loads: Record<string, number> };
 
 /** The Worker sends its progress at most this often, ms; the last value always goes. */
@@ -1286,6 +1300,8 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   let sentStep: FinalStep | null = null;
   // A new step always goes; within decoding, at most once a second, and the last figure.
   const progress = (done_s: number, total_s: number, step: FinalStep) => {
+    // A pass the host gave up on stops at the next piece, so the Worker can free its models.
+    if (m.abort && Atomics.load(m.abort, 0) === 1) throw new Error("the final pass was stopped");
     const now = performance.now();
     if (step === sentStep && now - sent < PROGRESS_EVERY_MS && done_s < total_s) return;
     sent = now;
@@ -1362,8 +1378,12 @@ if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
-  self.onmessage = (e: MessageEvent<ToFinal | ToJob>) =>
+  reportCrashes(post);
+  self.onmessage = (e: MessageEvent<ToFinal | ToJob | ToJobRelease>) => {
+    if (e.data.type === "release") return void releaseJobModels(post);
+    useNativeFlag(e.data.native);
     void (e.data.type === "job" ? runJobInWorker(e.data, post) : runInWorker(e.data, post));
+  };
 }
 
 /** What the host needs of a call: its folder, its writer, and a hold on it past the call's end. */
@@ -1490,15 +1510,29 @@ export async function finalizeCall(
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
+      const native = nativeFlag();
+      const abort = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
       /** llama-server processes the Worker runs: a terminated Worker cannot stop them. */
       const kids = new Set<number>();
       const onAbort = () => finish(quit);
-      const finish = (r: Out) => {
+      /** `answered`: the Worker freed its models and answered, or its thread is gone. */
+      const finish = (r: Out, answered = false) => {
         if (settled) return;
         settled = true;
         o.signal?.removeEventListener("abort", onAbort);
         clock.clearTimeout(timer);
-        w?.terminate();
+        // A pass that answered freed its models first. Any other stops at its next piece, frees
+        // them and only then goes (`retireWorker`), or the Worker would keep them for good.
+        if (w && answered) stopWorker(w, native);
+        else if (w) {
+          Atomics.store(abort, 0, 1);
+          const retired = retireWorker(w, native, {
+            later: true,
+            onMessage: (m) => {
+              if (m.type === "done") retired.release();
+            },
+          });
+        }
         for (const pid of kids) {
           try {
             process.kill(pid, "SIGTERM");
@@ -1508,10 +1542,10 @@ export async function finalizeCall(
         }
         resolve(r);
       };
-      const failWith = (step: string, error: string) => {
+      const failWith = (step: string, error: string, gone = false) => {
         if (settled) return;
         call.record({ type: "final.failed", step, error });
-        finish({ ok: false, parts: [], skipped: [], error, loads: {} });
+        finish({ ok: false, parts: [], skipped: [], error, loads: {} }, gone);
       };
       const timer = clock.setTimeout(
         () => failWith("timeout", `the final pass did not finish within ${budget} ms`),
@@ -1529,7 +1563,8 @@ export async function finalizeCall(
         else if (r.type === "child") {
           if (r.alive) kids.add(r.pid);
           else kids.delete(r.pid);
-        } else finish({ ...r.result, loads: r.loads });
+        } else if (r.type === CRASHED) failWith("worker", r.error);
+        else finish({ ...r.result, loads: r.loads }, true);
       };
       if (o.inThread) {
         void runInWorker(msg, onReply);
@@ -1539,8 +1574,9 @@ export async function finalizeCall(
         workerData: FINALIZE_WORKER_NAME,
       } as WorkerOptions);
       w.onmessage = (e: MessageEvent<FromFinal>) => onReply(e.data);
-      w.onerror = (e) => failWith("worker", e.message);
-      w.postMessage(msg);
+      // Its thread is gone, and what it held with it (`reportCrashes` keeps that rare).
+      w.onerror = (e) => failWith("worker", e.message, true);
+      w.postMessage({ ...msg, native, abort } satisfies ToFinal);
     });
   } finally {
     release();
@@ -2057,13 +2093,24 @@ type ToJob = {
   glossary?: readonly string[];
   languages?: readonly string[];
   options?: Partial<FinalOptions>;
+  /** The Worker's native-load flag (`native-guard.ts`). */
+  native?: NativeFlag;
+  /** Set to 1 by the host to stop the job between two pieces (`JobWorker.cancel`). */
+  abort?: Int32Array;
 };
+
+/** Asks an idle job Worker to free its models before the host terminates it. */
+type ToJobRelease = { type: "release" };
 
 type FromJob =
   | { type: "log"; level: JobLogLevel; msg: string }
+  /** The answer to `release`: the models are freed, the Worker may be terminated. */
+  | { type: "released" }
   | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
+  /** An uncaught error in the Worker (`reportCrashes`): the host retires it. */
+  | { type: typeof CRASHED; error: string }
   | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
   | { type: "job.failed"; error: string; code?: string; loads: Record<string, number> };
 
@@ -2071,6 +2118,26 @@ type FromJob =
 let jobModels: { key: string; set: Promise<ModelSet> } | null = null;
 /** And its llama-server engine, kept running between jobs, keyed by its own spec. */
 let jobEngine: { key: string; engine: FinalEngine } | null = null;
+
+/**
+ * Frees the models and the engine the Worker keeps, then says so. A terminated Worker never runs
+ * the native finalizers, so a model still held then stays in the process until it exits.
+ */
+async function releaseJobModels(reply: (r: FromJob) => void): Promise<void> {
+  const held = jobModels;
+  const engine = jobEngine;
+  jobModels = null;
+  jobEngine = null;
+  await engine?.engine.unload().catch(() => {});
+  // A set whose load failed is cleared by the job that saw it fail, so a rejection here is the
+  // release itself: said, and the host terminates the Worker as it would anyway.
+  try {
+    await (await held?.set)?.release?.();
+  } catch (err) {
+    reply({ type: "log", level: "warn", msg: `model release failed: ${(err as Error).message}` });
+  }
+  reply({ type: "released" });
+}
 
 async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEngine | undefined> {
   const spec = m.models.final;
@@ -2217,6 +2284,10 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
         languages: m.languages,
         options: m.options,
         progress: (p) => {
+          // A cancelled job stops at the next piece, so the Worker can free its models and go.
+          if (m.abort && Atomics.load(m.abort, 0) === 1) {
+            throw Object.assign(new Error("the job was cancelled"), { code: "cancelled" });
+          }
           // A new stage always goes; within one, at most once a second, and the last figure.
           const now = performance.now();
           if (
@@ -2253,11 +2324,19 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
 
 /**
  * One long-lived finalize Worker for file jobs: the models load once and serve every job after.
- * One job at a time. `cancel` terminates the Worker (a decode stuck in a native call answers
- * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6).
+ * One job at a time. `cancel` ends the job in it at once and retires the Worker, so the next job
+ * starts a fresh one (SV-J6). A retired Worker frees its models before it is terminated, or it
+ * would keep them (Parakeet is about 2.2 GB) for the life of the process: a terminated Bun Worker
+ * never runs the native finalizers, and each cancelled job left one more copy. A Worker that does
+ * not answer in time (a decode stuck in a native call) is terminated as it is, and one inside a
+ * model load only once the load returns (`native-guard.ts`, #408).
  */
 export class JobWorker {
   private w: Worker | null = null;
+  /** The native-load flag of the newest Worker, kept past its cancel for `loading`. */
+  private native: NativeFlag | null = null;
+  /** The newest Worker's stop flag: set, its job stops at the next piece (`ToJob.abort`). */
+  private abort: Int32Array | null = null;
   private busy: { reject(e: Error): void } | null = null;
   private lastLoads: Record<string, number> = {};
   /** Child processes the Worker runs (llama-server): killed with it, never left behind. */
@@ -2266,19 +2345,30 @@ export class JobWorker {
   constructor(
     private readonly models: ModelSpec,
     private readonly onLog?: (level: JobLogLevel, msg: string) => void,
+    /** How long `close` waits for an idle Worker to free its models before it terminates it. */
+    private readonly releaseMs = 15_000,
   ) {}
 
   run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
     const onProgress = input.progress;
     if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
-    this.w ??= new Worker(siblingModule(import.meta.url, "finalize-worker"), {
-      workerData: FINALIZE_WORKER_NAME,
-    } as WorkerOptions);
+    if (!this.w || !this.native) {
+      this.w = new Worker(siblingModule(import.meta.url, "finalize-worker"), {
+        workerData: FINALIZE_WORKER_NAME,
+      } as WorkerOptions);
+      this.native = nativeFlag();
+      this.abort = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    }
     const w = this.w;
+    const native = this.native;
+    const abort = this.abort ?? undefined;
     return new Promise<JobPassResult>((resolve, reject) => {
       const done = () => {
         this.busy = null;
-        w.onmessage = null;
+        // Between jobs, a Worker that reports an uncaught error is retired all the same.
+        w.onmessage = (e: MessageEvent<FromJob>) => {
+          if (e.data.type === CRASHED && this.w === w) this.retire(e.data.error);
+        };
         w.onerror = null;
       };
       this.busy = {
@@ -2299,17 +2389,22 @@ export class JobWorker {
           else this.kids.delete(r.pid);
           return;
         }
+        if (r.type === RELEASED) return;
+        // An uncaught error in the Worker: the job fails with it, and the Worker frees its models
+        // and goes, as a cancelled one does.
+        if (r.type === CRASHED) return this.retire(r.error);
         this.lastLoads = r.loads;
         done();
         if (r.type === "job.done") resolve(r.result);
         else reject(Object.assign(new Error(r.error), r.code ? { code: r.code } : {}));
       };
       w.onerror = (e) => {
-        // A Worker that died is not reused, and nor is anything it started.
+        // A Worker that died is not reused, and nor is anything it started. Its thread is gone,
+        // and what it held with it (`reportCrashes` keeps that rare).
         this.w = null;
-        w.terminate();
         this.killChildren();
         done();
+        stopWorker(w, native);
         reject(new Error(e.message));
       };
       const msg: ToJob = {
@@ -2322,19 +2417,25 @@ export class JobWorker {
         glossary: input.glossary,
         languages: input.languages,
         options: input.options,
+        native,
+        abort,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
       w.postMessage(msg, [input.samples.buffer as ArrayBuffer]);
     });
   }
 
-  /** Stops the job in flight: the Worker is terminated and `run` rejects with `reason`. */
+  /**
+   * Stops the job in flight: `run` rejects with `reason` at once, and the Worker is retired: it
+   * stops the job at its next piece, frees its models and is terminated (`retire`).
+   */
   cancel(reason = "cancelled"): void {
-    const w = this.w;
-    this.w = null;
-    w?.terminate();
-    this.killChildren();
-    this.busy?.reject(new Error(reason));
+    this.retire(reason);
+  }
+
+  /** Whether the newest Worker is inside a native model load now, cancelled or not. */
+  loading(): boolean {
+    return inNativeLoad(this.native);
   }
 
   /** The child processes the Worker runs now. */
@@ -2359,7 +2460,57 @@ export class JobWorker {
     return { ...this.lastLoads };
   }
 
+  /** Ends the Worker, as `cancel` does, without leaving its models behind. */
   close(): void {
-    this.cancel("the job Worker closed");
+    this.retire("the job Worker closed");
+  }
+
+  /**
+   * Ends the Worker and frees what it holds. A busy one is told to stop its job, which it does at
+   * the next piece; once it answers, or at once when idle, it frees its models and is terminated
+   * on its `released`. With no answer in `releaseMs` it is terminated as it is, after any model
+   * load it is in returns.
+   */
+  private retire(reason: string): void {
+    const w = this.w;
+    const native = this.native;
+    const abort = this.abort;
+    const busy = this.busy !== null;
+    this.w = null;
+    // The Worker's own children, followed until it is gone: the next Worker's are not these.
+    const kids = new Set(this.kids);
+    this.kids.clear();
+    this.busy?.reject(new Error(reason));
+    if (!w || !native) return;
+    const kill = () => {
+      for (const pid of kids) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {
+          // Already gone.
+        }
+      }
+      kids.clear();
+    };
+    // A job's llama-server goes now, so a decode waiting on it fails at once instead of finishing.
+    if (busy) kill();
+    const later = busy && abort !== null;
+    const retired = retireWorker(w, native, {
+      ms: this.releaseMs,
+      later,
+      onEnd: kill,
+      onMessage: (m) => {
+        const r = m as FromJob;
+        if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        if (r.type === "child") {
+          if (r.alive) kids.add(r.pid);
+          else kids.delete(r.pid);
+          return;
+        }
+        // The stopped job's answer: the Worker is between jobs now, so its models can go.
+        if (r.type === "job.done" || r.type === "job.failed") retired.release();
+      },
+    });
+    if (later && abort) Atomics.store(abort, 0, 1);
   }
 }

@@ -2,6 +2,51 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.5 — the last ways a stopped or crashed Worker kept its model memory are closed
+
+1.2.4 made akou give its model memory back in the common cases. Four rarer ones were left, and in each about 2.2 GB stayed in the process until it restarted: the Worker was stopped, or died of an error, while Parakeet was still loaded. Now every Worker that may hold models is asked to free them before it is stopped, and waits out a model load rather than being stopped in the middle of it. The 8-hour soak did not run for this release: the soak never reaches these four paths, and nothing else in the app changed. Instead we measured each path on a Linux server, before and after the fix, as the memory of the server process 20 s after the event.
+
+### Server and desktop
+- **A call's final pass that runs past its time budget, or is stopped at quit, frees its models** (#437). It now stops at its next piece and frees its models before it goes: 2171 MB kept before, 22 MB after.
+- **A job Worker that hits an uncaught error frees its models** (#437). The job fails as before, and the Worker is retired cleanly: 2199 MB kept before, 16 MB after. This also fixes a job Worker that crashed between jobs and kept being used, so the next job sent to it never answered.
+- **A live Worker that crashes frees its models** (#437). It is replaced as before: 2197 MB kept before, 36 MB after.
+- **A job cancelled during a slow model load frees its models** (#437). The Worker waits for the load to finish, then frees what it loaded: 2172 MB kept before, 18 MB after.
+
+One case is still out of reach: a Worker whose thread truly dies keeps its memory until the process exits, because Bun runs no finalizers when it tears down a dead Worker. Errors in akou's own code are now caught and reported, so they no longer kill a Worker that way.
+
+### Behind the scenes
+- A second stable release can now ship on the same day as the one before it, once the terms have been read again that day (#438).
+
+## 1.2.4 — akou gives its memory back once it is done with a model
+
+akou held memory after it had finished with a model: about 900 MB on a server after every live session, 650 MB on the Mac app after every dictation or job, and 2.2 GB more for every file job someone cancelled. The dictation lane's Qwen server and the live model warmed at start were never let go at all. Now each of these goes back to the system once its idle time is up, and an idle server or app falls back to within a few MB of its size at start. The next use after an idle stretch loads its model again, about 1.5 s for the live model and about 10 s for Parakeet on a server CPU. The 8-hour soak did not run for this release. Instead we measured the memory on every path this release changes, on a Linux server and on a Mac, before and after the fix.
+
+### Server
+- **A finished job or live session hands its model memory back** (#431). On Linux the released memory stayed in the C library's heaps and the server kept about 2.3 GB after a Parakeet job and about 680 MB after a live session. It now falls to about 45 MB, its size at start.
+- **A cancelled job no longer keeps its models** (#434). Every job cancelled while it ran kept about 2.2 GB until the server restarted. A DELETE, a client hanging up on the OpenAI route, Bazarr timing out on a long film and the Wyoming routes all cancel this way. The job now stops at its next piece and the Worker frees its models before it goes.
+- **The dictation lane's Qwen server and the live model warmed at start now go after their idle time** (#432). Before, nothing ever let them go.
+- **`server.model_idle_minutes` and `asr.modelIdleMinutes` now go up to 1440 (one day)** (#432). A larger stored value is refused with a `setting refused` line at start, and the default is used instead (10 and 5 minutes).
+- **`/healthz` answers 503 while a job is stuck** (#428). A job that has run longer than 300 s plus five times its audio length counts as stalled, in the new `queue.stalled`, and `/healthz` says `ok: false` until it ends. Before, a server whose every job hung at `running` still said `ok`.
+- **A job cancelled while its model loads no longer takes the server down** (#429). Bun aborts the whole process when a Worker is terminated inside a native model load, so a caller hanging up during a long Parakeet load crashed the server. The Worker is now terminated only once the load returns.
+
+### Desktop
+- **The Mac app gives back the memory of a released model** (#430, #431). It kept about 650 MB after every dictation or file job. macOS keeps freed large blocks in a cache unless the process starts with `MallocLargeCache=0`, so the app now sets it in its bundle, and on a three-job run its memory stays flat at about its size at launch.
+- **The same holds when the app starts at login, and for `akou serve` on a Mac** (#434, #433). The login item now sets `MallocLargeCache=0`, and a server started without it starts itself again once with it, on the same pid.
+
+### Behind the scenes
+- Dependencies: libc 0.2.191 and pulseaudio 0.3.2 in the native helpers (#427).
+
+## 1.2.3 — Option+Space dictates again while macOS Secure Input is on
+
+On macOS, a chord dictation key such as Option+Space did nothing at all while Secure Input was on, and the one warning akou gave was easy to miss. Secure Input is on whenever a password field or a terminal's secure entry has the keyboard, and macOS sometimes leaves it on after you unlock, until you log out. While it is on, macOS sends akou's key tap only the modifier keys, so akou saw Option and never Space. akou now also registers the chord with macOS as a system hotkey, which macOS delivers even under Secure Input. The 8-hour soak did not run for this release: the soak never starts the dictation helper, the only native code this changes. Instead an idle helper ran side by side with the old one for two minutes: about 0.5% of a core for each, and about 7 MB more memory, flat.
+
+### Desktop
+- **A chord dictation key works under Secure Input on macOS** (#424). The helper registers the dictation chord with `RegisterEventHotKey` beside its key tap, and moves it on every rebind. When the tap reports the same press, the press counts once. On a Mac whose login window held Secure Input, the 1.2.0 helper bound to Option+Space ignored the press. The new one started a session. A key on its own, such as Right Command, already worked and is unchanged. macOS cannot register a chord that names a side (`LeftOption+Space`) or uses `Fn`, or one another app has taken, so those still work only while Secure Input is off.
+- The "cannot reach akou while Secure Input is on" notice now shows only when the key really cannot get through, and goes away when a rebind fixes that (#424).
+
+### Behind the scenes
+- The terms check of 2026-10-23 is in [docs/providers.md](docs/providers.md). Anthropic's terms are unchanged. OpenAI published new Usage Policies, effective 20 November 2026; none of the changes touches anything akou does.
+
 ## 1.2.2 — akou stops trusting certificates made with the leaked eMudhra keys
 
 Eight eMudhra (emSign) intermediate certificates had private keys anyone could recover, and were revoked on 2026-10-18. Anyone can make a certificate for any site under them, and nothing checks the revocation. Bun, which akou runs on, trusted them whatever we set, so akou would have sent a remote server's key, an Anthropic or OpenAI API key, or a model download to whoever held such a certificate. This release stops that on the desktop app, the CLI and the server image. The 8-hour soak did not run for this release: the change touches only outbound TLS, nothing in capture or transcription.

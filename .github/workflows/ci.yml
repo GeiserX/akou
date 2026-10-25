@@ -1641,6 +1641,16 @@ jobs:
             echo "a silence guard test was skipped here, where the real VAD is on disk"
             exit 1
           fi
+      # A job cancelled inside Parakeet's load must not abort the process (#408, oven-sh/bun#45252):
+      # the check jobs have no model and skip that test, so here it must run, not skip.
+      - name: a job cancelled inside the model load
+        run: |
+          set -euo pipefail
+          bun test tests/native-guard.test.ts 2>&1 | tee "$RUNNER_TEMP/native-guard.txt"
+          if grep -qE '^ *[1-9][0-9]* skip$' "$RUNNER_TEMP/native-guard.txt"; then
+            echo "the model-load cancel test was skipped here, where Parakeet is on disk"
+            exit 1
+          fi
       - name: akou serve, on this machine only
         run: |
           mkdir -p "$AKOU_HOME/.config/akou"

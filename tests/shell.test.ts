@@ -668,6 +668,8 @@ describe("the login item", () => {
     expect(plist).toContain(`<string>${LOGIN_LABEL}</string>`);
     expect(plist).toContain("akou &amp; co.app");
     expect(plist).toContain("<key>AKOU_HEADLESS</key>");
+    // launchd skips LaunchServices, so the bundle's LSEnvironment never reaches a login launch (#433).
+    expect(plist).toContain("<key>MallocLargeCache</key>\n    <string>0</string>");
     expect(plist).toBe(launchAgentPlist(o.program));
     expect(await isLoginItem(o)).toBe(true);
     if (process.platform === "darwin") {

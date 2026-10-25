@@ -423,7 +423,7 @@ export interface AppOptions {
    */
   jobs?: Pick<
     JobServiceOptions,
-    "decode" | "delivery" | "now" | "remoteProbeMs" | "remoteFetch"
+    "decode" | "delivery" | "now" | "remoteProbeMs" | "remoteFetch" | "stallCheckMs"
   > & {
     modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
   };
@@ -2989,14 +2989,15 @@ export class AkouApp implements ApiApp {
   /**
    * Server mode: the streaming model a `hello` with no language opens is loaded at start, when it
    * is on disk, so the first live session does not wait for it. Only at start: a model the Worker
-   * let go of when idle loads again at the next session.
+   * let go of when idle loads again at the next session. The warm-up counts as a use, so a server
+   * no live client comes to lets it go after `asr.modelIdleMinutes`, like any other model.
    */
   private warmLive(asr: LiveAsr): void {
     const { choice } = chooseLiveEngine("auto", [], this.liveContext().present);
     if (!choice) return;
-    // Not a use: a server keeps it ready for the first session; idle time counts from a session.
+    // A use: the idle time starts when it is loaded, so it is never held for good.
     asr
-      .warmDictation(choice, false, false)
+      .warmDictation(choice, false, true)
       .catch((err: Error) =>
         this.log("warn", `live: ${choice.engine} not loaded ahead: ${err.message}`),
       );

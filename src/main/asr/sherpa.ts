@@ -18,6 +18,7 @@
  * is not a transducer: sherpa-onnx exits the process on that call.
  */
 
+import { dlopen, FFIType } from "bun:ffi";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -51,6 +52,7 @@ import {
 } from "./engine.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveEngineInfo } from "./live-engines.ts";
 import { modelEntry, modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
+import { nativeLoad } from "./native-guard.ts";
 import { warmNativeLoad } from "./native-warm.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
@@ -63,7 +65,8 @@ function sherpa(): Sherpa {
     const req = createRequire(import.meta.url);
     // On Windows the first load happens in a child, so this thread never holds the loader lock long.
     warmNativeLoad(req.resolve("sherpa-onnx-node"));
-    sherpaModule = req("sherpa-onnx-node");
+    // Every native load runs under the guard: a Worker is never terminated inside one (#408).
+    sherpaModule = nativeLoad(() => req("sherpa-onnx-node"));
   }
   return sherpaModule;
 }
@@ -318,6 +321,41 @@ interface OnlineResult {
   num_trailing_blanks?: number;
 }
 
+/** Frames `scrubStack` goes down: hundreds of KB of stack, in well under a millisecond. */
+const STACK_SCRUB_DEPTH = 4000;
+
+/**
+ * Writes plain numbers over the stack below the caller. JavaScriptCore scans the stack
+ * conservatively, so a native handle a decode left in a dead stack slot still looks like a
+ * reference to the next collection, and keeps the whole model alive. On macOS, 2 of 3 job
+ * releases freed nothing without this; with it every one did.
+ */
+function scrubStack(depth: number): number {
+  const slots = [depth, depth, depth, depth, depth, depth, depth, depth];
+  return depth > 0 ? scrubStack(depth - 1) + slots.length : 0;
+}
+
+/** glibc's `malloc_trim`, opened once; null off Linux, or where libc has none (musl). */
+let trim: (() => void) | null | undefined;
+
+/** Returns the free memory the C heap holds to the system (Linux, glibc); elsewhere nothing. */
+function mallocTrim(): void {
+  if (trim === undefined) {
+    trim = null;
+    if (process.platform === "linux") {
+      try {
+        const libc = dlopen("libc.so.6", {
+          malloc_trim: { args: [FFIType.u64], returns: FFIType.i32 },
+        });
+        trim = () => void libc.symbols.malloc_trim(0);
+      } catch {
+        // No glibc: nothing to trim.
+      }
+    }
+  }
+  trim?.();
+}
+
 /**
  * One `OnlineRecognizer` shared by the call's streams. The channels' audio arrives interleaved,
  * so a stream whose chunk is ready waits for the other's, and both decode in one batch
@@ -512,7 +550,7 @@ export class SherpaModels implements ModelSet {
     // Drop the previous recognizer before creating the next, so two never sit in memory at once.
     this.rec = null;
     Bun.gc(true);
-    const rec = new (sherpa().OfflineRecognizer)(config);
+    const rec = nativeLoad(() => new (sherpa().OfflineRecognizer)(config));
     this.count(RECOGNIZER);
     return {
       r: new SherpaRecognizer(RECOGNIZER, rec, this.decoding),
@@ -565,21 +603,24 @@ export class SherpaModels implements ModelSet {
   }
 
   vad(): Vad {
-    const v = new (sherpa().Vad)(
-      {
-        sileroVad: {
-          model: this.file("silero-vad", "silero_vad.onnx"),
-          threshold: 0.5,
-          minSpeechDuration: 0.1,
-          minSilenceDuration: 0.1,
-          maxSpeechDuration: 30,
-          windowSize: 512,
-        },
-        sampleRate: ASR_RATE,
-        debug: false,
-        numThreads: 1,
-      },
-      VAD_RESET_AFTER_SECONDS * 2,
+    const v = nativeLoad(
+      () =>
+        new (sherpa().Vad)(
+          {
+            sileroVad: {
+              model: this.file("silero-vad", "silero_vad.onnx"),
+              threshold: 0.5,
+              minSpeechDuration: 0.1,
+              minSilenceDuration: 0.1,
+              maxSpeechDuration: 30,
+              windowSize: 512,
+            },
+            sampleRate: ASR_RATE,
+            debug: false,
+            numThreads: 1,
+          },
+          VAD_RESET_AFTER_SECONDS * 2,
+        ),
     );
     this.count("silero-vad");
     return new SherpaVad(v);
@@ -588,11 +629,14 @@ export class SherpaModels implements ModelSet {
   embedder(): Embedder {
     if (!this.emb) {
       this.emb = new SherpaEmbedder(
-        new (sherpa().SpeakerEmbeddingExtractor)({
-          model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
-          numThreads: this.threads,
-          debug: 0,
-        }),
+        nativeLoad(
+          () =>
+            new (sherpa().SpeakerEmbeddingExtractor)({
+              model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
+              numThreads: this.threads,
+              debug: 0,
+            }),
+        ),
       );
       this.count("titanet-small");
     }
@@ -605,8 +649,9 @@ export class SherpaModels implements ModelSet {
     // Drop the previous engine before loading the next, so two never sit in memory at once.
     this.live = null;
     Bun.gc(true);
-    const rec = new (sherpa().OnlineRecognizer)(
-      onlineConfig((name) => this.file(id, name), this.threads),
+    const rec = nativeLoad(
+      () =>
+        new (sherpa().OnlineRecognizer)(onlineConfig((name) => this.file(id, name), this.threads)),
     );
     this.count(id);
     this.live = new SherpaLiveEngine(id, rec, LIVE_ENGINES[id]);
@@ -629,9 +674,13 @@ export class SherpaModels implements ModelSet {
     // one finalizer lets go of waits for the next collection: on Bun 1.4.2 the first collection
     // freed under a quarter of a pass's memory and the second the rest. Four leave room.
     for (let i = 0; i < 4; i++) {
+      scrubStack(STACK_SCRUB_DEPTH);
       Bun.gc(true);
       await Bun.sleep(0);
     }
+    // glibc keeps what the models freed in its per-thread heaps, about 850 MB after a live
+    // session, and never hands it back on its own: give it back to the system.
+    mallocTrim();
   }
 
   diarizer(): Diarizer {
@@ -639,21 +688,24 @@ export class SherpaModels implements ModelSet {
       this.dia = new NemotronDiarizer(this.nemotron(), () => this.count(NEMOTRON));
     } else if (!this.dia) {
       this.dia = new SherpaDiarizer(
-        new (sherpa().OfflineSpeakerDiarization)({
-          segmentation: {
-            pyannote: { model: this.file("pyannote-segmentation-3.0", "model.onnx") },
-            numThreads: this.threads,
-            debug: 0,
-          },
-          embedding: {
-            model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
-            numThreads: this.threads,
-            debug: 0,
-          },
-          clustering: { numClusters: -1, threshold: 0.5 },
-          minDurationOn: 0.2,
-          minDurationOff: 0.5,
-        }),
+        nativeLoad(
+          () =>
+            new (sherpa().OfflineSpeakerDiarization)({
+              segmentation: {
+                pyannote: { model: this.file("pyannote-segmentation-3.0", "model.onnx") },
+                numThreads: this.threads,
+                debug: 0,
+              },
+              embedding: {
+                model: this.file("titanet-small", "nemo_en_titanet_small.onnx"),
+                numThreads: this.threads,
+                debug: 0,
+              },
+              clustering: { numClusters: -1, threshold: 0.5 },
+              minDurationOn: 0.2,
+              minDurationOff: 0.5,
+            }),
+        ),
       );
       this.count("pyannote-segmentation-3.0");
     }

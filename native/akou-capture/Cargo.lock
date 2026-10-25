@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "akou-capture"
-version = "1.2.2"
+version = "1.2.5"
 dependencies = [
  "cpal",
  "futures",
@@ -676,9 +676,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "linux-raw-sys"
@@ -1023,9 +1023,9 @@ dependencies = [
 
 [[package]]
 name = "pulseaudio"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d70623bd7967a9ca4c2ae0e807fc380b291f98480fc037042305ec643a4d3373"
+checksum = "9ba79a4c6904c987cc31fa50e9b750539404511c2dbd9ce95e5e58444177a21e"
 dependencies = [
  "bitflags",
  "byteorder",

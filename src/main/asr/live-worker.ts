@@ -87,6 +87,7 @@ import { DEFAULT_FINAL, timelinePieces } from "./finalize-worker.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveChoice, streamLanguage } from "./live-engines.ts";
 import { CausalGain, StreamChannel, type StreamLine } from "./live-stream.ts";
 import { RECOGNIZER } from "./models.ts";
+import { type NativeFlag, nativeFlag, stopWorker, useNativeFlag } from "./native-guard.ts";
 import { gainFor, prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
 import {
@@ -103,6 +104,7 @@ import {
   splitToLines,
   UTTERANCE_MAX_SECONDS,
 } from "./upgrade.ts";
+import { CRASHED, RELEASED, reportCrashes, retireWorker } from "./worker-retire.ts";
 
 /** A stream diarizer that dies is started again at most this many times per call. */
 export const STREAM_RESTART_LIMIT = 3;
@@ -1258,7 +1260,13 @@ function streamRange(
 // Messages between the host and the Worker
 
 export type ToWorker =
-  | { type: "init"; models: ModelSpec; live: Partial<LiveOptions> }
+  | {
+      type: "init";
+      models: ModelSpec;
+      live: Partial<LiveOptions>;
+      /** The Worker's native-load flag (`native-guard.ts`); absent in-thread. */
+      native?: NativeFlag;
+    }
   | {
       type: "call";
       id: string;
@@ -1346,6 +1354,10 @@ export type FromWorker =
   | { type: "dstream-ack"; token: number; samples: number }
   /** A dictation's models are loaded, or `error` says why not. */
   | { type: "dwarmed"; token: number; error?: string }
+  /** The answer to `release`, after its `loads`: the models are freed. */
+  | { type: typeof RELEASED }
+  /** An uncaught error in the Worker (`reportCrashes`): the host replaces it and retires it. */
+  | { type: typeof CRASHED; error: string }
   /** Tagged with the call it belongs to, so a late result never lands in the next call. */
   | (LiveOut & { call: string });
 
@@ -1457,6 +1469,7 @@ export class WorkerSide {
           // The native memory comes back once the models are collected (`ModelSet.release`).
           await this.models?.release?.();
           this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
+          this.reply({ type: RELEASED });
           break;
         case "flush":
           if (m.call === this.callId) await p.flush();
@@ -1606,8 +1619,12 @@ if (!Bun.isMainThread && workerData === LIVE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
+  reportCrashes(post);
   const side = new WorkerSide(post);
-  self.onmessage = (e: MessageEvent<ToWorker>) => side.handle(e.data);
+  self.onmessage = (e: MessageEvent<ToWorker>) => {
+    if (e.data.type === "init") useNativeFlag(e.data.native);
+    side.handle(e.data);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1916,6 +1933,7 @@ export class LiveAsr {
   private spawn(): Transport {
     const onMessage = (m: FromWorker) => this.onWorker(m);
     let t: Transport;
+    let native: NativeFlag | undefined;
     if (this.o.inThread) {
       const side = new WorkerSide((m) => queueMicrotask(() => onMessage(m)));
       t = { post: (m) => side.handle(m), close: () => side.close() };
@@ -1923,13 +1941,22 @@ export class LiveAsr {
       const w = new Worker(siblingModule(import.meta.url, "live-worker"), {
         workerData: LIVE_WORKER_NAME,
       } as WorkerOptions);
+      const flag = nativeFlag();
+      native = flag;
       let dead = false;
       const died = (error: string) => {
         if (dead) return;
         dead = true;
         this.crashed(t, error);
       };
-      w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data);
+      w.onmessage = (e: MessageEvent<FromWorker>) => {
+        if (e.data.type !== CRASHED) return onMessage(e.data);
+        // Still alive (`reportCrashes`): it frees its models once what it was doing is done, and
+        // goes, while a new Worker takes over. Nothing it sends from now on reaches the calls.
+        died(e.data.error);
+        retireWorker(w, flag);
+      };
+      // Its thread is gone, and what it held with it (`reportCrashes` keeps that rare).
       w.onerror = (e) => died(e.message);
       t = {
         // A dead Worker must never throw into the call's packet or event path.
@@ -1943,11 +1970,12 @@ export class LiveAsr {
         },
         close: () => {
           dead = true;
-          w.terminate();
+          // Never inside a model load: Bun aborts the process on that (#408).
+          stopWorker(w, flag);
         },
       };
     }
-    t.post({ type: "init", models: this.o.models, live: this.o.live ?? {} });
+    t.post({ type: "init", models: this.o.models, live: this.o.live ?? {}, native });
     return t;
   }
 

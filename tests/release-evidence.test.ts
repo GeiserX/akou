@@ -124,12 +124,14 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
     expect(isStable("1.0.0-rc.1")).toBe(false);
   });
 
-  test("the terms table's newest dated row must be later than the previous stable tag", () => {
+  test("the terms table's newest dated row must be on or after the previous stable tag's day", () => {
     expect(termsProblems(terms("2027-02-01"), null)).toEqual([]);
     expect(termsProblems(terms("2027-01-01", "2027-03-01"), "2027-02-15")).toEqual([]);
     expect(termsProblems(terms("2027-03-01", "2027-01-01"), "2027-02-15")).toEqual([]);
-    expect(termsProblems(terms("2027-02-15"), "2027-02-15")).toEqual([
-      "docs/providers.md: the newest terms check is dated 2027-02-15, not after the previous stable release (2027-02-15); read the current terms and add a dated row",
+    // A second release on the day of the first: the reading that day counts.
+    expect(termsProblems(terms("2027-02-15"), "2027-02-15")).toEqual([]);
+    expect(termsProblems(terms("2027-02-14"), "2027-02-15")).toEqual([
+      "docs/providers.md: the newest terms check is dated 2027-02-14, before the previous stable release (2027-02-15); read the current terms and add a dated row",
     ]);
     expect(termsProblems(terms("not yet checked"), null)).toEqual([
       "docs/providers.md: the terms table has no dated row; read the current terms and add one (YYYY-MM-DD)",
@@ -240,7 +242,7 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         writeFileSync(join(t.dir, GATES), gates(ALL_PASS));
         const stale = check(["--check", "--root", t.dir]);
         expect(stale.code).toBe(1);
-        expect(stale.out).toContain("not after the previous stable release (2027-03-10)");
+        expect(stale.out).toContain("before the previous stable release (2027-03-10)");
         writeFileSync(join(t.dir, PROVIDERS), terms("2027-03-05", "2027-03-11"));
         expect(check(["--check", "--root", t.dir]).code).toBe(0);
       } finally {
@@ -307,7 +309,7 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
     const list = readFileSync(join(ROOT, "scripts", "release-checklist.md"), "utf8");
     expect(list).toContain("docs/providers.md");
     expect(list).toContain("docs/gates/M0-results.md");
-    expect(list).toMatch(/terms[^\n]*dated[^\n]*after the previous stable/i);
+    expect(list).toMatch(/terms[^\n]*dated on or after the day of the previous stable/i);
     expect(list).toMatch(/G1 to G8[^\n]*Pass/);
   });
 });
