@@ -168,7 +168,7 @@ With `server.auto_download` on (the default), the first utterance after you turn
 A job can give its speech in English instead of in the language spoken. Three doors take it:
 
 - `POST /v1/jobs` with `task=translate` and `language` set to the source (an ISO code such as `es`, or `auto`).
-- `POST /v1/audio/translations`, OpenAI's translation endpoint: `file`, `model`, `prompt`, `temperature` and `response_format`, plus `language`, which OpenAI's request lacks. Without it the source is `auto`.
+- `POST /v1/audio/translations`, OpenAI's translation endpoint: `file`, `model`, `prompt` (read by Whisper only; Canary takes none), `temperature` and `response_format`, plus `language`, which OpenAI's request lacks. Without it the source is `auto`. Any other field answers 400 `unknown_field`.
 - Bazarr's `POST /v1/asr?task=translate`.
 
 The source language picks the engine:
@@ -180,9 +180,9 @@ The source language picks the engine:
 
 The result's `language` is `en`, its `source_language` is the source (the one Whisper detected on `auto`) and its `task` is `translate`. Segments keep their times, so subtitles come out of it as from any job, but neither engine gives word times: `words` have `s` and `e` null. A line's times come from the voice-activity pieces the audio is cut into, a few seconds each.
 
-Why Canary first. On four 10-minute film clips scored against the films' own English subtitles, Canary matched Whisper's chrF (48.4 against 48.9), was 8 to 11 times faster on a Mac's Metal GPU (real-time factor 0.02 to 0.03 against 0.18 to 0.27) and used 1.4 GB against 2.3 GB. Over music and noise Whisper wrote ten lines that nobody said in 30 minutes of audio; Canary wrote none.
+Why Canary first: it trades a little accuracy for speed. On three 10-minute European film clips scored against the films' own English subtitles, Whisper scored higher BLEU on every clip (pooled 24.4 against 22.1, a significant gap, p=0.04), and the two did not differ significantly on chrF (48.9 against 48.4, p=0.17). Canary was 8.8 to 9.6 times faster on a Mac's Metal GPU (real-time factor 0.020 to 0.030 against 0.176 to 0.272) and used 1.4 GB against 2.3 GB. Over music and noise Whisper wrote ten lines that nobody said in 30 minutes of audio; Canary wrote none. To get Whisper's accuracy for a European language, name it: `model=whisper-large-v3`.
 
-On Linux with an Intel integrated GPU (Vulkan) Canary runs at about 0.3 times real time. Whisper is much slower there: 1.5 to 10 times real time on Vulkan, depending on the audio, and about 3 times on the CPU, so on such a box send Whisper only what Canary cannot translate.
+Where `asr.accelerator` runs Qwen on Vulkan or the CPU, both translate engines run on the CPU: on an Intel integrated GPU, Vulkan was slower than the CPU for both (Whisper at 10.2 times real time against 3.2, Canary 0.31 against 0.26). A discrete card on Vulkan is not measured. Canary runs at about 0.3 times real time there and Whisper at about 3, so on such a box send Whisper only what Canary cannot translate.
 
 Both models are downloaded on first use (Canary 1.14 GB, Whisper 1.67 GB) unless `server.auto_download` is off, load with the job, stay loaded across a batch and are freed after `server.model_idle_minutes` with nothing to do. A cancelled job stops the decode in flight and frees the engine.
 
