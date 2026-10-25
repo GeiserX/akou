@@ -512,6 +512,13 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Translate a file into English (server mode)",
+    cli: { none: "a program asks for it: `task=translate` on POST /jobs, or OpenAI's endpoint" },
+    api: ["POST /audio/translations"],
+    mcp: { none: "an agent transcribes through the job tools and reads the language it gets" },
+    window: { none: "the Jobs page lists translate jobs as any other job" },
+  },
+  {
     action: "Transcribe for Bazarr (server mode, SV-C3)",
     cli: { none: "Bazarr calls akou's endpoint itself; `akou transcribe` already takes a file" },
     api: ["POST /asr", "POST /detect-language"],

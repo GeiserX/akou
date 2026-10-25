@@ -30,10 +30,12 @@ import {
   createTranscribeCppEngine,
   type NativeModel,
   TRANSCRIBE_CPP_ENGINES,
+  TRANSLATE_LANGUAGES,
   type TranscribeBinding,
   TranscribeCppEngine,
   type TranscribeCppError,
   type TranscribeFamily,
+  translateEngine,
   WHISPER_PROMPT_TOKENS,
 } from "../src/main/asr/transcribe-cpp.ts";
 import { type ModelRefused, resolveModel, runsJobs } from "../src/main/server/model-store.ts";
@@ -99,6 +101,10 @@ function fakeBinding(family: TranscribeFamily, o: FakeOptions = {}) {
       }
       if (pcm.length === 0) throw new Error("PCM is empty");
       if (o.truncate) return result("buenos", { truncated: true });
+      // Asked to translate, both answer in English; a free Whisper names the source it heard.
+      if (opts.task === "translate") {
+        return result(ENGLISH, opts.language ? {} : { language: o.detects ?? "es" });
+      }
       if (family === "canary") {
         if (!opts.language) return result(ENGLISH);
         const said = o.says?.[opts.language] ?? SPOKEN;
@@ -354,6 +360,83 @@ describe("[T4.18] Models loaded twice: one load, explicit unload, one decode at 
     expect(() => createTranscribeCppEngine("qwen3-asr-1.7b", "/models")).toThrow(
       /not a transcribe-cpp engine/,
     );
+  });
+});
+
+describe("translate: into English, the source kept", () => {
+  const translator = (family: TranscribeFamily, fake: ReturnType<typeof fakeBinding>) =>
+    new TranscribeCppEngine({
+      id: family === "whisper" ? WHISPER_LARGE_V3 : CANARY_1B_V2,
+      family,
+      model: "/nowhere/model.gguf",
+      languages: family === "whisper" ? WHISPER_LANGUAGES : PARAKEET_LANGUAGES,
+      binding: fake.binding,
+      task: "translate",
+    });
+
+  test("translate: Canary is sent task translate, targetLanguage en, its source forced; the hypothesis's lang is the source", async () => {
+    const fake = fakeBinding("canary");
+    const h = await translator("canary", fake).decode(unit("es"));
+    expect(fake.calls).toEqual([
+      { language: "es", task: "translate", targetLanguage: "en", timestamps: "none" },
+    ]);
+    expect([h.text, h.lang]).toEqual([ENGLISH, "es"]);
+    // Canary is still never left to choose its source: with none it fails before it loads.
+    const err = await refusal(translator("canary", fakeBinding("canary")).decode(unit()));
+    expect(err.code).toBe("unit_failed");
+  });
+
+  test("translate: Whisper with no language detects, translates, and reports the heard source", async () => {
+    const fake = fakeBinding("whisper", { detects: "ja" });
+    const h = await translator("whisper", fake).decode(unit());
+    expect(fake.calls).toEqual([{ task: "translate", timestamps: "none" }]);
+    expect([h.text, h.lang]).toEqual([ENGLISH, "ja"]);
+    // Forced when the job names its source, and never sent Canary's target.
+    const forced = fakeBinding("whisper");
+    await translator("whisper", forced).decode(unit("fr"));
+    expect(forced.calls).toEqual([{ language: "fr", task: "translate", timestamps: "none" }]);
+  });
+
+  test("positive control: a transcribing engine sends no task, so the checks above see the difference", async () => {
+    const fake = fakeBinding("canary");
+    const h = await engine("canary", fake).decode(unit("es"));
+    expect(fake.calls).toEqual([{ language: "es", timestamps: "none" }]);
+    expect(h.text).toBe(SPOKEN);
+  });
+
+  test("a stopped job's signal is read at each decode, so an engine kept across jobs follows the job it decodes", async () => {
+    const fake = fakeBinding("canary");
+    let current: AbortSignal | undefined = new AbortController().signal;
+    const e = new TranscribeCppEngine({
+      id: CANARY_1B_V2,
+      family: "canary",
+      model: "/nowhere/model.gguf",
+      languages: PARAKEET_LANGUAGES,
+      binding: fake.binding,
+      task: "translate",
+      signal: () => current,
+    });
+    await e.decode(unit("es"));
+    const second = new AbortController();
+    current = second.signal;
+    await e.decode(unit("es"));
+    expect(fake.calls.map((c) => c.signal)).toEqual([expect.any(AbortSignal), second.signal]);
+    expect(fake.calls[0]?.signal).not.toBe(second.signal);
+  });
+
+  test("translateEngine: Canary for the languages it reads, Whisper for the rest and for auto, none for a language neither reads", () => {
+    expect(translateEngine("es")).toBe(CANARY_1B_V2);
+    expect(translateEngine("es-ES")).toBe(CANARY_1B_V2);
+    expect(translateEngine("ja")).toBe(WHISPER_LARGE_V3);
+    expect(translateEngine("auto")).toBe(WHISPER_LARGE_V3);
+    expect(translateEngine("tlh")).toBeNull();
+    // A named engine is kept when it reads the language, else none.
+    expect(translateEngine("es", WHISPER_LARGE_V3)).toBe(WHISPER_LARGE_V3);
+    expect(translateEngine("auto", CANARY_1B_V2)).toBeNull();
+    expect(translateEngine("ja", CANARY_1B_V2)).toBeNull();
+    expect(TRANSLATE_LANGUAGES).toContain("ja");
+    expect(TRANSLATE_LANGUAGES).toContain("es");
+    expect(TRANSLATE_LANGUAGES).not.toContain("tlh");
   });
 });
 

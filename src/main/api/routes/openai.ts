@@ -25,12 +25,18 @@
  * - `languages[]`, as on `POST /v1/jobs`: the codes an `auto` language may come out as.
  * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`,
  *   `known_speaker_names[]` and `known_speaker_references[]` (until diarization names speakers).
+ *
+ * `POST /v1/audio/translations` is the OpenAI translation endpoint on the same handler: the speech
+ * into English, as a job with `task=translate`. `model` names `canary-1b-v2` or `whisper-large-v3`
+ * or is no opinion (`whisper-1`); `language`, an akou extension OpenAI's request lacks, is the
+ * source, and absent it is `auto`, which Whisper detects. `verbose_json` says `task: translate`
+ * and `language: en`.
  */
 
 import type { JobSegment, JobWord } from "../../asr/finalize-worker.ts";
-import type { Job } from "../../server/store.ts";
+import type { Job, JobTask } from "../../server/store.ts";
 import { caller } from "../caller.ts";
-import { HttpError, json, type RouteContext, type Router } from "../http.ts";
+import { HttpError, json, type RouteContext, type RouteDoc, type Router } from "../http.ts";
 import type { SpooledFile } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
 import { checkTitle } from "./calls.ts";
@@ -50,6 +56,7 @@ import {
   queueFullError,
   requireRoomUnlessLane,
   textField,
+  translateChoice,
 } from "./jobs.ts";
 
 export const RESPONSE_FORMATS = [
@@ -222,6 +229,8 @@ interface Rendered {
   text: string;
   language: string | null;
   duration: number;
+  /** Set for a translation, which `verbose_json` names as OpenAI's does. */
+  task?: "translate";
 }
 
 function rendered(job: Job): Rendered {
@@ -231,6 +240,7 @@ function rendered(job: Job): Rendered {
     text: (r.text ?? "") as string,
     language: (r.language ?? null) as string | null,
     duration: (r.duration_s ?? 0) as number,
+    ...(r.task === "translate" ? { task: "translate" as const } : {}),
   };
 }
 
@@ -253,6 +263,7 @@ export function renderOpenAI(
       return plain(vtt(r.segments));
     case "verbose_json":
       return json(200, {
+        ...(r.task ? { task: r.task } : {}),
         // The engine's language (Qwen names it) or the request's hint; else BCP-47 `und`,
         // undetermined: the pinned OpenAI schema requires the field, so it is never left out.
         language: r.language ?? "und",
@@ -355,7 +366,7 @@ export function namesModel(jobs: ReturnType<typeof jobsOf>, model: string | unde
   }
 }
 
-async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
+async function transcriptions(c: RouteContext<ApiApp>, task: JobTask): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
   requireRoomUnlessLane(jobs, who.id, null);
@@ -387,7 +398,11 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     if (temperature !== undefined && Number.isNaN(Number(temperature))) {
       throw bad("temperature", "temperature is a number");
     }
-    const language = languageOf(form, c.app.config().settings["server.default_language"]);
+    // A translation with no language is left to Whisper to detect, as OpenAI's endpoint does.
+    const language = languageOf(
+      form,
+      task === "translate" ? "auto" : c.app.config().settings["server.default_language"],
+    );
     const keywords = promptTerms(textField(form, "prompt"), keywordsOf(form));
     list(form, "include");
     const languages = languagesOf(form);
@@ -398,17 +413,27 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     const metadata = metadataOf(form);
     const asked = { model: textField(form, "model") };
     // `whisper-1` and other unknown names are no opinion here, so the lane's engine decides.
-    const choice = chooseModel(
-      jobs,
-      interactive && !namesModel(jobs, asked.model) ? laneAsk(jobs, {}) : asked,
-      { diarize: format === "diarized_json" },
-      true,
-    );
+    const choice =
+      task === "translate"
+        ? translateChoice(
+            jobs,
+            asked.model,
+            language,
+            { diarize: format === "diarized_json" },
+            true,
+          )
+        : chooseModel(
+            jobs,
+            interactive && !namesModel(jobs, asked.model) ? laneAsk(jobs, {}) : asked,
+            { diarize: format === "diarized_json" },
+            true,
+          );
     const submitted = jobs.submit({
       key_id: who.id,
       preset: choice.preset,
       model: choice.model,
       model_source: choice.source,
+      task,
       language,
       keywords,
       languages,
@@ -460,6 +485,24 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
   }
 }
 
+const OPENAI_ERRORS: RouteDoc["errors"] = {
+  400: ["unknown_field"],
+  404: ["not_found"],
+  409: ["cancelled", "preset_unavailable"],
+  422: ["bad_field", "decode_failed", "missing_field", "too_long", "unsupported_language"],
+  429: ["queue_full"],
+  499: ["cancelled"],
+  500: [
+    "diarize_unavailable",
+    "engine_unavailable",
+    "interrupted",
+    "model_download_failed",
+    "models_missing",
+    "remote_refused",
+    "transcription_failed",
+  ],
+};
+
 export function openaiRoutes(r: Router<ApiApp>): void {
   r.add(
     "POST",
@@ -486,24 +529,32 @@ export function openaiRoutes(r: Router<ApiApp>): void {
         },
       },
       ok: 200,
-      errors: {
-        400: ["unknown_field"],
-        404: ["not_found"],
-        409: ["cancelled", "preset_unavailable"],
-        422: ["bad_field", "decode_failed", "missing_field", "too_long", "unsupported_language"],
-        429: ["queue_full"],
-        499: ["cancelled"],
-        500: [
-          "diarize_unavailable",
-          "engine_unavailable",
-          "interrupted",
-          "model_download_failed",
-          "models_missing",
-          "remote_refused",
-          "transcription_failed",
-        ],
-      },
+      errors: OPENAI_ERRORS,
     },
-    transcriptions,
+    (c) => transcriptions(c, "transcribe"),
+  );
+  r.add(
+    "POST",
+    "/audio/translations",
+    {
+      id: "openai.translate",
+      doc: "The OpenAI translation endpoint: a file in, its speech in English out, in one request. `model` names `canary-1b-v2` or `whisper-large-v3`, and anything else (`whisper-1`) leaves the choice to the language: `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`. `language`, an akou extension, names the source; absent or `auto`, `whisper-large-v3` detects it. A language neither engine reads, or `canary-1b-v2` with `auto`, answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). `prompt` is Whisper's initial prompt; `temperature` is read and ignored. `response_format` is json, text, srt, vtt or verbose_json, which says `task` `translate` and `language` `en`; the segments keep their times. The job runs through the same queue as `POST /v1/audio/transcriptions` and is deleted once the answer is sent; a caller that hangs up cancels it.",
+      access: "jobs",
+      modes: ["server"],
+      door: "compat",
+      body: {
+        multipart: {
+          file: "file",
+          "model?": "string",
+          "language?": "string",
+          "prompt?": "string",
+          "response_format?": "string",
+          "temperature?": "number",
+        },
+      },
+      ok: 200,
+      errors: OPENAI_ERRORS,
+    },
+    (c) => transcriptions(c, "translate"),
   );
 }

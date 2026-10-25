@@ -242,6 +242,10 @@ export interface FakeOptions {
   engineLang?: string;
   /** Ids of `createEngine` engines whose load fails. */
   engineLoadFails?: string[];
+  /** A file a `createEngine` engine appends `load <id>`, `unload <id>` and `abort <id>` to. */
+  engineEvents?: string;
+  /** A `createEngine` engine's decode waits until the job's signal aborts (a translate engine). */
+  engineBlocks?: boolean;
 }
 
 export interface DecodeCall {
@@ -652,16 +656,44 @@ export function createModels(options: FakeOptions = {}, model?: string): ModelSe
  * the fake recognizer does and, as they do, gives neither word times nor confidences. Its load
  * fails when its id is in `engineLoadFails`.
  */
-export function createEngine(options: FakeOptions = {}, engine = "fake-engine"): FinalEngine {
+export function createEngine(
+  options: FakeOptions = {},
+  engine = "fake-engine",
+  ctx?: { task: "translate"; signal(): AbortSignal | undefined },
+): FinalEngine {
   const rec = new FakeRecognizer(engine, { ...options, words: false });
+  const note = (what: string) => {
+    if (options.engineEvents) appendFileSync(options.engineEvents, `${what} ${engine}\n`);
+  };
+  let loaded = false;
   return {
     id: engine,
     features: { confidence: false, timestamps: false, glossary: true, languageId: true },
     load: async () => {
       if (options.engineLoadFails?.includes(engine)) throw new Error(`${engine} would not load`);
+      if (!loaded) note("load");
+      loaded = true;
     },
-    unload: async () => {},
+    unload: async () => {
+      if (loaded) note("unload");
+      loaded = false;
+    },
     decode: async (u) => {
+      if (!loaded) {
+        note("load");
+        loaded = true;
+      }
+      if (options.engineBlocks) {
+        const signal = ctx?.signal();
+        await new Promise<void>((resolve) => {
+          // No signal: it blocks for good, as a native decode nobody can stop does.
+          if (!signal) return;
+          if (signal.aborted) return resolve();
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        note("abort");
+        throw new Error(`${engine}: the decode was given up`);
+      }
       const t = performance.now();
       const text = rec.decode(u.samples).text;
       const h: Hypothesis = {

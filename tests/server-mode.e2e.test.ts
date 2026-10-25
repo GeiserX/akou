@@ -567,6 +567,7 @@ describe("SV-K1: GET /v1/server", () => {
           "languages_bound",
           "live",
           "openai",
+          "translate",
           "webhooks",
           "wyoming",
         ].sort(),

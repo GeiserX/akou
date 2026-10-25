@@ -5,7 +5,8 @@
  * - `POST /v1/asr?task=transcribe&language=&output=srt&encode=false`: one file part `audio_file`,
  *   raw 16 kHz mono s16le PCM with no header (`encode=false`) or any container (`encode=true`).
  *   The answer is the subtitle as text: SRT or WebVTT cues of at most 42 characters (SV-J5) at the
- *   audio's own times, or the plain text.
+ *   audio's own times, or the plain text. `task=translate` gives the subtitle in English, from
+ *   `language` (Canary or Whisper, as a job's `task=translate` chooses).
  * - `POST /v1/detect-language?encode=false`: the same part, the whole track; the first 30 s are
  *   transcribed under the `best` preset (Qwen names the language) and the answer is
  *   `{detected_language, language_code, confidence}`, as whisper-asr-webservice answers. With
@@ -25,7 +26,7 @@ import { join } from "node:path";
 import { QWEN_LANGUAGES, wavBytes } from "../../asr/qwen.ts";
 import type { JobService } from "../../server/jobs.ts";
 import type { ModelChoice } from "../../server/model-store.ts";
-import type { Job } from "../../server/store.ts";
+import type { Job, JobTask } from "../../server/store.ts";
 import type { Identity } from "../access.ts";
 import {
   HttpError,
@@ -45,6 +46,7 @@ import {
   LANGUAGE,
   queueFullError,
   requireQueueRoom,
+  translateChoice,
 } from "./jobs.ts";
 import { renderResult } from "./openai.ts";
 
@@ -134,6 +136,7 @@ async function runJob(
   audio: { path: string; sha256: string },
   choice: ModelChoice,
   language: string,
+  task: JobTask = "transcribe",
 ): Promise<Job> {
   let owned = false;
   try {
@@ -142,6 +145,7 @@ async function runJob(
       preset: choice.preset,
       model: choice.model,
       model_source: choice.source,
+      task,
       language,
       keywords: [],
       languages: [],
@@ -227,15 +231,7 @@ function logged(route: string, handler: (c: Ctx) => Promise<Response>) {
 
 async function asr(c: Ctx): Promise<Response> {
   on(c);
-  if (c.query.raw("task") === "translate") {
-    throw new HttpError(
-      400,
-      "bad_param",
-      "task=translate is not supported: akou transcribes in the language spoken",
-      { param: "task" },
-    );
-  }
-  c.query.oneOf("task");
+  const task = c.query.oneOf<JobTask>("task");
   const output = c.query.oneOf<"srt" | "vtt" | "txt">("output");
   const asked = c.query.raw("language")?.trim() ?? "";
   if (asked !== "" && !LANGUAGE.test(asked)) {
@@ -249,10 +245,14 @@ async function asr(c: Ctx): Promise<Response> {
   const jobs = jobsOf(c);
   const me = who(c);
   requireQueueRoom(jobs, me.id, null);
-  // The server's default, as for any request that names no model (SV-S1).
-  const choice = chooseModel(jobs, {}, { diarize: false }, true);
+  // The server's default, as for any request that names no model (SV-S1); a translation runs the
+  // engine that reads its language.
+  const choice =
+    task === "translate"
+      ? translateChoice(jobs, undefined, language, { diarize: false })
+      : chooseModel(jobs, {}, { diarize: false }, true);
   const audio = await audioOf(c, jobs);
-  const job = await runJob(c, jobs, me, audio, choice, language);
+  const job = await runJob(c, jobs, me, audio, choice, language, task);
   return renderResult(job, output === "txt" ? "text" : output);
 }
 
@@ -292,7 +292,7 @@ const ERRORS: RouteDoc["errors"] = {
   400: ["bad_param", "unknown_field"],
   404: ["not_found"],
   409: ["cancelled", "preset_unavailable"],
-  422: ["bad_field", "decode_failed", "missing_field", "too_long"],
+  422: ["bad_field", "decode_failed", "missing_field", "too_long", "unsupported_language"],
   429: ["queue_full"],
   499: ["cancelled"],
   500: [
@@ -312,16 +312,16 @@ export function bazarrRoutes(r: Router<ApiApp>): void {
     "/asr",
     {
       id: "bazarr.asr",
-      doc: "Bazarr's whisper transcription request: a file part `audio_file` in, a subtitle out as text. Bazarr sends `encode=false` and raw 16 kHz mono 16-bit PCM with no header; `encode=true` takes any audio or video file. `output` is srt (the default Bazarr asks for), vtt or txt; cues hold at most 42 characters and keep the audio's own times. The job runs `server.default_model` in `language`, else `server.default_language`. `task=translate` is refused with 400. Needs no key, and answers only while `server.bazarr` is on (404 otherwise); a key sent as a bearer token is honoured. A caller that hangs up cancels its job, and the job is deleted once the answer is sent.",
+      doc: "Bazarr's whisper transcription request: a file part `audio_file` in, a subtitle out as text. Bazarr sends `encode=false` and raw 16 kHz mono 16-bit PCM with no header; `encode=true` takes any audio or video file. `output` is srt (the default Bazarr asks for), vtt or txt; cues hold at most 42 characters and keep the audio's own times. The job runs `server.default_model` in `language`, else `server.default_language`. `task=translate` gives the subtitle in English: `canary-1b-v2` translates from the 25 languages it reads, `whisper-large-v3` from the rest and from `auto`, and a language neither reads answers 422 `unsupported_language`. Needs no key, and answers only while `server.bazarr` is on (404 otherwise); a key sent as a bearer token is honoured. A caller that hangs up cancels its job, and the job is deleted once the answer is sent.",
       access: "open",
       modes: ["server"],
       door: "compat",
       query: {
         task: {
           type: "string",
-          values: ["transcribe"],
+          values: ["transcribe", "translate"],
           default: "transcribe",
-          doc: "Only `transcribe`; `translate` is refused with 400.",
+          doc: "`transcribe`: the subtitle in the language spoken; `translate`: in English.",
         },
         language: {
           type: "string",

@@ -364,6 +364,30 @@ The gain flattens after three engines. Frequency (majority) ROVER gets worse wit
 - **The glossary's real carrier is Qwen.** The decode list passed as context lifted name hits from 47 to 64 of 67, with 0 false insertions and −0.36 [−0.54, −0.18] WER. Whisper takes the list as an initial prompt (transcribe.cpp reports `supports('initial_prompt')` true); the effect is unmeasured.
 - **Word times come from Parakeet's TDT token times.** Against Rev's forced alignment on e22, the median start error is 0.078 s and 89 % of words fall within 0.2 s. Qwen3-ForcedAligner is the later upgrade: 0.03 s median, 94 % within 0.2 s, RTF 0.014. That was measured on MLX only; the cross-OS route through CrispASR's GGUF or the ONNX export is extrapolated. Fusion does not need times from every engine: align the texts, then time the fused words from the anchor.
 
+### 4.1 Translation into English (`task=translate`)
+
+A job's `task=translate` runs Canary-1b-v2 for the 25 languages it reads and Whisper large-v3 for the rest and for `auto` ([server.md](../server.md#translation-into-english)). Measured with akou 1.2.5's own job pass (`runJobPass`, the same VAD pieces and loop guard), transcribe-cpp 0.4.0 and the catalog's Q8_0 GGUFs, on four 10-minute clips of films in the library, each scored against the human English subtitle track in the same file. Hypothesis and reference were grouped into 60 s windows by midpoint and scored with corpus BLEU and chrF (sacrebleu 2.4.3), with a paired bootstrap of 2000 samples over the 30 pooled windows of the three European clips.
+
+| Clip | Engine | BLEU | chrF | Decode RTF, M4 Metal | Peak memory |
+|---|---|---|---|---|---|
+| Spanish 1 | Canary | 19.4 | 47.7 | 0.020 | 1.42 GB |
+| Spanish 1 | Whisper | 22.1 | 48.4 | 0.176 | 2.29 GB |
+| Spanish 2 | Canary | 26.8 | 54.5 | 0.030 | 1.43 GB |
+| Spanish 2 | Whisper | 29.2 | 54.3 | 0.272 | 2.29 GB |
+| French, with music | Canary | 15.5 | 39.2 | 0.025 | 1.43 GB |
+| French, with music | Whisper | 17.1 | 40.7 | 0.240 | 2.30 GB |
+| Japanese | Canary | refuses every unit | | | |
+| Japanese | Whisper | 3.9 | 28.3 | 0.230 | 2.21 GB |
+| Pooled, European | Whisper | 24.4 ±3.9 | 48.9 ±3.5 | | |
+| Pooled, European | Canary | 22.1 ±3.6 (p=0.04) | 48.4 ±3.8 (p=0.17) | | |
+
+- **Invented text.** Whisper wrote 10 lines over music or noise across the three European clips (a TV network's name, a year, Korean letters, "Episode 9"); Canary wrote none there and dropped 3 short real lines Whisper kept. Neither left a line in the source language.
+- **`auto`.** Whisper with no language scored the same as forced Spanish on the first clip (22.2 / 48.5).
+- **Loads on Metal.** Canary 1.4 to 3.2 s warm, 17.9 s cold; Whisper 2.7 to 4.2 s, 24 s once after its pages were evicted. The machine's load average was 55 to 76 throughout, so the speeds are lower bounds.
+- **Linux, Intel UHD 770** (the `-vulkan` image, 8 GB limit, 8 CPUs, a loaded box): Canary RTF 0.31 on Vulkan and 0.26 on the CPU, with the same text as Metal; Whisper RTF 10.2 on Vulkan and 3.2 on the CPU on a 2-minute film slice. Through the finished `task=translate` jobs on the same box, on 4.5 minutes of synthetic Spanish speech, the job time including the load was 0.31 of real time for Canary and 1.55 for Whisper on `auto`, both on Vulkan. Windows, Linux arm64 and Intel macOS are not measured.
+- **Times.** transcribe-cpp reports `maxTimestampKind` `none` for Canary and `segment` for Whisper, and no word times for either, so a line's times are its VAD piece's: median 2.8 to 4.3 s, 90th percentile 9 to 18 s. The share of human cues whose midpoint falls inside an output line was 0.87 to 0.99.
+- **A stopped Worker.** A Worker stopped while transcribe-cpp loads or decodes left the model in the process, which then aborted on exit on Metal (exit 134, `GGML_ASSERT([rsets->data count] == 0)`); see [TRAPS.md](../TRAPS.md).
+
 ## 5. Fusion: what we ship, and what the LLM is for
 
 | Fuser | Pooled WER (against `q-lidc` 8.88) | Invented words | Needs | Decision |

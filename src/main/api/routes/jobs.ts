@@ -4,7 +4,8 @@
  * app the one local token reaches them, and owns every job as the key id `app`.
  *
  * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `title`, `preset`, `model`, `language`,
- *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
+ *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, `task` (`translate`: into
+ *   English, on Canary or Whisper by the source language), and the `Idempotency-Key`
  *   header. 202 with the new job, 200 with the existing one for a repeated key, file and options,
  *   422 `idempotency_conflict` for the same key with another file or options, 429 `queue_full`
  *   with `Retry-After` past a queue limit (SV-Q3), answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
@@ -27,11 +28,19 @@
 
 import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { QWEN_LANGUAGE_CODES } from "../../asr/llama-catalog.ts";
+import { CANARY_1B_V2, WHISPER_LARGE_V3 } from "../../asr/models.ts";
+import { translateEngine } from "../../asr/transcribe-cpp.ts";
 import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
 import { FORWARDED_HEADER } from "../../server/remotes.ts";
-import { JOB_STATES, type JobRequest, type JobStatus, type NewJob } from "../../server/store.ts";
+import {
+  JOB_STATES,
+  type JobRequest,
+  type JobStatus,
+  type JobTask,
+  type NewJob,
+} from "../../server/store.ts";
 import { CallbackRefused, checkCallbackUrl } from "../../server/webhooks.ts";
 import type { Identity } from "../access.ts";
 import { caller, requireCallbackAllowed } from "../caller.ts";
@@ -152,6 +161,59 @@ export function chooseModel(
     }
     throw err;
   }
+}
+
+/**
+ * The engine of a translate job (`task=translate`): the one `model` names, Canary-1b-v2 or Whisper
+ * large-v3, else the one that reads `language` (`translateEngine`). A language neither reads, or
+ * Canary asked for one it does not read or for `auto`, is 422 `unsupported_language`; another
+ * model is 422 `bad_field`, unless `unknownIsAuto` (the OpenAI door, whose `whisper-1` is no
+ * opinion). Its files are checked as any job's are (SV-M1).
+ */
+export function translateChoice(
+  jobs: JobService,
+  model: string | undefined,
+  language: string,
+  job: { diarize: boolean },
+  unknownIsAuto = false,
+): ModelChoice {
+  const asked = (model ?? "").trim();
+  const named = asked === CANARY_1B_V2 || asked === WHISPER_LARGE_V3;
+  if (asked !== "" && asked !== "auto" && !named && !unknownIsAuto) {
+    throw bad(
+      "model",
+      `task=translate runs ${CANARY_1B_V2} or ${WHISPER_LARGE_V3}; leave model out to have the language choose`,
+    );
+  }
+  const id = translateEngine(language, named ? asked : undefined);
+  if (id === null) {
+    throw new HttpError(
+      422,
+      "unsupported_language",
+      named
+        ? `${asked} cannot translate from ${language}${asked === CANARY_1B_V2 ? " (it must be told its source language)" : ""}`
+        : `no engine here translates from ${language}; GET /v1/server lists translate_languages`,
+      { field: "language", code: language },
+    );
+  }
+  try {
+    jobs.admit(id, job);
+  } catch (err) {
+    if (err instanceof ModelRefused) {
+      throw new HttpError(err.status, err.code, err.message, err.details);
+    }
+    throw err;
+  }
+  return { model: id, preset: "custom", source: "request" };
+}
+
+/** The `task` field: `transcribe` (the default) or `translate`. */
+export function taskOf(form: Form): JobTask {
+  const t = textField(form, "task")?.trim() || "transcribe";
+  if (t !== "transcribe" && t !== "translate") {
+    throw bad("task", "task is transcribe or translate");
+  }
+  return t;
 }
 
 /**
@@ -306,6 +368,7 @@ const JOB_FIELDS = new Set([
   "metadata",
   "interactive",
   "keep_audio",
+  "task",
 ]);
 
 /** A callback the caller may name (SV-K4), at an address the rules allow (SV-E7), and can sign. */
@@ -383,9 +446,11 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
     const diarize = booleanOf(form, "diarize");
     const keywords = keywordsOf(form);
     const languages = languagesOf(form);
+    const task = taskOf(form);
     // The options as sent, before a server default fills a gap: what a repeated Idempotency-Key is
     // compared against (SV-J2), so a retry still matches after a default changes.
     const request: JobRequest = {
+      task,
       preset: presetName,
       model: model?.trim() || null,
       language: textField(form, "language")?.trim() || "auto",
@@ -412,6 +477,7 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       request,
       interactive,
       keep_audio: booleanOf(form, "keep_audio") ?? false,
+      task,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
     // One this server cannot run goes to a remote that offers it (section 14), unless a remote sent
@@ -421,7 +487,11 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       : { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
     try {
-      const choice = chooseModel(jobs, ask, job);
+      // A translation runs the engine that reads its language, whatever the preset says.
+      const choice =
+        task === "translate"
+          ? translateChoice(jobs, model, job.language, job)
+          : chooseModel(jobs, ask, job);
       job.preset = choice.preset;
       job.model = choice.model;
       job.model_source = choice.source;
@@ -431,6 +501,7 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       const remote =
         !forwarded &&
         !interactive &&
+        task === "transcribe" &&
         err instanceof HttpError &&
         (err.status === 409 || err.status === 422)
           ? jobs.remoteChoice(ask)
@@ -517,7 +588,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`. `task=translate` decodes the speech into English instead of transcribing it: `language` is the source (an ISO code, or `auto`), and the engine is `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`, which also detects the source on `auto`; `model` may name either, any other model answers 422 `bad_field`, `preset` is not used, and a language neither engine reads (or `canary-1b-v2` with `auto`) answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). Its result has `language` `en`, `source_language` and `task` `translate`; its segments keep their times, its words have none. A changed `task` on a repeated `Idempotency-Key` answers 422 `idempotency_conflict`.",
       ...JOB_ROUTE,
       query: { wait: WAIT },
       body: {
@@ -535,6 +606,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "priority?": "integer",
           "interactive?": "boolean",
           "keep_audio?": "boolean",
+          "task?": "string",
         },
       },
       ok: 202,

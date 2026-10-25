@@ -138,7 +138,7 @@ describe("[SV-C3] Bazarr's /asr on a server with server.bazarr on", () => {
   });
 
   test("[SV-C3] red controls: the SRT check fails on a JSON refusal; a part with no filename is no file", async () => {
-    const refusal = await bazarr(rig, "/asr?task=translate&output=srt&encode=false", LATE);
+    const refusal = await bazarr(rig, "/asr?task=summarize&output=srt&encode=false", LATE);
     expect(() => srtCues(refusal.text)).toThrow("is not SRT");
     // The same bytes as a text part: the text cap or the file check refuses them, so the
     // test above sends a file part.
@@ -163,11 +163,24 @@ describe("[SV-C3] Bazarr's /asr on a server with server.bazarr on", () => {
     expect(`${t.status} ${t.text}`).toBe("200 hello world\n");
   });
 
-  test("[SV-C3] task=translate is refused with 400 bad_param and a non-SRT body, and logged", async () => {
-    const r = await bazarr(rig, "/asr?task=translate&language=en&output=srt&encode=false", LATE);
+  test("[SV-C3] task=translate returns an English SRT; a language no engine reads is a logged 422", async () => {
+    const r = await bazarr(rig, "/asr?task=translate&language=es&output=srt&encode=false", LATE);
+    expect(r.status).toBe(200);
+    expect(srtCues(r.text).length).toBeGreaterThan(0);
+    expect(r.text).toContain("hello world");
+    expect(uploads(rig)).toEqual([]);
+    const tlh = await bazarr(rig, "/asr?task=translate&language=tlh&output=srt&encode=false", LATE);
+    expect(`${tlh.status} ${JSON.parse(tlh.text).error}`).toBe("422 unsupported_language");
+    expect(rig.logs.some((l) => l.level === "warn" && l.msg.includes("unsupported_language"))).toBe(
+      true,
+    );
+  });
+
+  test("[SV-C3] values the dialect does not speak are refused, and logged", async () => {
+    const r = await bazarr(rig, "/asr?task=summarize&language=en&output=srt&encode=false", LATE);
     expect(r.status).toBe(400);
     expect(JSON.parse(r.text)).toMatchObject({ error: "bad_param", param: "task" });
-    expect(rig.logs.some((l) => l.level === "warn" && l.msg.includes("task=translate"))).toBe(true);
+    expect(rig.logs.some((l) => l.level === "warn" && l.msg.includes("bad_param"))).toBe(true);
     // Other values the dialect does not speak are refused by the declared enums.
     for (const q of ["output=json", "encode=maybe"]) {
       const x = await bazarr(rig, `/asr?${q}`, LATE);

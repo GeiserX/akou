@@ -72,6 +72,39 @@ export function nativeLoad<T>(
   return park(f);
 }
 
+/**
+ * `nativeLoad` for a load that resolves later (transcribe-cpp's `TranscribeModel.load`): counted on
+ * the flag until it settles. A stop asked before it starts skips it; one asked during it disposes
+ * the model it got, which the parked Worker would otherwise hold until the process exits, then
+ * parks. Without a flag it just runs `load`. `park` is for tests.
+ */
+export async function nativeLoadAsync<T>(
+  load: () => Promise<T>,
+  dispose: (model: T) => void,
+  f: NativeFlag | null = workerFlag,
+  park: (f: NativeFlag) => never = parkForever,
+): Promise<T> {
+  if (!f) return load();
+  Atomics.add(f, DEPTH, 1);
+  let got: { model: T } | null = null;
+  try {
+    if (Atomics.load(f, STOP) === 0) got = { model: await load() };
+  } finally {
+    Atomics.sub(f, DEPTH, 1);
+    if (Atomics.load(f, STOP) === 1) {
+      if (got) {
+        try {
+          dispose(got.model);
+        } catch {
+          // Its memory is lost either way; the Worker still parks.
+        }
+      }
+      park(f);
+    }
+  }
+  return got ? got.model : park(f);
+}
+
 // ---------------------------------------------------------------------------
 // The host side
 

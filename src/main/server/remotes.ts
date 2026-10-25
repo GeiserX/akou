@@ -149,6 +149,8 @@ export interface RemoteJob {
   keywords: readonly string[];
   languages: readonly string[];
   diarize: boolean;
+  /** Set only for a translate job. */
+  task?: "translate";
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: a remote's JSON is read field by field.
@@ -431,6 +433,9 @@ export class Remotes {
     // Sent only when set, so a remote from before the field still takes every other job.
     for (const l of j.languages) form.append("languages[]", l);
     form.append("diarize", j.diarize ? "true" : "false");
+    // Sent only for a translate job: a remote from before the field refuses it (400
+    // `unknown_field`), so the job runs here instead of coming back transcribed.
+    if (j.task) form.append("task", j.task);
     const res = await this.request(r, "/jobs", {
       method: "POST",
       headers: { "idempotency-key": j.id, [FORWARDED_HEADER]: "1" },

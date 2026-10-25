@@ -290,6 +290,7 @@ export function jobView(
     priority: j.priority,
     interactive: j.interactive,
     keep_audio: j.keep_audio,
+    task: j.task,
     language: j.language,
     languages: j.languages,
     diarize: j.diarize,
@@ -358,12 +359,16 @@ export function jobResult(
   engine: { version: string; models: string[] },
   timings?: JobTimings,
 ): Record<string, unknown> {
+  // The engine's own guess first; Parakeet detects none, so the client's hint stands in.
+  const heard = pass.language ?? (job.language === "auto" ? null : job.language);
+  const translated = job.task === "translate";
   return {
     job_id: job.id,
     status: "done",
     text: pass.text,
-    // The engine's own guess first; Parakeet detects none, so the client's hint stands in.
-    language: pass.language ?? (job.language === "auto" ? null : job.language),
+    // A translation is English, from the language the engine heard or the client named.
+    language: translated ? "en" : heard,
+    ...(translated ? { source_language: heard, task: "translate" } : {}),
     language_confidence: null,
     duration_s: pass.duration_s,
     // Parakeet gives word times; Qwen gives none, so its words' `s` and `e` are null.
@@ -1222,10 +1227,14 @@ export class JobService {
     }
   }
 
-  /** Whether a model's engine runs on a Metal llama-server (Qwen on Apple silicon). */
+  /**
+   * Whether a model's engine runs on Metal: a Metal llama-server (Qwen on Apple silicon), or a
+   * translate engine on transcribe-cpp on a Mac (two Metal engines together run out of memory).
+   */
   private onMetal(model: string): boolean {
     try {
-      return this.o.models(model)?.final?.accelerator === "metal";
+      const spec = this.o.models(model);
+      return spec?.final?.accelerator === "metal" || translatesOnMetal(spec);
     } catch {
       return false;
     }
@@ -1384,7 +1393,7 @@ export class JobService {
       });
       // A llama-server engine (Qwen) takes the keywords as its glossary instead of hotwords.
       const decode: DecodeList | null =
-        job.keywords.length === 0 || spec.final
+        job.keywords.length === 0 || spec.final || spec.translate
           ? null
           : {
               model: modelNameFor(spec),
@@ -1564,6 +1573,7 @@ export class JobService {
       keywords: j.keywords,
       languages: j.languages,
       diarize: j.diarize,
+      ...(j.task === "translate" ? { task: "translate" as const } : {}),
     };
   }
 
@@ -1707,11 +1717,19 @@ export class JobService {
  */
 export function takesGpuTurn(spec: ModelSpec): boolean {
   return (
-    Boolean(spec.final) || (spec.fusion?.engines.some((e) => e.kind === "llama-server") ?? false)
+    Boolean(spec.final) ||
+    (spec.fusion?.engines.some((e) => e.kind === "llama-server") ?? false) ||
+    translatesOnMetal(spec)
   );
 }
 
+/** A translate engine on transcribe-cpp on a Mac, where it runs on Metal. */
+function translatesOnMetal(spec: ModelSpec | null | undefined): boolean {
+  return spec?.translate?.kind === "transcribe-cpp" && process.platform === "darwin";
+}
+
 const REQUEST_FIELDS = [
+  "task",
   "preset",
   "model",
   "language",
@@ -1729,6 +1747,7 @@ const REQUEST_FIELDS = [
 function comparable(r: JobRequest): JobRequest {
   return {
     ...r,
+    task: r.task ?? "transcribe",
     language: r.language.toLowerCase(),
     keywords: [...new Set(r.keywords)].sort(),
     languages: [...new Set((r.languages ?? []).map((l) => l.toLowerCase()))].sort(),

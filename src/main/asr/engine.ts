@@ -293,7 +293,9 @@ export interface LlamaEngineSpec {
  * that decodes a file job's units in place of the model set's recognizer, which then never loads;
  * the model set still gives the VAD and the speaker labels. `fusion`, when set, is the N-engine pass
  * (ASR-6): every engine of its list decodes every unit, one engine at a time, and the fuser joins
- * their words; it takes the place of `final`.
+ * their words; it takes the place of `final`. `translate`, when set, is the engine of a job's
+ * `task=translate` (Canary or Whisper on transcribe-cpp, or a module's `createEngine`), which
+ * decodes into English in place of the recognizer and stays loaded across jobs as `final` does.
  */
 export type ModelSpec = (
   | {
@@ -309,7 +311,12 @@ export type ModelSpec = (
       diarizeHelper?: readonly string[];
     }
   | { kind: "module"; path: string; model: string; options?: unknown }
-) & { final?: LlamaEngineSpec; fusion?: FusionSpec };
+) & { final?: LlamaEngineSpec; fusion?: FusionSpec; translate?: TranslateSpec };
+
+/** The engine of a translate job: Canary or Whisper on transcribe-cpp, or a test module's. */
+export type TranslateSpec =
+  | { kind: "transcribe-cpp"; engine: string; modelsDir: string }
+  | { kind: "module"; path: string; engine: string; options?: unknown };
 
 /**
  * One engine of the N-engine pass, as the Worker builds it: the model set's recognizer (Parakeet),
