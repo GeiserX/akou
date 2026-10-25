@@ -2,6 +2,21 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.2.5 — the last ways a stopped or crashed Worker kept its model memory are closed
+
+1.2.4 made akou give its model memory back in the common cases. Four rarer ones were left, and in each about 2.2 GB stayed in the process until it restarted: the Worker was stopped, or died of an error, while Parakeet was still loaded. Now every Worker that may hold models is asked to free them before it is stopped, and waits out a model load rather than being stopped in the middle of it. The 8-hour soak did not run for this release: the soak never reaches these four paths, and nothing else in the app changed. Instead we measured each path on a Linux server, before and after the fix, as the memory of the server process 20 s after the event.
+
+### Server and desktop
+- **A call's final pass that runs past its time budget, or is stopped at quit, frees its models** (#437). It now stops at its next piece and frees its models before it goes: 2171 MB kept before, 22 MB after.
+- **A job Worker that hits an uncaught error frees its models** (#437). The job fails as before, and the Worker is retired cleanly: 2199 MB kept before, 16 MB after. This also fixes a job Worker that crashed between jobs and kept being used, so the next job sent to it never answered.
+- **A live Worker that crashes frees its models** (#437). It is replaced as before: 2197 MB kept before, 36 MB after.
+- **A job cancelled during a slow model load frees its models** (#437). The Worker waits for the load to finish, then frees what it loaded: 2172 MB kept before, 18 MB after.
+
+One case is still out of reach: a Worker whose thread truly dies keeps its memory until the process exits, because Bun runs no finalizers when it tears down a dead Worker. Errors in akou's own code are now caught and reported, so they no longer kill a Worker that way.
+
+### Behind the scenes
+- A second stable release can now ship on the same day as the one before it, once the terms have been read again that day (#438).
+
 ## 1.2.4 — akou gives its memory back once it is done with a model
 
 akou held memory after it had finished with a model: about 900 MB on a server after every live session, 650 MB on the Mac app after every dictation or job, and 2.2 GB more for every file job someone cancelled. The dictation lane's Qwen server and the live model warmed at start were never let go at all. Now each of these goes back to the system once its idle time is up, and an idle server or app falls back to within a few MB of its size at start. The next use after an idle stretch loads its model again, about 1.5 s for the live model and about 10 s for Parakeet on a server CPU. The 8-hour soak did not run for this release. Instead we measured the memory on every path this release changes, on a Linux server and on a Mac, before and after the fix.
