@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { EventDraft } from "../src/core/log/events.ts";
 import { EVENTS_FILE } from "../src/core/log/writer.ts";
 import { finalizeCall, JobWorker } from "../src/main/asr/finalize-worker.ts";
@@ -80,14 +81,16 @@ async function child(
   s: ReturnType<typeof spec>,
   body: string,
 ): Promise<{ terminated?: { released: boolean }[]; text?: string }> {
-  const script = join(dir, `${s.options.marker.split("/").pop()}.child.ts`);
-  const src = (f: string) => JSON.stringify(join(import.meta.dir, "..", "src", "main", "asr", f));
+  const script = join(dir, `${basename(s.options.marker)}.child.ts`);
+  // File URLs, so a Windows path is a valid module specifier.
+  const url = (path: string) => JSON.stringify(pathToFileURL(path).href);
+  const src = (f: string) => url(join(import.meta.dir, "..", "src", "main", "asr", f));
   writeFileSync(
     script,
     `import { existsSync } from "node:fs";
 import { JobWorker } from ${src("finalize-worker.ts")};
 import { LiveAsr } from ${src("live-worker.ts")};
-import { concat, silence, speak } from ${JSON.stringify(join(import.meta.dir, "fixtures", "asr-fake.ts"))};
+import { concat, silence, speak } from ${url(join(import.meta.dir, "fixtures", "asr-fake.ts"))};
 const SPEC = ${JSON.stringify(s)};
 const terminated = [];
 const terminate = Worker.prototype.terminate;
