@@ -4,7 +4,7 @@ All notable changes to akou. Versions follow [semantic versioning](https://semve
 
 ## 1.2.5 — the last ways a stopped or crashed Worker kept its model memory are closed
 
-1.2.4 made akou give its model memory back in the common cases. Four rarer ones were left, and in each about 2.2 GB stayed in the process until it restarted: the Worker was stopped, or died of an error, while Parakeet was still loaded. Now every Worker that may hold models is asked to free them before it is stopped, and waits out a model load rather than being stopped in the middle of it. The 8-hour soak did not run for this release: the soak never reaches these four paths, and nothing else changed. Instead we measured each path on a Linux server, before and after the fix, as the memory of the server process 20 s after the event.
+1.2.4 made akou give its model memory back in the common cases. Four rarer ones were left, and in each about 2.2 GB stayed in the process until it restarted: the Worker was stopped, or died of an error, while Parakeet was still loaded. Now every Worker that may hold models is asked to free them before it is stopped, and waits out a model load rather than being stopped in the middle of it. The 8-hour soak did not run for this release: the soak never reaches these four paths, and nothing else in the app changed. Instead we measured each path on a Linux server, before and after the fix, as the memory of the server process 20 s after the event.
 
 ### Server and desktop
 - **A call's final pass that runs past its time budget, or is stopped at quit, frees its models** (#437). It now stops at its next piece and frees its models before it goes: 2171 MB kept before, 22 MB after.
