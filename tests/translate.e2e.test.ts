@@ -161,6 +161,16 @@ describe("task=translate through the API, with fakes", () => {
     // A translation has no speakers: diarized_json is refused rather than labelled a transcript.
     const diarized = await send({ language: "es", response_format: "diarized_json" });
     expect([diarized.status, JSON.parse(diarized.text).field]).toEqual([422, "response_format"]);
+    // Only the fields the route declares: the transcription's others are refused, not half-applied.
+    for (const [k, v] of [
+      ["stream", "true"],
+      ["interactive", "true"],
+      ["timestamp_granularities[]", "word"],
+      ["metadata", "{}"],
+    ]) {
+      const r = await send({ language: "es", [k as string]: v as string });
+      expect([k, r.status, JSON.parse(r.text).error]).toEqual([k, 400, "unknown_field"]);
+    }
   });
 
   test("GET /v1/server: capabilities.translate and the source languages", async () => {

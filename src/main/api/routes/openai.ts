@@ -89,6 +89,20 @@ const FIELDS = new Set([
   "metadata",
 ]);
 
+/**
+ * The fields of `POST /v1/audio/translations`: OpenAI's translation request plus `language`. The
+ * rest of the transcription set (`stream`, `interactive`, `timestamp_granularities[]`...) has no
+ * meaning for a translation, so it is refused as unknown rather than half-applied.
+ */
+const TRANSLATE_FIELDS = new Set([
+  "file",
+  "model",
+  "language",
+  "prompt",
+  "response_format",
+  "temperature",
+]);
+
 function bad(field: string, message: string): HttpError {
   return new HttpError(422, "bad_field", message, { field });
 }
@@ -374,8 +388,9 @@ async function transcriptions(c: RouteContext<ApiApp>, task: JobTask): Promise<R
   // Every file but the job's is deleted, and the job's too when the request is refused first.
   let kept: SpooledFile | undefined;
   try {
+    const allowed = task === "translate" ? TRANSLATE_FIELDS : FIELDS;
     for (const k of form.keys()) {
-      if (!FIELDS.has(k.replace(/\[\]$/, ""))) {
+      if (!allowed.has(k.replace(/\[\]$/, ""))) {
         throw new HttpError(400, "unknown_field", `unknown field "${k}"`, { field: k });
       }
     }
@@ -545,7 +560,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/translations",
     {
       id: "openai.translate",
-      doc: "The OpenAI translation endpoint: a file in, its speech in English out, in one request. `model` names `canary-1b-v2` or `whisper-large-v3`, and anything else (`whisper-1`) leaves the choice to the language: `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`. `language`, an akou extension, names the source; absent or `auto`, `whisper-large-v3` detects it. A language neither engine reads, or `canary-1b-v2` with `auto`, answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). `prompt` is Whisper's initial prompt; `temperature` is read and ignored. `response_format` is json, text, srt, vtt or verbose_json, which says `task` `translate` and `language` `en`; the segments keep their times. The job runs through the same queue as `POST /v1/audio/transcriptions` and is deleted once the answer is sent; a caller that hangs up cancels it.",
+      doc: "The OpenAI translation endpoint: a file in, its speech in English out, in one request. `model` names `canary-1b-v2` or `whisper-large-v3`, and anything else (`whisper-1`) leaves the choice to the language: `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`. `language`, an akou extension, names the source; absent or `auto`, `whisper-large-v3` detects it. A language neither engine reads, or `canary-1b-v2` with `auto`, answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). `prompt` is Whisper's initial prompt, and applies only when Whisper is the engine: Canary takes no prompt and drops it. `temperature` is read and ignored; the transcription's other fields (`stream`, `interactive`, `timestamp_granularities[]` and the rest) answer 400 `unknown_field`. `response_format` is json, text, srt, vtt or verbose_json, which says `task` `translate` and `language` `en`; the segments keep their times. The job runs through the same queue as `POST /v1/audio/transcriptions` and is deleted once the answer is sent; a caller that hangs up cancels it.",
       access: "jobs",
       modes: ["server"],
       door: "compat",
