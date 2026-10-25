@@ -104,6 +104,7 @@ import {
   splitToLines,
   UTTERANCE_MAX_SECONDS,
 } from "./upgrade.ts";
+import { CRASHED, RELEASED, reportCrashes, retireWorker } from "./worker-retire.ts";
 
 /** A stream diarizer that dies is started again at most this many times per call. */
 export const STREAM_RESTART_LIMIT = 3;
@@ -1353,6 +1354,10 @@ export type FromWorker =
   | { type: "dstream-ack"; token: number; samples: number }
   /** A dictation's models are loaded, or `error` says why not. */
   | { type: "dwarmed"; token: number; error?: string }
+  /** The answer to `release`, after its `loads`: the models are freed. */
+  | { type: typeof RELEASED }
+  /** An uncaught error in the Worker (`reportCrashes`): the host replaces it and retires it. */
+  | { type: typeof CRASHED; error: string }
   /** Tagged with the call it belongs to, so a late result never lands in the next call. */
   | (LiveOut & { call: string });
 
@@ -1464,6 +1469,7 @@ export class WorkerSide {
           // The native memory comes back once the models are collected (`ModelSet.release`).
           await this.models?.release?.();
           this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
+          this.reply({ type: RELEASED });
           break;
         case "flush":
           if (m.call === this.callId) await p.flush();
@@ -1613,6 +1619,7 @@ if (!Bun.isMainThread && workerData === LIVE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
+  reportCrashes(post);
   const side = new WorkerSide(post);
   self.onmessage = (e: MessageEvent<ToWorker>) => {
     if (e.data.type === "init") useNativeFlag(e.data.native);
@@ -1942,7 +1949,14 @@ export class LiveAsr {
         dead = true;
         this.crashed(t, error);
       };
-      w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data);
+      w.onmessage = (e: MessageEvent<FromWorker>) => {
+        if (e.data.type !== CRASHED) return onMessage(e.data);
+        // Still alive (`reportCrashes`): it frees its models once what it was doing is done, and
+        // goes, while a new Worker takes over. Nothing it sends from now on reaches the calls.
+        died(e.data.error);
+        retireWorker(w, flag);
+      };
+      // Its thread is gone, and what it held with it (`reportCrashes` keeps that rare).
       w.onerror = (e) => died(e.message);
       t = {
         // A dead Worker must never throw into the call's packet or event path.

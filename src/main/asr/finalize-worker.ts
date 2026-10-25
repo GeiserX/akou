@@ -82,6 +82,7 @@ import { peak, prepareSpan } from "./pad.ts";
 import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
+import { CRASHED, RELEASED, reportCrashes, retireWorker } from "./worker-retire.ts";
 
 export interface FinalOptions {
   /** Audio read per step, seconds (no temporary WAV, no whole file in memory for the energy scan). */
@@ -1267,6 +1268,8 @@ type ToFinal = {
   options?: Partial<FinalOptions>;
   /** The Worker's native-load flag (`native-guard.ts`); absent when the pass runs in-thread. */
   native?: NativeFlag;
+  /** Set to 1 by the host to stop the pass at its next piece (a pass past its budget, a quit). */
+  abort?: Int32Array;
 };
 
 type FromFinal =
@@ -1275,6 +1278,8 @@ type FromFinal =
   | { type: "progress"; done_s: number; total_s: number; step: FinalStep }
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
+  /** An uncaught error in the Worker (`reportCrashes`): the host retires it. */
+  | { type: typeof CRASHED; error: string }
   | { type: "done"; result: FinalResult; loads: Record<string, number> };
 
 /** The Worker sends its progress at most this often, ms; the last value always goes. */
@@ -1295,6 +1300,8 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   let sentStep: FinalStep | null = null;
   // A new step always goes; within decoding, at most once a second, and the last figure.
   const progress = (done_s: number, total_s: number, step: FinalStep) => {
+    // A pass the host gave up on stops at the next piece, so the Worker can free its models.
+    if (m.abort && Atomics.load(m.abort, 0) === 1) throw new Error("the final pass was stopped");
     const now = performance.now();
     if (step === sentStep && now - sent < PROGRESS_EVERY_MS && done_s < total_s) return;
     sent = now;
@@ -1371,6 +1378,7 @@ if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
+  reportCrashes(post);
   self.onmessage = (e: MessageEvent<ToFinal | ToJob | ToJobRelease>) => {
     if (e.data.type === "release") return void releaseJobModels(post);
     useNativeFlag(e.data.native);
@@ -1503,16 +1511,28 @@ export async function finalizeCall(
       let settled = false;
       let w: Worker | null = null;
       const native = nativeFlag();
+      const abort = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
       /** llama-server processes the Worker runs: a terminated Worker cannot stop them. */
       const kids = new Set<number>();
       const onAbort = () => finish(quit);
-      const finish = (r: Out) => {
+      /** `answered`: the Worker freed its models and answered, or its thread is gone. */
+      const finish = (r: Out, answered = false) => {
         if (settled) return;
         settled = true;
         o.signal?.removeEventListener("abort", onAbort);
         clock.clearTimeout(timer);
-        // Never inside a model load: Bun aborts the process on that (#408).
-        if (w) stopWorker(w, native);
+        // A pass that answered freed its models first. Any other stops at its next piece, frees
+        // them and only then goes (`retireWorker`), or the Worker would keep them for good.
+        if (w && answered) stopWorker(w, native);
+        else if (w) {
+          Atomics.store(abort, 0, 1);
+          const retired = retireWorker(w, native, {
+            later: true,
+            onMessage: (m) => {
+              if (m.type === "done") retired.release();
+            },
+          });
+        }
         for (const pid of kids) {
           try {
             process.kill(pid, "SIGTERM");
@@ -1522,10 +1542,10 @@ export async function finalizeCall(
         }
         resolve(r);
       };
-      const failWith = (step: string, error: string) => {
+      const failWith = (step: string, error: string, gone = false) => {
         if (settled) return;
         call.record({ type: "final.failed", step, error });
-        finish({ ok: false, parts: [], skipped: [], error, loads: {} });
+        finish({ ok: false, parts: [], skipped: [], error, loads: {} }, gone);
       };
       const timer = clock.setTimeout(
         () => failWith("timeout", `the final pass did not finish within ${budget} ms`),
@@ -1543,7 +1563,8 @@ export async function finalizeCall(
         else if (r.type === "child") {
           if (r.alive) kids.add(r.pid);
           else kids.delete(r.pid);
-        } else finish({ ...r.result, loads: r.loads });
+        } else if (r.type === CRASHED) failWith("worker", r.error);
+        else finish({ ...r.result, loads: r.loads }, true);
       };
       if (o.inThread) {
         void runInWorker(msg, onReply);
@@ -1553,8 +1574,9 @@ export async function finalizeCall(
         workerData: FINALIZE_WORKER_NAME,
       } as WorkerOptions);
       w.onmessage = (e: MessageEvent<FromFinal>) => onReply(e.data);
-      w.onerror = (e) => failWith("worker", e.message);
-      w.postMessage({ ...msg, native } satisfies ToFinal);
+      // Its thread is gone, and what it held with it (`reportCrashes` keeps that rare).
+      w.onerror = (e) => failWith("worker", e.message, true);
+      w.postMessage({ ...msg, native, abort } satisfies ToFinal);
     });
   } finally {
     release();
@@ -2087,6 +2109,8 @@ type FromJob =
   | ({ type: "progress" } & JobProgress)
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
+  /** An uncaught error in the Worker (`reportCrashes`): the host retires it. */
+  | { type: typeof CRASHED; error: string }
   | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
   | { type: "job.failed"; error: string; code?: string; loads: Record<string, number> };
 
@@ -2341,7 +2365,10 @@ export class JobWorker {
     return new Promise<JobPassResult>((resolve, reject) => {
       const done = () => {
         this.busy = null;
-        w.onmessage = null;
+        // Between jobs, a Worker that reports an uncaught error is retired all the same.
+        w.onmessage = (e: MessageEvent<FromJob>) => {
+          if (e.data.type === CRASHED && this.w === w) this.retire(e.data.error);
+        };
         w.onerror = null;
       };
       this.busy = {
@@ -2362,14 +2389,18 @@ export class JobWorker {
           else this.kids.delete(r.pid);
           return;
         }
-        if (r.type === "released") return;
+        if (r.type === RELEASED) return;
+        // An uncaught error in the Worker: the job fails with it, and the Worker frees its models
+        // and goes, as a cancelled one does.
+        if (r.type === CRASHED) return this.retire(r.error);
         this.lastLoads = r.loads;
         done();
         if (r.type === "job.done") resolve(r.result);
         else reject(Object.assign(new Error(r.error), r.code ? { code: r.code } : {}));
       };
       w.onerror = (e) => {
-        // A Worker that died is not reused, and nor is anything it started.
+        // A Worker that died is not reused, and nor is anything it started. Its thread is gone,
+        // and what it held with it (`reportCrashes` keeps that rare).
         this.w = null;
         this.killChildren();
         done();
@@ -2463,33 +2494,23 @@ export class JobWorker {
     };
     // A job's llama-server goes now, so a decode waiting on it fails at once instead of finishing.
     if (busy) kill();
-    let ended = false;
-    const end = () => {
-      if (ended) return;
-      ended = true;
-      clearTimeout(timer);
-      w.onmessage = null;
-      w.onerror = null;
-      kill();
-      stopWorker(w, native);
-    };
-    // clock: a real-time cap on a Worker that may never answer.
-    const timer = setTimeout(end, this.releaseMs);
-    const release = () => w.postMessage({ type: "release" } satisfies ToJobRelease);
-    w.onmessage = (e: MessageEvent<FromJob>) => {
-      const r = e.data;
-      if (r.type === "log") return this.onLog?.(r.level, r.msg);
-      if (r.type === "child") {
-        if (r.alive) kids.add(r.pid);
-        else kids.delete(r.pid);
-        return;
-      }
-      if (r.type === "released") return end();
-      // The stopped job's answer: the Worker is between jobs now, so its models can go.
-      if (r.type === "job.done" || r.type === "job.failed") release();
-    };
-    w.onerror = end;
-    if (busy && abort) Atomics.store(abort, 0, 1);
-    else release();
+    const later = busy && abort !== null;
+    const retired = retireWorker(w, native, {
+      ms: this.releaseMs,
+      later,
+      onEnd: kill,
+      onMessage: (m) => {
+        const r = m as FromJob;
+        if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        if (r.type === "child") {
+          if (r.alive) kids.add(r.pid);
+          else kids.delete(r.pid);
+          return;
+        }
+        // The stopped job's answer: the Worker is between jobs now, so its models can go.
+        if (r.type === "job.done" || r.type === "job.failed") retired.release();
+      },
+    });
+    if (later && abort) Atomics.store(abort, 0, 1);
   }
 }
