@@ -673,6 +673,8 @@ export async function runFinalPass(
     step = "decode";
     progress(0);
     const decodeFrom = performance.now();
+    // The word-time aligner's share of the decode, left out of the recognizer's speed (SV-U6).
+    let alignMs = 0;
     const languages = new Set<string>();
     let callText = false;
     let callEnergy = false;
@@ -840,6 +842,7 @@ export async function runFinalPass(
               o,
               skip,
             );
+            alignMs += r.alignMs ?? 0;
             progress(piece.to);
             const l = lineOf(p, ch, piece, r, clock, spans);
             if (l) lines.push(l);
@@ -850,7 +853,7 @@ export async function runFinalPass(
         closePart(p, lines);
       }
     }
-    const decode_s = (performance.now() - decodeFrom) / 1000;
+    const decode_s = (performance.now() - decodeFrom - alignMs) / 1000;
     for (const d of layer) emit(d);
 
     // 4 (names). Final clusters to live clusters, jointly.
@@ -940,6 +943,7 @@ export async function decodeUnit(
     if (h.conf !== undefined) out.conf = h.conf;
     if (h.aligner) out.aligner = h.aligner;
     if (h.untimed) out.untimed = h.untimed;
+    if (h.alignMs !== undefined) out.alignMs = h.alignMs;
     return out;
   } catch (err) {
     if ((err as { fatal?: boolean }).fatal) throw err;
@@ -974,6 +978,8 @@ export function joinHalves(a: Hypothesis, b: Hypothesis): Hypothesis {
   if (aligner) out.aligner = aligner;
   const untimed = a.untimed ?? b.untimed;
   if (untimed) out.untimed = untimed;
+  if (a.alignMs !== undefined || b.alignMs !== undefined)
+    out.alignMs = (a.alignMs ?? 0) + (b.alignMs ?? 0);
   return out;
 }
 
@@ -1192,7 +1198,8 @@ export async function runEngines(
           drop((err as Error).message, units.length - u, err as Error);
           break;
         }
-        run.decode_s += (performance.now() - t) / 1000;
+        // The word-time aligner's share is not the engine's speed (SV-U6).
+        run.decode_s += (performance.now() - t - (h.alignMs ?? 0)) / 1000;
         o.onUnit?.(u, turn, n);
         // Fusion aligns words; a single engine's result keeps exactly what the engine gave.
         if (n > 1) h = withWords(h);

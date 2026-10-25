@@ -49,6 +49,11 @@ export interface Hypothesis {
   aligner?: string;
   /** Why the words have no times, when the engine gives them none and no aligner timed them. */
   untimed?: string;
+  /**
+   * Milliseconds the aligner took inside this decode: left out of the engine's decode time, so the
+   * machine's measured speed on the recognizer (SV-U6) stays the recognizer's own.
+   */
+  alignMs?: number;
 }
 
 /** One unit of the final pass: gained, padded audio and what the call knows about it. */

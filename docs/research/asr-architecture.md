@@ -377,9 +377,11 @@ Qwen3-ASR writes no word times, so the best preset's words came back with null t
 | Substrate | Words timed | Median start error | p90 | Within 0.2 s | Aligner RTF |
 |---|---|---|---|---|---|
 | Metal, M4 Mac mini | 3,585 of 3,585 | 0.023 s | 0.056 s | 99.97 % | 0.051 (peak 826 MB) |
-| Vulkan, Intel UHD 770 | 3,585 of 3,585 | 0.023 s | 0.056 s | 99.97 % | 0.42 (host load 17) |
+| Vulkan, Intel UHD 770 | 3,585 of 3,585 | 0.023 s | 0.056 s | 99.97 % | 0.42 (host load 17; peak memory not measured) |
 
-Both substrates gave the same times to the millisecond; 3,518 of the words matched a reference word. The whole best job on the UHD 770 ran at 1.64 times real time, Qwen included, so Vulkan on an iGPU is slow but correct. Parakeet's TDT times on e22 had a 0.078 s median and 89 % within 0.2 s, so the aligner is the better clock. The first run on a machine compiles the GPU shaders (21 s idle, minutes under load); the first unit gets 300 s more before it is killed.
+These figures hold for 15 to 30 s pieces of read English, one speaker. Every unit starts CrispASR and loads the model again, so the shorter units the VAD cuts from a film pay that cost more often and the aligner's RTF on them is higher than above. Spanish and music are not measured.
+
+Both substrates gave the same times to the millisecond; 3,518 of the words matched a reference word. The whole best job on the UHD 770 ran at 1.64 times real time, Qwen included, so Vulkan on an iGPU is slow but correct. Parakeet's TDT times on e22 had a 0.078 s median and 89 % within 0.2 s, so the aligner is the better clock. The first run on a machine compiles the GPU shaders (21 s idle, minutes under load); the first unit each job Worker runs on the aligner gets 300 s more before it is killed. A unit that runs past its deadline stops the aligner for the rest of that job, so a hung GPU costs one deadline, not one per unit.
 
 ## 5. Fusion: what we ship, and what the LLM is for
 

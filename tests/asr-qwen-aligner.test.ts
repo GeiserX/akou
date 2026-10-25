@@ -9,6 +9,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { jobCues } from "../src/main/api/routes/openai.ts";
 import { Aligner, joinAligned } from "../src/main/asr/aligner.ts";
 import {
   ALIGNER,
@@ -58,7 +59,11 @@ function scratch(): {
   };
 }
 
-function aligner(log: string, mode = "ok", o: { baseTimeoutS?: number } = {}) {
+function aligner(
+  log: string,
+  mode = "ok",
+  o: { baseTimeoutS?: number; firstRunExtraS?: number; model?: string } = {},
+) {
   const pids: number[] = [];
   const a = new Aligner({
     id: ALIGNER,
@@ -207,10 +212,43 @@ describe("Aligner: one CrispASR run per unit", () => {
     const { a, pids } = aligner(s.log, "hang", { baseTimeoutS: 1 });
     const short = THREE.subarray(0, RATE / 4);
     const t = performance.now();
-    expect(await a.align(short, ["hello"])).toEqual({ error: "the aligner took longer than 2 s" });
+    expect(await a.align(short, ["hello"])).toEqual({
+      error: "the aligner took longer than 2 s",
+      timedOut: true,
+    });
     expect(performance.now() - t).toBeLessThan(10_000);
     expect(pids).toHaveLength(1);
     expect(gone(pids[0] as number)).toBe(true);
+  });
+
+  test("after a unit times out, the job's later units start no CrispASR and wait for no deadline", async () => {
+    const s = scratch();
+    const { a, pids } = aligner(s.log, "hang", { baseTimeoutS: 1 });
+    const short = THREE.subarray(0, RATE / 4);
+    await a.align(short, ["hello"]);
+    const t = performance.now();
+    expect(await a.align(short, ["hello"])).toEqual({
+      error: "the aligner took longer than 2 s on an earlier piece",
+      timedOut: true,
+    });
+    expect(performance.now() - t).toBeLessThan(500);
+    expect(pids).toHaveLength(1);
+    expect(s.runs()).toHaveLength(1);
+  });
+
+  test("the first run's extra time is given once per model in a process, not once per job", async () => {
+    const s = scratch();
+    const short = THREE.subarray(0, RATE / 4);
+    const model = join(s.dir, "warm.gguf");
+    // Each job builds its own Aligner; only the first one ever run on the model gets the extra.
+    const first = aligner(s.log, "hang", { baseTimeoutS: 1, firstRunExtraS: 1, model }).a;
+    expect(await first.align(short, ["hello"])).toMatchObject({
+      error: "the aligner took longer than 3 s",
+    });
+    const next = aligner(s.log, "hang", { baseTimeoutS: 1, firstRunExtraS: 1, model }).a;
+    expect(await next.align(short, ["hello"])).toMatchObject({
+      error: "the aligner took longer than 2 s",
+    });
   });
 
   test("a CrispASR that cannot start fails the unit, not the job", async () => {
@@ -331,6 +369,83 @@ describe("a job on Qwen with the aligner", () => {
     expect(r.text).toBe("hello world ok great");
     expect(r.words.every((w) => w.s === null)).toBe(true);
     expect(r.untimed).toEqual([{ reason: "the aligner failed", units: r.segments.length }]);
+  });
+
+  test("one piece the aligner fails keeps its words untimed; the other pieces keep their times and their word cues", async () => {
+    const s = scratch();
+    const engine = createLlamaEngine(
+      qwenSpec(s.dir, {
+        engine: ALIGNER,
+        model: join(s.dir, "a.gguf"),
+        command: [process.execPath, FAKE_CRISPASR, "--fake-log", s.log, "--fake-mode", "miss:ok"],
+      }),
+    );
+    cleanups.push(() => engine.unload());
+    const r = await runJobPass(
+      { samples: NOTE, diarize: false, decode: null, language: "en" },
+      new FakeModels(),
+      () => {},
+      engine,
+    );
+    expect(r.segments.map((x) => x.text)).toEqual(["hello world", "ok great"]);
+    expect(r.words.map((w) => w.s === null)).toEqual([false, false, true, true]);
+    expect(r.aligner).toBe(ALIGNER);
+    expect(r.untimed).toEqual([{ reason: "the aligner failed", units: 1 }]);
+    const cues = jobCues(r.words, r.segments);
+    // The timed piece's cue runs from its first word's start to its last word's end, not the
+    // segment's padded edges; the untimed piece is its segment, as before.
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toMatchObject({ text: "hello world", s: r.words[0]?.s, e: r.words[1]?.e });
+    expect(cues[0]?.s).not.toBe(r.segments[0]?.s);
+    expect(cues[1]).toEqual(r.segments[1] as (typeof r.segments)[number]);
+  });
+
+  test("a unit that times out stops the aligner for the rest of the job: one CrispASR run, every piece says so", async () => {
+    const s = scratch();
+    const engine = createLlamaEngine(qwenSpec(s.dir));
+    engine.setAligner(
+      new Aligner({
+        id: ALIGNER,
+        model: join(s.dir, "a.gguf"),
+        command: [process.execPath, FAKE_CRISPASR, "--fake-log", s.log, "--fake-mode", "hang"],
+        baseTimeoutS: 1,
+        firstRunExtraS: 0,
+      }),
+    );
+    cleanups.push(() => engine.unload());
+    const r = await runJobPass(
+      { samples: NOTE, diarize: false, decode: null, language: "en" },
+      new FakeModels(),
+      () => {},
+      engine,
+    );
+    expect(r.segments).toHaveLength(2);
+    expect(s.runs()).toHaveLength(1);
+    expect(r.untimed).toEqual([{ reason: "the aligner timed out", units: 2 }]);
+  });
+
+  test("the aligner's time is not counted as Qwen's decode time (the Models page's speed)", async () => {
+    const s = scratch();
+    const engine = createLlamaEngine(
+      qwenSpec(s.dir, {
+        engine: ALIGNER,
+        model: join(s.dir, "a.gguf"),
+        command: [process.execPath, FAKE_CRISPASR, "--fake-log", s.log, "--fake-mode", "slow"],
+      }),
+    );
+    cleanups.push(() => engine.unload());
+    // Load first, so the decode time holds no llama-server start.
+    await engine.load();
+    const r = await runJobPass(
+      { samples: NOTE, diarize: false, decode: null, language: "en" },
+      new FakeModels(),
+      () => {},
+      engine,
+    );
+    expect(r.aligner).toBe(ALIGNER);
+    expect(s.runs()).toHaveLength(2);
+    // Two units at 1.5 s each in the aligner: 3 s that are not Qwen's.
+    expect(r.decode_s as number).toBeLessThan(1.5);
   });
 
   test("with no aligner here, the spec's reason reaches every piece", async () => {

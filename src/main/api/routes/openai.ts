@@ -132,7 +132,7 @@ export const CUE_CHARS = 42;
 /**
  * Subtitle cues from timed words (SV-J5): words join a cue while it stays within `CUE_CHARS` and
  * inside one segment, so a cue never runs across a pause or a change of speaker. Null when a word
- * has no time (an engine that gives none, such as Qwen): `segmentCues` cuts the segments then.
+ * has no time (an engine that gives none, such as Qwen): `jobCues` then goes segment by segment.
  */
 export function wordCues(
   words: readonly JobWord[],
@@ -161,6 +161,44 @@ export function wordCues(
   }
   if (cue) out.push(cue);
   return out;
+}
+
+/** The words of each segment, in order: they spell its text, spaces aside. Null when they do not. */
+export function wordsBySegment(
+  words: readonly JobWord[],
+  segments: readonly JobSegment[],
+): JobWord[][] | null {
+  const out: JobWord[][] = [];
+  let i = 0;
+  for (const seg of segments) {
+    const want = seg.text.replace(/\s+/g, "");
+    const mine: JobWord[] = [];
+    let got = "";
+    while (got.length < want.length && i < words.length) {
+      const w = words[i++] as JobWord;
+      got += w.w.replace(/\s+/g, "");
+      mine.push(w);
+    }
+    if (got !== want) return null;
+    out.push(mine);
+  }
+  return i === words.length ? out : null;
+}
+
+/**
+ * A job's subtitle cues (SV-J5): from the timed words where every word has a time, else segment by
+ * segment, so a piece whose words have none (Qwen's aligner skipped or failed it) is cut by
+ * `segmentCues` and the pieces it timed keep their word cues. Words that cannot be told apart by
+ * segment cut every segment by `segmentCues`.
+ */
+export function jobCues(words: readonly JobWord[], segments: readonly JobSegment[]): JobSegment[] {
+  const all = wordCues(words, segments);
+  if (all) return all;
+  const groups = wordsBySegment(words, segments);
+  if (!groups) return segmentCues(segments);
+  return segments.flatMap(
+    (seg, i) => wordCues(groups[i] as JobWord[], [seg]) ?? segmentCues([seg]),
+  );
 }
 
 /**
@@ -203,18 +241,17 @@ export type ResultFormat = (typeof RESULT_FORMATS)[number];
 
 /**
  * A done job's result in a format of SV-J5: `json` is the result as stored; `verbose_json` the
- * OpenAI shape of SV-C1 with its segments; `srt` and `vtt` cues of at most `CUE_CHARS` from the
- * timed words, else from the segments cut at word boundaries; `text` the text.
+ * OpenAI shape of SV-C1 with its segments and its timed words; `srt` and `vtt` cues of at most
+ * `CUE_CHARS` from the timed words, else from the segments cut at word boundaries (`jobCues`);
+ * `text` the text.
  */
 export function renderResult(job: Job, format: ResultFormat): Response {
   if (format === "json") return json(200, job.result);
   const r = rendered(job);
   if (format === "srt" || format === "vtt") {
-    const words = ((job.result as Record<string, unknown>).words ?? []) as JobWord[];
-    const cues = wordCues(words, r.segments) ?? segmentCues(r.segments);
-    return renderOpenAI({ ...r, segments: cues }, format, []);
+    return renderOpenAI({ ...r, segments: jobCues(r.words ?? [], r.segments) }, format, []);
   }
-  return renderOpenAI(r, format, ["segment"]);
+  return renderOpenAI(r, format, ["segment", "word"]);
 }
 
 interface Rendered {
@@ -239,12 +276,16 @@ function rendered(job: Job): Rendered {
 
 const usage = (seconds: number) => ({ type: "duration", seconds });
 
-/** A job's words in OpenAI's `{word, start, end}`, or none when any word has no time. */
+/**
+ * A job's timed words in OpenAI's `{word, start, end}`. A word with no time is left out, never
+ * given a guessed one: the pieces the aligner could not time are in `segments` only.
+ */
 export function openaiWords(
   words: readonly JobWord[],
 ): { word: string; start: number; end: number }[] {
-  if (words.some((w) => w.s === null || w.e === null)) return [];
-  return words.map((w) => ({ word: w.w, start: w.s as number, end: w.e as number }));
+  return words.flatMap((w) =>
+    w.s === null || w.e === null ? [] : [{ word: w.w, start: w.s, end: w.e }],
+  );
 }
 
 /** The answer in the format asked for. */
@@ -269,8 +310,8 @@ export function renderOpenAI(
         language: r.language ?? "und",
         duration: r.duration,
         text: r.text,
-        // The job's words with their times (akou-5an.84), when every word has them: Parakeet's,
-        // and Qwen's where the aligner timed them. Otherwise an empty list, never guesses.
+        // The job's words with their times (akou-5an.84): Parakeet's, and Qwen's where the aligner
+        // timed them. A word with no time is left out, never guessed.
         ...(granularities.includes("word") ? { words: openaiWords(r.words ?? []) } : {}),
         ...(granularities.includes("segment")
           ? {
@@ -477,7 +518,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `timestamp_granularities[]` with `word` gives `words` as `{word, start, end}` when every word has a time (Parakeet's, and Qwen's where the word-time aligner ran), else an empty list, never guessed times. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. In `verbose_json`, `language` is the language the engine heard (the `best` preset's Qwen names it) or the request's `language`, and `und` (BCP-47 for undetermined) when neither says; `timestamp_granularities[]` with `word` gives `words` as `{word, start, end}` for the words that have a time (Parakeet's, and Qwen's where the word-time aligner ran); a word with none is left out, never given a guessed time. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. `languages[]` bounds an `auto` language as on `POST /v1/jobs`; a code no engine here can choose answers 422 `unsupported_language`. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
       access: "jobs",
       modes: ["server"],
       door: "compat",

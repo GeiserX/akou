@@ -10,7 +10,8 @@
  * `--fake-log FILE` appends one JSON line per run: `{pid, argv, stdin}`. `--fake-mode` breaks the
  * answer as CrispASR has been seen to, or worse: `outside` puts the last word at 400 s, `backwards`
  * starts the last word before the one before it, `count` drops the last word, `hang` never
- * answers, `exit` exits 3 with nothing on stdout.
+ * answers, `exit` exits 3 with nothing on stdout, `slow` answers after 1.5 s, and `miss:WORD`
+ * drops the last word only in a text that holds WORD (one piece of a job fails, the rest pass).
  */
 
 import { appendFileSync, readFileSync } from "node:fs";
@@ -27,6 +28,7 @@ const logFile = opt("--fake-log");
 if (logFile)
   appendFileSync(logFile, `${JSON.stringify({ pid: process.pid, argv, stdin: text })}\n`);
 
+if (mode === "slow") await Bun.sleep(1500);
 if (mode === "hang") await new Promise(() => setInterval(() => {}, 60_000));
 if (mode === "exit") {
   process.stderr.write("crispasr[align-only]: alignment failed or produced no words.\n");
@@ -69,5 +71,5 @@ words.forEach((w, i) => {
 const last = out.at(-1);
 if (last && mode === "outside") last.start = last.end = 400;
 if (last && mode === "backwards") last.start = Math.max(0, (out.at(-2)?.start ?? 0) - 0.05);
-if (mode === "count") out.pop();
+if (mode === "count" || (mode.startsWith("miss:") && words.includes(mode.slice(5)))) out.pop();
 process.stdout.write(`${JSON.stringify(out)}\n`);

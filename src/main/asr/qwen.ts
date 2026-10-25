@@ -306,6 +306,8 @@ export class QwenEngine implements FinalEngine {
       words,
       ms: performance.now() - t,
     };
+    const alignMs = hs.reduce((n, x) => n + (x.alignMs ?? 0), 0);
+    if (alignMs > 0) h.alignMs = alignMs;
     const lang = hs.find((x) => x.text !== "" && x.lang)?.lang ?? hs.find((x) => x.lang)?.lang;
     if (lang) h.lang = lang;
     const untimed = hs.find((x) => x.untimed)?.untimed;
@@ -363,13 +365,15 @@ export class QwenEngine implements FinalEngine {
       h.untimed = `the aligner does not cover ${lang ? `language ${lang}` : "a unit whose language is unknown"}`;
       return;
     }
+    const t = performance.now();
     const r = await aligner.align(
       unit.samples,
       h.words.map((w) => w.w),
     );
+    h.alignMs = performance.now() - t;
     if ("error" in r) {
       this.o.log?.("warn", `${aligner.id}: a unit keeps no word times: ${r.error}`);
-      h.untimed = "the aligner failed";
+      h.untimed = r.timedOut ? "the aligner timed out" : "the aligner failed";
       return;
     }
     h.words = h.words.map((w, i) => {

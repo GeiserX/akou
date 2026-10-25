@@ -21,7 +21,9 @@
  *   answer that does not spell the text exactly fails the unit, and its words keep no times: a time
  *   is never guessed.
  *
- * A failed unit costs only its times; the words and the text are Qwen's either way.
+ * A failed unit costs only its times; the words and the text are Qwen's either way. A unit that
+ * runs past its deadline stops the aligner for the rest of the job (`Aligner` lives one job): a
+ * hung or starved GPU would make every later unit wait out its own deadline for no times.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -40,16 +42,23 @@ export interface AlignerOptions {
   /** Told of every process started (`true`) and ended (`false`), so a host can kill orphans. */
   onChild?(pid: number, alive: boolean): void;
   /**
-   * Seconds a unit may take: this plus twice its length. Default 30. The first unit of a process
-   * gets `FIRST_RUN_EXTRA_S` more: CrispASR's first run on a machine compiles its GPU shaders.
+   * Seconds a unit may take: this plus twice its length. Default 30. The first unit this process
+   * runs on a model gets `FIRST_RUN_EXTRA_S` more, once, not once per job: CrispASR's first run on
+   * a machine compiles its GPU shaders.
    */
   baseTimeoutS?: number;
   /** The first unit's extra seconds; default `FIRST_RUN_EXTRA_S`. */
   firstRunExtraS?: number;
 }
 
-/** What one unit came back with: a start and an end per word, or why there are none. */
-export type Alignment = { times: [number, number][] } | { error: string };
+/**
+ * What one unit came back with: a start and an end per word, or why there are none. `timedOut`
+ * marks a unit past its deadline, or one after it in the same job, which never ran.
+ */
+export type Alignment = { times: [number, number][] } | { error: string; timedOut?: true };
+
+/** The models a first run was already given its extra time for, in this process. */
+const warmed = new Set<string>();
 
 /** Extra seconds for the first unit: shader compilation took 21 s idle and minutes under load. */
 export const FIRST_RUN_EXTRA_S = 300;
@@ -123,7 +132,8 @@ export function joinAligned(words: readonly string[], raw: unknown, seconds: num
 /** Runs CrispASR's aligner over units, one child process each. */
 export class Aligner {
   readonly id: string;
-  private runs = 0;
+  /** Set once a unit timed out: the units after it are not run. */
+  private stopped: string | undefined;
 
   constructor(private readonly o: AlignerOptions) {
     this.id = o.id;
@@ -132,6 +142,7 @@ export class Aligner {
   /** Times for `words` (Qwen's, in order) over `samples`, seconds into `samples`. */
   async align(samples: Float32Array, words: readonly string[]): Promise<Alignment> {
     const seconds = samples.length / ASR_RATE;
+    if (this.stopped) return { error: this.stopped, timedOut: true };
     let command: readonly string[];
     try {
       command = typeof this.o.command === "function" ? this.o.command() : this.o.command;
@@ -154,11 +165,12 @@ export class Aligner {
       }
       const pid = proc.pid;
       this.o.onChild?.(pid, true);
+      const first = !warmed.has(this.o.model);
+      warmed.add(this.o.model);
       const limitS =
         (this.o.baseTimeoutS ?? 30) +
         2 * seconds +
-        (this.runs === 0 ? (this.o.firstRunExtraS ?? FIRST_RUN_EXTRA_S) : 0);
-      this.runs++;
+        (first ? (this.o.firstRunExtraS ?? FIRST_RUN_EXTRA_S) : 0);
       let timedOut = false;
       // clock: the unit's deadline; past it the process is killed and the unit keeps no times.
       const timer = setTimeout(() => {
@@ -179,7 +191,10 @@ export class Aligner {
       ]);
       clearTimeout(timer);
       this.o.onChild?.(pid, false);
-      if (timedOut) return { error: `the aligner took longer than ${Math.round(limitS)} s` };
+      if (timedOut) {
+        this.stopped = `the aligner took longer than ${Math.round(limitS)} s on an earlier piece`;
+        return { error: `the aligner took longer than ${Math.round(limitS)} s`, timedOut: true };
+      }
       if (code !== 0) {
         const tail = err.trim().split("\n").slice(-2).join(" | ").slice(0, 200);
         return { error: `the aligner exited with ${code}${tail ? `: ${tail}` : ""}` };
