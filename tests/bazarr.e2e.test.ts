@@ -13,7 +13,13 @@ import { join } from "node:path";
 import { DETECT_PCM_BYTES } from "../src/main/api/routes/bazarr.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
-import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import {
+  CANARY_1B_V2,
+  hostPlatform,
+  NEMOTRON,
+  RECOGNIZER,
+  WHISPER_LARGE_V3,
+} from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -351,6 +357,30 @@ describe("[SV-C3] refusals Bazarr cannot read, answered as akou's JSON", () => {
       await rig.close();
       reg.stop();
       t.cleanup();
+    }
+  });
+
+  test("[SV-C3] task=translate with language=auto keeps auto, so Whisper detects, while server.default_language is fixed", async () => {
+    const rig = await appRig({
+      settings: { ...SERVER, "server.bazarr": true, "server.default_language": "es" },
+    });
+    try {
+      const done = (model: string) =>
+        rig.logs.filter((l) => l.msg.includes("job.done") && l.msg.includes(`model ${model}`))
+          .length;
+      const auto = await bazarr(
+        rig,
+        "/asr?task=translate&language=auto&output=srt&encode=false",
+        LATE,
+      );
+      expect(auto.status).toBe(200);
+      expect([done(WHISPER_LARGE_V3), done(CANARY_1B_V2)]).toEqual([1, 0]);
+      // Positive control: no language takes the server's, Spanish, which Canary reads.
+      const none = await bazarr(rig, "/asr?task=translate&output=srt&encode=false", LATE);
+      expect(none.status).toBe(200);
+      expect([done(WHISPER_LARGE_V3), done(CANARY_1B_V2)]).toEqual([1, 1]);
+    } finally {
+      await rig.close();
     }
   });
 

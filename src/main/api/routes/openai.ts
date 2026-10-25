@@ -384,6 +384,13 @@ async function transcriptions(c: RouteContext<ApiApp>, task: JobTask): Promise<R
     if (!RESPONSE_FORMATS.includes(format)) {
       throw bad("response_format", `response_format is one of ${RESPONSE_FORMATS.join(", ")}`);
     }
+    // A translation has no speakers to label, and OpenAI's translation endpoint has no such format.
+    if (task === "translate" && format === "diarized_json") {
+      throw bad(
+        "response_format",
+        "a translation's response_format is json, text, srt, vtt or verbose_json",
+      );
+    }
     const granularities = list(form, "timestamp_granularities");
     for (const g of granularities) {
       if (g !== "word" && g !== "segment") {

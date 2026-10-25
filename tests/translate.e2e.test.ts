@@ -158,6 +158,9 @@ describe("task=translate through the API, with fakes", () => {
     expect(JSON.parse(json.text)).toMatchObject({ text: "hello world" });
     const tlh = await send({ language: "tlh" });
     expect([tlh.status, JSON.parse(tlh.text).error]).toEqual([422, "unsupported_language"]);
+    // A translation has no speakers: diarized_json is refused rather than labelled a transcript.
+    const diarized = await send({ language: "es", response_format: "diarized_json" });
+    expect([diarized.status, JSON.parse(diarized.text).field]).toEqual([422, "response_format"]);
   });
 
   test("GET /v1/server: capabilities.translate and the source languages", async () => {

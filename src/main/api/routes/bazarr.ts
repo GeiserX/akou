@@ -241,7 +241,9 @@ async function asr(c: Ctx): Promise<Response> {
   }
   c.query.raw("video_file");
   const fallback = c.app.config().settings["server.default_language"];
-  const language = asked === "" || asked === "auto" ? fallback : asked;
+  // An explicit `auto` stays for a translation, which Whisper then detects; a transcription takes
+  // the server's language for it, as before.
+  const language = asked === "" || (asked === "auto" && task !== "translate") ? fallback : asked;
   const jobs = jobsOf(c);
   const me = who(c);
   requireQueueRoom(jobs, me.id, null);
