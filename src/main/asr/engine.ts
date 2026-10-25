@@ -314,9 +314,10 @@ export type ModelSpec = (
 ) & { final?: LlamaEngineSpec; fusion?: FusionSpec; translate?: TranslateSpec };
 
 /** The engine of a translate job: Canary or Whisper on transcribe-cpp, or a test module's. */
-export type TranslateSpec =
+export type TranslateSpec = (
   | { kind: "transcribe-cpp"; engine: string; modelsDir: string }
-  | { kind: "module"; path: string; engine: string; options?: unknown };
+  | { kind: "module"; path: string; engine: string; options?: unknown }
+) & { /** Default transcribe-cpp's `auto`; see `translateBackend`. */ backend?: "cpu" };
 
 /**
  * One engine of the N-engine pass, as the Worker builds it: the model set's recognizer (Parakeet),

@@ -2168,6 +2168,7 @@ async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEn
           task: "translate",
           signal: () => jobSignal,
           log,
+          ...(t.backend ? { backend: t.backend } : {}),
         });
       } else {
         const mod = (await import(t.path)) as {

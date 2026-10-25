@@ -47,10 +47,12 @@
  *   `task: translate` and `targetLanguage: en` with its source forced, as it must be told one;
  *   Whisper is sent `task: translate`, forced when the job names a language and left to detect it
  *   on `auto`. The hypothesis's `lang` is the source the engine heard, never `en`. `translateEngine`
- *   picks between them: on four 10-minute film clips Canary matched Whisper's chrF (48.4 against
- *   48.9, p=0.17), ran 8 to 11 times faster on Metal and wrote nothing over music, where Whisper
- *   invented ten lines in 30 minutes; Whisper is the one that reads every other language, and the
- *   only one that can detect the source.
+ *   picks between them, trading accuracy for speed: on three 10-minute European film clips
+ *   Whisper scored significantly higher BLEU (24.4 against 22.1, p=0.04) with no significant chrF
+ *   difference (48.9 against 48.4, p=0.17), while Canary ran 8.8 to 9.6 times faster on Metal,
+ *   used 1.4 GB against 2.3 GB and wrote nothing over music, where Whisper invented ten lines in 30
+ *   minutes; Whisper is the one that reads every other language, and the only one that can detect
+ *   the source.
  * - **The load is counted on the native flag** (`nativeLoadAsync`): a Worker stopped while a model
  *   loads frees it before it parks. A half-loaded model left behind made the process abort on
  *   exit on Metal (`GGML_ASSERT([rsets->data count] == 0)`).
@@ -169,6 +171,17 @@ export function translateEngine(lang: string, model?: string): string | null {
   if (model === CANARY_1B_V2 || model === WHISPER_LARGE_V3) return reads(model) ? model : null;
   if (reads(CANARY_1B_V2)) return CANARY_1B_V2;
   return reads(WHISPER_LARGE_V3) ? WHISPER_LARGE_V3 : null;
+}
+
+/**
+ * The backend a translate engine loads on, given the GPU `asr.accelerator` chose for Qwen: the CPU
+ * where that is Vulkan or the CPU, else transcribe-cpp's `auto` (Metal on Apple silicon). On an
+ * Intel UHD 770 Vulkan was slower than the CPU for both engines (Whisper RTF 10.2 against 3.2,
+ * Canary 0.31 against 0.26; docs/research/asr-architecture.md §4.1), and with no GPU chosen `auto`
+ * could still pick a Vulkan device the operator turned off.
+ */
+export function translateBackend(accelerator: string): "cpu" | undefined {
+  return accelerator === "vulkan" || accelerator === "cpu" ? "cpu" : undefined;
 }
 
 /** Every language some engine here translates into English from, sorted. */

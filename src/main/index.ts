@@ -148,6 +148,7 @@ import {
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import { QwenEngine } from "./asr/qwen.ts";
 import { availableMemory, StartWarm, type WarmSetting } from "./asr/start-warm.ts";
+import { translateBackend } from "./asr/transcribe-cpp.ts";
 import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
@@ -3066,6 +3067,8 @@ export class AkouApp implements ApiApp {
     // for the VAD and the speaker labels; a test's module stands in with its `createEngine`.
     if (recognizer === CANARY_1B_V2 || recognizer === WHISPER_LARGE_V3) {
       if (given === null) return null;
+      const backend = translateBackend(this.llamaPlan().accelerator);
+      const on = backend ? { backend } : {};
       if (given?.kind === "module") {
         return {
           ...given,
@@ -3074,6 +3077,7 @@ export class AkouApp implements ApiApp {
             path: given.path,
             engine: recognizer,
             options: given.options,
+            ...on,
           },
         };
       }
@@ -3083,6 +3087,7 @@ export class AkouApp implements ApiApp {
           kind: "transcribe-cpp",
           engine: recognizer,
           modelsDir: this.cfg.settings["asr.modelsDir"],
+          ...on,
         },
       };
     }
