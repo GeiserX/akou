@@ -162,23 +162,39 @@ describe("[bun#45252 / transcribe-cpp] a load that resolves later", () => {
     return {
       load,
       disposed,
-      dispose: (m: { id: number }) => disposed.push(m.id),
+      // As transcribe-cpp's dispose: the native free is queued on the model lock, a later microtask.
+      dispose: (m: { id: number }) => {
+        const prev = Promise.resolve();
+        void prev.then(() => disposed.push(m.id));
+      },
       settle: (id: number) => settle({ id }),
     };
+  }
+
+  /** A park that, like the real one, never yields again: it records what was freed before it. */
+  function parkRecording(disposed: number[]) {
+    const seen: number[][] = [];
+    const fn = (): never => {
+      seen.push([...disposed]);
+      throw new Parked();
+    };
+    return { fn, seen };
   }
 
   test("an async load counted on the flag; a stop during it disposes the model and parks", async () => {
     const f = nativeFlag();
     const w = new FakeWorker();
     const l = slowLoad();
-    const p = nativeLoadAsync(l.load, l.dispose, f, park);
+    const pk = parkRecording(l.disposed);
+    const p = nativeLoadAsync(l.load, l.dispose, f, pk.fn);
     // Counted across the await: a stop now waits for the park instead of terminating inside it.
     expect(inNativeLoad(f)).toBe(true);
     expect(stopWorker(w, f)).toBe(false);
     expect(w.terminated).toBe(0);
     l.settle(7);
     await expect(p).rejects.toBeInstanceOf(Parked);
-    expect(l.disposed).toEqual([7]);
+    // The deferred free ran before the park, which never yields to let it run afterwards.
+    expect(pk.seen).toEqual([[7]]);
     expect(inNativeLoad(f)).toBe(false);
   });
 

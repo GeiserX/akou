@@ -77,6 +77,10 @@ export function nativeLoad<T>(
  * the flag until it settles. A stop asked before it starts skips it; one asked during it disposes
  * the model it got, which the parked Worker would otherwise hold until the process exits, then
  * parks. Without a flag it just runs `load`. `park` is for tests.
+ *
+ * transcribe-cpp's `dispose()` frees nothing itself: it queues the native free on the model's lock,
+ * which runs on a later microtask. A parked Worker never yields again, so the free gets one
+ * macrotask to run before the park, still counted on the flag, so no terminate lands inside it.
  */
 export async function nativeLoadAsync<T>(
   load: () => Promise<T>,
@@ -90,17 +94,17 @@ export async function nativeLoadAsync<T>(
   try {
     if (Atomics.load(f, STOP) === 0) got = { model: await load() };
   } finally {
-    Atomics.sub(f, DEPTH, 1);
-    if (Atomics.load(f, STOP) === 1) {
-      if (got) {
-        try {
-          dispose(got.model);
-        } catch {
-          // Its memory is lost either way; the Worker still parks.
-        }
+    if (got && Atomics.load(f, STOP) === 1) {
+      try {
+        dispose(got.model);
+      } catch {
+        // Its memory is lost either way; the Worker still parks.
       }
-      park(f);
+      // clock: a zero delay only yields one macrotask, so the queued free runs; no time is read.
+      await new Promise((r) => setTimeout(r, 0));
     }
+    Atomics.sub(f, DEPTH, 1);
+    if (Atomics.load(f, STOP) === 1) park(f);
   }
   return got ? got.model : park(f);
 }
