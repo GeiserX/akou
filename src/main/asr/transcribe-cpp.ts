@@ -43,6 +43,19 @@
  *   for this platform, a missing or corrupt file) throws `engine_unavailable`, `fatal`, as qwen.ts
  *   marks a llama-server that is down. A crash inside native code is no exception: it ends the
  *   whole process, a Worker's thread included, and only a separate process would contain it.
+ * - **Translation into English** (`task: "translate"`, a job's `task=translate`): Canary is sent
+ *   `task: translate` and `targetLanguage: en` with its source forced, as it must be told one;
+ *   Whisper is sent `task: translate`, forced when the job names a language and left to detect it
+ *   on `auto`. The hypothesis's `lang` is the source the engine heard, never `en`. `translateEngine`
+ *   picks between them, trading accuracy for speed: on three 10-minute European film clips
+ *   Whisper scored significantly higher BLEU (24.4 against 22.1, p=0.04) with no significant chrF
+ *   difference (48.9 against 48.4, p=0.17), while Canary ran 8.8 to 9.6 times faster on Metal,
+ *   used 1.4 GB against 2.3 GB and wrote nothing over music, where Whisper invented ten lines in 30
+ *   minutes; Whisper is the one that reads every other language, and the only one that can detect
+ *   the source.
+ * - **The load is counted on the native flag** (`nativeLoadAsync`): a Worker stopped while a model
+ *   loads frees it before it parks. A half-loaded model left behind made the process abort on
+ *   exit on Metal (`GGML_ASSERT([rsets->data count] == 0)`).
  */
 
 import type {
@@ -62,6 +75,7 @@ import {
   WHISPER_LARGE_V3,
   WHISPER_LARGE_V3_FILE,
 } from "./models.ts";
+import { nativeLoadAsync } from "./native-guard.ts";
 
 /** The model families this file runs. */
 export type TranscribeFamily = "whisper" | "canary";
@@ -127,8 +141,13 @@ export interface TranscribeCppOptions {
   backend?: Backend;
   /** Test seam; default the real binding. */
   binding?: () => Promise<TranscribeBinding>;
-  /** Aborts the decode in flight: its caller gave it up. */
-  signal?: AbortSignal;
+  /**
+   * Aborts the decode in flight: its caller gave it up. A function is read at each decode, so an
+   * engine kept across jobs follows the job it decodes now.
+   */
+  signal?: AbortSignal | (() => AbortSignal | undefined);
+  /** Default `transcribe`; `translate` decodes into English (Canary's AST, Whisper's translate). */
+  task?: "transcribe" | "translate";
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -136,6 +155,39 @@ export interface TranscribeCppOptions {
 function base(tag: string): string {
   return tag.toLowerCase().split(/[-_]/)[0] as string;
 }
+
+/**
+ * The engine that translates a job in `lang` into English, or null when none here reads it:
+ * Canary-1b-v2 for the languages it reads, Whisper large-v3 for the rest and for `auto` (Canary
+ * must be told its source). `model`, when it names one of the two, is used instead, and null when
+ * it cannot read `lang`.
+ */
+export function translateEngine(lang: string, model?: string): string | null {
+  const code = lang === "auto" ? "auto" : base(lang);
+  const reads = (id: string) =>
+    id === CANARY_1B_V2
+      ? code !== "auto" && PARAKEET_LANGUAGES.includes(code)
+      : code === "auto" || WHISPER_LANGUAGES.includes(code);
+  if (model === CANARY_1B_V2 || model === WHISPER_LARGE_V3) return reads(model) ? model : null;
+  if (reads(CANARY_1B_V2)) return CANARY_1B_V2;
+  return reads(WHISPER_LARGE_V3) ? WHISPER_LARGE_V3 : null;
+}
+
+/**
+ * The backend a translate engine loads on, given the GPU `asr.accelerator` chose for Qwen: the CPU
+ * where that is Vulkan or the CPU, else transcribe-cpp's `auto` (Metal on Apple silicon). On an
+ * Intel UHD 770 Vulkan was slower than the CPU for both engines (Whisper RTF 10.2 against 3.2,
+ * Canary 0.31 against 0.26; docs/research/asr-architecture.md §4.1), and with no GPU chosen `auto`
+ * could still pick a Vulkan device the operator turned off.
+ */
+export function translateBackend(accelerator: string): "cpu" | undefined {
+  return accelerator === "vulkan" || accelerator === "cpu" ? "cpu" : undefined;
+}
+
+/** Every language some engine here translates into English from, sorted. */
+export const TRANSLATE_LANGUAGES: readonly string[] = [
+  ...new Set([...PARAKEET_LANGUAGES, ...WHISPER_LANGUAGES]),
+].sort();
 
 export class TranscribeCppEngine implements FinalEngine {
   readonly id: string;
@@ -186,7 +238,11 @@ export class TranscribeCppEngine implements FinalEngine {
     this.loading ??= (async () => {
       try {
         const binding = await (this.o.binding ?? (() => nativeBinding(this.o.log)))();
-        const m = await binding.load(this.o.model, { backend: this.o.backend ?? "auto" });
+        // Counted on the Worker's native flag: one stopped meanwhile frees the model, then parks.
+        const m = await nativeLoadAsync(
+          () => binding.load(this.o.model, { backend: this.o.backend ?? "auto" }),
+          (x) => x.dispose(),
+        );
         this.model = m;
         return m;
       } catch (err) {
@@ -287,13 +343,18 @@ export class TranscribeCppEngine implements FinalEngine {
   ): Promise<TranscriptionResult> {
     const opts: TranscribeOptions = { timestamps: "none" };
     if (lang) opts.language = this.o.family === "whisper" ? (WHISPER_CODE[lang] ?? lang) : lang;
+    if (this.o.task === "translate") {
+      opts.task = "translate";
+      if (this.o.family === "canary") opts.targetLanguage = "en";
+    }
     if (family) opts.family = family;
-    if (this.o.signal) opts.signal = this.o.signal;
+    const signal = typeof this.o.signal === "function" ? this.o.signal() : this.o.signal;
+    if (signal) opts.signal = signal;
     let r: TranscriptionResult;
     try {
       r = await m.transcribe(samples, opts);
     } catch (err) {
-      if (this.o.signal?.aborted) throw new Error(`${this.id}: the decode was given up`);
+      if (signal?.aborted) throw new Error(`${this.id}: the decode was given up`);
       const e = err as Error;
       throw new TranscribeCppError(
         `${this.id} refused the unit: ${e.name}: ${e.message}`,

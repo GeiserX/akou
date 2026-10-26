@@ -6718,7 +6718,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`.",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords and languages in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]`, `languages[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `languages[]` (ISO 639 codes, for example `es` and `en`) bounds an `auto` language for this job as `asr.languages` does for the server, and wins over it: an answer in another language is replaced by the listed language's forced decode that scores higher, and a no-speech answer stays empty; a code no engine here can choose answers 422 `unsupported_language` (`GET /v1/server` `bound_languages` lists the ones it can). `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which). `wait` (query, up to 60 s) holds the answer until the job ends: 200 with the job and, when it is done, its `result`; a job still queued or running when the wait runs out answers as without `wait`. `keep_audio=true` keeps the upload after the job ends (`GET /v1/jobs/{id}/audio`, the job's `keep_audio` says so) and exempts the job, its result and its events from `server.retain_days`: it goes only when a client deletes it. Like `metadata`, it is not compared on a repeated `Idempotency-Key`: a retry gets the first job, so read its `keep_audio`. `task=translate` decodes the speech into English instead of transcribing it: `language` is the source (an ISO code, or `auto`), and the engine is `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`, which also detects the source on `auto`; `model` may name either, any other model answers 422 `bad_field`, `preset` is not used, and a language neither engine reads (or `canary-1b-v2` with `auto`) answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). Its result has `language` `en`, `source_language` and `task` `translate`; its segments keep their times, its words have none. A changed `task` on a repeated `Idempotency-Key` answers 422 `idempotency_conflict`.",
         "parameters": [
           {
             "name": "wait",
@@ -6786,6 +6786,9 @@
                   },
                   "keep_audio": {
                     "type": "boolean"
+                  },
+                  "task": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -7806,6 +7809,104 @@
         "x-akou-door": "compat"
       }
     },
+    "/v1/audio/translations": {
+      "post": {
+        "operationId": "openai.translate",
+        "tags": [
+          "openai"
+        ],
+        "description": "The OpenAI translation endpoint: a file in, its speech in English out, in one request. `model` names `canary-1b-v2` or `whisper-large-v3`, and anything else (`whisper-1`) leaves the choice to the language: `canary-1b-v2` for the 25 languages it reads, else `whisper-large-v3`. `language`, an akou extension, names the source; absent or `auto`, `whisper-large-v3` detects it. A language neither engine reads, or `canary-1b-v2` with `auto`, answers 422 `unsupported_language` (`GET /v1/server` `translate_languages` lists the ones they read). `prompt` is Whisper's initial prompt, and applies only when Whisper is the engine: Canary takes no prompt and drops it. `temperature` is read and ignored; the transcription's other fields (`stream`, `interactive`, `timestamp_granularities[]` and the rest) answer 400 `unknown_field`. `response_format` is json, text, srt, vtt or verbose_json, which says `task` `translate` and `language` `en`; the segments keep their times. The job runs through the same queue as `POST /v1/audio/transcriptions` and is deleted once the answer is sent; a caller that hangs up cancels it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "response_format": {
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_multipart.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.cancelled.preset_unavailable"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.multipart_required"
+          },
+          "422": {
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long.unsupported_language"
+          },
+          "429": {
+            "$ref": "#/components/responses/429.queue_full"
+          },
+          "499": {
+            "$ref": "#/components/responses/499.cancelled"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs",
+        "x-akou-door": "compat"
+      }
+    },
     "/v1/live": {
       "get": {
         "operationId": "live.open",
@@ -7852,17 +7953,18 @@
         "tags": [
           "bazarr"
         ],
-        "description": "Bazarr's whisper transcription request: a file part `audio_file` in, a subtitle out as text. Bazarr sends `encode=false` and raw 16 kHz mono 16-bit PCM with no header; `encode=true` takes any audio or video file. `output` is srt (the default Bazarr asks for), vtt or txt; cues hold at most 42 characters and keep the audio's own times. The job runs `server.default_model` in `language`, else `server.default_language`. `task=translate` is refused with 400. Needs no key, and answers only while `server.bazarr` is on (404 otherwise); a key sent as a bearer token is honoured. A caller that hangs up cancels its job, and the job is deleted once the answer is sent.",
+        "description": "Bazarr's whisper transcription request: a file part `audio_file` in, a subtitle out as text. Bazarr sends `encode=false` and raw 16 kHz mono 16-bit PCM with no header; `encode=true` takes any audio or video file. `output` is srt (the default Bazarr asks for), vtt or txt; cues hold at most 42 characters and keep the audio's own times. The job runs `server.default_model` in `language`, else `server.default_language`. `task=translate` gives the subtitle in English: `canary-1b-v2` translates from the 25 languages it reads, `whisper-large-v3` from the rest and from `auto`, and a language neither reads answers 422 `unsupported_language`. Needs no key, and answers only while `server.bazarr` is on (404 otherwise); a key sent as a bearer token is honoured. A caller that hangs up cancels its job, and the job is deleted once the answer is sent.",
         "parameters": [
           {
             "name": "task",
             "in": "query",
             "required": false,
-            "description": "Only `transcribe`; `translate` is refused with 400.",
+            "description": "`transcribe`: the subtitle in the language spoken; `translate`: in English.",
             "schema": {
               "type": "string",
               "enum": [
-                "transcribe"
+                "transcribe",
+                "translate"
               ],
               "default": "transcribe"
             }
@@ -7966,7 +8068,7 @@
             "$ref": "#/components/responses/415.multipart_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long.unsupported_language"
           },
           "429": {
             "$ref": "#/components/responses/429.queue_full"
@@ -8088,7 +8190,7 @@
             "$ref": "#/components/responses/415.multipart_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long"
+            "$ref": "#/components/responses/422.bad_field.decode_failed.missing_field.too_long.unsupported_language"
           },
           "429": {
             "$ref": "#/components/responses/429.queue_full"

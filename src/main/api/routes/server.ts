@@ -33,6 +33,7 @@
 
 import { fusionChoice } from "../../asr/fusion.ts";
 import { RECOGNIZER } from "../../asr/models.ts";
+import { TRANSLATE_LANGUAGES } from "../../asr/transcribe-cpp.ts";
 import type { QueueStats } from "../../server/jobs.ts";
 import { hardwareChoice, type ModelChoice } from "../../server/model-store.ts";
 import { PRESET_NAMES, PRESETS } from "../../server/presets.ts";
@@ -202,9 +203,13 @@ export function serverRoutes(r: Router<ApiApp>): void {
           wyoming: (c.app.wyomingPort?.() ?? null) !== null,
           // SV-C3: Bazarr's open routes answer only while `server.bazarr` is on.
           bazarr: has("POST", "/asr") && c.app.config().settings["server.bazarr"] === true,
+          // A job's `task=translate` decodes into English (`translate_languages` are the sources).
+          translate: has("POST", "/jobs"),
         },
         // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
         bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],
+        // The ISO codes a translate job's `language` may name: the ones Canary or Whisper reads.
+        translate_languages: has("POST", "/jobs") ? TRANSLATE_LANGUAGES : [],
         // SV-C2: the port Home Assistant's Wyoming integration connects to, null while it is off.
         wyoming_port: c.app.wyomingPort?.() ?? null,
         // SV-C4: where this API's description is, once the route serving it exists.

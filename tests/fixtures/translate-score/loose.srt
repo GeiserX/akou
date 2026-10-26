@@ -1,0 +1,35 @@
+1
+00:00:02,000 --> 00:00:05,000
+The train goes at nine.
+
+2
+00:00:07,000 --> 00:00:10,000
+We must buy the tickets.
+
+3
+00:00:30,000 --> 00:00:34,000
+My sister lives by the bridge.
+
+4
+00:00:50,000 --> 00:00:53,000
+Take a coat, night is cold.
+
+5
+00:01:05,000 --> 00:01:08,000
+There is a market on Saturday.
+
+6
+00:01:20,000 --> 00:01:24,000
+The keys are on the table.
+
+7
+00:01:40,000 --> 00:01:44,000
+Phone me at the station.
+
+8
+00:02:05,000 --> 00:02:09,000
+On Sunday the library shuts early.
+
+9
+00:02:20,000 --> 00:02:22,000
+Episode nine.

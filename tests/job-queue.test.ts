@@ -226,6 +226,36 @@ describe("SV-Q2: priority, then submit order, kept across a restart", () => {
     });
     expect(j.priority).toBe(0);
   });
+
+  test("a jobs.db from before task gains the column, and its jobs read as transcribe", () => {
+    const t = tempDir("akou-queue-old-task-");
+    cleanups.push(t.cleanup);
+    mkdirSync(join(t.dir, "audio"));
+    const path = join(t.dir, JOBS_DB);
+    const base = {
+      key_id: "key_a",
+      preset: "fast",
+      language: "auto",
+      keywords: [],
+      diarize: false,
+      callback_url: null,
+      metadata: null,
+      idempotency_key: null,
+      file_sha256: "0".repeat(64),
+      audio: join(t.dir, "audio", "x.upload"),
+    };
+    const s = new JobStore(path);
+    const old = s.submit(base).job;
+    s.close();
+    const raw = new Database(path);
+    raw.run("ALTER TABLE jobs DROP COLUMN task");
+    raw.close();
+    const again = new JobStore(path);
+    cleanups.push(() => again.close());
+    expect(again.job(old.id)?.task).toBe("transcribe");
+    const fresh = again.submit({ ...base, language: "es", task: "translate" }).job;
+    expect([fresh.task, again.job(fresh.id)?.task]).toEqual(["translate", "translate"]);
+  });
 });
 
 describe("SV-Q3: the queue limits, and the refusal a client can wait out", () => {

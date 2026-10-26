@@ -40,7 +40,13 @@ import {
   QWEN_ASR,
 } from "../src/main/asr/llama-catalog.ts";
 import { llamaPlan } from "../src/main/asr/llama-server.ts";
-import { ACCELERATORS, MODELS, PLATFORMS } from "../src/main/asr/models.ts";
+import {
+  ACCELERATORS,
+  CANARY_1B_V2,
+  MODELS,
+  PLATFORMS,
+  WHISPER_LARGE_V3,
+} from "../src/main/asr/models.ts";
 import { validateSetting } from "../src/main/config/schema.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -696,6 +702,27 @@ describe("GET /v1/server reports the accelerator", () => {
     // The best preset's Qwen runs there too: on the image's llama-server, on the Vulkan GPU.
     const engines = b.engines as { id: string; provider: string }[];
     expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("vulkan");
+  });
+
+  test("[translate] a translate engine loads on the CPU where Qwen's GPU is Vulkan, auto on Metal", async () => {
+    /** The backend the translate spec of a Canary or Whisper job carries. */
+    const backend = (r: AppRig, id: string) =>
+      (
+        r.app as unknown as { jobModels(id: string): { translate?: { backend?: string } } }
+      ).jobModels(id).translate?.backend;
+    // On an Intel iGPU Vulkan was slower than the CPU for both (asr-architecture.md §4.1).
+    const intel = await rig(LIST_UHD770);
+    await server(intel);
+    expect(backend(intel, CANARY_1B_V2)).toBe("cpu");
+    expect(backend(intel, WHISPER_LARGE_V3)).toBe("cpu");
+    // asr.accelerator cpu keeps it off a Vulkan device transcribe-cpp's auto would pick.
+    expect((await intel.api("PATCH", "/config", { "asr.accelerator": "cpu" })).status).toBe(200);
+    expect(backend(intel, WHISPER_LARGE_V3)).toBe("cpu");
+    // Apple silicon: transcribe-cpp's auto, which is Metal.
+    const mac = await appRig({ accelerator: { probe: machine("darwin-arm64") } });
+    rigs.push(mac);
+    expect(backend(mac, CANARY_1B_V2)).toBeUndefined();
+    expect(mac.app.accelerator()?.active).toBe("metal");
   });
 
   test("the same box whose build opens nothing: the CPU, and why", async () => {

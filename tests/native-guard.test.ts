@@ -17,6 +17,7 @@ import {
   type NativeFlag,
   nativeFlag,
   nativeLoad,
+  nativeLoadAsync,
   type Stoppable,
   stopWorker,
 } from "../src/main/asr/native-guard.ts";
@@ -149,6 +150,79 @@ describe("[bun#45252] a Worker is never terminated inside a native load", () => 
 
   test("without a flag (in-thread, tests) a load just runs", () => {
     expect(nativeLoad(() => 42, null, park)).toBe(42);
+  });
+});
+
+describe("[bun#45252 / transcribe-cpp] a load that resolves later", () => {
+  /** A slow model load, settled by the test, and the models it disposed. */
+  function slowLoad() {
+    let settle: (m: { id: number }) => void = () => {};
+    const disposed: number[] = [];
+    const load = () => new Promise<{ id: number }>((r) => (settle = r));
+    return {
+      load,
+      disposed,
+      // As transcribe-cpp's dispose: the native free is queued on the model lock, a later microtask.
+      dispose: (m: { id: number }) => {
+        const prev = Promise.resolve();
+        void prev.then(() => disposed.push(m.id));
+      },
+      settle: (id: number) => settle({ id }),
+    };
+  }
+
+  /** A park that, like the real one, never yields again: it records what was freed before it. */
+  function parkRecording(disposed: number[]) {
+    const seen: number[][] = [];
+    const fn = (): never => {
+      seen.push([...disposed]);
+      throw new Parked();
+    };
+    return { fn, seen };
+  }
+
+  test("an async load counted on the flag; a stop during it disposes the model and parks", async () => {
+    const f = nativeFlag();
+    const w = new FakeWorker();
+    const l = slowLoad();
+    const pk = parkRecording(l.disposed);
+    const p = nativeLoadAsync(l.load, l.dispose, f, pk.fn);
+    // Counted across the await: a stop now waits for the park instead of terminating inside it.
+    expect(inNativeLoad(f)).toBe(true);
+    expect(stopWorker(w, f)).toBe(false);
+    expect(w.terminated).toBe(0);
+    l.settle(7);
+    await expect(p).rejects.toBeInstanceOf(Parked);
+    // The deferred free ran before the park, which never yields to let it run afterwards.
+    expect(pk.seen).toEqual([[7]]);
+    expect(inNativeLoad(f)).toBe(false);
+  });
+
+  test("positive control: a bare await of the load is not counted and never disposes", async () => {
+    const f = nativeFlag();
+    const w = new FakeWorker();
+    const l = slowLoad();
+    const p = l.load();
+    expect(inNativeLoad(f)).toBe(false);
+    // The host terminates at once, inside the load, and the model it then gets is never freed.
+    expect(stopWorker(w, f)).toBe(true);
+    l.settle(7);
+    await p;
+    expect(l.disposed).toEqual([]);
+  });
+
+  test("with no stop the model is returned and kept; without a flag a load just runs", async () => {
+    const f = nativeFlag();
+    const l = slowLoad();
+    const p = nativeLoadAsync(l.load, l.dispose, f, park);
+    l.settle(3);
+    expect(await p).toEqual({ id: 3 });
+    expect(l.disposed).toEqual([]);
+    expect(inNativeLoad(f)).toBe(false);
+    const m = slowLoad();
+    const q = nativeLoadAsync(m.load, m.dispose, null, park);
+    m.settle(4);
+    expect(await q).toEqual({ id: 4 });
   });
 });
 

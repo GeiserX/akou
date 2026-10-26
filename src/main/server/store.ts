@@ -83,6 +83,8 @@ export interface Job {
    * response and akou removes the job after it, so it writes nothing to the feed (SV-E1).
    */
   quiet: boolean;
+  /** `translate`: the speech is decoded into English (`language` is its source); else `transcribe`. */
+  task: JobTask;
   language: string;
   keywords: string[];
   /** The ISO codes an `auto` language may come out as (`languages[]`); empty: `asr.languages`. */
@@ -123,8 +125,13 @@ export interface Job {
  * default fills a gap (SV-J2). `metadata`, `callback_url` and `priority` are not among them: they
  * change what is done with the result, never the result.
  */
+/** What a job makes of its speech: a transcript in the language spoken, or English. */
+export type JobTask = "transcribe" | "translate";
+
 export interface JobRequest {
   preset: string;
+  /** The `task` field; absent on a job from before it existed, which compares as `transcribe`. */
+  task?: JobTask;
   /** The `model` field, or null when the request named none. */
   model: string | null;
   /** The `language` field, `auto` when the request sent none. */
@@ -230,7 +237,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   languages TEXT,
   quiet INTEGER NOT NULL DEFAULT 0,
   keep_audio INTEGER NOT NULL DEFAULT 0,
-  kept TEXT
+  kept TEXT,
+  task TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -346,6 +354,7 @@ function jobOf(r: Row): Job {
     priority: (r.priority as number | null) ?? 0,
     interactive: r.interactive === 1,
     quiet: r.quiet === 1,
+    task: r.task === "translate" ? "translate" : "transcribe",
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     languages: typeof r.languages === "string" ? JSON.parse(r.languages) : [],
@@ -410,6 +419,8 @@ export interface NewJob {
   interactive?: boolean;
   /** A synchronous call, which writes no feed event. Default false. */
   quiet?: boolean;
+  /** Default `transcribe`. */
+  task?: JobTask;
   language: string;
   keywords: string[];
   /** Default none: `asr.languages` bounds an `auto` language. */
@@ -468,7 +479,8 @@ export class JobStore {
       (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
     );
     // One from before job names gains the title column; its jobs have none. One from before
-    // `languages[]` gains that column; its jobs are bounded by `asr.languages`.
+    // `languages[]` gains that column; its jobs are bounded by `asr.languages`. One from before
+    // `task` gains that column; its jobs transcribe.
     for (const c of [
       "model",
       "model_source",
@@ -479,6 +491,7 @@ export class JobStore {
       "title",
       "languages",
       "kept",
+      "task",
     ]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
@@ -531,8 +544,8 @@ export class JobStore {
       this.db
         .query(
           `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive, quiet,
-            language, keywords, languages, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, keep_audio, created_at)
-           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            language, keywords, languages, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, keep_audio, created_at, task)
+           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -557,6 +570,7 @@ export class JobStore {
           j.audio,
           j.keep_audio ? 1 : 0,
           now,
+          j.task === "translate" ? "translate" : null,
         );
       return { job: this.job(id) as Job, existing: false };
     })();

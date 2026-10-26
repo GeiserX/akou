@@ -67,6 +67,7 @@ import {
   type ModelSet,
   type ModelSpec,
   type PreparedHotwords,
+  type TranslateSpec,
   type WordHyp,
 } from "./engine.ts";
 import type { FinalStep } from "./final-text.ts";
@@ -2143,8 +2144,10 @@ type FromJob =
 
 /** The job Worker keeps its models between jobs: loaded once per Worker, keyed by the spec. */
 let jobModels: { key: string; set: Promise<ModelSet> } | null = null;
-/** And its llama-server engine, kept running between jobs, keyed by its own spec. */
-let jobEngine: { key: string; engine: QwenEngine } | null = null;
+/** And its llama-server or translate engine, kept between jobs, keyed by its own spec. */
+let jobEngine: { key: string; engine: FinalEngine } | null = null;
+/** The job running now's signal: aborted when the host stops it, so a decode in flight ends. */
+let jobSignal: AbortSignal | undefined;
 
 /**
  * Frees the models and the engine the Worker keeps, then says so. A terminated Worker never runs
@@ -2176,23 +2179,62 @@ function engineKey(spec: LlamaEngineSpec | undefined): string {
   return JSON.stringify(rest);
 }
 
+/** The kept engine's key for a job: Qwen's spec without its per-job aligner, else the translate spec. */
+function jobKey(models: ToJob["models"]): string {
+  if (models.final) return engineKey(models.final);
+  return models.translate ? JSON.stringify(models.translate) : "";
+}
+
 async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEngine | undefined> {
-  const spec = m.models.final;
-  const key = engineKey(spec);
+  const spec = m.models.final ?? m.models.translate;
+  const key = jobKey(m.models);
   if (jobEngine && jobEngine.key !== key) {
     await jobEngine.engine.unload();
     jobEngine = null;
   }
   if (!spec) return undefined;
-  const { createLlamaEngine, alignerOf } = await import("./llama-server.ts");
-  const hooks = {
-    onChild: (pid: number, alive: boolean) => reply({ type: "child", pid, alive }),
-    log: (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg }),
-  };
-  if (!jobEngine) jobEngine = { key, engine: createLlamaEngine(spec, hooks) };
-  const a = alignerOf(spec, hooks);
-  jobEngine.engine.setAligner(a.aligner, a.untimed);
+  const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
+  if (m.models.final) {
+    const { createLlamaEngine, alignerOf } = await import("./llama-server.ts");
+    const hooks = {
+      onChild: (pid: number, alive: boolean) => reply({ type: "child", pid, alive }),
+      log,
+    };
+    if (!jobEngine) jobEngine = { key, engine: createLlamaEngine(m.models.final, hooks) };
+    const a = alignerOf(m.models.final, hooks);
+    // The key names a llama-server spec, so the kept engine is the Qwen one.
+    (jobEngine.engine as QwenEngine).setAligner(a.aligner, a.untimed);
+    return jobEngine.engine;
+  }
+  if (!jobEngine) {
+    const t = m.models.translate as TranslateSpec;
+    let engine: FinalEngine;
+    if (t.kind === "transcribe-cpp") {
+      const { createTranscribeCppEngine } = await import("./transcribe-cpp.ts");
+      engine = createTranscribeCppEngine(t.engine, t.modelsDir, {
+        task: "translate",
+        signal: () => jobSignal,
+        log,
+        ...(t.backend ? { backend: t.backend } : {}),
+      });
+    } else {
+      const mod = (await import(t.path)) as {
+        createEngine(o: unknown, engine: string, ctx?: TranslateContext): FinalEngine;
+      };
+      engine = mod.createEngine(t.options, t.engine, {
+        task: "translate",
+        signal: () => jobSignal,
+      });
+    }
+    jobEngine = { key, engine };
+  }
   return jobEngine.engine;
+}
+
+/** What a module's translate engine is given: the task, and the running job's signal. */
+export interface TranslateContext {
+  task: "translate";
+  signal(): AbortSignal | undefined;
 }
 
 /**
@@ -2294,16 +2336,25 @@ async function fusionEngines(
 async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
   let lastSent = Number.NEGATIVE_INFINITY;
   let lastStage: JobProgress["stage"] | null = null;
-  const { final: _, fusion, ...setSpec } = m.models;
+  const { final: _, fusion, translate: _t, ...setSpec } = m.models;
   const key = JSON.stringify(setSpec);
   if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(setSpec as ModelSpec) };
   let models: ModelSet | null = null;
   let fused: FinalEngine[] = [];
+  // The host's stop flag as this job's signal, so an engine that takes one (transcribe-cpp) ends
+  // the decode in flight instead of finishing it after the job was cancelled.
+  const stop = new AbortController();
+  jobSignal = stop.signal;
+  // clock: polls the shared stop flag; a decode in a native call leaves the event loop free.
+  const poll = setInterval(() => {
+    if (m.abort && Atomics.load(m.abort, 0) === 1) stop.abort();
+  }, 100);
   try {
     models = await jobModels.set;
     // An engine that starts for this job starts inside its first decode, so the job's decode time
     // would carry the start: such a job reports none.
-    const starts = m.models.final !== undefined && jobEngine?.key !== engineKey(m.models.final);
+    const kept = m.models.final ?? m.models.translate;
+    const starts = kept !== undefined && jobEngine?.key !== jobKey(m.models);
     // A fusion job stops a llama-server kept from an earlier job: one Metal engine at a time.
     const single = await engineFor(m, reply);
     if (fusion) fused = await fusionEngines(fusion, models, m.decode, reply);
@@ -2355,6 +2406,9 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
       code: (err as { code?: string }).code,
       loads: { ...models?.loads },
     });
+  } finally {
+    clearInterval(poll);
+    if (jobSignal === stop.signal) jobSignal = undefined;
   }
 }
 

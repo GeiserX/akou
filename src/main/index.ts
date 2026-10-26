@@ -138,6 +138,7 @@ import {
 } from "./asr/llama-server.ts";
 import { chosenModels, keptModels, type ModelSetContext } from "./asr/model-set.ts";
 import {
+  CANARY_1B_V2,
   DownloadRefused,
   downloadModels,
   hostPlatform,
@@ -150,10 +151,12 @@ import {
   NEMOTRON,
   pruneRetiredModels,
   RECOGNIZER,
+  WHISPER_LARGE_V3,
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import { QwenEngine } from "./asr/qwen.ts";
 import { availableMemory, StartWarm, type WarmSetting } from "./asr/start-warm.ts";
+import { translateBackend } from "./asr/transcribe-cpp.ts";
 import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
@@ -3072,6 +3075,35 @@ export class AkouApp implements ApiApp {
     const fused = fusionParts(recognizer);
     if (fused) return this.fusionModels(fused.fuser, fused.engines);
     const given = this.o.models;
+    // Canary and Whisper run a job alone only as its translate engine (`task=translate`): a
+    // transcribe job naming one is refused before it is queued (`runsJobs`). The model set stays
+    // for the VAD and the speaker labels; a test's module stands in with its `createEngine`.
+    if (recognizer === CANARY_1B_V2 || recognizer === WHISPER_LARGE_V3) {
+      if (given === null) return null;
+      const backend = translateBackend(this.llamaPlan().accelerator);
+      const on = backend ? { backend } : {};
+      if (given?.kind === "module") {
+        return {
+          ...given,
+          translate: {
+            kind: "module",
+            path: given.path,
+            engine: recognizer,
+            options: given.options,
+            ...on,
+          },
+        };
+      }
+      return {
+        ...(given ?? this.finalSherpaSpec()),
+        translate: {
+          kind: "transcribe-cpp",
+          engine: recognizer,
+          modelsDir: this.cfg.settings["asr.modelsDir"],
+          ...on,
+        },
+      };
+    }
     const llama = this.runsOnLlama(recognizer);
     if (given !== undefined) {
       const spec =

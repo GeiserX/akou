@@ -122,6 +122,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/live": "jobs",
   "GET /v1/events": "jobs",
   "POST /v1/audio/transcriptions": "jobs",
+  "POST /v1/audio/translations": "jobs",
   // Bazarr's whisper dialect (SV-C3): no key, gated by `server.bazarr` in the handler.
   "POST /v1/asr": "open",
   "POST /v1/detect-language": "open",

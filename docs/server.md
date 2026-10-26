@@ -163,6 +163,29 @@ Home Assistant's Wyoming integration adds akou as a speech-to-text engine for As
 
 With `server.auto_download` on (the default), the first utterance after you turn on a preset that is not downloaded yet waits for the download, and Home Assistant may hit its 300-second pipeline timeout once. After a new preset is installed, reload the Wyoming entry in Home Assistant: it reads the list of languages once, at setup.
 
+## Translation into English
+
+A job can give its speech in English instead of in the language spoken. Three doors take it:
+
+- `POST /v1/jobs` with `task=translate` and `language` set to the source (an ISO code such as `es`, or `auto`).
+- `POST /v1/audio/translations`, OpenAI's translation endpoint: `file`, `model`, `prompt` (read by Whisper only; Canary takes none), `temperature` and `response_format`, plus `language`, which OpenAI's request lacks. Without it the source is `auto`. Any other field answers 400 `unknown_field`.
+- Bazarr's `POST /v1/asr?task=translate`.
+
+The source language picks the engine:
+
+- **Canary-1b-v2** for the 25 European languages it reads (Spanish, French, German, Italian, Portuguese and the rest of Parakeet's list).
+- **Whisper large-v3** for every other language it reads, such as Japanese, and for `auto`, since only Whisper can work out the source for itself.
+- `model` may name either one. Any other model answers 422 `bad_field`; Canary with `auto` or with a language it does not read answers 422 `unsupported_language`.
+- A language neither engine reads answers 422 `unsupported_language`. `GET /v1/server` lists the ones they read in `translate_languages`, and `capabilities.translate` says the server takes the task.
+
+The result's `language` is `en`, its `source_language` is the source (the one Whisper detected on `auto`) and its `task` is `translate`. Segments keep their times, so subtitles come out of it as from any job, but neither engine gives word times: `words` have `s` and `e` null. A line's times come from the voice-activity pieces the audio is cut into, a few seconds each.
+
+Why Canary first: it trades a little accuracy for speed. On three 10-minute European film clips scored against the films' own English subtitles, Whisper scored higher BLEU on every clip (pooled 24.4 against 22.1, a significant gap, p=0.04), and the two did not differ significantly on chrF (48.9 against 48.4, p=0.17). Canary was 8.8 to 9.6 times faster on a Mac's Metal GPU (real-time factor 0.020 to 0.030 against 0.176 to 0.272) and used 1.4 GB against 2.3 GB. Over music and noise Whisper wrote ten lines that nobody said in 30 minutes of audio; Canary wrote none. To get Whisper's accuracy for a European language, name it: `model=whisper-large-v3`.
+
+Where `asr.accelerator` runs Qwen on Vulkan or the CPU, both translate engines run on the CPU: on an Intel integrated GPU, Vulkan was slower than the CPU for both (Whisper at 10.2 times real time against 3.2, Canary 0.31 against 0.26). A discrete card on Vulkan is not measured. Canary runs at about 0.3 times real time there and Whisper at about 3, so on such a box send Whisper only what Canary cannot translate.
+
+Both models are downloaded on first use (Canary 1.14 GB, Whisper 1.67 GB) unless `server.auto_download` is off, load with the job, stay loaded across a batch and are freed after `server.model_idle_minutes` with nothing to do. A cancelled job stops the decode in flight and frees the engine.
+
 ## Bazarr
 
 Bazarr's Whisper provider sends each video's audio to `POST /v1/asr` and gets an SRT back, and asks `POST /v1/detect-language` which language a track is in. akou answers both once `server.bazarr` is on. Set it with `AKOU_BAZARR=true` on the container, or in the config file; the API cannot turn it on, since these two routes take jobs with no key. Off, both answer 404.
@@ -173,9 +196,10 @@ Bazarr sends `Host: akou:8476`. akou accepts that with `server.behind_proxy` on,
 
 Each request is one job on `server.default_model`, in the language Bazarr asks for, deleted once the subtitle is sent. Cues hold at most 42 characters and keep the audio's own times. A track with no speech, or a stretch of one, gets no cue: akou returns an empty subtitle rather than inventing a sentence from the noise. A film can take a while: Bazarr waits up to its read timeout, and if it hangs up first, akou cancels the job, so set Bazarr's timeout above your longest film's transcription time.
 
-Three things do not work, on purpose:
+`task=translate`, which Bazarr sends when it wants English subtitles for audio in another language, gives an English SRT from the language Bazarr names, as described in [Translation into English](#translation-into-english). A language neither translation engine reads answers 422 and writes a `bazarr:` warning line in akou's log.
 
-- **Translation.** Bazarr asks for `task=translate` when it wants English subtitles for audio in another language. akou transcribes only, so it answers 400 and writes a `bazarr:` warning line in its log.
+Two things do not work, on purpose:
+
 - **Language detection without Qwen.** `/detect-language` transcribes the first 30 seconds under the `best` preset, whose Qwen model names the language. That cap is on Bazarr's raw PCM: with `encode=true`, which Bazarr never sends, the whole file is decoded. The first call downloads Qwen (2.5 GB) unless `akou models pull best` ran first; with `server.auto_download` off and Qwen missing, akou answers 409 and Bazarr marks the detection failed.
 - **Test Connection.** Bazarr's button calls `GET /status` on the host, which akou does not answer, so it never turns green. Check the endpoint with a request of Bazarr's shape instead:
 
