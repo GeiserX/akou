@@ -1,15 +1,16 @@
 /**
  * The notepad (docs/DESIGN.md section 5.1): a plain-text pane beside the transcript. A line becomes
- * a `note` event when the user presses Enter or stops typing for 2 s; later keystrokes on the same
- * line are edits (`rev + 1`). The note carries the wall time of its first keystroke and the last
- * log entry visible then, so it can be tied to what was being said.
+ * a `note` event when the user presses Enter, and not before; Shift+Enter starts a new line inside
+ * the same note. The note carries the wall time of its first keystroke and the last log entry
+ * visible then, so it can be tied to what was being said. The list keeps its newest note in view
+ * unless the user has scrolled up to read.
  *
  * Each line has a time gutter: clicking it scrolls the transcript there and plays from it. Lines an
  * agent wrote (`by: agent:<client>`) are drawn in another colour and say which agent, so the user
  * and the agent are two visible authors of one notepad (TRAPS "Agent-authored notes
  * indistinguishable from the user's"). A line akou wrote from a fix of a transcript line
  * ("Fixed: versal -> Vercel", `from: fix`) says so. Markers: `- `, `[] ` (action), `? ` (question),
- * `# `.
+ * `# `, on the note's first line.
  */
 
 import { formatWall } from "../core/log/clock.ts";
@@ -19,6 +20,14 @@ import { noteKind } from "./model.ts";
 import type { Transport } from "./protocol.ts";
 
 export const PAUSE_SAVES_MS = 2000;
+
+/** An Enter that sends: not Shift+Enter, and not one that confirms an input method's candidate. */
+function sends(e: KeyboardEvent): boolean {
+  return e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229;
+}
+
+/** How close to the end of the list, in pixels, still counts as at the newest note. */
+const AT_END_PX = 4;
 
 /** The markers a note may start with, and what a screen reader says for the glyph drawn instead. */
 const MARKER: Partial<Record<ReturnType<typeof noteKind>, { prefix: RegExp; said: string }>> = {
@@ -43,13 +52,19 @@ export interface NotepadDeps {
 
 export class NotepadPane {
   private readonly list = byId("notes");
+  /** What scrolls: the pane around the list. */
+  private readonly pane = byId("pane-notes");
+  /** The list follows its newest note while this holds: until the user scrolls up, again at the end. */
+  private pinned = true;
+  private scrolling: ReturnType<typeof setTimeout> | null = null;
+  /** The next scroll is the list following its end, not the user, so it shows no scrollbar. */
+  private following = false;
   private readonly input = byId<HTMLTextAreaElement>("note-input");
   /** The note box grows with the note (WINDOW section 6), so a long one reads whole. */
-  private readonly fit = autosize(this.input);
+  private readonly fit = autosize(this.input, 12, true);
   private readonly count = byId("notes-count");
-  /** The line being typed: when it began, what was visible then, and its note once saved. */
-  private draft: { w: number; afterSeq: number; id?: string; saved?: string } | null = null;
-  private pause: ReturnType<typeof setTimeout> | null = null;
+  /** The note being typed: when it began and what was visible then. */
+  private draft: { w: number; afterSeq: number } | null = null;
   private saving: Promise<void> = Promise.resolve();
   /** The note being edited in place. Its row stays put on a redraw, which would drop the edit. */
   private editing: string | null = null;
@@ -57,13 +72,40 @@ export class NotepadPane {
   constructor(private readonly d: NotepadDeps) {
     this.input.addEventListener("input", () => this.onInput());
     this.input.addEventListener("keydown", (e) => {
-      // An Enter that confirms an input method's candidate is not the end of the note.
-      if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) {
+      // Shift+Enter is left to the box, which puts a line break in the note.
+      if (sends(e)) {
         e.preventDefault();
-        void this.commit(true);
+        void this.commit();
       }
     });
     this.list.addEventListener("click", (e) => this.onClick(e));
+    this.pane.addEventListener("scroll", () => {
+      this.pinned = this.atEnd();
+      if (this.following) {
+        this.following = false;
+        return;
+      }
+      // The scrollbar shows while the pane scrolls and a moment after (theme.css).
+      this.pane.dataset.scrolling = "";
+      if (this.scrolling) clearTimeout(this.scrolling);
+      this.scrolling = setTimeout(() => delete this.pane.dataset.scrolling, 800);
+    });
+    // The pane or a note changing size (a resize, a note growing while edited) keeps the end in view.
+    const follow = new ResizeObserver(() => this.follow());
+    follow.observe(this.pane);
+    follow.observe(this.list);
+  }
+
+  private atEnd(): boolean {
+    const p = this.pane;
+    return p.scrollHeight - p.scrollTop - p.clientHeight <= AT_END_PX;
+  }
+
+  /** Scrolls to the newest note, unless the user scrolled up to read. */
+  private follow(): void {
+    if (!this.pinned || this.atEnd()) return;
+    this.following = true;
+    this.pane.scrollTop = this.pane.scrollHeight;
   }
 
   reset(): void {
@@ -71,7 +113,8 @@ export class NotepadPane {
     this.editing = null;
     this.input.value = "";
     this.fit();
-    if (this.pause) clearTimeout(this.pause);
+    // A call opens at its newest note.
+    this.pinned = true;
     this.render();
   }
 
@@ -82,33 +125,20 @@ export class NotepadPane {
       // clock: a note is placed at the moment the user starts typing it.
       this.draft = { w: Date.now(), afterSeq: v.lastSeq };
     }
-    if (this.pause) clearTimeout(this.pause);
-    // clock: a pause in typing saves the note.
-    this.pause = setTimeout(() => void this.commit(false), PAUSE_SAVES_MS);
   }
 
-  /** Saves the line: a new note the first time, an edit after. Enter also starts a new line. */
-  private commit(newLine: boolean): Promise<void> {
-    if (this.pause) clearTimeout(this.pause);
-    this.pause = null;
+  /** Saves the note on Enter and empties the box for the next one. */
+  private commit(): Promise<void> {
     const text = this.input.value.trim();
     const draft = this.draft;
-    if (newLine) {
-      this.input.value = "";
-      this.fit();
-      this.draft = null;
-    }
+    const call = this.d.call();
+    this.input.value = "";
+    this.fit();
+    this.draft = null;
+    if (!call || !draft || text === "") return this.saving;
+    // The user's own note brings the list back to the end, where it shows.
+    this.pinned = true;
     this.saving = this.saving.then(async () => {
-      const call = this.d.call();
-      if (!call || !draft || text === "" || text === draft.saved) return;
-      if (draft.id) {
-        const r = await this.d.t
-          .request("PATCH", `/calls/${call}/notes/${draft.id}`, { text })
-          .catch(() => null);
-        if (!r || r.status >= 400) toast(message(r?.body, "the note was not saved"));
-        else draft.saved = text;
-        return;
-      }
       const r = await this.d.t
         .request<{ note?: { id: string }; message?: string }>("POST", `/calls/${call}/notes`, {
           text,
@@ -117,10 +147,6 @@ export class NotepadPane {
         })
         .catch(() => null);
       if (!r || r.status >= 400 || !r.body.note) toast(message(r?.body, "the note was not saved"));
-      else {
-        draft.id = r.body.note.id;
-        draft.saved = text;
-      }
     });
     return this.saving;
   }
@@ -142,17 +168,21 @@ export class NotepadPane {
       this.editing && at >= 0
         ? this.list.querySelector<HTMLElement>(`li.note[data-id="${CSS.escape(this.editing)}"]`)
         : null;
+    const top = this.pane.scrollTop;
     if (!kept) {
       // Nothing is being edited, or the edited note was deleted elsewhere and its edit goes with it.
       this.editing = null;
       replace(this.list, ...rows);
-      return;
+    } else {
+      // Moving the edited row would take focus from its input, which closes the edit: the other
+      // notes are drawn around it instead.
+      for (const el of [...this.list.children]) if (el !== kept) el.remove();
+      kept.before(...rows.slice(0, at));
+      kept.after(...rows.slice(at + 1));
     }
-    // Moving the edited row would take focus from its input, which closes the edit: the other
-    // notes are drawn around it instead.
-    for (const el of [...this.list.children]) if (el !== kept) el.remove();
-    kept.before(...rows.slice(0, at));
-    kept.after(...rows.slice(at + 1));
+    // Scrolled up to read, the user stays where they were; at the end, the newest note shows.
+    if (this.pinned) this.follow();
+    else this.pane.scrollTop = top;
   }
 
   private noteRow(n: NoteView, tz: string): HTMLElement {
@@ -223,17 +253,18 @@ export class NotepadPane {
   private edit(li: HTMLElement, call: string, id: string): void {
     const span = li.querySelector(".note-text") as HTMLElement;
     const whole = li.dataset.text ?? span.textContent ?? "";
-    const input = h("input", {
+    const input = h("textarea", {
       class: "note-edit",
-      value: whole,
-      attrs: { "aria-label": "Edit the note" },
+      attrs: { "aria-label": "Edit the note", rows: "1" },
     });
+    input.value = whole;
     span.replaceWith(input);
+    autosize(input, 12, true)();
     input.focus();
     this.editing = id;
-    // An edit is saved on Enter, when focus leaves it and after a 2 s pause (WINDOW W6.2), each
-    // save a new revision; Escape closes it without saving what was not saved yet. A save that
-    // fails is a toast and leaves the editor open with its text, to try again.
+    // An edit is saved on Enter (Shift+Enter is a line break), when focus leaves it and after a
+    // 2 s pause (WINDOW W6.2), each save a new revision; Escape closes it without saving what was
+    // not saved yet. A save that fails is a toast and leaves the editor open with its text.
     let saved = whole;
     let pause: ReturnType<typeof setTimeout> | null = null;
     let open = true;
@@ -273,8 +304,10 @@ export class NotepadPane {
       pause = setTimeout(() => void save(), PAUSE_SAVES_MS);
     });
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") void done(true);
-      else if (e.key === "Escape") void done(false);
+      if (sends(e)) {
+        e.preventDefault();
+        void done(true);
+      } else if (e.key === "Escape") void done(false);
     });
     input.addEventListener("blur", () => void done(true));
   }

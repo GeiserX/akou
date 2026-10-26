@@ -2302,17 +2302,41 @@ button.cite:hover {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-/* The notes pane, between the Notes heading and the note input. */
+/* The notes pane, between the Notes heading and the note input. It keeps the newest note in view
+   (notepad.ts). Its scrollbar is thin and shows only while the pointer is over the pane or it
+   scrolls; the gutter it sits in is always there, so the notes never shift when it shows. WebKit
+   does not repaint a scrollbar for a `:hover` on its own pseudo-element, but it does when the
+   pane's `color` changes: the thumb is drawn in the pane's colour, transparent at rest, and the
+   notes set their own. */
 #pane-notes {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 0 8px 8px;
+  overflow-y: scroll;
+  padding: 0 0 8px 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  color: transparent;
+  transition: color 0.2s;
+}
+#pane-notes:hover,
+#pane-notes[data-scrolling] {
+  color: var(--faint);
+}
+#pane-notes::-webkit-scrollbar {
+  width: 8px;
+}
+#pane-notes::-webkit-scrollbar-track {
+  background: transparent;
+}
+#pane-notes::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background-clip: padding-box;
+  background-color: currentColor;
 }
 #notes {
+  color: var(--fg);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -2337,6 +2361,16 @@ button.cite:hover {
 }
 .note .note-text {
   display: block;
+  /* A note of several lines (Shift+Enter) keeps its line breaks. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Editing a note: a field that wraps and grows with it (autosize in dom.ts), line breaks kept. */
+.note textarea.note-edit {
+  display: block;
+  width: 100%;
+  resize: none;
+  overflow-y: hidden;
 }
 /* "Action" or "Open question" under the note (b2). */
 .note .tag {

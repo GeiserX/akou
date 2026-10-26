@@ -36,6 +36,8 @@ import {
   watchedOffenders,
 } from "./rig.ts";
 
+/** The header an agent's request carries, so its note is drawn as the agent's. */
+const AGENT = { "x-akou-client": "claude-code" };
 const XSS = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
 
 async function withRig<T>(
@@ -642,25 +644,10 @@ describe("the notepad (DESIGN 5.1)", () => {
             return row.getBoundingClientRect().right - t.getBoundingClientRect().right;
           });
           expect(gap).toBeLessThan(16);
-          // A pause of 2 s saves the line too, and later keystrokes edit it (rev + 1).
-          await page.keyboard.type("? who owns it");
-          await until(
-            async () => (await events(rig, id)).filter((e) => e.type === "note").length === 2,
-            5000,
-            "the pause to save",
-          );
-          await page.keyboard.type(" now");
+          await page.keyboard.type("? who owns it now");
           await page.keyboard.press("Enter");
           await page.waitForSelector("#notes li.note.question .tag");
           expect(await text(page, "#notes li.note.question .tag")).toBe("Open question");
-          await until(
-            async () =>
-              (await events(rig, id)).some(
-                (e) => e.type === "note" && (e as { rev: number }).rev === 2,
-              ),
-            5000,
-            "the edit",
-          );
           // An agent's note is marked as the agent's.
           await rig.api(
             "POST",
@@ -673,6 +660,192 @@ describe("the notepad (DESIGN 5.1)", () => {
           // The time gutter scrolls to the transcript there.
           await page.click("#notes li.note.human .gutter");
           await page.waitForSelector("#lines .row.flash");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W6.27] a new note is added on Enter only: nothing is sent while it is typed or after a pause, the text survives a redraw, and Shift+Enter is a line break in it",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const posts: string[] = [];
+          page.on("request", (r) => {
+            if (r.method() !== "GET" && /\/calls\/[^/]+\/notes/.test(r.url())) posts.push(r.url());
+          });
+          const mine = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note" && (e as { by: string }).by === "user")
+              .map((e) => e as LogEvent & { text: string; w: number });
+          const typed = Date.now();
+          await page.click("#note-input");
+          await page.keyboard.type("half a thought");
+          // Well past the old 2 s pause: nothing sent, nothing in the list.
+          await page.waitForTimeout(3000);
+          expect(posts).toEqual([]);
+          expect(await mine()).toEqual([]);
+          expect(await page.locator("#notes li.note").count()).toBe(0);
+          // A note arriving through another door redraws the pane; the unsent text stays.
+          await rig.api("POST", `/calls/${id}/notes`, { text: "an aside" }, AGENT);
+          await page.waitForSelector("#notes li.note.agent");
+          expect(await page.inputValue("#note-input")).toBe("half a thought");
+          // Shift+Enter is a line break, still nothing sent; Enter sends the whole note once.
+          await page.keyboard.press("Shift+Enter");
+          await page.keyboard.type("- and its second line");
+          await page.waitForTimeout(300);
+          expect(posts).toEqual([]);
+          await page.keyboard.press("Enter");
+          await until(async () => (await mine()).length === 1, 5000, "the note");
+          const [note] = await mine();
+          expect(note?.text).toBe("half a thought\n- and its second line");
+          // Timed at its first keystroke, not at Enter.
+          expect(Math.abs((note?.w ?? 0) - typed)).toBeLessThan(2500);
+          expect(posts.length).toBe(1);
+          expect(await page.inputValue("#note-input")).toBe("");
+          // The list draws it on two lines; a marker on a later line is text, not a bullet.
+          const row = "#notes li.note.human";
+          await page.waitForSelector(row);
+          expect(await page.locator(`${row}.text`).count()).toBe(1);
+          expect(await page.$eval(`${row} .note-text`, (el) => (el as HTMLElement).innerText)).toBe(
+            "half a thought\n- and its second line",
+          );
+          const lines = await page.$eval(`${row} .note-text`, (el) => {
+            const lh = Number.parseFloat(getComputedStyle(el).lineHeight);
+            return Math.round(el.getBoundingClientRect().height / lh);
+          });
+          expect(lines).toBe(2);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W6.2] Shift+Enter is a line break in a note being edited, and Enter saves the edit with it",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
+          const nid = made.body.note.id as string;
+          const last = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note" && (e as { id: string }).id === nid)
+              .map((e) => (e as { text: string }).text)
+              .at(-1);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const row = `#notes li.note[data-id="${nid}"]`;
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.press("Shift+Enter");
+          await page.keyboard.type("and the second line");
+          // Still editing: Shift+Enter neither saved nor closed it.
+          expect(await page.inputValue(`${row} .note-edit`)).toBe(
+            "budget review\nand the second line",
+          );
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          await until(
+            async () => (await last()) === "budget review\nand the second line",
+            5000,
+            "the edit with its line break",
+          );
+          expect(await page.$eval(`${row} .note-text`, (el) => (el as HTMLElement).innerText)).toBe(
+            "budget review\nand the second line",
+          );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W6.26] the notes list opens at its newest note and stays there as notes arrive, leaves a reader who scrolled up alone, and shows its scrollbar only on hover",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          for (let i = 1; i <= 40; i++) {
+            await rig.api("POST", `/calls/${id}/notes`, { text: `note number ${i}` });
+          }
+          const page = await rig.open(id);
+          await page.setViewportSize({ width: 1440, height: 900 });
+          await page.waitForSelector("#lines .row >> nth=3");
+          const count = (n: number) =>
+            until(
+              async () => (await page.locator("#notes li.note").count()) === n,
+              5000,
+              `${n} notes`,
+            );
+          const pane = () =>
+            page.$eval("#pane-notes", (p) => ({
+              top: p.scrollTop,
+              gap: p.scrollHeight - p.scrollTop - p.clientHeight,
+              over: p.scrollHeight > p.clientHeight,
+            }));
+          await count(40);
+          // It opens at the end: the newest note shows without scrolling.
+          await until(async () => (await pane()).gap <= 4, 5000, "the list at its end");
+          expect((await pane()).over).toBe(true);
+          // An agent's note keeps it at the end.
+          await rig.api("POST", `/calls/${id}/notes`, { text: "agent note" }, AGENT);
+          await count(41);
+          await until(async () => (await pane()).gap <= 4, 5000, "the end after an agent note");
+          // So does the user's own.
+          await page.click("#note-input");
+          await page.keyboard.type("my note");
+          await page.keyboard.press("Enter");
+          await count(42);
+          await until(async () => (await pane()).gap <= 4, 5000, "the end after my note");
+          // Scrolled up to read: a new note does not move the list.
+          await page.hover("#pane-notes");
+          await page.mouse.wheel(0, -400);
+          await until(async () => (await pane()).gap > 100, 5000, "scrolled up");
+          const at = (await pane()).top;
+          await rig.api("POST", `/calls/${id}/notes`, { text: "while reading" });
+          await count(43);
+          await page.waitForTimeout(300);
+          expect((await pane()).top).toBe(at);
+          // Back at the end, it follows again.
+          await page.mouse.wheel(0, 10_000);
+          await until(async () => (await pane()).gap <= 4, 5000, "back at the end");
+          await rig.api("POST", `/calls/${id}/notes`, { text: "after reading" });
+          await count(44);
+          await until(async () => (await pane()).gap <= 4, 5000, "the end after reading");
+          // The scrollbar: its thumb takes the pane's colour, transparent at rest, shown on hover.
+          const thumb = () => page.$eval("#pane-notes", (p) => getComputedStyle(p).color);
+          const strip = async () => {
+            const b = await page.locator("#pane-notes").boundingBox();
+            if (!b) throw new Error("no notes pane");
+            return page.screenshot({
+              clip: { x: b.x + b.width - 8, y: b.y, width: 8, height: b.height },
+            });
+          };
+          await page.mouse.move(5, 5);
+          await until(async () => (await thumb()) === "rgba(0, 0, 0, 0)", 5000, "the thumb hidden");
+          const rest = await strip();
+          await page.hover("#notes li.note >> nth=-1");
+          await until(async () => (await thumb()) !== "rgba(0, 0, 0, 0)", 5000, "the thumb shown");
+          // WebKit (the app's engine) draws it; headless Chromium draws no scrollbars at all.
+          if (process.env.AKOU_UI_BROWSER === "webkit") {
+            await page.waitForTimeout(400);
+            expect((await strip()).equals(rest)).toBe(false);
+          }
+          await page.mouse.move(5, 5);
+          await until(async () => (await thumb()) === "rgba(0, 0, 0, 0)", 5000, "hidden again");
+          await page.waitForTimeout(400);
+          expect((await strip()).equals(rest)).toBe(true);
         },
       );
     },
@@ -1206,7 +1379,7 @@ describe("the side column (WINDOW section 6)", () => {
         );
         expect(tops).toEqual([...tops].sort((a, b) => a - b));
         expect(await page.getAttribute("#note-input", "placeholder")).toBe(
-          "Type a note, Enter to add it",
+          "Enter to add, Shift+Enter for a new line",
         );
         // The markers are text under the field, never in its placeholder.
         expect(await text(page, "#note-hints")).toBe("- bullet [] action ? question # section");
@@ -1286,7 +1459,7 @@ const rowsOf = (page: Page, sel: string) =>
 
 describe("the note box and the fix box grow with their text", () => {
   test(
-    "the note box wraps and grows to show a long note whole, caps at twelve rows, and Enter (with or without Shift) still adds the note",
+    "the note box wraps and grows to show a long note whole, caps at twelve rows, Enter adds the note and Shift+Enter is a line break in it",
     async () => {
       let id = "";
       await withRig(
@@ -1321,9 +1494,13 @@ describe("the note box and the fix box grow with their text", () => {
           // Back to one row for the next note.
           expect(await page.inputValue("#note-input")).toBe("");
           expect(await height()).toBe(36);
-          // Shift+Enter adds the note too, as it did in the one-line input: a note is one line.
+          // Shift+Enter is a new line in the box, which grows a row; Enter adds the note.
           await page.keyboard.type("second note");
           await page.keyboard.press("Shift+Enter");
+          await page.keyboard.type("its next line");
+          expect(await page.inputValue("#note-input")).toBe("second note\nits next line");
+          expect(await height()).toBeGreaterThan(36);
+          await page.keyboard.press("Enter");
           await until(async () => (await text(page, "#notes-count")) === "2", 5000, "the second");
           expect(await page.inputValue("#note-input")).toBe("");
         },

@@ -419,7 +419,7 @@ Rendering rules, enforced in code:
 
 ### 5.1 Notepad
 
-A plain-text pane beside the transcript. Each line becomes a `note` event when the user presses Enter or pauses for 2 s. `w` is the wall time of the first keystroke and `afterSeq` the last segment visible then, so the model can tie "build -> new box?" to the transcript around that moment. Edits are `rev+1`. Markdown-lite markers: `- `, `[] ` (action), `? ` (open question), `# ` (section). Clicking a note's time gutter scrolls the transcript there and plays audio from it.
+A plain-text pane beside the transcript. What the user types becomes a `note` event when they press Enter, and not before; Shift+Enter starts a new line in the same note. `w` is the wall time of the first keystroke and `afterSeq` the last segment visible then, so the model can tie "build -> new box?" to the transcript around that moment. Edits are `rev+1`. Markdown-lite markers on a note's first line: `- `, `[] ` (action), `? ` (open question), `# ` (section). Clicking a note's time gutter scrolls the transcript there and plays audio from it.
 
 Agents add notes too (`akou note`, MCP `akou_add_note`). Those carry `by: agent:<client>` and render in a different colour, so the human and the agent are two visible authors of the same notepad.
 
