@@ -362,7 +362,26 @@ The gain flattens after three engines. Frequency (majority) ROVER gets worse wit
 - **Fewer or more engines.** A user who picks one engine gets Qwen, or Parakeet if Qwen cannot load. Two engines means Q+P (−0.4 pooled, measured). A third, Whisper or Cohere, takes off another 0.3. Four and five measured 8.05 and 7.98, so they add no pooled gain, but they hold up better per set (e22 6.51 with five against 6.64 with three) and the oracle keeps falling. Canary or Cohere adds 1.5 to 2.2 min per audio hour each.
 - **Parakeet decodes greedy from now on, with no hotwords,** until the sherpa empty-output bug is fixed upstream. Hotwords at boost 3 are a regression: +1.96 [+0.93, +3.12] on e21, 25 false names, 8 of them distractors that were never said. If beam search comes back, the boost is 1.5 (44 hits, 0 false insertions).
 - **The glossary's real carrier is Qwen.** The decode list passed as context lifted name hits from 47 to 64 of 67, with 0 false insertions and −0.36 [−0.54, −0.18] WER. Whisper takes the list as an initial prompt (transcribe.cpp reports `supports('initial_prompt')` true); the effect is unmeasured.
-- **Word times come from Parakeet's TDT token times.** Against Rev's forced alignment on e22, the median start error is 0.078 s and 89 % of words fall within 0.2 s. Qwen3-ForcedAligner is the later upgrade: 0.03 s median, 94 % within 0.2 s, RTF 0.014. That was measured on MLX only; the cross-OS route through CrispASR's GGUF or the ONNX export is extrapolated. Fusion does not need times from every engine: align the texts, then time the fused words from the anchor.
+- **Word times come from Parakeet's TDT token times.** Against Rev's forced alignment on e22, the median start error is 0.078 s and 89 % of words fall within 0.2 s. Qwen's own words get theirs from Qwen3-ForcedAligner through CrispASR on Metal and Vulkan (next section). Fusion does not need times from every engine: align the texts, then time the fused words from the anchor.
+
+### Word times for Qwen
+
+Qwen3-ASR writes no word times, so the best preset's words came back with null times and every caption cut had to guess. Since akou-chp.15 the best preset runs Qwen3-ForcedAligner-0.6B over each unit after Qwen decodes it: the same audio, Qwen's own text, one start and one end per word.
+
+- **Route.** transcribe-cpp has no forced aligner, llama.cpp does not run the aligner's timestamp head, and onnxruntime has no Metal or Vulkan provider. CrispASR v0.8.44 (MIT) runs the q4_k GGUF (529 MB) with `--align-only`, one short process per unit, the text on stdin. The file keeps its published name: CrispASR picks the model family from it.
+- **Where it runs.** Metal on Apple silicon (a pinned release build, downloaded with the preset) and the amd64 `-vulkan` image (the build is in the image). The CPU build gave times hundreds of seconds past the audio under load with more than one thread and runs near real time with one, so the CPU, CUDA, arm64 Linux and Windows keep null times, and the result's `warnings` says why. Always `-t 1`: on the GPU builds it costs 12 to 15 % of the speed and removed the bad times.
+- **Languages.** The aligner's 11: zh en yue fr de it ja ko pt ru es. Other languages keep null times.
+- **Checks.** A time outside the audio, a word that starts before the one before it, or an answer whose words do not spell Qwen's text fails the unit, and its words keep null times. CrispASR splits hyphenated words and moves an opening quote onto the word before, so its words are laid back over Qwen's letter by letter.
+- **Measured** on 60 LibriSpeech test-clean pieces of 15 to 30 s (23.7 min, 3,592 words, CC-BY-4.0) through a real akou server, against the reference forced-alignment times of gilkeyio/librispeech-alignments, matching Qwen's words to the reference by text:
+
+| Substrate | Words timed | Median start error | p90 | Within 0.2 s | Aligner RTF |
+|---|---|---|---|---|---|
+| Metal, M4 Mac mini | 3,585 of 3,585 | 0.023 s | 0.056 s | 99.97 % | 0.051 (peak 826 MB) |
+| Vulkan, Intel UHD 770 | 3,585 of 3,585 | 0.023 s | 0.056 s | 99.97 % | 0.42 (host load 17; peak memory not measured) |
+
+These figures hold for 15 to 30 s pieces of read English, one speaker. Every unit starts CrispASR and loads the model again, so the shorter units the VAD cuts from a film pay that cost more often and the aligner's RTF on them is higher than above. Spanish and music are not measured.
+
+Both substrates gave the same times to the millisecond; 3,518 of the words matched a reference word. The whole best job on the UHD 770 ran at 1.64 times real time, Qwen included, so Vulkan on an iGPU is slow but correct. Parakeet's TDT times on e22 had a 0.078 s median and 89 % within 0.2 s, so the aligner is the better clock. The first run on a machine compiles the GPU shaders (21 s idle, minutes under load); the first unit each job Worker runs on the aligner gets 300 s more before it is killed. A unit that runs past its deadline stops the aligner for the rest of that job, so a hung GPU costs one deadline, not one per unit.
 
 ## 5. Fusion: what we ship, and what the LLM is for
 
@@ -430,7 +449,7 @@ Nothing is bundled in the app except the two npm runtimes. Everything else is pu
 | Whisper large-v3 Q8_0 (transcribe.cpp) | 1.67 GB | Metal | Vulkan, CPU (untested) | Vulkan, CPU (untested) | Catalog |
 | Cohere Transcribe Q8_0 (optional) | 2.41 GB | Same | Same | Same | Catalog |
 | Canary-1b-v2 Q8_0 (optional) | 1.14 GB | Same | Same | Same | Catalog |
-| Qwen3-ForcedAligner-0.6B (later) | 0.99 GB GGUF | CrispASR or ONNX | Same | Same | Earlier research run |
+| Qwen3-ForcedAligner-0.6B q4_k + CrispASR v0.8.44 | 0.53 GB GGUF + 18 MB (macOS) | Metal, measured | None | Vulkan amd64, measured; in the image | Section 4, word times |
 | gemma-4-12B-it Q4_0 (optional local fusion LLM) | 7.2 GB | Metal | Untested | Untested | Earlier research run |
 
 The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, Qwen 2.5, Whisper 1.67, VAD and diarization 1.04. Disk is not the constraint; resident memory is (section 3.2).
@@ -450,7 +469,7 @@ The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, 
 - **Qwen as a true streaming engine on every OS.** Port the re-decode-with-rollback loop onto llama.cpp. The in-call upgrade gives Qwen-quality text about 45 s after the words, once a minute, without it.
 - **Voxtral Mini 4B Realtime live**, the best measured streaming accuracy (7.19 / 3.60 on FLEURS). It runs at RTF 1.0 on the M4, so it needs a faster GPU and one channel, and it has no timestamps and no biasing.
 - **The transcribe-cpp engines on Windows.** The live engine and Qwen are measured there ([ASR-12](../gates/asr-12-windows.md)); the transcribe-cpp win32 package waits for ASR-8.
-- **Qwen3-ForcedAligner on every OS.** Through CrispASR's GGUF (one clip checked) or an ONNX Runtime session (not run).
+- **Qwen3-ForcedAligner on the CPU, CUDA, arm64 Linux and Windows.** It ships on Metal and Vulkan amd64. The CPU build's times break under load with more than one thread; the others are not measured.
 - **Voxtral-Small-24B**, the best English in the transcribe.cpp catalogue (3.55 / 2.86). It is 14.3 GB at Q4_K_M and needs a 32 GB machine.
 
 ## 9. Plan

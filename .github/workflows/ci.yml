@@ -72,7 +72,7 @@ jobs:
           else
             echo "diarize=false" >> "$GITHUB_OUTPUT"
           fi
-          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|llama-catalog|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
+          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|aligner-catalog|llama-builds|llama-catalog|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
             echo "gpu=true" >> "$GITHUB_OUTPUT"
           else
             echo "gpu=false" >> "$GITHUB_OUTPUT"
@@ -1780,6 +1780,14 @@ jobs:
         run: docker build --build-arg ACCELERATOR="$VARIANT" -t "akou:$VARIANT" .
       - name: its llama-server runs
         run: docker run --rm --entrypoint sh "akou:$VARIANT" -c '/opt/llama/llama-server --version'
+      - name: the word-time aligner's CrispASR runs in vulkan on amd64, and is absent elsewhere
+        run: |
+          set -euo pipefail
+          if [ "$VARIANT" = vulkan ] && [ "$(uname -m)" = x86_64 ]; then
+            docker run --rm --entrypoint sh akou:vulkan -c 'test "$AKOU_CRISPASR" = /opt/crispasr/crispasr && /opt/crispasr/crispasr --help > /dev/null'
+          else
+            docker run --rm --entrypoint sh "akou:$VARIANT" -c 'test ! -e /opt/crispasr/crispasr'
+          fi
       - name: the Vulkan loader and Mesa's drivers load (vulkan)
         if: matrix.variant == 'vulkan'
         run: |

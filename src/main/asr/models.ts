@@ -20,6 +20,7 @@ import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync }
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { ALIGNER_CATALOG } from "./aligner-catalog.ts";
 import type { DiarizerKind } from "./engine.ts";
 import { LLAMA_CATALOG } from "./llama-catalog.ts";
 import { MODEL_TEXT } from "./model-text.ts";
@@ -48,17 +49,35 @@ export type Platform = (typeof PLATFORMS)[number];
  * How an entry runs: in-process sherpa-onnx, the `akou-diarize` helper, a `llama-server` child
  * process (llama.cpp), which is itself a catalog entry per platform and accelerator, or
  * transcribe-cpp (transcribe.cpp through koffi, transcribe-cpp.ts), an npm dependency that ships its
- * native library per platform and so is never a download.
+ * native library per platform and so is never a download, or CrispASR, the program that runs the
+ * word-time aligner (aligner-catalog.ts), itself a catalog entry per platform and accelerator.
  */
-export const RUNTIMES = ["sherpa-onnx", "akou-diarize", "llama-server", "transcribe-cpp"] as const;
+export const RUNTIMES = [
+  "sherpa-onnx",
+  "akou-diarize",
+  "llama-server",
+  "transcribe-cpp",
+  "crispasr",
+] as const;
 export type Runtime = (typeof RUNTIMES)[number];
 
 /** The llama.cpp backends akou ships builds of (llama-catalog.ts), in the order `asr.accelerator` lists them. */
 export const ACCELERATORS = ["cpu", "metal", "vulkan", "cuda", "sycl", "rocm"] as const;
 export type Accelerator = (typeof ACCELERATORS)[number];
 
-/** The interfaces of engine.ts an entry serves; `runtime` is a program another entry runs on. */
-export const ROLES = ["final", "live", "vad", "diarizer", "embedder", "runtime"] as const;
+/**
+ * The interfaces of engine.ts an entry serves; `runtime` is a program another entry runs on, and
+ * `aligner` puts times on another engine's words (aligner.ts).
+ */
+export const ROLES = [
+  "final",
+  "live",
+  "vad",
+  "diarizer",
+  "embedder",
+  "runtime",
+  "aligner",
+] as const;
 export type Role = (typeof ROLES)[number];
 
 /** A catalog entry: a model with what runs it, where, and for which languages. */
@@ -538,6 +557,7 @@ export const MODELS: readonly CatalogEntry[] = [
   ...MORE_TIERS,
   ...LLAMA_CATALOG,
   ...TRANSCRIBE_CPP_MODELS,
+  ...ALIGNER_CATALOG,
 ];
 
 /** The models only one speaker-label engine needs. */

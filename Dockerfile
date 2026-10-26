@@ -45,8 +45,11 @@ RUN cargo build --locked --release && ./target/release/akou-diarize --version
 FROM ${BUN_IMAGE} AS llama
 ARG ACCELERATOR=cpu
 WORKDIR /src
-COPY src/main/asr/llama-builds.ts src/main/asr/llama-catalog.ts src/main/asr/model-text.ts src/main/asr/models.ts src/main/asr/
+COPY src/main/asr/llama-builds.ts src/main/asr/llama-catalog.ts src/main/asr/aligner-catalog.ts src/main/asr/model-text.ts src/main/asr/models.ts src/main/asr/
 RUN bun -e 'await (await import("./src/main/asr/llama-builds.ts")).fetchForHost(process.env.ACCELERATOR, "/opt/llama")'
+# CrispASR for the word-time aligner of Qwen's words, from the release akou pins: only the vulkan
+# variant on amd64 gets a build (aligner-catalog.ts); the others get an empty /opt/crispasr.
+RUN bun -e 'await (await import("./src/main/asr/llama-builds.ts")).fetchAlignerForHost(process.env.ACCELERATOR, "/opt/crispasr")'
 
 FROM ${BUN_IMAGE}
 ARG ACCELERATOR=cpu
@@ -58,6 +61,7 @@ RUN case "$ACCELERATOR" in vulkan) gpu="mesa-vulkan-drivers libvulkan1" ;; *) gp
   && rm -rf /var/lib/apt/lists/*
 COPY --from=llama /opt/llama /opt/llama
 RUN /opt/llama/llama-server --version
+COPY --from=llama /opt/crispasr /opt/crispasr
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
 RUN bun install --frozen-lockfile --production
@@ -73,13 +77,15 @@ RUN printf '#!/bin/sh\nexec bun /app/src/main/cli/cli.ts "$@"\n' > /usr/local/bi
   && mkdir -p /data /models \
   && chown bun:bun /data /models
 # AKOU_ACCELERATORS is what this image can run (asr.accelerator's `auto` picks among these, and
-# GET /v1/server reports the choice), AKOU_LLAMA_SERVER the build it runs.
+# GET /v1/server reports the choice), AKOU_LLAMA_SERVER the build it runs, AKOU_CRISPASR the
+# aligner's build, read only when Qwen runs on Vulkan (the other variants carry none).
 ENV AKOU_HOME=/data \
   AKOU_MODELS_DIR=/models \
   AKOU_SERVER=1 \
   AKOU_HEADLESS=1 \
   AKOU_ACCELERATORS=${ACCELERATOR},cpu \
   AKOU_LLAMA_SERVER=/opt/llama/llama-server \
+  AKOU_CRISPASR=/opt/crispasr/crispasr \
   NVIDIA_DRIVER_CAPABILITIES=compute,utility
 USER bun
 VOLUME ["/data", "/models"]

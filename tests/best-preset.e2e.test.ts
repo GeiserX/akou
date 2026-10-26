@@ -8,6 +8,7 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
+import { ALIGNER } from "../src/main/asr/aligner-catalog.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
 import { hostPlatform, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
@@ -22,6 +23,7 @@ import { asKey, type Key, newKey, RESULT, SERVER, submit } from "./server-helper
 setDefaultTimeout(60_000);
 
 const FAKE_LLAMA = join(import.meta.dir, "fixtures", "fake-llama-server.ts");
+const FAKE_CRISPASR = join(import.meta.dir, "fixtures", "fake-crispasr.ts");
 
 /** Two voices, as a voice note with two people in it. */
 const DIALOGUE = monoWav(
@@ -138,6 +140,11 @@ describe("akou-5an.93: preset best", () => {
     // The fake llama-server gives every word token a log-probability of -0.05.
     expect(res.confidence).toBeCloseTo(Math.exp(-0.05), 3);
     expect(res.skipped).toEqual([]);
+    // akou-chp.15: the result says why there are no times (this rig's Qwen runs on the CPU).
+    expect(res.warnings).toEqual([
+      "word times unavailable: the aligner runs only on Metal or Vulkan, and Qwen runs on the CPU here",
+    ]);
+    expect(res.engine.models).not.toContain(ALIGNER);
   });
 
   test("a Spanish note: the language is forced, and comes back as es", async () => {
@@ -199,6 +206,119 @@ describe("akou-5an.93: preset best", () => {
     } finally {
       await asKey(rig, admin.key, "PATCH", "/config", { "server.default_model": "auto" });
     }
+  });
+});
+
+describe("akou-chp.15: best with the word-time aligner", () => {
+  let ar: AppRig;
+  let akey: Key;
+  const t = tempDir("akou-best-aligned-");
+  const alog = join(t.dir, "crispasr.log");
+
+  beforeAll(async () => {
+    ar = await appRig({
+      settings: {
+        ...SERVER,
+        "asr.llamaServer": [process.execPath, FAKE_LLAMA],
+        "server.dictation_slots": 1,
+      },
+      aligner: [process.execPath, FAKE_CRISPASR, "--fake-log", alog],
+    });
+    akey = await newKey(ar, "archive");
+  });
+
+  afterAll(async () => {
+    await ar.close();
+    t.cleanup();
+  });
+
+  async function result(id: string) {
+    const j = await asKey(ar, akey.key, "GET", `/jobs/${id}?wait=30`);
+    expect(`${j.body.status} ${j.body.error?.message ?? ""}`).toBe("done ");
+    return (await asKey(ar, akey.key, "GET", `/jobs/${id}/result`)).body;
+  }
+
+  async function srtOf(id: string): Promise<string> {
+    const r = await fetch(`http://127.0.0.1:${ar.port}/v1/jobs/${id}/result?format=srt`, {
+      headers: { authorization: `Bearer ${akey.key}` },
+    });
+    return await r.text();
+  }
+
+  test("the words carry times inside their segment and in order, and the aligner is named", async () => {
+    const s = await submit(ar, akey.key, DIALOGUE, {
+      preset: "best",
+      diarize: "true",
+      language: "en",
+    });
+    expect(s.status).toBe(202);
+    const res = await result(s.body.id);
+    expect(RESULT.safeParse(res).error?.issues ?? []).toEqual([]);
+    expect(res.engine.models).toEqual([QWEN_ASR, ALIGNER, "silero-vad", NEMOTRON]);
+    expect(res.warnings).toEqual([]);
+    // DIALOGUE speaks at 0.4 s and 0.77 s, then after 1.2 s of silence at 2.34 s and 2.71 s.
+    const starts = [0.4, 0.77, 2.34, 2.71];
+    let last = -1;
+    for (const [i, w] of (res.words as { w: string; s: number; e: number }[]).entries()) {
+      expect(Math.abs(w.s - (starts[i] as number))).toBeLessThan(0.05);
+      expect(w.e).toBeGreaterThan(w.s);
+      expect(w.s).toBeGreaterThan(last);
+      last = w.s;
+      const seg = (res.segments as { s: number; e: number; text: string }[]).find((x) =>
+        x.text.split(" ").includes(w.w),
+      );
+      expect(w.s).toBeGreaterThanOrEqual(seg?.s as number);
+      expect(w.e).toBeLessThanOrEqual(seg?.e as number);
+    }
+  });
+
+  test("[SV-J5] srt cues start and end on the words' times, not on shares of the segment", async () => {
+    const s = await submit(ar, akey.key, DIALOGUE, { preset: "best", language: "en" });
+    const res = await result(s.body.id);
+    const srt = await srtOf(s.body.id);
+    const stamp = (x: number) => {
+      const ms = Math.round(x * 1000);
+      const p = (n: number, w = 2) => String(n).padStart(w, "0");
+      return `00:00:${p(Math.floor(ms / 1000))},${p(ms % 1000, 3)}`;
+    };
+    const words = res.words as { s: number; e: number }[];
+    const times = [...srt.matchAll(/(\S+) --> (\S+)/g)].map((m) => [m[1], m[2]]);
+    // The first cue opens on the first word, the last closes on the last word.
+    expect(times[0]?.[0]).toBe(stamp(words[0]?.s as number));
+    expect(times.at(-1)?.[1]).toBe(stamp(words.at(-1)?.e as number));
+    // Positive control: the segment's own start is earlier than its first word's (the VAD's pad).
+    expect(res.segments[0].s).toBeLessThan(words[0]?.s as number);
+  });
+
+  test("[akou-5an.84] the OpenAI door's verbose_json carries the timed words", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(DIALOGUE)], { type: "audio/wav" }), "a.wav");
+    form.append("model", "best");
+    form.append("language", "en");
+    form.append("response_format", "verbose_json");
+    form.append("timestamp_granularities[]", "word");
+    const r = await fetch(`http://127.0.0.1:${ar.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${akey.key}` },
+      body: form,
+    });
+    const b = (await r.json()) as { words: { word: string; start: number; end: number }[] };
+    expect(b.words.map((w: { word: string }) => w.word)).toEqual(["hello", "world", "ok", "great"]);
+    for (const w of b.words) expect(w.end).toBeGreaterThan(w.start);
+  });
+
+  test("a dictation (interactive) is not aligned, and says so", async () => {
+    const before = jsonLines(alog).length;
+    const s = await submit(ar, akey.key, DIALOGUE, {
+      preset: "best",
+      language: "en",
+      interactive: "true",
+    });
+    expect(s.status).toBe(202);
+    const res = await result(s.body.id);
+    expect(res.words.every((w: { s: null }) => w.s === null)).toBe(true);
+    expect(res.warnings).toEqual(["word times unavailable: a dictation's words are not aligned"]);
+    expect(jsonLines(alog).length).toBe(before);
   });
 });
 

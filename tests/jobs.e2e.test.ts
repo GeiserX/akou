@@ -1011,6 +1011,15 @@ describe("SV-J5: ?format on the result route", () => {
     const vj = await call(server, k.key, "GET", `/jobs/${id}/result?format=verbose_json`);
     expect(vj.body).toMatchObject({ text: "hello world", duration: result.duration_s });
     expect(vj.body.segments[0]).toMatchObject({ id: 0, start: result.segments[0].s });
+    // The job route's verbose_json carries the timed words too, as the OpenAI door does.
+    expect(vj.body.words).toEqual(
+      result.words.map((w: { w: string; s: number; e: number }) => ({
+        word: w.w,
+        start: w.s,
+        end: w.e,
+      })),
+    );
+    expect(vj.body.words).toHaveLength(2);
     const j = await call(server, k.key, "GET", `/jobs/${id}/result?format=json`);
     expect(j.body).toEqual(result);
     const bad = await call(server, k.key, "GET", `/jobs/${id}/result?format=docx`);

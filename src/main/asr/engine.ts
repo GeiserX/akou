@@ -45,6 +45,15 @@ export interface Hypothesis {
   conf?: number;
   /** Decode time, milliseconds. */
   ms: number;
+  /** The aligner that put the words' times (Qwen's words, aligner.ts), when one did. */
+  aligner?: string;
+  /** Why the words have no times, when the engine gives them none and no aligner timed them. */
+  untimed?: string;
+  /**
+   * Milliseconds the aligner took inside this decode: left out of the engine's decode time, so the
+   * machine's measured speed on the recognizer (SV-U6) stays the recognizer's own.
+   */
+  alignMs?: number;
 }
 
 /** One unit of the final pass: gained, padded audio and what the call knows about it. */
@@ -285,6 +294,19 @@ export interface LlamaEngineSpec {
   gpuLayers?: number;
   /** ISO codes the engine may choose among on `auto`; empty for any. */
   languages?: readonly string[];
+  /**
+   * The word-time aligner (aligner.ts), when it can run here: its GGUF and CrispASR, the image's or
+   * an own one (`command`), else the pinned build unpacked on first use. Only a single-engine job
+   * on `best` carries it.
+   */
+  aligner?: {
+    engine: string;
+    model: string;
+    command?: readonly string[];
+    build?: { dir: string; archives: readonly string[]; platform: string };
+  };
+  /** Why a job's words keep no times when there is no aligner, said in the job's warnings. */
+  untimed?: string;
 }
 
 /**

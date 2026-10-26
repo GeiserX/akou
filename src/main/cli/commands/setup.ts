@@ -11,9 +11,10 @@ import { existsSync, statSync } from "node:fs";
 import { totalmem } from "node:os";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
+import { alignerIds, alignerPlan, imageAligner } from "../../asr/aligner-catalog.ts";
 import { fusionChoice } from "../../asr/fusion.ts";
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
-import { llamaRuntime } from "../../asr/llama-server.ts";
+import { llamaPlan, llamaRuntime } from "../../asr/llama-server.ts";
 import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
 import { chosenModelsHere } from "../../asr/model-set.ts";
 import {
@@ -225,10 +226,17 @@ function pullPlan(
       settings["asr.accelerator"] as AcceleratorSetting,
       hostProbe(ctx.io.env),
     );
-    const runtime = llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
-      image: ctx.io.env.AKOU_LLAMA_SERVER,
-      detected,
-    });
+    const llama = llamaPlan(
+      {
+        setting: settings["asr.accelerator"],
+        own: settings["asr.llamaServer"],
+        image: ctx.io.env.AKOU_LLAMA_SERVER,
+        detected,
+        platform: hostPlatform(),
+      },
+      all as readonly CatalogEntry[],
+    );
+    const runtime = llama.build?.id ?? null;
     // `auto` pulls what a job that names no model would run here (SV-R2, `autoChoice`).
     const dir = settings["asr.modelsDir"];
     const preset =
@@ -240,11 +248,20 @@ function pullPlan(
             machine: { gpu: detected.gpu !== null, memoryGb: totalmem() / 1024 ** 3 },
           }).preset
         : name;
+    // The word-time aligner and its CrispASR, where Qwen runs on Metal or Vulkan.
+    const aligner = alignerIds(
+      alignerPlan({
+        accelerator: llama.accelerator,
+        platform: hostPlatform(),
+        image: imageAligner(ctx.io.env.AKOU_CRISPASR),
+      }),
+    ).filter((id) => all.some((m) => m.id === id));
     const p = presetModels(
       preset,
       reg.map((m) => m.id),
       runtime,
       fusionChoice(settings).engines,
+      aligner,
     );
     if ("unavailable" in p) {
       return {

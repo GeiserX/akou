@@ -320,6 +320,12 @@ export interface ModelStoreOptions {
    * kept and swept with it.
    */
   requires?(recognizer: string): readonly string[];
+  /**
+   * What makes a recognizer's result better but is never waited for: the word-time aligner for
+   * Qwen. A job never waits on it and `admit` never counts it; `fetchExtras` starts its download
+   * when `server.auto_download` allows, and a job's start and end mark it used.
+   */
+  extras?(recognizer: string): readonly string[];
   autoDownload(): boolean;
   maxGb(): number;
   unusedDays(): number;
@@ -752,6 +758,30 @@ export class ModelStore {
         { reason: "disk_full", model: first, bytes: need },
       );
     }
+  }
+
+  /** The optional models a job on `recognizer` uses when they are here (`extras`). */
+  extras(recognizer: string): string[] {
+    return (this.o.extras?.(recognizer) ?? []).filter((id) => this.entry(id));
+  }
+
+  /**
+   * Starts the download of a recognizer's missing optional models, when `server.auto_download` is
+   * on and the size and disk limits allow it; else leaves them, and the job runs without.
+   */
+  fetchExtras(recognizer: string): void {
+    const miss = this.missing(this.extras(recognizer));
+    if (miss.length === 0 || !this.o.autoDownload()) return;
+    try {
+      this.admit(miss);
+    } catch (err) {
+      this.o.log(
+        "warn",
+        `model.download ${miss.join(", ")} not started: ${(err as Error).message}`,
+      );
+      return;
+    }
+    this.fetch(miss);
   }
 
   /** Starts the download of every missing model not already downloading. */
