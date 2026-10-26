@@ -232,3 +232,33 @@ export function autosize(area: HTMLTextAreaElement, maxRows = 12, breaks = false
   });
   return fit;
 }
+
+/**
+ * Wires a `.scrolls` pane (theme.css): its scrollbar shows on hover and while the user scrolls it
+ * (wheel, touch, keys or a press on the bar), then fades. A scroll the code makes, such as a pane
+ * following its newest line, shows nothing, so a live call does not flash the bar.
+ */
+export function quietScrollbar(el: HTMLElement, holdMs = 800): void {
+  let lastHand = Number.NEGATIVE_INFINITY;
+  let held = false;
+  let hide: ReturnType<typeof setTimeout> | null = null;
+  const hand = () => {
+    lastHand = performance.now();
+  };
+  for (const type of ["wheel", "touchmove", "keydown"]) {
+    el.addEventListener(type, hand, { passive: true });
+  }
+  // A press on the bar lands on the pane itself; the scroll it drives while held is by hand.
+  el.addEventListener("mousedown", (e) => {
+    held = e.target === el;
+  });
+  document.addEventListener("mouseup", () => {
+    held = false;
+  });
+  el.addEventListener("scroll", () => {
+    if (!held && performance.now() - lastHand > holdMs) return;
+    el.dataset.scrolling = "";
+    if (hide) clearTimeout(hide);
+    hide = setTimeout(() => delete el.dataset.scrolling, holdMs);
+  });
+}

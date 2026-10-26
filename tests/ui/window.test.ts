@@ -1457,6 +1457,92 @@ const rowsOf = (page: Page, sel: string) =>
     };
   });
 
+describe("the main panes' scrollbars (WINDOW W13.7)", () => {
+  test(
+    "[W13.7] the calls list, the transcript and the notes show a thin bar only on hover or a scroll by hand, and the calls keep their width when the list scrolls",
+    async () => {
+      await withRig(
+        {
+          seed: (home) => {
+            for (let i = 0; i < 40; i++) {
+              const id = `01J8Z6Q4M2VX0K7B3D4E5F${String(i).padStart(4, "0")}`;
+              seedCall(home, (b) => standardCall(b, id));
+            }
+          },
+        },
+        async (rig) => {
+          const page = await rig.open();
+          await page.emulateMedia({ colorScheme: "dark" });
+          await page.setViewportSize({ width: 1440, height: 900 });
+          await until(
+            async () => (await page.locator("#calls li button").count()) >= 40,
+            5000,
+            "the calls",
+          );
+          const list = "#sidebar .calls-sub";
+          const shown = (sel: string) =>
+            page.$eval(sel, (el) => getComputedStyle(el).color !== "rgba(0, 0, 0, 0)");
+          expect(await page.$eval(list, (el) => el.scrollHeight > el.clientHeight)).toBe(true);
+          // The calls line up with the rows under the list: the bar's 8 px gutter sits in the
+          // column's padding and takes none of their width. Headless Chromium draws no
+          // scrollbars, so no gutter, and only WebKit (the app's engine) can show it.
+          if (process.env.AKOU_UI_BROWSER === "webkit") {
+            const [row, nav, gutter] = await page.evaluate(() => {
+              const w = (el: Element | null) => el?.getBoundingClientRect().width ?? 0;
+              const l = document.querySelector("#sidebar .calls-sub") as HTMLElement;
+              return [
+                w(document.querySelector("#calls li button")),
+                w(document.getElementById("dictation-open")),
+                l.offsetWidth - l.clientWidth,
+              ];
+            });
+            expect(gutter).toBe(8);
+            expect(Math.abs((row ?? 0) - (nav ?? 0))).toBeLessThanOrEqual(1);
+          }
+          // At rest no pane shows a bar.
+          await page.mouse.move(700, 5);
+          for (const sel of [list, "#scroller", "#pane-notes"]) {
+            await until(async () => !(await shown(sel)), 5000, `${sel} at rest`);
+          }
+          const strip = async () => {
+            const b = await page.locator(list).boundingBox();
+            if (!b) throw new Error("no calls list");
+            return page.screenshot({
+              clip: { x: b.x + b.width - 8, y: b.y, width: 8, height: b.height },
+            });
+          };
+          const rest = await strip();
+          // A scroll the code makes shows nothing.
+          await page.$eval(list, (el) => {
+            el.scrollTop = 200;
+          });
+          await page.waitForTimeout(200);
+          expect(await page.$eval(list, (el) => "scrolling" in (el as HTMLElement).dataset)).toBe(
+            false,
+          );
+          // Hover shows it.
+          await page.hover("#calls li button >> nth=3");
+          await until(() => shown(list), 5000, "the bar on hover");
+          if (process.env.AKOU_UI_BROWSER === "webkit") {
+            await page.waitForTimeout(500);
+            expect((await strip()).equals(rest)).toBe(false);
+          }
+          // A wheel scroll shows it while it scrolls, and it goes after.
+          await page.mouse.wheel(0, 300);
+          await until(
+            () => page.$eval(list, (el) => "scrolling" in (el as HTMLElement).dataset),
+            5000,
+            "the bar while scrolling",
+          );
+          await page.mouse.move(700, 5);
+          await until(async () => !(await shown(list)), 5000, "the bar gone after");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the note box and the fix box grow with their text", () => {
   test(
     "the note box wraps and grows to show a long note whole, caps at twelve rows, Enter adds the note and Shift+Enter is a line break in it",

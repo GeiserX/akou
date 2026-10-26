@@ -18,7 +18,17 @@ import { CallPicker } from "./call-picker.ts";
 import { DictationDictionary } from "./dictation-dictionary.ts";
 import { DictationHistory } from "./dictation-history.ts";
 import { DictationPage, HISTORY, WORDS } from "./dictation-page.ts";
-import { autosize, byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
+import {
+  autosize,
+  byId,
+  closable,
+  closeX,
+  h,
+  openModal,
+  quietScrollbar,
+  replace,
+  toast,
+} from "./dom.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
 import { liveChip } from "./live-options.ts";
@@ -249,6 +259,8 @@ class App {
       fixWord: (id, anchor, sel, near) => this.fixWord(id, anchor, sel, near),
     });
     new LineMenu(byId("lines"), byId("scroller"), () => this.lineActions());
+    // The main panes' scrollbars show only while in use (theme.css `.scrolls`).
+    for (const el of document.querySelectorAll<HTMLElement>(".scrolls")) quietScrollbar(el);
     this.player = new Player({
       view,
       mayPlay: () => this.mayPlay(),

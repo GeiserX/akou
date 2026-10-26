@@ -56,9 +56,6 @@ export class NotepadPane {
   private readonly pane = byId("pane-notes");
   /** The list follows its newest note while this holds: until the user scrolls up, again at the end. */
   private pinned = true;
-  private scrolling: ReturnType<typeof setTimeout> | null = null;
-  /** The next scroll is the list following its end, not the user, so it shows no scrollbar. */
-  private following = false;
   private readonly input = byId<HTMLTextAreaElement>("note-input");
   /** The note box grows with the note (WINDOW section 6), so a long one reads whole. */
   private readonly fit = autosize(this.input, 12, true);
@@ -81,14 +78,6 @@ export class NotepadPane {
     this.list.addEventListener("click", (e) => this.onClick(e));
     this.pane.addEventListener("scroll", () => {
       this.pinned = this.atEnd();
-      if (this.following) {
-        this.following = false;
-        return;
-      }
-      // The scrollbar shows while the pane scrolls and a moment after (theme.css).
-      this.pane.dataset.scrolling = "";
-      if (this.scrolling) clearTimeout(this.scrolling);
-      this.scrolling = setTimeout(() => delete this.pane.dataset.scrolling, 800);
     });
     // The pane or a note changing size (a resize, a note growing while edited) keeps the end in view.
     const follow = new ResizeObserver(() => this.follow());
@@ -104,7 +93,6 @@ export class NotepadPane {
   /** Scrolls to the newest note, unless the user scrolled up to read. */
   private follow(): void {
     if (!this.pinned || this.atEnd()) return;
-    this.following = true;
     this.pane.scrollTop = this.pane.scrollHeight;
   }
 
