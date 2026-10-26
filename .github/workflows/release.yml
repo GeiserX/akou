@@ -367,8 +367,8 @@ jobs:
       - name: G1 tools (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends xvfb xauth openbox wmctrl xdotool \
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends xvfb xauth openbox wmctrl xdotool \
             imagemagick dbus dbus-x11 python3-gi gir1.2-glib-2.0 libgtk-3-0t64 \
             libwebkit2gtk-4.1-0 libayatana-appindicator3-1
       - name: G1, the shell of the packaged app (ROADMAP)

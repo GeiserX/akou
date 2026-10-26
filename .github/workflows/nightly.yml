@@ -166,7 +166,7 @@ jobs:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       # ffmpeg as on check's Linux leg, so the same tests run and the same floor holds.
-      - run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
+      - run: command -v ffmpeg || { sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends ffmpeg; }
       - name: bun test, ${{ matrix.run }}
         shell: bash
         env:

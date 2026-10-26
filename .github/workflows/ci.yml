@@ -95,7 +95,7 @@ jobs:
       # ffmpeg on the Linux check, so the tests that read audio and subtitles through the real
       # ffmpeg (SV-P6, SV-J5) run in CI instead of skipping; the floor's maxSkip counts on it.
       - if: runner.os == 'Linux'
-        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg; }
+        run: command -v ffmpeg || { sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends ffmpeg; }
       # The tests' temporary folders on the runner's D: drive. Left to TEMP they land on C:, the
       # runner's OS disk, where an fsync takes 3.5 ms at the median and up to a second, against
       # 0.24 ms and 150 ms on D:. The dictation log fsyncs every event and the call log as it
@@ -247,7 +247,7 @@ jobs:
       - name: dbus-daemon for the MPRIS tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          command -v dbus-daemon || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends dbus; }
+          command -v dbus-daemon || { sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends dbus; }
           dbus-daemon --version | head -1
       - name: cargo test (shipping and test builds)
         working-directory: native/akou-capture
@@ -912,8 +912,8 @@ jobs:
         run: cargo build --locked --release
       - name: ${{ matrix.server }} with a virtual mic and call output
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ${{ matrix.packages }}
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends ${{ matrix.packages }}
           unset DBUS_SESSION_BUS_ADDRESS
           scripts/capture-rig.sh ${{ matrix.server }} | tee rig.txt
           grep '^DBUS_SESSION_BUS_ADDRESS=' rig.txt >> "$GITHUB_ENV"
@@ -978,7 +978,7 @@ jobs:
           paplay -d "$MIC_SINK" tone.wav &
           player=$!
           sudo modprobe uinput || true
-          command -v setfacl >/dev/null || sudo apt-get install -y -qq acl
+          command -v setfacl >/dev/null || sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq acl
           mkfifo kb.fifo mouse.fifo
           exec 4<>kb.fifo 5<>mouse.fifo
           sudo python3 uinput.py keyboard <kb.fifo >kb.out &
@@ -1050,7 +1050,7 @@ jobs:
       - name: dictate pauses a playing MPRIS player for the session and gives it back
         run: |
           set -euo pipefail
-          sudo apt-get install -y -qq --no-install-recommends python3-dbus python3-gi
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends python3-dbus python3-gi
           bin="$PWD/native/akou-capture/target/release/akou-capture"
           work=$(mktemp -d)
           cd "$work"
@@ -1138,7 +1138,7 @@ jobs:
       - name: dictate hears its chord through the GlobalShortcuts portal
         run: |
           set -euo pipefail
-          sudo apt-get install -y -qq --no-install-recommends python3-dbus python3-gi
+          sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y -qq --no-install-recommends python3-dbus python3-gi
           bin="$PWD/native/akou-capture/target/release/akou-capture"
           work=$(mktemp -d)
           cd "$work"
@@ -1538,7 +1538,7 @@ jobs:
           chmod 0777 "$wy"
           cp "$RUNNER_TEMP/en.wav" "$wy/en.wav"
           docker run --rm -v "$wy:/work" --entrypoint ffmpeg akou:ci -nostdin -loglevel error -i /work/en.wav -ar 16000 -ac 1 -sample_fmt s16 /work/en16.wav
-          python3 -m venv "$RUNNER_TEMP/wy" || { sudo apt-get update -q && sudo apt-get install -y python3-venv && python3 -m venv "$RUNNER_TEMP/wy"; }
+          python3 -m venv "$RUNNER_TEMP/wy" || { sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 update -q && sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=5 install -y python3-venv && python3 -m venv "$RUNNER_TEMP/wy"; }
           "$RUNNER_TEMP/wy/bin/pip" install --require-hashes -r scripts/ci/wyoming/requirements.txt
           "$RUNNER_TEMP/wy/bin/python" -I scripts/ci/wyoming/probe.py --host 127.0.0.1 --port 10300 --language en --wav "$wy/en16.wav" | tee wyoming.txt
           head -n1 wyoming.txt | jq -e '.asr[0].name == "akou" and ([.asr[0].models[].name] | index("fast") != null)'
