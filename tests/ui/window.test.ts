@@ -1031,12 +1031,25 @@ describe("the notepad (DESIGN 5.1)", () => {
             timeout: 5000,
           });
 
-          // A new note whose request fails does not stop the next one.
+          // A new note whose request fails goes back in the box to send again, and does not stop
+          // the next one.
           await page.click("#note-input");
           await page.keyboard.type("lost line");
           fail = "net";
           await page.keyboard.press("Enter");
           await toastSays("the note was not saved");
+          await until(
+            async () => (await page.inputValue("#note-input")) === "lost line",
+            5000,
+            "the failed note back in the box",
+          );
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("lost line"),
+            5000,
+            "the failed note sent again",
+          );
+          expect(await page.inputValue("#note-input")).toBe("");
           await page.keyboard.type("fresh line");
           await page.keyboard.press("Enter");
           await until(

@@ -134,7 +134,15 @@ export class NotepadPane {
           afterSeq: draft.afterSeq,
         })
         .catch(() => null);
-      if (!r || r.status >= 400 || !r.body.note) toast(message(r?.body, "the note was not saved"));
+      if (r && r.status < 400 && r.body.note) return;
+      toast(message(r?.body, "the note was not saved"));
+      // Only Enter sends now, so a failed note goes back in the box with its time, to send
+      // again; a next note already being typed there is left alone.
+      if (this.d.call() === call && this.input.value.trim() === "") {
+        this.input.value = text;
+        this.fit();
+        this.draft = draft;
+      }
     });
     return this.saving;
   }
