@@ -259,6 +259,7 @@ export function quietScrollbar(el: HTMLElement, holdMs = 800): void {
     if (!held && performance.now() - lastHand > holdMs) return;
     el.dataset.scrolling = "";
     if (hide) clearTimeout(hide);
+    // clock: the bar stays a moment after the last scroll by hand, then fades.
     hide = setTimeout(() => delete el.dataset.scrolling, holdMs);
   });
 }

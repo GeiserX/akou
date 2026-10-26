@@ -1945,6 +1945,7 @@ body.inset #ask-row {
 }
 
 main {
+  overflow-y: auto;
   scroll-behavior: smooth;
   padding: 20px 24px 40vh;
 }
