@@ -105,6 +105,10 @@ export function modelName(r: Pick<ModelRow, "id" | "job"> & { name?: string | nu
     const on = BUILDS[r.id.slice(r.id.lastIndexOf("-") + 1)];
     return on ? `Qwen3-ASR's program for ${on}` : "Qwen3-ASR's program";
   }
+  if (r.id.startsWith("crispasr-")) {
+    const on = BUILDS[r.id.slice(r.id.lastIndexOf("-") + 1)];
+    return on ? `The word-time aligner's program for ${on}` : "The word-time aligner's program";
+  }
   return r.id;
 }
 

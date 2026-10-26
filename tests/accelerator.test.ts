@@ -517,7 +517,9 @@ describe("the pinned llama.cpp builds", () => {
 });
 
 describe("one table: what detection offers is what the best preset downloads", () => {
-  const runtimes = MODELS.filter((m) => m.serves.includes("runtime"));
+  const runtimes = MODELS.filter(
+    (m) => m.serves.includes("runtime") && m.runtime === "llama-server",
+  );
 
   test("every build is a catalog entry with the same files, and every catalog build is in the table", () => {
     for (const b of LLAMA_BUILDS) {

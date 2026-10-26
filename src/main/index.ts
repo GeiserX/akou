@@ -79,6 +79,14 @@ import {
   type Probe,
   verifyAccelerator,
 } from "./asr/accelerator.ts";
+import {
+  ALIGNER,
+  ALIGNER_FILE,
+  type AlignerPlan,
+  alignerIds,
+  alignerPlan,
+  imageAligner,
+} from "./asr/aligner-catalog.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import {
   chooseFinalModel,
@@ -386,6 +394,11 @@ export interface AppOptions {
    * loopback server; the recognizer is then not restarted after a pull, because they are not models.
    */
   modelRegistry?: readonly ModelSpecEntry[];
+  /**
+   * CrispASR for the word-time aligner, program first, run whatever the accelerator and with no
+   * file checked (a test's fake). By default the image's, or the pinned build on Metal or Vulkan.
+   */
+  aligner?: readonly string[];
   /**
    * Where the final pass reads a call's audio, or null when it cannot. By default a part's Opus
    * file, decoded by the capture helper, or a 16-bit WAV beside it (`partsAudio`).
@@ -3097,10 +3110,10 @@ export class AkouApp implements ApiApp {
         given?.kind === "module" && this.o.modelRegistry && !llama
           ? { ...given, model: recognizer }
           : given;
-      return spec && llama ? { ...spec, final: this.llamaSpec(recognizer) } : spec;
+      return spec && llama ? { ...spec, final: this.alignedSpec(recognizer) } : spec;
     }
     // Parakeet on sherpa-onnx, or a llama-server engine (Qwen) over the same VAD and speaker models.
-    if (llama) return { ...this.finalSherpaSpec(), final: this.llamaSpec(recognizer) };
+    if (llama) return { ...this.finalSherpaSpec(), final: this.alignedSpec(recognizer) };
     if (recognizer !== RECOGNIZER) {
       throw Object.assign(new Error(`${recognizer} has no engine in this version`), {
         code: "unknown_model",
@@ -3181,6 +3194,52 @@ export class AkouApp implements ApiApp {
   /** The platform detection read, which is the machine's own outside tests. */
   private llamaPlatform(): string {
     return this.accelProbe?.platform ?? hostPlatform();
+  }
+
+  /** The word-time aligner here (aligner-catalog.ts), by the backend Qwen runs on. */
+  private alignerPlan(): AlignerPlan {
+    if (this.o.aligner) return { command: this.o.aligner };
+    return alignerPlan({
+      accelerator: this.llamaPlan().accelerator,
+      platform: this.llamaPlatform(),
+      image: imageAligner(this.accelProbe?.env.AKOU_CRISPASR),
+    });
+  }
+
+  /**
+   * A single-engine job's Qwen with the word-time aligner when it can run and is on disk, else
+   * with why its words keep no times (aligner.ts). Fusion, a call's final pass and dictation's own
+   * Qwen take `llamaSpec` as it is.
+   */
+  private alignedSpec(engine: string): LlamaEngineSpec {
+    const spec = this.llamaSpec(engine);
+    const dir = this.cfg.settings["asr.modelsDir"];
+    const model = modelFile(dir, ALIGNER, ALIGNER_FILE);
+    const plan = this.alignerPlan();
+    if ("why" in plan) return { ...spec, untimed: plan.why };
+    if (this.o.aligner) {
+      return { ...spec, aligner: { engine: ALIGNER, model, command: this.o.aligner } };
+    }
+    const ids = alignerIds(plan);
+    const missing = ids.some((id) => {
+      const m = MODELS.find((x) => x.id === id);
+      return !m || m.files.some((f) => !existsSync(modelFile(dir, id, f.name)));
+    });
+    if (missing)
+      return { ...spec, untimed: "the aligner is not downloaded (akou models pull best)" };
+    const aligner: NonNullable<LlamaEngineSpec["aligner"]> =
+      "command" in plan
+        ? { engine: ALIGNER, model, command: plan.command }
+        : {
+            engine: ALIGNER,
+            model,
+            build: {
+              dir: join(dir, plan.build.id),
+              archives: plan.build.files.map((f) => modelFile(dir, plan.build.id, f.name)),
+              platform: this.llamaPlatform(),
+            },
+          };
+    return { ...spec, aligner };
   }
 
   /** The llama-server engine a job on `engine` runs: `asr.llamaServer`, the image's, or the pinned build. */
@@ -3811,6 +3870,9 @@ export class AkouApp implements ApiApp {
         const build = this.llamaPlan().build;
         return build ? [build.id] : [];
       },
+      // Word times for a job on Qwen: fetched in the background, never waited for.
+      extras: (id) =>
+        this.runsOnLlama(id) && !this.o.aligner ? alignerIds(this.alignerPlan()) : [],
       autoDownload: () => s()["server.auto_download"],
       maxGb: () => s()["server.models_max_gb"],
       unusedDays: () => s()["server.models_unused_days"],

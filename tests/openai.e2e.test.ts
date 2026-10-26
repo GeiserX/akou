@@ -11,6 +11,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CUE_CHARS,
+  jobCues,
+  openaiWords,
   promptTerms,
   RESPONSE_FORMATS,
   renderResult,
@@ -209,14 +211,14 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
     expect(check(OK["application/json"].schema, { ...b, segments: [seg] })).not.toEqual([]);
   });
 
-  test("[SV-C1] verbose_json with no language anywhere says und, never unknown; words stay empty", async () => {
+  test("[SV-C1] verbose_json with no language anywhere says und, never unknown", async () => {
     // The fake engine, as Parakeet, names no language: only the request's hint could.
     const r = await post([
       ["response_format", "verbose_json"],
       ["timestamp_granularities[]", "word"],
     ]);
     const b = JSON.parse(r.text);
-    expect([b.language, b.words]).toEqual(["und", []]);
+    expect(b.language).toBe("und");
     expect(check(OK["application/json"].schema, b)).toEqual([]);
     // Positive control: a hint is the language when the engine names none.
     const es = await post([
@@ -382,6 +384,66 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const r = await post([["model", "whisper-1"]], monoWav(silence(61)));
     expect(r.status).toBe(422);
     expect(JSON.parse(r.text)).toMatchObject({ error: "too_long" });
+  });
+
+  test("[akou-5an.84] verbose_json words: every word that has a time, and never a guessed one", () => {
+    const timed = [
+      { w: "a", s: 0.1, e: 0.3, c: 1 },
+      { w: "b", s: 0.4, e: 0.6, c: null },
+    ];
+    expect(openaiWords(timed)).toEqual([
+      { word: "a", start: 0.1, end: 0.3 },
+      { word: "b", start: 0.4, end: 0.6 },
+    ]);
+    // A piece the aligner could not time loses its words here, not the other pieces' words.
+    expect(openaiWords([...timed, { w: "c", s: null, e: null, c: 0.9 }])).toEqual([
+      { word: "a", start: 0.1, end: 0.3 },
+      { word: "b", start: 0.4, end: 0.6 },
+    ]);
+    expect(openaiWords([{ w: "c", s: null, e: null, c: 0.9 }])).toEqual([]);
+  });
+
+  test("[SV-J5] one untimed segment among timed ones: the timed segments keep their word cues", () => {
+    const segs = [
+      { s: 0, e: 10, text: "one two", speaker: null },
+      { s: 10, e: 20, text: "three four", speaker: null },
+      { s: 20, e: 30, text: "five six", speaker: null },
+    ];
+    const words = [
+      { w: "one", s: 1, e: 1.5, c: 1 },
+      { w: "two", s: 2, e: 2.5, c: 1 },
+      { w: "three", s: null, e: null, c: 1 },
+      { w: "four", s: null, e: null, c: 1 },
+      { w: "five", s: 21, e: 21.5, c: 1 },
+      { w: "six", s: 22, e: 22.5, c: 1 },
+    ];
+    expect(jobCues(words, segs)).toEqual([
+      { s: 1, e: 2.5, text: "one two", speaker: null },
+      { s: 10, e: 20, text: "three four", speaker: null },
+      { s: 21, e: 22.5, text: "five six", speaker: null },
+    ]);
+    // Through the result route too.
+    const job = { result: { text: "", segments: segs, words } } as unknown as Job;
+    return renderResult(job, "srt")
+      .text()
+      .then((body) => expect(body).toContain("00:00:01,000 --> 00:00:02,500\none two"));
+  });
+
+  test("[SV-J5] words that do not spell their segments leave every segment to its characters", () => {
+    const segs = [
+      { s: 0, e: 10, text: "one two", speaker: null },
+      { s: 10, e: 20, text: "three", speaker: null },
+    ];
+    const words = [
+      { w: "one", s: 1, e: 1.5, c: 1 },
+      { w: "too", s: 2, e: 2.5, c: 1 },
+      { w: "three", s: null, e: null, c: 1 },
+    ];
+    expect(jobCues(words, segs)).toEqual(segs);
+    // Positive control: spelled right, the first segment gets its word cue.
+    expect(
+      jobCues([words[0], { ...words[1], w: "two" }, words[2]] as typeof words, segs)[0],
+    ).toEqual({ s: 1, e: 2.5, text: "one two", speaker: null });
   });
 
   test("[SV-J5] cues from timed words: at most 42 characters, never across a segment", () => {

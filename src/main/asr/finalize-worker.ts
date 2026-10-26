@@ -62,6 +62,7 @@ import {
   type FusionEngineSpec,
   type FusionSpec,
   type Hypothesis,
+  type LlamaEngineSpec,
   loadModelSet,
   type ModelSet,
   type ModelSpec,
@@ -80,6 +81,7 @@ import {
   useNativeFlag,
 } from "./native-guard.ts";
 import { peak, prepareSpan } from "./pad.ts";
+import type { QwenEngine } from "./qwen.ts";
 import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
@@ -672,6 +674,8 @@ export async function runFinalPass(
     step = "decode";
     progress(0);
     const decodeFrom = performance.now();
+    // The word-time aligner's share of the decode, left out of the recognizer's speed (SV-U6).
+    let alignMs = 0;
     const languages = new Set<string>();
     let callText = false;
     let callEnergy = false;
@@ -839,6 +843,7 @@ export async function runFinalPass(
               o,
               skip,
             );
+            alignMs += r.alignMs ?? 0;
             progress(piece.to);
             const l = lineOf(p, ch, piece, r, clock, spans);
             if (l) lines.push(l);
@@ -849,7 +854,7 @@ export async function runFinalPass(
         closePart(p, lines);
       }
     }
-    const decode_s = (performance.now() - decodeFrom) / 1000;
+    const decode_s = (performance.now() - decodeFrom - alignMs) / 1000;
     for (const d of layer) emit(d);
 
     // 4 (names). Final clusters to live clusters, jointly.
@@ -937,6 +942,9 @@ export async function decodeUnit(
     };
     if (h.lang) out.lang = h.lang;
     if (h.conf !== undefined) out.conf = h.conf;
+    if (h.aligner) out.aligner = h.aligner;
+    if (h.untimed) out.untimed = h.untimed;
+    if (h.alignMs !== undefined) out.alignMs = h.alignMs;
     return out;
   } catch (err) {
     if ((err as { fatal?: boolean }).fatal) throw err;
@@ -967,6 +975,12 @@ export function joinHalves(a: Hypothesis, b: Hypothesis): Hypothesis {
   if (lang) out.lang = lang;
   const confs = [a.conf, b.conf].filter((c) => c !== undefined);
   if (confs.length > 0) out.conf = confs.reduce((x, y) => x + y, 0) / confs.length;
+  const aligner = a.aligner ?? b.aligner;
+  if (aligner) out.aligner = aligner;
+  const untimed = a.untimed ?? b.untimed;
+  if (untimed) out.untimed = untimed;
+  if (a.alignMs !== undefined || b.alignMs !== undefined)
+    out.alignMs = (a.alignMs ?? 0) + (b.alignMs ?? 0);
   return out;
 }
 
@@ -1185,7 +1199,8 @@ export async function runEngines(
           drop((err as Error).message, units.length - u, err as Error);
           break;
         }
-        run.decode_s += (performance.now() - t) / 1000;
+        // The word-time aligner's share is not the engine's speed (SV-U6).
+        run.decode_s += (performance.now() - t - (h.alignMs ?? 0)) / 1000;
         o.onUnit?.(u, turn, n);
         // Fusion aligns words; a single engine's result keeps exactly what the engine gave.
         if (n > 1) h = withWords(h);
@@ -1849,6 +1864,10 @@ export interface JobPassResult {
    * and for how many units (null: all of them).
    */
   fusion?: { fuser: BuiltFuser; engines: EngineRun[]; dropped: EngineDrop[] };
+  /** The aligner that timed Qwen's words (aligner.ts), when it timed any. */
+  aligner?: string;
+  /** Pieces whose words keep no times though the engine's could have had them, by reason. */
+  untimed?: { reason: string; units: number }[];
 }
 
 /** The N-engine pass of a job: the engines in priority order, the fuser, the memory budget. */
@@ -1959,6 +1978,8 @@ export async function runJobPass(
   // Characters of text per detected language: the job's language is the one most of it is in, so
   // a filler the model hears as another language at the start does not name the whole file.
   const heard = new Map<string, number>();
+  let aligner: string | undefined;
+  const untimed = new Map<string, number>();
   // The pad counts as speech, so it stays with the speech beside it and never becomes a piece of
   // noise on its own.
   const heardSpeech = flags.slice(w0, w1);
@@ -2019,6 +2040,8 @@ export async function runJobPass(
     }
     if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
+    if (r.aligner) aligner ??= r.aligner;
+    if (r.untimed) untimed.set(r.untimed, (untimed.get(r.untimed) ?? 0) + 1);
     for (const w of r.words) words.push(jobWord(w, offset));
     if (r.conf !== undefined) unitConfs.push(r.conf);
     segments.push({
@@ -2054,6 +2077,10 @@ export async function runJobPass(
     },
     ...(fusion
       ? { fusion: { fuser: fusion.fuser, engines: pass.ran, dropped: pass.dropped } }
+      : {}),
+    ...(aligner ? { aligner } : {}),
+    ...(untimed.size > 0
+      ? { untimed: [...untimed].map(([reason, units]) => ({ reason, units })) }
       : {}),
   };
 }
@@ -2142,43 +2169,62 @@ async function releaseJobModels(reply: (r: FromJob) => void): Promise<void> {
   reply({ type: "released" });
 }
 
+/**
+ * The key the kept engine is reused by: its spec without the aligner, which is set per job, so a
+ * job without it (a dictation) or one after its download finished never restarts llama-server.
+ */
+function engineKey(spec: LlamaEngineSpec | undefined): string {
+  if (!spec) return "";
+  const { aligner: _, untimed: __, ...rest } = spec;
+  return JSON.stringify(rest);
+}
+
+/** The kept engine's key for a job: Qwen's spec without its per-job aligner, else the translate spec. */
+function jobKey(models: ToJob["models"]): string {
+  if (models.final) return engineKey(models.final);
+  return models.translate ? JSON.stringify(models.translate) : "";
+}
+
 async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEngine | undefined> {
   const spec = m.models.final ?? m.models.translate;
-  const key = spec ? JSON.stringify(spec) : "";
+  const key = jobKey(m.models);
   if (jobEngine && jobEngine.key !== key) {
     await jobEngine.engine.unload();
     jobEngine = null;
   }
   if (!spec) return undefined;
+  const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
+  if (m.models.final) {
+    const { createLlamaEngine, alignerOf } = await import("./llama-server.ts");
+    const hooks = {
+      onChild: (pid: number, alive: boolean) => reply({ type: "child", pid, alive }),
+      log,
+    };
+    if (!jobEngine) jobEngine = { key, engine: createLlamaEngine(m.models.final, hooks) };
+    const a = alignerOf(m.models.final, hooks);
+    // The key names a llama-server spec, so the kept engine is the Qwen one.
+    (jobEngine.engine as QwenEngine).setAligner(a.aligner, a.untimed);
+    return jobEngine.engine;
+  }
   if (!jobEngine) {
-    const log = (level: "info" | "warn" | "error", msg: string) =>
-      reply({ type: "log", level, msg });
+    const t = m.models.translate as TranslateSpec;
     let engine: FinalEngine;
-    if (m.models.final) {
-      const { createLlamaEngine } = await import("./llama-server.ts");
-      engine = createLlamaEngine(m.models.final, {
-        onChild: (pid, alive) => reply({ type: "child", pid, alive }),
+    if (t.kind === "transcribe-cpp") {
+      const { createTranscribeCppEngine } = await import("./transcribe-cpp.ts");
+      engine = createTranscribeCppEngine(t.engine, t.modelsDir, {
+        task: "translate",
+        signal: () => jobSignal,
         log,
+        ...(t.backend ? { backend: t.backend } : {}),
       });
     } else {
-      const t = m.models.translate as TranslateSpec;
-      if (t.kind === "transcribe-cpp") {
-        const { createTranscribeCppEngine } = await import("./transcribe-cpp.ts");
-        engine = createTranscribeCppEngine(t.engine, t.modelsDir, {
-          task: "translate",
-          signal: () => jobSignal,
-          log,
-          ...(t.backend ? { backend: t.backend } : {}),
-        });
-      } else {
-        const mod = (await import(t.path)) as {
-          createEngine(o: unknown, engine: string, ctx?: TranslateContext): FinalEngine;
-        };
-        engine = mod.createEngine(t.options, t.engine, {
-          task: "translate",
-          signal: () => jobSignal,
-        });
-      }
+      const mod = (await import(t.path)) as {
+        createEngine(o: unknown, engine: string, ctx?: TranslateContext): FinalEngine;
+      };
+      engine = mod.createEngine(t.options, t.engine, {
+        task: "translate",
+        signal: () => jobSignal,
+      });
     }
     jobEngine = { key, engine };
   }
@@ -2308,7 +2354,7 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
     // An engine that starts for this job starts inside its first decode, so the job's decode time
     // would carry the start: such a job reports none.
     const kept = m.models.final ?? m.models.translate;
-    const starts = kept !== undefined && jobEngine?.key !== JSON.stringify(kept);
+    const starts = kept !== undefined && jobEngine?.key !== jobKey(m.models);
     // A fusion job stops a llama-server kept from an earlier job: one Metal engine at a time.
     const single = await engineFor(m, reply);
     if (fusion) fused = await fusionEngines(fusion, models, m.decode, reply);
@@ -2393,7 +2439,13 @@ export class JobWorker {
     private readonly releaseMs = 15_000,
   ) {}
 
-  run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
+  /**
+   * `models`, when given, is this job's spec in place of the Worker's: the same models, with the
+   * word-time aligner set or not (a dictation, a download that finished since).
+   */
+  run(
+    input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions>; models?: ModelSpec },
+  ) {
     const onProgress = input.progress;
     if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
     if (!this.w || !this.native) {
@@ -2454,7 +2506,7 @@ export class JobWorker {
       const msg: ToJob = {
         type: "job",
         samples: input.samples,
-        models: this.models,
+        models: input.models ?? this.models,
         decode: input.decode,
         diarize: input.diarize,
         language: input.language,

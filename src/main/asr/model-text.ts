@@ -83,6 +83,8 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
   // Engines of the final pass only (transcribe-cpp): no live or review slot, so no line.
   "whisper-large-v3": { name: "Whisper large-v3", short: "Whisper", lines: {} },
   "canary-1b-v2": { name: "Canary 1B v2", short: "Canary", lines: {} },
+  // Times Qwen's words on the best preset; it hears no words itself, so no slot and no line.
+  "qwen3-forced-aligner-0.6b": { name: "Qwen3 forced aligner", short: "Aligner", lines: {} },
 };
 
 /** Settings values by their model's name. */

@@ -36,13 +36,16 @@ const WAITS_FOR_ENGINES = "its engines wait for the engine design";
 /**
  * `machine` is the ids of every model this machine's settings need, as `modelsFor` lists them;
  * `runtime` is the llama-server build `best` runs on here, or null for an own llama-server;
- * `fusion` is the `fusion` preset's engines as the settings make them (`fusionChoice`).
+ * `fusion` is the `fusion` preset's engines as the settings make them (`fusionChoice`); `aligner`
+ * is the word-time aligner and its CrispASR build where they run (`alignerIds`), which `best`
+ * pulls too, though a job never waits for them.
  */
 export function presetModels(
   preset: Preset,
   machine: readonly string[],
   runtime: string | null = null,
   fusion: readonly string[] = FUSION_DEFAULT,
+  aligner: readonly string[] = [],
 ): PresetModels {
   switch (preset) {
     case "fast":
@@ -56,6 +59,7 @@ export function presetModels(
             QWEN_ASR,
             ...(runtime ? [runtime] : []),
             ...machine.filter((id) => id !== RECOGNIZER),
+            ...aligner,
           ]),
         ],
       };
