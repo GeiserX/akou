@@ -2,6 +2,18 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.3.0 — Qwen's words get real times, and a server can translate into English
+
+Two things a subtitle client such as WhisperSubs still needed a local engine for now come from akou itself. The `best` preset's words used to come back with no times, so clients cut subtitle cues by guessing from character counts; now every word is timed. And akou could only transcribe, so English subtitles for foreign audio still needed a local Whisper; now a job can ask for a translation into English. The 8-hour soak did not run for this release: it exercises the call-recording helper, which neither change touches.
+
+### Server
+- **Qwen's words are timed** (#441). After Qwen decodes a piece, Qwen3-ForcedAligner-0.6B runs over the same audio and Qwen's own text through CrispASR, on Metal on Apple silicon and in the amd64 `-vulkan` image. On 3,585 read English words the median start error was 0.023 s and 99.97 % started within 0.2 s, on both. SRT and VTT cues follow the word times, and OpenAI's `verbose_json` now carries the timed words. Where the aligner cannot run (the CPU, CUDA and arm64 images, Windows) or a language is outside its 11, words keep no times and the result says why in `warnings`.
+- **Translation into English** (#440). `POST /v1/jobs` takes `task=translate`, OpenAI's `/v1/audio/translations` works, and Bazarr's `/asr?task=translate` returns an English SRT instead of a 400. Canary-1b-v2 translates its 25 languages and Whisper large-v3 everything else and `auto`; a source neither reads gets 422. `GET /v1/server` lists `capabilities.translate` and `translate_languages`. On four film clips Canary scored chrF 48.4 against Whisper's 48.9 at about a tenth of its decode time, and wrote no lines over music where Whisper wrote ten.
+- **A Worker stopped while transcribe-cpp loads or decodes frees the model** (#440). It used to keep it, and on Metal the process aborted on exit.
+
+### Behind the scenes
+- transcribe-cpp 0.4.1, Biome 2.6.2, gpt-tokenizer 4.1.0 and playwright-core 1.64.1 (#442).
+
 ## 1.2.5 — the last ways a stopped or crashed Worker kept its model memory are closed
 
 1.2.4 made akou give its model memory back in the common cases. Four rarer ones were left, and in each about 2.2 GB stayed in the process until it restarted: the Worker was stopped, or died of an error, while Parakeet was still loaded. Now every Worker that may hold models is asked to free them before it is stopped, and waits out a model load rather than being stopped in the middle of it. The 8-hour soak did not run for this release: the soak never reaches these four paths, and nothing else in the app changed. Instead we measured each path on a Linux server, before and after the fix, as the memory of the server process 20 s after the event.
