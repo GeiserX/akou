@@ -166,6 +166,11 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # A stalled request to the Ubuntu mirror waits apt's default 120 s before anything retries it.
+      # On 2026-10-26 those stalls (40 to 111 s each, on files of 25 kB) kept WebKit's 140 MB of
+      # libraries from arriving inside the job's 20 minutes, four runs in a row. Give up after 10 s
+      # and retry instead.
+      - run: printf 'Acquire::http::Timeout "10";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99akou-ci-retries
       # The browser build pinned by playwright-core, with its system libraries.
       - run: bunx playwright-core install --with-deps ${{ matrix.install }}
       # Every parity screen in both themes, for review (TS-15c), from the Chromium leg: saved, never
