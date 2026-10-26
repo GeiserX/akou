@@ -2,6 +2,16 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.3.1 — the notes pane stays on your newest note, and a note goes out only on Enter
+
+During a call the notes pane opened at its oldest note, so you scrolled down by hand to see the newest one every time. A note you were still typing was saved after a 2 s pause and showed up half written, and Shift+Enter sent it when you wanted a new line. The calls list and the notes pane also showed a scrollbar all the time. The 8-hour soak did not run for this release: it exercises the call-recording helper, and only the window changed.
+
+### Desktop
+- **The notes pane stays on the newest note** (#444). It opens at the end and follows each new note, yours, an agent's or a fix note. Scroll up to read and a new note leaves you where you are; scroll back to the end and it follows again.
+- **A new note is sent only on Enter** (#444). The 2 s save is gone, and the text you have not sent stays in the box. If the save fails, the note comes back into the box.
+- **Shift+Enter adds a line**, in the new-note box and when editing a note (#444). A note keeps its line breaks on screen and stays one list item in the Markdown export.
+- **Quiet scrollbars** in the calls list, the transcript and the notes pane (#444). The bar is hidden at rest and shows on hover or while you scroll, and the calls list no longer loses width to it.
+
 ## 1.3.0 — Qwen's words get real times, and a server can translate into English
 
 Two things a subtitle client such as WhisperSubs still needed a local engine for now come from akou itself. The `best` preset's words used to come back with no times, so clients cut subtitle cues by guessing from character counts; now every word is timed. And akou could only transcribe, so English subtitles for foreign audio still needed a local Whisper; now a job can ask for a translation into English. The 8-hour soak did not run for this release: it exercises the call-recording helper, which neither change touches.
