@@ -812,7 +812,17 @@ describe("the notepad (DESIGN 5.1)", () => {
           await page.hover("#pane-notes");
           await page.mouse.wheel(0, -400);
           await until(async () => (await pane()).gap > 100, 5000, "scrolled up");
-          const at = (await pane()).top;
+          // A wheel scroll is animated in WebKit: read where it ends, not a frame on the way.
+          const settled = async () => {
+            let last = -1;
+            for (;;) {
+              await page.waitForTimeout(150);
+              const top = (await pane()).top;
+              if (top === last) return top;
+              last = top;
+            }
+          };
+          const at = await settled();
           await rig.api("POST", `/calls/${id}/notes`, { text: "while reading" });
           await count(43);
           await page.waitForTimeout(300);
