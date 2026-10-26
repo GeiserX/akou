@@ -202,10 +202,11 @@ export function openModal(dialog: HTMLDialogElement): void {
  * A one-line text box that wraps and grows with what it holds, so a long note or a long line being
  * fixed reads whole: one row when empty, then as many rows as the text takes, up to `maxRows`,
  * after which it scrolls inside. It stays one line of text, as the input it replaces was: a line
- * break pasted in becomes a space, and the caller keeps Enter for its own action. Returns `fit`,
- * for the caller to run after it sets the value itself or shows the box.
+ * break pasted in becomes a space, and the caller keeps Enter for its own action. With `breaks`,
+ * the line breaks stay (a note, where Shift+Enter starts a new line). Returns `fit`, for the
+ * caller to run after it sets the value itself or shows the box.
  */
-export function autosize(area: HTMLTextAreaElement, maxRows = 12): () => void {
+export function autosize(area: HTMLTextAreaElement, maxRows = 12, breaks = false): () => void {
   const fit = () => {
     // Hidden, the box has no size to measure: back to its one row until it shows and is typed in.
     if (area.getClientRects().length === 0) {
@@ -222,7 +223,7 @@ export function autosize(area: HTMLTextAreaElement, maxRows = 12): () => void {
     area.style.overflowY = want > max ? "auto" : "hidden";
   };
   area.addEventListener("input", () => {
-    if (/[\r\n]/.test(area.value)) {
+    if (!breaks && /[\r\n]/.test(area.value)) {
       const [from, to] = [area.selectionStart, area.selectionEnd];
       area.value = area.value.replace(/[\r\n]/g, " ");
       area.setSelectionRange(from, to);
@@ -230,4 +231,35 @@ export function autosize(area: HTMLTextAreaElement, maxRows = 12): () => void {
     fit();
   });
   return fit;
+}
+
+/**
+ * Wires a `.scrolls` pane (theme.css): its scrollbar shows on hover and while the user scrolls it
+ * (wheel, touch, keys or a press on the bar), then fades. A scroll the code makes, such as a pane
+ * following its newest line, shows nothing, so a live call does not flash the bar.
+ */
+export function quietScrollbar(el: HTMLElement, holdMs = 800): void {
+  let lastHand = Number.NEGATIVE_INFINITY;
+  let held = false;
+  let hide: ReturnType<typeof setTimeout> | null = null;
+  const hand = () => {
+    lastHand = performance.now();
+  };
+  for (const type of ["wheel", "touchmove", "keydown"]) {
+    el.addEventListener(type, hand, { passive: true });
+  }
+  // A press on the bar lands on the pane itself; the scroll it drives while held is by hand.
+  el.addEventListener("mousedown", (e) => {
+    held = e.target === el;
+  });
+  document.addEventListener("mouseup", () => {
+    held = false;
+  });
+  el.addEventListener("scroll", () => {
+    if (!held && performance.now() - lastHand > holdMs) return;
+    el.dataset.scrolling = "";
+    if (hide) clearTimeout(hide);
+    // clock: the bar stays a moment after the last scroll by hand, then fades.
+    hide = setTimeout(() => delete el.dataset.scrolling, holdMs);
+  });
 }

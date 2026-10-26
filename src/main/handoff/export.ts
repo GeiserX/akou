@@ -306,7 +306,8 @@ export function renderNotes(view: CallView, tz: string): string {
           : n.author === "agent"
             ? ` _(agent: ${n.client ?? n.by.slice(6)})_`
             : "";
-      return `- ${formatWall(n.w, tz)} ${n.text}${who}`;
+      // A note of several lines stays one list item: its next lines are indented under it.
+      return `- ${formatWall(n.w, tz)} ${n.text.replace(/\n/g, "\n  ")}${who}`;
     })
     .join("\n");
 }

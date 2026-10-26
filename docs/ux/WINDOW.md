@@ -207,7 +207,7 @@ Play is a round icon button. The readout is one "position / end of the part" pai
 
 ## 6. The side pane
 
-The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call. It wraps and grows with the note, up to twelve rows and then it scrolls, so a long note reads whole while it is written; Enter adds it. A line akou wrote from a fix of a transcript line (`Fixed: versal -> Vercel`) says "from a fix".
+The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call. It wraps and grows with the note, up to twelve rows and then it scrolls, so a long note reads whole while it is written. Enter adds it and nothing is added before then; Shift+Enter starts a new line in the note. The list shows its newest note at the bottom: a call opens there, and a new note keeps it there; scrolled up to read, an agent's note leaves the user where they are until they scroll back down, while their own note brings the list back to the end, where it shows. A note that fails to save goes back in the input, with its time, to send again. Its scrollbar is thin and shows only while the pointer is over the list or it scrolls. A line akou wrote from a fix of a transcript line (`Fixed: versal -> Vercel`) says "from a fix".
 
 ### 6.1 Notes
 
@@ -220,7 +220,7 @@ The side column has three parts, top to bottom. Ask is always on top, so asking 
             Open question
  15:47     Ben owns the migration  agent claude-code   (agent colour)
  ──────────────────────────────────────────────────────
- [ Type a note, Enter to add it                      ]
+ [ Enter to add, Shift+Enter for a new line         ]
  - bullet   [] action   ? question   # section
 ```
 
@@ -229,7 +229,9 @@ A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, a
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.1 | Notepad with markers, time gutter, agent lines in their own colour | done | DESIGN 5.1 | Existing tests | has |
-| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter | P0 | Audit: clicking away drops the edit, which loses what the user typed; DESIGN 5.1 says Enter or a 2 s pause | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | has |
+| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter; Shift+Enter is a line break there too | P0 | Audit: clicking away drops the edit, which loses what the user typed | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | has |
+| W6.26 | The notes list stays at its newest note: on open, on every new note and on a resize, unless the user scrolled up; its scrollbar shows only on hover or while scrolling ([at rest](design-explorations/built/notes-pane-after-rest-dark.png), [on hover](design-explorations/built/notes-pane-after-hover-dark.png), [before](design-explorations/built/notes-pane-before-rest-dark.png)) | done | Owner: scrolling down by hand on every note | `tests/ui/window.test.ts` "[W6.26]": a call with many notes opens at the end, a new note keeps it there, scrolled up it stays put, the thumb is transparent at rest | has |
+| W6.27 | A new note is added on Enter only, never on a pause; Shift+Enter is a line break and the note keeps it ([typing, 3 s in](design-explorations/built/notes-pane-after-typing-dark.png), [before](design-explorations/built/notes-pane-before-typing-dark.png)) | done | Owner: a half-written note showed up in the list | `tests/ui/window.test.ts` "[W6.27]": nothing is posted 3 s after typing, the text survives a redraw, Shift+Enter then Enter posts one note with its line break | has |
 | W6.3 | Delete a note with a 10 s undo | P1 | Audit: no confirm and no undo | Delete shows "Note deleted · Undo"; Undo restores it as a new revision | partial |
 
 ### 6.2 Ask
@@ -403,6 +405,7 @@ The sidebar is the window's left column, the full height of the window: the word
 | W13.3 | Delete a call to the Trash, restore from it, empty it now | P1 | Granola, Minutes; audit: no delete in any surface | Delete follows PG-A4 (refused for a live call, folder moved to `trash/`, purged after 30 days); the call leaves the list; Restore brings it back intact; "Empty trash now" asks for confirmation. Exports already written are the user's and are not touched | missing |
 | W13.4 | Suggested title for a call started without one, applied only on the user's yes | P2 | heed | After the final pass, an untitled call shows "Title: Budget review? Use it" | missing |
 | W13.6 | Open on a workspace: `akou open -w WS`, `POST /window {workspace}` and the page's `?workspace=` put that workspace first in the picker, even before any call is filed under it | P2 | hark-viewer `?workspace=` (carried) | Opening with `?workspace=ops` on an empty home shows "ops" selected in the picker; Record starts a call in it | missing |
+| W13.7 | The main panes (the calls list, the transcript, the notes) share one scrollbar: thin, hidden at rest, shown on hover or while scrolled by hand, then it fades; its gutter is always kept, so the calls never narrow when the list starts to scroll and line up with the rows under it ([before](design-explorations/built/calls-list-before-dark.png), [at rest](design-explorations/built/calls-list-after-rest-dark.png), [on hover](design-explorations/built/calls-list-after-hover-dark.png)) | done | Owner: the default bar always showed and took the rows' width | `tests/ui/window.test.ts` "[W13.7]": the calls keep the width of the rows under them, no pane shows a bar at rest, a scroll the code makes shows nothing, hover and a wheel scroll show it and it goes after | has |
 
 hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The page used it to guess a dead capture from missing lines when hark gave no call-side health. akou's helper reports each channel's health directly, so the window never guesses from silence.
 
@@ -498,7 +501,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Transcript, echo | n/a | n/a | amber banner when `health {state: echo}` holds: "The microphone hears the call. Headphones fix this." Echo lines stay hidden (W17.3) |
 | Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the call header if it runs out |
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
-| Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
+| Notes | the input's placeholder, "Enter to add, Shift+Enter for a new line", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
 | Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated in plain words (a missing or signed-out assistant is one line that points at Settings, never a setting's key), excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |

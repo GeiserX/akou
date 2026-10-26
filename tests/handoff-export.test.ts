@@ -24,6 +24,7 @@ import {
   frontmatterId,
   isoLocal,
   renderEnhanced,
+  renderNotes,
   safeFileTitle,
   yamlScalar,
 } from "../src/main/handoff/export.ts";
@@ -259,6 +260,23 @@ describe("the export Markdown (DESIGN 8.2)", () => {
     } finally {
       r.cleanup();
     }
+  });
+});
+
+describe("raw notes in the export", () => {
+  test("a note of several lines stays one list item, its next lines indented under it", () => {
+    const b = new LogBuilder();
+    b.created();
+    b.add({
+      type: "note",
+      id: "n0001",
+      rev: 1,
+      text: "budget first\n- then hiring",
+      w: T0,
+      afterSeq: 1,
+      by: "user",
+    });
+    expect(renderNotes(fold(b.events), "UTC")).toBe("- 20:36:12 budget first\n  - then hiring");
   });
 });
 
