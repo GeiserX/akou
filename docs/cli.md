@@ -859,6 +859,8 @@ usage: akou mcp
   -h, --help     show this help
       --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
 
+AKOU_URL serves a remote akou instead of the app here; a plain http AKOU_URL to another machine is refused (the key would cross the network unencrypted) unless AKOU_ALLOW_HTTP=1.
+
 example: akou mcp
 ```
 

@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, type Transport } from "@modelcontextprotocol/server";
 import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { ApiClient, ApiResponse, RequestOptions } from "../src/main/cli/client.ts";
-import { createMcpServer, mcpFactory } from "../src/main/mcp/server.ts";
+import { createMcpServer, type McpOptions, mcpFactory } from "../src/main/mcp/server.ts";
 import { quoteCallText } from "../src/main/query/render.ts";
 
 /** An `ApiClient` whose every request is answered by `body`: 200 (or `status`) with that JSON. */
@@ -42,8 +42,13 @@ export interface ToolAnswer {
 }
 
 /** An MCP client named `name`, connected in process to a fresh akou MCP server over `api`. */
-export async function mcpClient(api: ApiClient, name = "claude-code", mode?: "app" | "server") {
-  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}) });
+export async function mcpClient(
+  api: ApiClient,
+  name = "claude-code",
+  mode?: "app" | "server",
+  more: Partial<McpOptions> = {},
+) {
+  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}), ...more });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b);
   const client = new Client({ name, version: "1.0.0" });

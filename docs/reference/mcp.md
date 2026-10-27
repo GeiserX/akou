@@ -508,7 +508,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 Retract a line kept with akou_remember, by its id.
 
-Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1162,7 +1162,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 Stop sharing a call's live link, or every link when no `call` is named.
 
-Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`.
+Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -1226,7 +1226,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 **Live links that are on**
 
-The read-only live links that are on, one per shared call, with their address.
+The read-only live links that are on, one per shared call: the call, where it listens, when it expires and how many people watch. The token in each address is cut out (`/s/<token>/`): it is the whole credential, so only akou_share_on, which the user asks for, answers it.
 
 Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
@@ -1417,7 +1417,7 @@ Parameters: none.
 
 Transcribe an audio or video file on this machine as a job on the akou server (`AKOU_URL`, server mode): uploads the file once and waits up to `wait` seconds. A job that ends in time comes back done with its transcript in `result`; one still queued or running comes back with its `id` for akou_job_get. A path that is missing or not an audio or video file is refused and nothing is sent.
 
-Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

@@ -32,7 +32,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import {
   CLIENT_INFO_META_KEY,
@@ -408,10 +408,17 @@ const DESTRUCTIVE: Hints = { ...WRITE, destructiveHint: true };
 const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
 /** Runs akou's configured provider, which may be a remote API. */
 const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
-/** Takes away what the user wrote (a note): the harness should confirm. */
+/** Deletes something (a note, a remembered line, a job): the harness should confirm. */
 const REMOVES = DESTRUCTIVE;
+/**
+ * Turns off links other people hold: their address stops working for good, and the same
+ * request twice leaves the same state.
+ */
+const REVOKES: Hints = { ...DESTRUCTIVE, idempotentHint: true };
 /** Lets people outside this machine read the call: the harness should confirm. */
 const SHARES: Hints = { ...WRITE, openWorldHint: true };
+/** Sends a file on this machine to another one (the akou server at `AKOU_URL`). */
+const UPLOADS: Hints = { ...WRITE, openWorldHint: true };
 
 /**
  * Every tool's title and annotations (PG-M2): one row per tool, and registering a tool without a
@@ -438,7 +445,7 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_delete_note: { title: "Delete a note", hints: REMOVES },
   akou_get_notes: { title: "Read the notepad", hints: READ, less: "page with `offset`" },
   akou_remember: { title: "Remember a fact", hints: WRITE },
-  akou_forget: { title: "Forget a fact", hints: WRITE },
+  akou_forget: { title: "Forget a fact", hints: REMOVES },
   akou_memo_get: { title: "Read the memo", hints: READ },
   akou_memo_put: { title: "Write the memo", hints: IDEMPOTENT },
   akou_vocab_add: { title: "Add a word", hints: WRITE },
@@ -468,12 +475,12 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_export: { title: "Export a call", hints: WRITE },
   akou_share_status: { title: "Live links that are on", hints: READ },
   akou_share_on: { title: "Share a live link", hints: SHARES },
-  akou_share_off: { title: "Stop sharing", hints: IDEMPOTENT },
+  akou_share_off: { title: "Stop sharing", hints: REVOKES },
   akou_open_window: { title: "Show the window", hints: WRITE },
   akou_config_get: { title: "Read the settings", hints: READ },
   akou_dictation_list: { title: "List past dictations", hints: READ, less: "a smaller `limit`" },
   akou_dictation_get: { title: "Read a dictation", hints: READ },
-  akou_transcribe: { title: "Transcribe a file on a server", hints: WRITE },
+  akou_transcribe: { title: "Transcribe a file on a server", hints: UPLOADS },
   akou_job_get: { title: "Read a transcription job", hints: READ },
   akou_jobs_list: { title: "List transcription jobs", hints: READ },
   akou_devices: { title: "List microphones and apps", hints: READ },
@@ -510,8 +517,26 @@ export function isMediaHead(b: Uint8Array): boolean {
   return b.length >= 2 && b[0] === 0xff && ((b[1] ?? 0) & 0xe0) === 0xe0;
 }
 
-/** A file to upload, or why not: missing, not a file, or not audio or video. */
-function readMedia(path: string): { bytes: Uint8Array } | { error: string } {
+/**
+ * The largest file `akou_transcribe` sends: a server's own default cap (`server.max_upload_mb`,
+ * 512 MB). Larger files go through `akou transcribe`, which reads the server's own cap.
+ */
+export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+
+/**
+ * The largest API answer the MCP server reads: far above any real one (a job result for a
+ * many-hour file), and a bound on what a misbehaving remote or proxy can make it hold.
+ */
+export const MAX_ANSWER_BYTES = 16 * 1024 * 1024;
+
+/**
+ * A file to upload, or why not: missing, not a file, over `max` bytes, or not audio or video. The
+ * file goes out as a `Bun.file`, read as it is sent, never held in memory whole.
+ */
+export function readMedia(
+  path: string,
+  max: number = MAX_UPLOAD_BYTES,
+): { file: Blob } | { error: string } {
   let size: number;
   try {
     const st = statSync(path);
@@ -519,6 +544,12 @@ function readMedia(path: string): { bytes: Uint8Array } | { error: string } {
     size = st.size;
   } catch {
     return { error: `no file at ${path}` };
+  }
+  if (size > max) {
+    const mb = (n: number) => Math.ceil(n / (1024 * 1024));
+    return {
+      error: `${path} is ${mb(size)} MB, over the ${mb(max)} MB akou_transcribe sends; nothing was sent. Run \`akou transcribe\` for it instead`,
+    };
   }
   const head = new Uint8Array(Math.min(size, 16));
   try {
@@ -534,13 +565,45 @@ function readMedia(path: string): { bytes: Uint8Array } | { error: string } {
   if (!isMediaHead(head)) {
     return { error: `${path} is not an audio or video file; nothing was sent` };
   }
-  return { bytes: readFileSync(path) };
+  return { file: Bun.file(path) };
+}
+
+/** A loopback host: a plain http request to it never leaves this machine. */
+function loopback(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h === "::1" || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+/**
+ * Why `akou mcp` refuses this `AKOU_URL`, or null: a plain `http://` URL to another machine
+ * sends the API key unencrypted on every request. `AKOU_ALLOW_HTTP=1` accepts it for a network
+ * the user trusts end to end.
+ */
+export function plainHttpRefusal(env: Record<string, string | undefined>): string | null {
+  const raw = env.AKOU_URL?.trim();
+  if (!raw) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    // Not a URL at all: the client's own check says what is wrong with it.
+    return null;
+  }
+  if (url.protocol !== "http:" || loopback(url.hostname) || env.AKOU_ALLOW_HTTP === "1") {
+    return null;
+  }
+  return `AKOU_URL is plain http to ${url.host}, which would send the API key unencrypted; use https, or set AKOU_ALLOW_HTTP=1 if you trust every network in between`;
+}
+
+/** A live link's address with its path token, the whole credential, cut out. */
+export function redactShareUrl(url: unknown): unknown {
+  return typeof url === "string" ? url.replace(/\/s\/[^/?#]+/, "/s/<token>") : url;
 }
 
 /** What `GET /v1/server` says the target is, `app` or `server`, or null when it cannot say. */
 export async function targetMode(client: ApiClient): Promise<"app" | "server" | null> {
   try {
-    const r = await client.request("GET", "/server", { launch: false });
+    const r = await client.request("GET", "/server", { launch: false, maxBytes: MAX_ANSWER_BYTES });
     const mode = r.status === 200 ? r.body?.mode : null;
     return mode === "app" || mode === "server" ? mode : null;
   } catch {
@@ -561,6 +624,8 @@ export interface McpOptions {
    * 2026-07-28, where no `initialized` arrives and the client is named per request.
    */
   era?: "legacy" | "modern";
+  /** The largest file akou_transcribe sends (`MAX_UPLOAD_BYTES`; tests lower it). */
+  maxUploadBytes?: number;
 }
 
 /** What akou says it is, in `initialize` and in `server/discover`. */
@@ -618,7 +683,7 @@ export function createMcpServer(o: McpOptions): McpServer {
   const tag = () => clientTag(clientName());
   const call = async (method: string, path: string, ro: RequestOptions = {}) => {
     try {
-      return await o.client.request(method, path, ro);
+      return await o.client.request(method, path, { maxBytes: MAX_ANSWER_BYTES, ...ro });
     } catch (err) {
       const cancelled = ro.signal?.aborted === true;
       const message = cancelled ? "the client cancelled this tool call" : (err as Error).message;
@@ -1583,11 +1648,21 @@ export function createMcpServer(o: McpOptions): McpServer {
   tool(
     "akou_share_status",
     {
-      description: "The read-only live links that are on, one per shared call, with their address.",
+      description:
+        "The read-only live links that are on, one per shared call: the call, where it listens, when it expires and how many people watch. The token in each address is cut out (`/s/<token>/`): it is the whole credential, so only akou_share_on, which the user asks for, answers it.",
       inputSchema: z.object({}),
       outputSchema: OUT.body,
     },
-    async () => asResult(await req("GET", "/share"), compact),
+    async () =>
+      asResult(await req("GET", "/share"), (b) => {
+        // A link's token is the whole credential: this read-only tool, which a harness may run
+        // unasked, never hands one out. The user has it from akou_share_on or the window.
+        const shares = ((b.shares ?? []) as Body[]).map((s) => ({
+          ...s,
+          url: redactShareUrl(s.url),
+        }));
+        return compact({ ...b, shares });
+      }),
   );
 
   tool(
@@ -1835,10 +1910,10 @@ export function createMcpServer(o: McpOptions): McpServer {
       outputSchema: OUT.job,
     },
     async (a) => {
-      const file = readMedia(a.path);
-      if ("error" in file) return errorText(file.error);
+      const media = readMedia(a.path, o.maxUploadBytes);
+      if ("error" in media) return errorText(media.error);
       const form = new FormData();
-      form.append("file", new Blob([new Uint8Array(file.bytes)]), basename(a.path));
+      form.append("file", media.file, basename(a.path));
       if (a.preset) form.append("preset", a.preset);
       if (a.language) form.append("language", a.language);
       if (a.diarize !== undefined) form.append("diarize", String(a.diarize));
@@ -1923,7 +1998,11 @@ export function createMcpServer(o: McpOptions): McpServer {
   const refreshAsk = async () => {
     if (!served("akou_ask")) return;
     try {
-      const r = await o.client.request("GET", "/status", { launch: false, timeoutMs: 5000 });
+      const r = await o.client.request("GET", "/status", {
+        launch: false,
+        timeoutMs: 5000,
+        maxBytes: MAX_ANSWER_BYTES,
+      });
       if (r.status === 200) applyProvider(r.body.provider);
     } catch {}
   };

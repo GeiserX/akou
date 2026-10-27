@@ -45,10 +45,18 @@ const mcp: Command = {
   summary: "Serve MCP on stdin and stdout for an agent (a thin client of the local API)",
   usage: "akou mcp",
   flags: { json: { type: "boolean", desc: "ignored: MCP already speaks JSON-RPC on stdout" } },
+  notes: [
+    "AKOU_URL serves a remote akou instead of the app here; a plain http AKOU_URL to another machine is refused (the key would cross the network unencrypted) unless AKOU_ALLOW_HTTP=1.",
+  ],
   examples: ["akou mcp"],
   run: async (ctx) => {
     // Loaded only here, so the SDK never slows down the other commands.
-    const { runMcpStdio } = await import("../mcp/server.ts");
+    const { plainHttpRefusal, runMcpStdio } = await import("../mcp/server.ts");
+    const refusal = plainHttpRefusal(ctx.io.env);
+    if (refusal) {
+      ctx.io.err(`akou mcp: ${refusal}`);
+      return EXIT.usage;
+    }
     await runMcpStdio({
       client: ctx.client,
       version: ctx.version,

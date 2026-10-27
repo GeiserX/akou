@@ -248,6 +248,35 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Aborts the request (Ctrl-C during `tail -f`). */
   signal?: AbortSignal;
+  /**
+   * The most bytes of the answer to read: a longer one is cut off unread and answers 502
+   * `too_large`. Unset, the whole answer is read (`akou mcp` sets it).
+   */
+  maxBytes?: number;
+}
+
+/** The answer's body as text, or null once it passes `max` bytes (the rest is never read). */
+async function cappedText(res: Response, max: number): Promise<string | null> {
+  const declared = Number(res.headers.get("content-length") ?? Number.NaN);
+  if (declared > max) {
+    await res.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 /** Inside a program built by `bun build --compile`, whose modules live in Bun's virtual folder. */
@@ -363,7 +392,18 @@ export class ApiClient {
 
   private async send(to: Runtime | RemoteTarget, method: string, path: string, o: RequestOptions) {
     const res = await this.fetchRaw(to, method, path, o);
-    const text = await res.text();
+    const text = o.maxBytes === undefined ? await res.text() : await cappedText(res, o.maxBytes);
+    if (text === null) {
+      return {
+        status: 502,
+        body: {
+          error: "too_large",
+          message: `the answer to ${method} ${path} passed ${o.maxBytes} bytes, so it was not read`,
+        },
+        text: "",
+        contentType: res.headers.get("content-type") ?? "",
+      };
+    }
     let body: unknown = null;
     try {
       body = JSON.parse(text);
