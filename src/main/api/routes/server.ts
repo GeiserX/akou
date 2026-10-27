@@ -64,7 +64,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`), and on a server with no speech engine (the single-file CLI), with `reason` saying where one is. `models_ready` says only whether the models are ready. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -72,6 +72,18 @@ export function rootRoutes(r: Router<ApiApp>): void {
     (c) => {
       const { loading, ready } = modelState(c.app);
       const queue = queueOf(c.app);
+      // No speech engine here (#436): never ready, so a client or a load balancer sends no work.
+      const none = c.app.noEngine?.() ?? null;
+      if (none) {
+        return json(503, {
+          ok: false,
+          version: c.app.version,
+          models_ready: false,
+          reason: none,
+          queue_depth: c.app.queueDepth?.() ?? 0,
+          queue,
+        });
+      }
       // A job stuck at running (#407) is a server that takes jobs and ends none.
       const ok = !loading && (queue?.stalled ?? 0) === 0;
       return json(ok ? 200 : 503, {

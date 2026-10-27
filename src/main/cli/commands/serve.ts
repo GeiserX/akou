@@ -30,6 +30,14 @@ export function compiledServeWarning(compiled: boolean): string | null {
 }
 
 /**
+ * Why the single-file CLI's server takes no job and no live session (#436): `/healthz` gives it as
+ * `reason`, and `POST /v1/jobs`, the OpenAI door, Wyoming and `GET /v1/live` refuse with it as
+ * `no_engine`.
+ */
+export const NO_ENGINE_REASON =
+  "this single-file akou CLI carries no speech engine, so it cannot transcribe; run the drumsergio/akou image, or `bun src/main/cli/cli.ts serve` from a checkout";
+
+/**
  * The API's address as bound (SV-P5), for the startup line: `0.0.0.0` or `::` when it listens on
  * every address, where `url` names the loopback a client on this machine uses.
  */
@@ -60,8 +68,15 @@ export const serveCommand: Command = {
       "../../index.ts"
     );
     let app: Awaited<ReturnType<typeof startApp>>;
+    const compiled = isCompiled();
     try {
-      app = await startApp({ env, headless: true, version: ctx.version });
+      app = await startApp({
+        env,
+        headless: true,
+        version: ctx.version,
+        // No engine to start: no live Worker that dies at once, no job taken to fail (#436).
+        ...(compiled ? { noEngine: NO_ENGINE_REASON } : {}),
+      });
     } catch (err) {
       if (err instanceof AlreadyRunningError) {
         ctx.io.err(`akou serve: ${err.message}`);
@@ -85,7 +100,7 @@ export const serveCommand: Command = {
       ? boundUrl(app.server.hostname, app.server.url)
       : app.server?.url;
     ctx.io.err(`akou ${app.version}: serving on ${where} (pid ${process.pid})`);
-    const warning = compiledServeWarning(isCompiled());
+    const warning = compiledServeWarning(compiled);
     if (warning) ctx.io.err(warning);
     const quit = () => void app.quit();
     if (ctx.io.signal?.aborted) quit();

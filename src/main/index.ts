@@ -464,6 +464,12 @@ export interface AppOptions {
   /** How often the in-call upgrade reviews a call's closed utterances, ms. Tests only. */
   liveReviewEveryMs?: number;
   version?: string;
+  /**
+   * This process carries no speech engine, and why: the single-file CLI's `akou serve` (#436). The
+   * live recognizer never starts, `/healthz` is 503 with the reason, and a job or a live session is
+   * refused at once with `no_engine`.
+   */
+  noEngine?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /**
    * Write `app.log` in the config folder and run the watchdog (DK-M8). The two entry points set
@@ -1329,6 +1335,10 @@ export class AkouApp implements ApiApp {
    * `recognizerOnNewModels` starts it when they arrive.
    */
   private startAsr(s: Settings): void {
+    if (this.o.noEngine) {
+      this.asrState = { state: "unavailable", reason: this.o.noEngine };
+      return;
+    }
     const waits = this.o.models === undefined || this.o.modelRegistry !== undefined;
     this.asrAwaitingModels = waits && !modelsPresent(s["asr.modelsDir"], this.registry());
     if (this.asrAwaitingModels) {
@@ -4051,6 +4061,7 @@ export class AkouApp implements ApiApp {
         dictationSlots: () => (server ? s()["server.dictation_slots"] : 0),
         dictationEngine: () => s()["server.dictation_engine"],
         keepIdleWorkers: () => server,
+        noEngine: () => this.noEngine(),
         ...(server ? {} : { ownerHeld: () => this.appHeld() }),
         ...(server
           ? {}
@@ -4079,6 +4090,11 @@ export class AkouApp implements ApiApp {
       this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
       this.modelSweep.unref?.();
     }
+  }
+
+  /** Why this process has no speech engine (#436), or null when it has one. */
+  noEngine(): string | null {
+    return this.o.noEngine ?? null;
   }
 
   recognizer(): "loading" | "ready" | "unavailable" {

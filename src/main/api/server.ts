@@ -230,6 +230,8 @@ export interface ApiApp {
    * while it is still loading them, or after it failed to. Absent: ready once the files are.
    */
   recognizer?(): "loading" | "ready" | "unavailable";
+  /** Why this server has no speech engine (#436), or null when it has one. */
+  noEngine?(): string | null;
   /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
   /**

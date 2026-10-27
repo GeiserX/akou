@@ -234,6 +234,8 @@ export interface JobServiceOptions {
    * memory is free again once the queue is empty.
    */
   keepIdleWorkers?(): boolean;
+  /** Why this server has no speech engine (#436): every job is refused with `no_engine`. */
+  noEngine?(): string | null;
   /**
    * The owner's own models, in place of the default model's set: the desktop app's (its
    * recognizer, its final pass, dictation), whose `defaults` are what its settings name, so a job
@@ -764,7 +766,14 @@ export class JobService {
    * only the models it runs count: no live-only model, the speaker models only with diarize.
    */
   admit(model: string, job?: { diarize: boolean }): void {
+    const none = this.noEngine();
+    if (none) throw new ModelRefused(503, "no_engine", none);
     this.o.shelf.admit(this.o.shelf.needs(model, job));
+  }
+
+  /** Why this server has no speech engine (#436), or null when it has one. */
+  noEngine(): string | null {
+    return this.o.noEngine?.() ?? null;
   }
 
   private modelOf(j: Job): string {

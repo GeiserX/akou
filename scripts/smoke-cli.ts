@@ -12,8 +12,10 @@
  * - `akou start --json`, with no app running and none installed, exits 69 and says the app must be
  *   opened: the compiled CLI never tries to be the app.
  * - `akou serve` runs the server in the foreground from this binary (SV-P8): `GET /healthz` answers
- *   with no token, `akou status` through the same binary reaches it, and SIGTERM ends it with 0
- *   (`akou quit` on Windows, where SIGTERM is TerminateProcess and no handler runs).
+ *   with no token, 503 with `models_ready: false` and the reason, since the binary carries no speech
+ *   engine; `POST /v1/jobs` and `GET /v1/live` are refused with `no_engine` and no Worker starts
+ *   (#436); `akou status` through the same binary reaches it, and SIGTERM ends it with 0 (`akou
+ *   quit` on Windows, where SIGTERM is TerminateProcess and no handler runs).
  *
  * Nothing here opens a window; `akou serve` is the one server it starts, and it stops it.
  */
@@ -164,10 +166,43 @@ async function serveCheck(): Promise<void> {
     const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
       signal: AbortSignal.timeout(5000),
     }).catch((e: Error) => e);
+    // It carries no speech engine (#436): never ready, with the reason, so no client sends it work.
+    const body = health instanceof Error ? null : await health.json().catch(() => null);
     check(
-      !(health instanceof Error) && health.status === 200,
-      "akou serve answers GET /healthz with no token",
-      health instanceof Error ? health.message : `HTTP ${health.status}`,
+      !(health instanceof Error) &&
+        health.status === 503 &&
+        body?.models_ready === false &&
+        String(body?.reason ?? "").includes("drumsergio/akou"),
+      "akou serve answers GET /healthz with no token: 503, models_ready false and the reason",
+      health instanceof Error ? health.message : `HTTP ${health.status} ${JSON.stringify(body)}`,
+    );
+    const token = readFileSync(join(configDir, "token"), "utf8").trim();
+    const auth = { authorization: `Bearer ${token}` };
+    // A job is refused at once, before it is queued, never accepted to fail with ModuleNotFound.
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(44)], { type: "audio/wav" }), "a.wav");
+    const job = await fetch(`http://127.0.0.1:${port}/v1/jobs`, {
+      method: "POST",
+      headers: auth,
+      body: form,
+      signal: AbortSignal.timeout(5000),
+    }).catch((e: Error) => e);
+    const jobBody = job instanceof Error ? null : await job.json().catch(() => null);
+    check(
+      !(job instanceof Error) && job.status === 503 && jobBody?.error === "no_engine",
+      "akou serve refuses POST /v1/jobs at once with 503 no_engine",
+      job instanceof Error ? job.message : `HTTP ${job.status} ${JSON.stringify(jobBody)}`,
+    );
+    // A live session is refused before the upgrade.
+    const live = await fetch(`http://127.0.0.1:${port}/v1/live`, {
+      headers: auth,
+      signal: AbortSignal.timeout(5000),
+    }).catch((e: Error) => e);
+    const liveBody = live instanceof Error ? null : await live.json().catch(() => null);
+    check(
+      !(live instanceof Error) && live.status === 503 && liveBody?.error === "no_engine",
+      "akou serve refuses GET /v1/live with 503 no_engine",
+      live instanceof Error ? live.message : `HTTP ${live.status} ${JSON.stringify(liveBody)}`,
     );
     const status = spawnSync(exe, ["status", "--json"], {
       env: serveEnv,
@@ -197,6 +232,12 @@ async function serveCheck(): Promise<void> {
     check(
       stderr.includes("cannot transcribe"),
       "akou serve from the single-file CLI says it cannot transcribe",
+      stderr.trim(),
+    );
+    // No live Worker was started, so none died and was started again (#436).
+    check(
+      !/worker died|ModuleNotFound/.test(stderr),
+      "akou serve from the single-file CLI starts no recognizer Worker",
       stderr.trim(),
     );
     if (code !== 0) child.kill("SIGKILL");

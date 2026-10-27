@@ -320,6 +320,9 @@ export function booleanOf(form: Form, name: string): boolean | null {
  * refusal waits for the body: `JobService.submit` makes the same check in its transaction.
  */
 export function requireRoomUnlessLane(jobs: JobService, key: string, idem: string | null): void {
+  // A server with no speech engine refuses before the upload too (#436).
+  const none = jobs.noEngine();
+  if (none) throw new HttpError(503, "no_engine", none);
   if (!jobs.interactive(true)) requireQueueRoom(jobs, key, idem);
 }
 
@@ -623,6 +626,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "unsupported_language",
         ],
         429: ["queue_full"],
+        503: ["no_engine"],
       },
     },
     submit,
