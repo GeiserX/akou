@@ -363,7 +363,7 @@ describe("signing secrets never reach a pull request", () => {
     expect(run).toContain('tar -xzf dist/release/akou-diarize-*-darwin-arm64.tar.gz -C "$check/diarize"');
     expect(run).toContain('notarized_bin "$check/diarize/akou-diarize"');
     // notarized_bin checks the team and the hardened runtime, then the notarization.
-    const fn = /notarized_bin\(\) \{\n([\s\S]*?)\n {10}\}/.exec(run)?.[1] ?? "";
+    const fn = /notarized_bin\(\) \{\n([\s\S]*?)\n\}/.exec(run)?.[1] ?? "";
     expect(fn).toContain('signed_by_team "$1"');
     expect(fn).toContain('codesign --verify --strict --check-notarization -R=notarized "$1"');
     expect(fn).toContain("exit 1");
