@@ -292,6 +292,29 @@ export function confirmAccelerator(
 }
 
 /**
+ * The waits, ms, before asking llama-server again when a GPU the setting names came back with no
+ * device at all (#456), about 15 minutes in all. An empty list, unlike one without that device, is
+ * a driver still starting: under WSL2 the GPU showed up minutes after the container did.
+ */
+export const DRIVER_RETRY_MS: readonly number[] = [
+  5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000,
+];
+
+/** The setting named this GPU and the build answered with no GPU device at all, so asking again may find it. */
+export function driverNotUp(
+  detected: AcceleratorState,
+  answer: { output?: string; error?: string },
+): boolean {
+  return (
+    detected.setting !== "auto" &&
+    detected.active === detected.setting &&
+    detected.active !== "cpu" &&
+    answer.output !== undefined &&
+    parseDevices(answer.output).length === 0
+  );
+}
+
+/**
  * llama-server for the active backend: the image's (`AKOU_LLAMA_SERVER`), else the build the best
  * preset downloaded and unpacked (llama-server.ts: `<models>/<build id>/bin`, inside the release's
  * top folder on Linux and macOS, at the top on Windows), else none yet.

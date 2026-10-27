@@ -10,7 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import type { Tool } from "@modelcontextprotocol/client";
 import * as z from "zod";
-import { fakeApi, mcpClient, PROVIDER_STATUS } from "./mcp-helpers.ts";
+import type { ApiClient, RequestOptions } from "../src/main/cli/client.ts";
+import { fakeApi, mcpClient, PROVIDER_STATUS, sampleApi, TOOL_ARGS } from "./mcp-helpers.ts";
 
 type Hints = {
   readOnlyHint: boolean;
@@ -36,6 +37,10 @@ const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
 const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
 /** Lets people outside this machine read the call. */
 const SHARES: Hints = { ...WRITE, openWorldHint: true };
+/** Turns off links other people hold, for good; twice is the same as once. */
+const REVOKES: Hints = { ...DESTRUCTIVE, idempotentHint: true };
+/** Sends a file on this machine to the akou server at AKOU_URL. */
+const UPLOADS: Hints = { ...WRITE, openWorldHint: true };
 
 /** The one table: every tool akou lists, and its annotations. */
 const ANNOTATIONS: Record<string, Hints> = {
@@ -59,7 +64,7 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_delete_note: DESTRUCTIVE,
   akou_get_notes: READ,
   akou_remember: WRITE,
-  akou_forget: WRITE,
+  akou_forget: DESTRUCTIVE,
   akou_memo_get: READ,
   akou_memo_put: IDEMPOTENT,
   akou_vocab_add: WRITE,
@@ -81,14 +86,15 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_export: WRITE,
   akou_share_status: READ,
   akou_share_on: SHARES,
-  akou_share_off: IDEMPOTENT,
+  akou_share_off: REVOKES,
   akou_open_window: WRITE,
   akou_config_get: READ,
   akou_dictation_list: READ,
   akou_dictation_get: READ,
-  akou_transcribe: WRITE,
+  akou_transcribe: UPLOADS,
   akou_job_get: READ,
   akou_jobs_list: READ,
+  akou_job_delete: DESTRUCTIVE,
   akou_devices: READ,
 };
 
@@ -122,6 +128,38 @@ function annotationProblems(tools: readonly Tool[], table: Record<string, Hints>
     if (!listed.has(name)) out.push(`${name}: in the table but not listed`);
   }
   return out;
+}
+
+/** Every tool that sends a DELETE and does not say it is destructive. */
+function deleteProblems(tools: readonly Tool[], methods: Map<string, Set<string>>): string[] {
+  return tools
+    .filter((t) => methods.get(t.name)?.has("DELETE") && t.annotations?.destructiveHint !== true)
+    .map((t) => `${t.name}: sends DELETE but destructiveHint is ${t.annotations?.destructiveHint}`);
+}
+
+/** The HTTP methods each tool sends when called with its usual arguments. */
+async function methodsByTool(): Promise<{ tools: Tool[]; methods: Map<string, Set<string>> }> {
+  const methods = new Map<string, Set<string>>();
+  let current = "";
+  const base = sampleApi();
+  const api = {
+    request: (method: string, path: string, o: RequestOptions = {}) => {
+      if (current) methods.get(current)?.add(method);
+      return base.request(method, path, o);
+    },
+  } as unknown as ApiClient;
+  const c = await mcpClient(api);
+  try {
+    const tools = (await c.client.listTools()).tools;
+    for (const t of tools) {
+      current = t.name;
+      methods.set(t.name, new Set());
+      await c.call(t.name, TOOL_ARGS[t.name]);
+    }
+    return { tools, methods };
+  } finally {
+    await c.close();
+  }
 }
 
 async function listed(): Promise<Tool[]> {
@@ -165,6 +203,24 @@ describe("[PG-M2] every MCP tool carries annotations and a title", () => {
       expect([d, hint(`akou_${d}`)?.destructiveHint]).toEqual([d, true]);
     for (const i of ["name_speaker", "memo_put"])
       expect([i, hint(`akou_${i}`)?.idempotentHint]).toEqual([i, true]);
+  });
+
+  test("every tool that deletes says it is destructive", async () => {
+    const { tools, methods } = await methodsByTool();
+    const deleting = [...methods].filter(([, m]) => m.has("DELETE")).map(([n]) => n);
+    expect(deleting.sort()).toEqual([
+      "akou_delete_note",
+      "akou_forget",
+      "akou_job_delete",
+      "akou_share_off",
+    ]);
+    expect(deleteProblems(tools, methods)).toEqual([]);
+    // Positive control: akou_forget as it was, a plain write.
+    const forget = tools.find((t) => t.name === "akou_forget") as Tool;
+    const harmless = { ...forget, annotations: { ...forget.annotations, destructiveHint: false } };
+    expect(deleteProblems([harmless], methods)).toEqual([
+      "akou_forget: sends DELETE but destructiveHint is false",
+    ]);
   });
 
   test("positive control: a tool missing from the table, a wrong hint and a missing title all fail", async () => {
