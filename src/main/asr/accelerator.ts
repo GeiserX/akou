@@ -3,8 +3,8 @@
  *
  * `asr.accelerator` is `auto` or a llama.cpp backend: `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or
  * `rocm`. `auto` reads the machine once at start: Apple silicon has Metal; on Linux an NVIDIA device
- * node means CUDA and a DRI render node (Intel or AMD, by its PCI vendor) means Vulkan; on Windows
- * the NVIDIA driver's `nvcuda.dll` means CUDA and the Vulkan loader means Vulkan. `auto` never picks
+ * node (under WSL2, /dev/dxg with the driver's libcuda) means CUDA and a DRI render node (Intel or
+ * AMD, by its PCI vendor) means Vulkan; on Windows the NVIDIA driver's `nvcuda.dll` means CUDA and the Vulkan loader means Vulkan. `auto` never picks
  * SYCL or ROCm: Vulkan runs the same cards from a build a fraction of the size, with no vendor
  * runtime on the host.
  *
@@ -107,6 +107,14 @@ export function findDevices(p: Probe): Device[] {
   // The NVIDIA Container Toolkit (`--gpus all`) and the host driver both create /dev/nvidia0.
   if (p.exists("/dev/nvidia0")) {
     out.push({ vendor: "nvidia", node: "/dev/nvidia0", usable: p.usable("/dev/nvidia0") });
+  } else if (
+    p.exists("/dev/dxg") &&
+    p.list("/usr/lib/wsl/lib").some((n) => n.startsWith("libcuda.so"))
+  ) {
+    // WSL2 has no /dev/nvidia0: every GPU is /dev/dxg, and the Windows NVIDIA driver puts libcuda
+    // in /usr/lib/wsl/lib (the toolkit mounts both into a `--gpus all` container). An Intel or AMD
+    // GPU under WSL2 has /dev/dxg but no libcuda.
+    out.push({ vendor: "nvidia", node: "/dev/dxg", usable: p.usable("/dev/dxg") });
   }
   const renders = p
     .list("/dev/dri")

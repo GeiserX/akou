@@ -156,6 +156,42 @@ describe("what the machine has", () => {
     expect(findDevices(machine("linux-arm64"))).toEqual([]);
   });
 
+  test("[#447] WSL2: /dev/dxg with the NVIDIA driver's libcuda in /usr/lib/wsl/lib is an NVIDIA GPU, and auto picks CUDA", () => {
+    const p = machine("linux-x64", {
+      files: { "/dev/dxg": "" },
+      dirs: {
+        "/usr/lib/wsl/lib": ["libcuda.so", "libcuda.so.1", "libcuda.so.1.1", "libdxcore.so"],
+      },
+    });
+    const devices = findDevices(p);
+    expect(devices).toEqual([{ vendor: "nvidia", node: "/dev/dxg", usable: true }]);
+    expect(chooseAccelerator("auto", devices, ["cpu", "cuda"])).toEqual({
+      active: "cuda",
+      reason: "an NVIDIA GPU at /dev/dxg",
+    });
+  });
+
+  test("[#447] positive control: /dev/dxg with no libcuda (an Intel or AMD GPU under WSL2) is not NVIDIA", () => {
+    const p = machine("linux-x64", {
+      files: { "/dev/dxg": "" },
+      dirs: { "/usr/lib/wsl/lib": ["libdxcore.so", "libd3d12.so"] },
+    });
+    expect(findDevices(p)).toEqual([]);
+    expect(findDevices(machine("linux-x64", { files: { "/dev/dxg": "" } }))).toEqual([]);
+  });
+
+  test("[#447] WSL2: /dev/nvidia0 wins over /dev/dxg, and a /dev/dxg this user cannot open is not usable", () => {
+    const wsl = { "/usr/lib/wsl/lib": ["libcuda.so.1"] };
+    const both = machine("linux-x64", { files: { "/dev/dxg": "", "/dev/nvidia0": "" }, dirs: wsl });
+    expect(findDevices(both)).toEqual([{ vendor: "nvidia", node: "/dev/nvidia0", usable: true }]);
+    const locked = machine("linux-x64", {
+      files: { "/dev/dxg": "" },
+      dirs: wsl,
+      denied: ["/dev/dxg"],
+    });
+    expect(findDevices(locked)).toEqual([{ vendor: "nvidia", node: "/dev/dxg", usable: false }]);
+  });
+
   test("Windows: the NVIDIA driver's nvcuda.dll, and the Vulkan loader any GPU driver installs", () => {
     const sys = join("C:\\Windows", "System32");
     const p = machine("win32-x64", {
