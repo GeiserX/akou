@@ -79,7 +79,7 @@ The workflow checks the tag equals every version string and that `ci-ok` passed 
 
 ## Signing
 
-A tag or a dispatch signs the app and the macOS CLI with the Developer ID and notarizes both; the `app` job fails when a secret below is missing, and checks the zip's and the DMG's app with `spctl` and `stapler`, and the CLI with `codesign --check-notarization`, before it uploads them. A pull request's dry run never reads them and builds ad-hoc. The secrets:
+A tag or a dispatch signs the app, the macOS CLI and the `akou-diarize` archive's helper with the Developer ID and notarizes all three; the `app` job fails when a secret below is missing, and checks the zip's and the DMG's app with `spctl` and `stapler`, and the CLI and `akou-diarize` with `codesign --check-notarization`, before it uploads them. A pull request's dry run never reads them and builds ad-hoc. The secrets:
 
 | Secret | Value |
 |---|---|
