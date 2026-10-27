@@ -6840,6 +6840,9 @@
           "500": {
             "$ref": "#/components/responses/500.internal"
           },
+          "503": {
+            "$ref": "#/components/responses/503.no_engine"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7798,6 +7801,9 @@
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
+          "503": {
+            "$ref": "#/components/responses/503.no_engine"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7896,6 +7902,9 @@
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
+          "503": {
+            "$ref": "#/components/responses/503.no_engine"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7934,7 +7943,7 @@
             "$ref": "#/components/responses/500.internal"
           },
           "503": {
-            "$ref": "#/components/responses/503.no_live_engine"
+            "$ref": "#/components/responses/503.no_engine.no_live_engine"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -10754,7 +10763,7 @@
           }
         }
       },
-      "503.no_live_engine": {
+      "503.no_engine": {
         "description": "Unavailable",
         "content": {
           "application/json": {
@@ -10767,6 +10776,30 @@
                   "properties": {
                     "error": {
                       "enum": [
+                        "no_engine"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "503.no_engine.no_live_engine": {
+        "description": "Unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_engine",
                         "no_live_engine"
                       ]
                     }
@@ -11105,6 +11138,10 @@
           {
             "const": "no_live_call",
             "description": "Nothing is recording, so `live` names no call; `last` names the latest."
+          },
+          {
+            "const": "no_engine",
+            "description": "This server carries no speech engine (the single-file CLI); the message names the image or the checkout that has one."
           },
           {
             "const": "no_live_engine",
