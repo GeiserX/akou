@@ -73,11 +73,14 @@ import { APP_LOG, AppLog, HANGS_DIR } from "./app-log.ts";
 import {
   type AcceleratorSetting,
   type AcceleratorState,
+  confirmAccelerator,
+  DRIVER_RETRY_MS,
   detectAccelerator,
+  driverNotUp,
   hostProbe,
+  listDevices,
   llamaServerBin,
   type Probe,
-  verifyAccelerator,
 } from "./asr/accelerator.ts";
 import {
   ALIGNER,
@@ -450,6 +453,8 @@ export interface AppOptions {
   accelerator?: {
     probe?: Probe;
     run?: (bin: string) => Promise<{ output?: string; error?: string }>;
+    /** The waits before asking again while a named GPU lists nothing (#456); DRIVER_RETRY_MS by default. */
+    retryMs?: readonly number[];
   };
   /**
    * The Metal llama-server beside dictation's own (`except`), a final pass's, or null: by default
@@ -3038,6 +3043,8 @@ export class AkouApp implements ApiApp {
     this.accel = first;
     this.accelProbe = probe;
     this.accelAsked = null;
+    if (this.accelRetry !== null) this.clock.clearTimeout(this.accelRetry);
+    this.accelRetry = null;
     this.verifyAccelerator(first);
     return first;
   }
@@ -3052,16 +3059,55 @@ export class AkouApp implements ApiApp {
     const bin = llamaServerBin(probe, this.cfg.settings["asr.modelsDir"], state.active);
     if (bin === null || bin === this.accelAsked) return;
     this.accelAsked = bin;
-    void verifyAccelerator(state, bin, this.o.accelerator?.run).then((st) => {
+    this.askAccelerator(state, state, bin, 0);
+  }
+
+  /**
+   * Asks `bin` for its devices and confirms `detected` from the answer, while `shown` is still the
+   * state reported. A GPU the setting names whose build lists no device at all is a driver still
+   * starting (#456): the CPU runs meanwhile, and the build is asked again after each wait of
+   * `retryMs`, so the GPU takes over the next llama-server start once it appears.
+   */
+  private askAccelerator(
+    detected: AcceleratorState,
+    shown: AcceleratorState,
+    bin: string,
+    tries: number,
+  ): void {
+    const run = this.o.accelerator?.run ?? ((b: string) => listDevices([b]));
+    void run(bin).then((answer) => {
       // A newer detection (the setting changed) owns the state now.
-      if (this.quitting || this.accel !== state) return;
+      if (this.quitting || this.accel !== shown) return;
+      const waits = this.o.accelerator?.retryMs ?? DRIVER_RETRY_MS;
+      const late = driverNotUp(detected, answer);
+      const wait = late ? waits[tries] : undefined;
+      let st = confirmAccelerator(detected, answer);
+      if (wait !== undefined) {
+        st = {
+          ...st,
+          reason: `${st.reason}; asking again in ${Math.ceil(wait / 1000)} s, since a driver still starting lists nothing`,
+        };
+      } else if (late && tries > 0) {
+        st = {
+          ...st,
+          reason: `${st.reason}; asked ${tries + 1} times, so it stays on the CPU until akou restarts`,
+        };
+      }
       this.accel = st;
       this.log(
         "info",
         `accelerator ${st.active}${st.device ? ` (${st.device})` : ""}${st.verified ? "" : " unverified"}: ${st.reason}`,
       );
+      if (wait === undefined) return;
+      this.accelRetry = this.clock.setTimeout(() => {
+        this.accelRetry = null;
+        this.askAccelerator(detected, st, bin, tries + 1);
+      }, wait);
     });
   }
+
+  /** The next check of a named GPU that listed nothing, while one is waiting. */
+  private accelRetry: unknown = null;
 
   /** The llama-server binary the last check asked, so each build is asked once. */
   private accelAsked: string | null = null;
@@ -4402,6 +4448,8 @@ export class AkouApp implements ApiApp {
       await this.quitStep("the Wyoming listener", () => this.wyoming?.stop());
       if (this.networkRetry !== null) this.clock.clearTimeout(this.networkRetry);
       this.networkRetry = null;
+      if (this.accelRetry !== null) this.clock.clearTimeout(this.accelRetry);
+      this.accelRetry = null;
       await this.quitStep("the network listener", () => this.network?.stop());
       await this.quitStep("the API server", () => this.server?.stop());
       // After the API: no request is left holding the store. A running job is queued again at start.

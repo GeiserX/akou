@@ -6,10 +6,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
-import { ApiClient } from "../src/main/cli/client.ts";
+import { ApiClient, Hung, Unreachable } from "../src/main/cli/client.ts";
 import {
   ancestry,
   descendants,
@@ -289,6 +289,79 @@ describe("[DK-M8] An app that takes the connection and never answers", () => {
           `akou: akou is not answering, and the processes below it could not be listed (ps failed), so nothing was stopped; kill -KILL ${h.pid} restarts it by hand`,
         );
         expect(processAlive(h.pid)).toBe(true);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
+});
+
+/**
+ * A client for hung home `h` whose launch is a script that only writes a mark, given
+ * `-a BUNDLE` as `open` gets it, the bundle a fake `akou.app` of `version` (#455).
+ */
+function bundleClient(
+  h: { env: Record<string, string | undefined>; cfg: string },
+  version: string,
+) {
+  const app = join(h.cfg, "akou.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(
+    join(app, "Contents", "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>${version}</string>\n</dict>\n</plist>\n`,
+  );
+  const mark = join(h.cfg, "launched");
+  const script = join(h.cfg, "launcher.ts");
+  writeFileSync(script, `require("node:fs").writeFileSync(${JSON.stringify(mark)}, "");\n`);
+  const api = new ApiClient({
+    env: h.env,
+    client: "test",
+    launch: [process.execPath, script, "-g", "-j", "-a", app, "--env", "AKOU_HEADLESS=1"],
+    launchBudgetMs: 1500,
+    version: "1.3.1",
+  });
+  return { api, app, mark };
+}
+
+describe("[DK-M8] [T4.11] a hung app is not stopped for a relaunch of an older installed app (#455)", () => {
+  test.skipIf(!POSIX)(
+    "with an installed app older than the CLI, the hung app is left running and the message says why",
+    async () => {
+      const h = await hungHome();
+      try {
+        const { api, app, mark } = bundleClient(h, "1.2.0");
+        const err = (await api
+          .request("POST", "/calls/live/stop")
+          .catch((e: unknown) => e)) as Error;
+        expect(err).toBeInstanceOf(Hung);
+        expect(err.message).toBe(
+          `akou is not answering (pid ${h.pid}), and the installed ${app} is 1.2.0, older than this command line (1.3.1), so it was not restarted and nothing was stopped; update the app to 1.3.1 or newer (brew upgrade --cask geiserx/akou/akou, or the DMG from https://github.com/GeiserX/akou/releases) and try again`,
+        );
+        expect(processAlive(h.pid)).toBe(true);
+        expect(existsSync(mark)).toBe(false);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test.skipIf(!POSIX)(
+    "positive control: with an installed app of the CLI's version, the hung app is stopped and the launcher runs",
+    async () => {
+      const h = await hungHome();
+      try {
+        const { api, mark } = bundleClient(h, "1.3.1");
+        const err = (await api
+          .request("POST", "/calls/live/stop")
+          .catch((e: unknown) => e)) as Error;
+        // The fake launcher starts no app, so the relaunch fails, but after the stop and the launch.
+        expect(err).toBeInstanceOf(Unreachable);
+        expect(err.message).not.toContain("older than this command line");
+        await h.proc.exited;
+        expect(processAlive(h.pid)).toBe(false);
+        expect(existsSync(mark)).toBe(true);
       } finally {
         h.cleanup();
       }

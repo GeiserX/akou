@@ -13,7 +13,7 @@ During a call the notes pane opened at its oldest note, so you scrolled down by 
 - **Quiet scrollbars** in the calls list, the transcript and the notes pane (#444). The bar is hidden at rest and shows on hover or while you scroll, and the calls list no longer loses width to it.
 
 ### Behind the scenes
-- CI gives up on a stalled Ubuntu mirror request after 10 s and retries it, so the WebKit window tests no longer run out of time while their system libraries download.
+- CI tells apt to give up on a stalled Ubuntu mirror request after 10 s and retry it in the WebKit window-test job. It did not fix the slow installs that held this release up: the mirror kept sending data slowly, which never trips that timeout, and the release went out after reruns.
 
 ## 1.3.0 — Qwen's words get real times, and a server can translate into English
 

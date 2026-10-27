@@ -4,10 +4,12 @@
  */
 
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { Client } from "@modelcontextprotocol/client";
-import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { InMemoryTransport, type Transport } from "@modelcontextprotocol/server";
+import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { ApiClient, ApiResponse, RequestOptions } from "../src/main/cli/client.ts";
-import { createMcpServer } from "../src/main/mcp/server.ts";
+import { createMcpServer, type McpOptions, mcpFactory } from "../src/main/mcp/server.ts";
 import { quoteCallText } from "../src/main/query/render.ts";
 
 /** An `ApiClient` whose every request is answered by `body`: 200 (or `status`) with that JSON. */
@@ -40,8 +42,13 @@ export interface ToolAnswer {
 }
 
 /** An MCP client named `name`, connected in process to a fresh akou MCP server over `api`. */
-export async function mcpClient(api: ApiClient, name = "claude-code", mode?: "app" | "server") {
-  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}) });
+export async function mcpClient(
+  api: ApiClient,
+  name = "claude-code",
+  mode?: "app" | "server",
+  more: Partial<McpOptions> = {},
+) {
+  const server = createMcpServer({ client: api, ...(mode ? { mode } : {}), ...more });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b);
   const client = new Client({ name, version: "1.0.0" });
@@ -54,6 +61,35 @@ export async function mcpClient(api: ApiClient, name = "claude-code", mode?: "ap
     return { text, isError: r.isError === true, structured: r.structuredContent };
   };
   return { client, server, call, close: () => client.close() };
+}
+
+/**
+ * An MCP client on the 2026-07-28 revision, named `name`, talking to akou's MCP server the way
+ * `akou mcp` serves it (`serveStdio` and `mcpFactory`), over a pair of in-process pipes: every
+ * request carries the envelope, and no `initialize` is ever sent.
+ */
+export async function modernClient(api: ApiClient, name = "claude-code", mode?: "app" | "server") {
+  const up = new PassThrough();
+  const down = new PassThrough();
+  const served = serveStdio(mcpFactory({ client: api, ...(mode ? { mode } : {}) }), {
+    transport: new StdioServerTransport(up, down),
+  });
+  const client = new Client(
+    { name, version: "1.0.0" },
+    { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+  );
+  // The client's end of the same pipes: a line of JSON each way, as over a process's stdio.
+  await client.connect(new StdioServerTransport(down, up) as unknown as Transport);
+  const call = async (tool: string, args: Record<string, unknown> = {}): Promise<ToolAnswer> => {
+    const r = await client.callTool({ name: tool, arguments: args });
+    const text = (r.content as { type: string; text: string }[]).map((c) => c.text).join("\n");
+    return { text, isError: r.isError === true, structured: r.structuredContent };
+  };
+  const close = async () => {
+    await client.close();
+    await served.close();
+  };
+  return { client, call, close };
 }
 
 /** Arguments that make each tool do its usual work, for tests that call every tool. */
@@ -108,6 +144,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_transcribe: { path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 },
   akou_job_get: { id: "job_1", wait: 0 },
   akou_jobs_list: {},
+  akou_job_delete: { id: "job_1" },
   akou_devices: {},
 };
 
@@ -155,7 +192,8 @@ export function sampleApi(n = 3): ApiClient {
     if (path.endsWith("/finalize")) return { call: "c1", model: "qwen" };
     if (path === "/share" && method === "GET") return { active: false, shares: [] };
     if (path === "/share" && method === "POST") return { id: "s1", call: "c1", url: "http://x" };
-    if (path === "/share") return { ok: true, stopped: 1 };
+    if (path === "/share")
+      return { ok: true, stopped: [{ id: "s1", call: "c1", url: "http://x", expiresAt: null }] };
     if (path === "/window") return { ok: true };
     if (path === "/config") {
       return { file: "/cfg/config.json", settings: { "asr.live": "auto" }, set: {}, issues: [] };
@@ -328,6 +366,8 @@ export function sampleApi(n = 3): ApiClient {
       return { jobs: Array.from({ length: Math.min(n, limit) }, (_, i) => job(i)), cursor: null };
     }
     if (path.endsWith("/result")) return transcript;
+    if (path.startsWith("/jobs/") && method === "DELETE")
+      return { id: "job_1", status: "done", deleted: true };
     if (path.startsWith("/jobs/")) return job(1);
     return {};
   };

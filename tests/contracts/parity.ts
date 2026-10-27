@@ -504,7 +504,7 @@ export const PARITY: readonly Row[] = [
       "POST /audio/transcriptions",
     ],
     // SI-7: an agent with a shell uploads a file on its machine; Executor uses the OpenAPI file.
-    mcp: ["akou_transcribe", "akou_job_get", "akou_jobs_list"],
+    mcp: ["akou_transcribe", "akou_job_get", "akou_jobs_list", "akou_job_delete"],
     // The Jobs page of server mode's web UI (SERVER.md SV-U4).
     window: [
       ui("server-jobs.ts", '"GET", `/jobs?#{q}`'),
@@ -515,7 +515,7 @@ export const PARITY: readonly Row[] = [
     action: "Translate a file into English (server mode)",
     cli: { none: "a program asks for it: `task=translate` on POST /jobs, or OpenAI's endpoint" },
     api: ["POST /audio/translations"],
-    mcp: { none: "an agent transcribes through the job tools and reads the language it gets" },
+    mcp: { none: "akou_transcribe takes `task: translate`, the same job through POST /jobs" },
     window: { none: "the Jobs page lists translate jobs as any other job" },
   },
   {
