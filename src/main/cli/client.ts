@@ -329,6 +329,11 @@ export function olderThan(a: string, b: string): boolean {
   return pre !== "" && preB === "";
 }
 
+/** How to get an app of at least `cli`, the end of each message that refuses an older one. */
+function updateHint(cli: string): string {
+  return `update the app to ${cli} or newer (brew upgrade --cask geiserx/akou/akou, or the DMG from https://github.com/GeiserX/akou/releases) and try again`;
+}
+
 export class ApiClient {
   readonly configDir: string;
   private readonly launchCmd: readonly string[] | null;
@@ -607,9 +612,18 @@ export class ApiClient {
     }
     if (olderThan(app, cli)) {
       throw new Unreachable(
-        `akou is not running, and the installed ${bundle} is ${app}, older than this command line (${cli}), so it was not started; update the app to ${cli} or newer (brew upgrade --cask geiserx/akou/akou, or the DMG from https://github.com/GeiserX/akou/releases) and try again`,
+        `akou is not running, and the installed ${bundle} is ${app}, older than this command line (${cli}), so it was not started; ${updateHint(cli)}`,
       );
     }
+  }
+
+  /** The version of the bundle this client would launch, when it is older than the CLI (#455). */
+  private olderBundle(): { bundle: string; app: string; cli: string } | null {
+    const bundle = this.launchCmd ? launchedBundle(this.launchCmd) : null;
+    if (!bundle) return null;
+    const cli = this.o.version ?? APP_VERSION;
+    const app = bundleVersion(bundle);
+    return app !== null && olderThan(app, cli) ? { bundle, app, cli } : null;
   }
 
   /** Does the app lock name a live process: an app past the start of its start, not answering yet? */
@@ -678,6 +692,14 @@ export class ApiClient {
     if ((await probe(rt.port, rest)) === "answers") {
       this.answeredAt = performance.now();
       return rt;
+    }
+    // A restart would start the installed app, and one older than this command line is never
+    // started (#455): the hung app is left as it is, not stopped for a relaunch that cannot follow.
+    const old = launch || this.o.restart === true ? this.olderBundle() : null;
+    if (old) {
+      throw new Hung(
+        `akou is not answering (pid ${rt.pid}), and the installed ${old.bundle} is ${old.app}, older than this command line (${old.cli}), so it was not restarted and nothing was stopped; ${updateHint(old.cli)}`,
+      );
     }
     const left = await stopAll(stopList(rows, rt.pid));
     if (left.length > 0) {
