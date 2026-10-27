@@ -691,10 +691,16 @@ function loopback(host: string): boolean {
   return h === "localhost" || h === "::1" || /^127(\.\d{1,3}){3}$/.test(h);
 }
 
+/** `AKOU_ALLOW_HTTP` read as `AKOU_MCP_READONLY` is: `1` or `true`, any case, spaces around ignored. */
+function allowHttp(v: string | undefined): boolean {
+  const s = (v ?? "").trim().toLowerCase();
+  return s === "1" || s === "true";
+}
+
 /**
  * Why `akou mcp` refuses this `AKOU_URL`, or null: a plain `http://` URL to another machine
- * sends the API key unencrypted on every request. `AKOU_ALLOW_HTTP=1` accepts it for a network
- * the user trusts end to end.
+ * sends the API key unencrypted on every request. `AKOU_ALLOW_HTTP=1` (or `true`) accepts it for a
+ * network the user trusts end to end.
  */
 export function plainHttpRefusal(env: Record<string, string | undefined>): string | null {
   const raw = env.AKOU_URL?.trim();
@@ -706,7 +712,7 @@ export function plainHttpRefusal(env: Record<string, string | undefined>): strin
     // Not a URL at all: the client's own check says what is wrong with it.
     return null;
   }
-  if (url.protocol !== "http:" || loopback(url.hostname) || env.AKOU_ALLOW_HTTP === "1") {
+  if (url.protocol !== "http:" || loopback(url.hostname) || allowHttp(env.AKOU_ALLOW_HTTP)) {
     return null;
   }
   return `AKOU_URL is plain http to ${url.host}, which would send the API key unencrypted; use https, or set AKOU_ALLOW_HTTP=1 if you trust every network in between`;
@@ -2309,11 +2315,17 @@ export function createMcpServer(o: McpOptions): McpServer {
       }),
       outputSchema: OUT.job,
     },
-    async (a) => {
-      const r = await req("GET", `/jobs/${id(a.id)}`, {
-        query: { wait: a.wait },
-        timeoutMs: (a.wait + 15) * 1000,
-      });
+    async (a, ctx) => {
+      const stop = progressBeat(ctx, "Waiting for the job");
+      let r: ApiResponse;
+      try {
+        r = await req("GET", `/jobs/${id(a.id)}`, {
+          query: { wait: a.wait },
+          timeoutMs: (a.wait + 15) * 1000,
+        });
+      } finally {
+        stop();
+      }
       if (r.status !== 200 || r.body?.status !== "done") return asResult(r, jobAnswer);
       const result = await req("GET", `/jobs/${id(a.id)}/result`, {
         query: a.format === "json" ? {} : { format: a.format },

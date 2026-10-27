@@ -35,6 +35,11 @@ describe("akou mcp never sends the API key over plain http to another machine", 
       expect([ok, plainHttpRefusal({ AKOU_URL: ok })]).toEqual([ok, null]);
     }
     expect(plainHttpRefusal({ AKOU_URL: "http://akou.lan", AKOU_ALLOW_HTTP: "1" })).toBeNull();
+    // The opt-in reads like AKOU_MCP_READONLY: `true` counts as well as `1`, and nothing else does.
+    expect(plainHttpRefusal({ AKOU_URL: "http://akou.lan", AKOU_ALLOW_HTTP: " True " })).toBeNull();
+    expect(plainHttpRefusal({ AKOU_URL: "http://akou.lan", AKOU_ALLOW_HTTP: "yes" })).toContain(
+      "plain http",
+    );
     expect(plainHttpRefusal({})).toBeNull();
   });
 
