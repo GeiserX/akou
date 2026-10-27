@@ -853,13 +853,17 @@ example: akou skill uninstall
 ```text
 akou mcp: Serve MCP on stdin and stdout for an agent (a thin client of the local API)
 
-usage: akou mcp
+usage: akou mcp [--read-only]
 
-      --json     ignored: MCP already speaks JSON-RPC on stdout
-  -h, --help     show this help
-      --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
+      --json       ignored: MCP already speaks JSON-RPC on stdout
+      --read-only  list only the tools that change nothing; AKOU_MCP_READONLY=1 does the same
+  -h, --help       show this help
+      --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
+
+AKOU_URL serves a remote akou instead of the app here; a plain http AKOU_URL to another machine is refused (the key would cross the network unencrypted) unless AKOU_ALLOW_HTTP=1.
 
 example: akou mcp
+example: akou mcp --read-only
 ```
 
 ## serve
@@ -929,8 +933,8 @@ example: akou serve
 | Devices and apps | `devices`, `apps` | `GET /devices`, `GET /apps` | `akou_devices` | `src/ui/dictation-mic.ts`, `src/ui/settings-page.ts`, `src/ui/call-picker.ts` |
 | Update the CLI | `self-update` | none: the CLI replaces its own binary; not built yet | none: touches only akou's own folders or the terminal (docs/ux/CLI.md section 14) | none: the app's update notice is DK-U1 |
 | What this akou is and can do | none: a program reads it before it offers presets; the CLI already knows its akou | `GET /server`, `GET /openapi.json` | none: the MCP server talks to the akou it was installed with | none: the window is the app itself |
-| Transcribe a file as a job (server mode) | `transcribe`, `jobs` | `POST /jobs`, `GET /jobs`, `GET /jobs/:id`, `GET /jobs/:id/result`, `DELETE /jobs/:id`, `GET /events`, `POST /audio/transcriptions` | `akou_transcribe`, `akou_job_get`, `akou_jobs_list` | `src/ui/server-jobs.ts` |
-| Translate a file into English (server mode) | none: a program asks for it: `task=translate` on POST /jobs, or OpenAI's endpoint | `POST /audio/translations` | none: an agent transcribes through the job tools and reads the language it gets | none: the Jobs page lists translate jobs as any other job |
+| Transcribe a file as a job (server mode) | `transcribe`, `jobs` | `POST /jobs`, `GET /jobs`, `GET /jobs/:id`, `GET /jobs/:id/result`, `DELETE /jobs/:id`, `GET /events`, `POST /audio/transcriptions` | `akou_transcribe`, `akou_job_get`, `akou_jobs_list`, `akou_job_delete` | `src/ui/server-jobs.ts` |
+| Translate a file into English (server mode) | none: a program asks for it: `task=translate` on POST /jobs, or OpenAI's endpoint | `POST /audio/translations` | none: akou_transcribe takes `task: translate`, the same job through POST /jobs | none: the Jobs page lists translate jobs as any other job |
 | Transcribe for Bazarr (server mode, SV-C3) | none: Bazarr calls akou's endpoint itself; `akou transcribe` already takes a file | `POST /asr`, `POST /detect-language` | none: an agent transcribes through the job tools; this door speaks Bazarr's dialect | none: Bazarr is the window: it saves the subtitle next to the video |
 | Name or rename a job (server mode) | none: a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name | `PATCH /jobs/:id` | none: an agent reads its jobs by id; SI-7 names no rename tool, and a title is for the Jobs page | none: the Jobs page shows each job's name and finds jobs by it; the program that submitted a job names it |
 | Download a kept recording (server mode) | none: the client that recorded keeps its own copy until the server keeps one | `GET /jobs/:id/audio` | none: an agent reads a job's text; the audio is for the client that recorded it | none: the Jobs page lists jobs; the recording plays in the client that made it |
