@@ -303,22 +303,30 @@ export function launchedBundle(cmd: readonly string[]): string | null {
 export function bundleVersion(bundle: string): string | null {
   try {
     const plist = readFileSync(join(bundle, "Contents", "Info.plist"), "utf8");
-    const m = /<key>CFBundleShortVersionString<\/key>\s*<string>\s*(\d+\.\d+\.\d+)/.exec(plist);
+    const m =
+      /<key>CFBundleShortVersionString<\/key>\s*<string>\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(
+        plist,
+      );
     return m?.[1] ?? null;
   } catch {
     return null;
   }
 }
 
-/** `a` older than `b`, both `x.y.z`. */
-function olderThan(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
+/**
+ * `a` older than `b`, both `x.y.z` with an optional `-prerelease`: by major, minor and patch, and
+ * on a tie a prerelease is older than the release (`1.3.1-rc.1` before `1.3.1`).
+ */
+export function olderThan(a: string, b: string): boolean {
+  const [ca = "", pre = ""] = a.split(/-(.*)/s);
+  const [cb = "", preB = ""] = b.split(/-(.*)/s);
+  const pa = ca.split(".").map(Number);
+  const pb = cb.split(".").map(Number);
   for (let i = 0; i < 3; i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (d !== 0) return d < 0;
   }
-  return false;
+  return pre !== "" && preB === "";
 }
 
 export class ApiClient {

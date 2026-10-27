@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ApiClient, bundleVersion, Unreachable } from "../src/main/cli/client.ts";
+import { ApiClient, bundleVersion, olderThan, Unreachable } from "../src/main/cli/client.ts";
 import { tempDir } from "./helpers.ts";
 
 const CLI = "1.3.1";
@@ -58,13 +58,23 @@ describe("[T4.11] Login agent does not start mid-session: an installed app older
     const t = tempDir();
     try {
       expect(bundleVersion(bundle(join(t.dir, "a"), plist("0.6.2")))).toBe("0.6.2");
-      expect(bundleVersion(bundle(join(t.dir, "b"), plist("1.4.0-rc.1")))).toBe("1.4.0");
+      expect(bundleVersion(bundle(join(t.dir, "b"), plist("1.4.0-rc.1")))).toBe("1.4.0-rc.1");
       expect(bundleVersion(bundle(join(t.dir, "c"), null))).toBeNull();
       expect(bundleVersion(bundle(join(t.dir, "d"), "bplist00\u0000\u0001garbage"))).toBeNull();
       expect(bundleVersion(bundle(join(t.dir, "e"), plist("unknown")))).toBeNull();
     } finally {
       t.cleanup();
     }
+  });
+
+  test("olderThan orders by major, minor and patch, and a prerelease before its release", () => {
+    expect(olderThan("0.6.2", CLI)).toBe(true);
+    expect(olderThan("1.3.0", CLI)).toBe(true);
+    expect(olderThan("1.3.1-rc.1", CLI)).toBe(true);
+    expect(olderThan(CLI, CLI)).toBe(false);
+    expect(olderThan("1.3.2", CLI)).toBe(false);
+    expect(olderThan("1.4.0-rc.1", CLI)).toBe(false);
+    expect(olderThan("10.0.0", "9.9.9")).toBe(false);
   });
 
   test("an older app is refused before anything is launched, naming both versions and the update", async () => {
