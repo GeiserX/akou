@@ -53,7 +53,11 @@ async function openLive(r: AppRig, key: string) {
 
 async function openai(r: AppRig, key: string) {
   const form = new FormData();
-  form.append("file", new Blob([new Uint8Array(clip(["hello"], 1))], { type: "audio/wav" }), "a.wav");
+  form.append(
+    "file",
+    new Blob([new Uint8Array(clip(["hello"], 1))], { type: "audio/wav" }),
+    "a.wav",
+  );
   form.append("model", "whisper-1");
   return fetch(`http://127.0.0.1:${r.port}/v1/audio/transcriptions`, {
     method: "POST",
@@ -124,9 +128,17 @@ describe("[#436] akou serve with no speech engine", () => {
     const body = JSON.parse(r.body) as { error: string; message: string };
     expect(body.error).toBe("no_engine");
     expect(body.message).toBe(NO_ENGINE_REASON);
-    // Positive control: with the engine the same request is upgraded.
+    // Positive control: with the engine the same request is upgraded and the socket opens.
     const engine = await rig(false);
     const ek = await newKey(engine, "live-engine");
-    expect((await openLive(engine, ek.key)).status).toBe(101);
+    const ws = new WebSocket(`ws://127.0.0.1:${engine.port}/v1/live`, {
+      headers: { authorization: `Bearer ${ek.key}` },
+    } as unknown as string[]);
+    const opened = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+    });
+    ws.close();
+    expect(opened).toBe(true);
   });
 });
