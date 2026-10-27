@@ -772,8 +772,11 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
   });
 
   const modelsReady = async (s: Server): Promise<boolean> =>
-    ((await (await fetch(`http://127.0.0.1:${s.port}/healthz`)).json()) as { models_ready: boolean })
-      .models_ready;
+    (
+      (await (await fetch(`http://127.0.0.1:${s.port}/healthz`)).json()) as {
+        models_ready: boolean;
+      }
+    ).models_ready;
 
   for (const c of [
     // The default cannot be fetched here, so the job route sends it to any remote that offers it.
