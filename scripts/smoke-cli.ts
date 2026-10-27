@@ -167,7 +167,8 @@ async function serveCheck(): Promise<void> {
       signal: AbortSignal.timeout(5000),
     }).catch((e: Error) => e);
     // It carries no speech engine (#436): never ready, with the reason, so no client sends it work.
-    const body = health instanceof Error ? null : await health.json().catch(() => null);
+    type Answer = { models_ready?: boolean; reason?: string; error?: string } | null;
+    const body: Answer = health instanceof Error ? null : await health.json().catch(() => null);
     check(
       !(health instanceof Error) &&
         health.status === 503 &&
@@ -187,7 +188,7 @@ async function serveCheck(): Promise<void> {
       body: form,
       signal: AbortSignal.timeout(5000),
     }).catch((e: Error) => e);
-    const jobBody = job instanceof Error ? null : await job.json().catch(() => null);
+    const jobBody: Answer = job instanceof Error ? null : await job.json().catch(() => null);
     check(
       !(job instanceof Error) && job.status === 503 && jobBody?.error === "no_engine",
       "akou serve refuses POST /v1/jobs at once with 503 no_engine",
@@ -198,7 +199,7 @@ async function serveCheck(): Promise<void> {
       headers: auth,
       signal: AbortSignal.timeout(5000),
     }).catch((e: Error) => e);
-    const liveBody = live instanceof Error ? null : await live.json().catch(() => null);
+    const liveBody: Answer = live instanceof Error ? null : await live.json().catch(() => null);
     check(
       !(live instanceof Error) && live.status === 503 && liveBody?.error === "no_engine",
       "akou serve refuses GET /v1/live with 503 no_engine",

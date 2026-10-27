@@ -56,6 +56,7 @@ import {
   type Held,
   hardwareChoice,
   type ModelChoice,
+  ModelRefused,
   type ModelSource,
   type ModelStore,
   resolveModel,
