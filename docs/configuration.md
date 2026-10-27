@@ -27,6 +27,8 @@ Keys marked *file only* name a program akou runs or an address your audio or tra
 | `AKOU_URL` | Points the command line and `akou mcp` at a remote akou instead of the app on this machine |
 | `AKOU_API_KEY` | The key for `AKOU_URL` |
 | `AKOU_API_KEY_FILE` | A file holding the key for `AKOU_URL`, read instead of `AKOU_API_KEY` |
+| `AKOU_ALLOW_HTTP` | `1` lets `akou mcp` use a plain `http` `AKOU_URL` on another machine; without it, the key would cross the network unencrypted and it refuses |
+| `AKOU_MCP_READONLY` | `1` or `true` makes `akou mcp` list only the tools that change nothing, as `--read-only` does |
 
 ## Every setting
 
