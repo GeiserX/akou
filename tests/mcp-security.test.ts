@@ -48,7 +48,7 @@ describe("akou mcp never sends the API key over plain http to another machine", 
 
 describe("akou_share_status hands out no live link's token", () => {
   test("the token is cut out of every address, in the text and the structured result", async () => {
-    const token = "Zx81bQ0cR4nd0mT0k3n";
+    const token = "fake-share-token-for-this-test";
     const api = fakeApi((_m, path) =>
       path === "/share"
         ? {
