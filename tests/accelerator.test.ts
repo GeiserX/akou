@@ -186,7 +186,10 @@ describe("what the machine has", () => {
     picksCudaOnDxg({
       "/usr/lib/wsl/lib": ["libdxcore.so"],
       "/usr/lib/wsl/drivers": ["nvdm.inf_amd64_0123456789abcdef"],
-      "/usr/lib/wsl/drivers/nvdm.inf_amd64_0123456789abcdef": ["libcuda.so.1.1", "libnvdxgdmal.so.1"],
+      "/usr/lib/wsl/drivers/nvdm.inf_amd64_0123456789abcdef": [
+        "libcuda.so.1.1",
+        "libnvdxgdmal.so.1",
+      ],
     });
   });
 
@@ -204,7 +207,9 @@ describe("what the machine has", () => {
     expect(findDevices(machine("linux-x64", { files: { "/dev/dxg": "" } }))).toEqual([]);
     // libcuda with no /dev/dxg is not a GPU either: a plain Linux box with a CUDA library and no device.
     expect(
-      findDevices(machine("linux-x64", { dirs: { "/usr/lib/x86_64-linux-gnu": ["libcuda.so.1"] } })),
+      findDevices(
+        machine("linux-x64", { dirs: { "/usr/lib/x86_64-linux-gnu": ["libcuda.so.1"] } }),
+      ),
     ).toEqual([]);
   });
 
