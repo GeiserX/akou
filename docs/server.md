@@ -266,7 +266,7 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 curl -s http://127.0.0.1:8476/healthz
 ```
 
-which answers `{"ok":true,…,"models_ready":true}` once the models a job with no `model` runs (`server.default_model`, its helpers, and the speaker models when `server.default_diarize` is on) are on disk and nothing is loading. If it answers nothing, the log is the `StandardErrorPath` file.
+which answers `{"ok":true,…,"models_ready":true}` once the models a job with no `model` runs (`server.default_model`, its helpers, and the speaker models when `server.default_diarize` is on) are on disk and nothing is loading, or once a remote that is up takes those jobs (see [Sending jobs to another akou](#sending-jobs-to-another-akou)). If it answers nothing, the log is the `StandardErrorPath` file.
 
 ## Sending jobs to another akou
 

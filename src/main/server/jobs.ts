@@ -750,18 +750,37 @@ export class JobService {
   }
 
   /**
-   * Whether a job that names no model has every model it loads on this disk (#449), the speaker
-   * models only with `diarize`: `/healthz`'s `models_ready`. False when `server.default_model`
-   * refuses every job.
+   * Whether a job that names no model can run without waiting on a model (#449), the speaker
+   * models only with `diarize`: `/healthz`'s `models_ready`. True when every model it loads is on
+   * this disk, or when a remote that is up takes it the way the queue routes it (section 14): a
+   * remote entry that names it first, or, for a default this server cannot run or fetch, any up
+   * remote that offers it. False when `server.default_model` refuses every job and no remote
+   * takes it.
    */
   defaultOnDisk(diarize: boolean): boolean {
-    let model: string;
+    let choice: ModelChoice | null;
     try {
-      model = this.choose({}).model;
+      choice = this.choose({});
     } catch {
-      return false;
+      choice = null;
     }
-    return this.o.shelf.missing(this.o.shelf.needs(model, { diarize })).length === 0;
+    if (choice && this.o.shelf.missing(this.o.shelf.needs(choice.model, { diarize })).length === 0)
+      return true;
+    if (!this.remotes.configured()) return false;
+    // A remote that is up but full still takes the job once it has room: no model to wait on.
+    const takes = (url: string | null) => url !== null && url !== "pending";
+    if (choice) {
+      const names = [choice.preset, choice.model].filter((n) => n !== "custom" && n !== "auto");
+      if (takes(this.remotes.pick(names, true))) return true;
+      // A default this server may fetch is accepted here and waits for its download.
+      try {
+        this.admit(choice.model, { diarize });
+        return false;
+      } catch {}
+    }
+    // What the job route sends to a remote when this server cannot run or fetch the default.
+    const remote = this.remoteChoice({});
+    return remote !== null && takes(this.remotes.pick([remote.model ?? remote.preset], false));
   }
 
   /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */

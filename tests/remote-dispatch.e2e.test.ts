@@ -771,6 +771,46 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
     }
   });
 
+  const modelsReady = async (s: Server): Promise<boolean> =>
+    ((await (await fetch(`http://127.0.0.1:${s.port}/healthz`)).json()) as { models_ready: boolean })
+      .models_ready;
+
+  for (const c of [
+    // The default cannot be fetched here, so the job route sends it to any remote that offers it.
+    { name: "a default this server cannot fetch", takes: "", autoDownload: false },
+    // The default could be fetched, but the remote entry names it, so the queue sends it there first.
+    { name: "a default a remote entry names", takes: " best", autoDownload: true },
+  ]) {
+    test(`[SV-P4] #449 ${c.name}, which only a remote runs, is ready while that remote is up`, async () => {
+      const pdir = tempDir("akou-primary-").dir;
+      const kf = keyFile(pdir, FAKE_KEY);
+      const primary = await server({
+        home: pdir,
+        installed: true,
+        keyName: "archive",
+        absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
+        settings: {
+          "server.default_model": "best",
+          "server.remotes": [`http://127.0.0.1:${fake.port} ${kf}${c.takes}`],
+          "server.auto_download": c.autoDownload,
+        },
+      });
+      try {
+        await remoteState(primary, "up");
+        expect(await modelsReady(primary)).toBe(true);
+        // Positive control: the remote gone, a default job waits on a model again.
+        const set = await primary.api("PATCH", "/config", {
+          "server.remotes": [`http://127.0.0.1:${freePort()} ${kf}${c.takes}`],
+        });
+        expect(set.status).toBe(200);
+        await remoteState(primary, "down");
+        expect(await modelsReady(primary)).toBe(false);
+      } finally {
+        await primary.close();
+      }
+    });
+  }
+
   test("with no remote ever seen offering best, best is still 409 preset_unavailable", async () => {
     const pdir = tempDir("akou-primary-").dir;
     const primary = await server({

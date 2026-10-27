@@ -7,8 +7,8 @@
  *   them) and while a job is stalled (`queue.stalled`, #407: running past `STALL_BASE_MS` plus
  *   `STALL_PER_AUDIO` times its audio). `models_ready` is true once every model a job that names
  *   no model loads is on disk (`server.default_model`, or what `auto` runs, with its helpers, and
- *   the speaker models when `server.default_diarize` is on) and nothing is loading, whatever the
- *   jobs do (#449); with no job queue, once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
+ *   the speaker models when `server.default_diarize` is on) and nothing is loading, or once an up
+ *   remote takes that job (section 14), whatever the jobs do (#449); with no job queue, once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
  *   `queue` is the job queue's settings, depth, throughput and ETA (SV-Q4), in both modes.
  * - `GET /v1/server`, no key: what this akou is and can do, and a link to the OpenAPI file (SV-C4),
  *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
@@ -63,8 +63,9 @@ export function modelState(app: ApiApp): { loading: boolean; ready: boolean } {
 /**
  * `/healthz`'s `models_ready` (#449): with a job queue, a job that names no model has everything
  * it loads on disk (the recognizer `server.default_model` or `auto` resolves to, its helpers, the
- * speaker models when `server.default_diarize` is on) and nothing loads, so a server with only
- * `best` never waits on Parakeet. With no queue, the recognizer's readiness.
+ * speaker models when `server.default_diarize` is on) and nothing loads, or an up remote takes it
+ * (section 14), so a server with only `best` never waits on Parakeet. With no queue, the
+ * recognizer's readiness.
  */
 function jobModelsReady(app: ApiApp, state: { loading: boolean; ready: boolean }): boolean {
   const jobs = app.jobs?.();
@@ -78,7 +79,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
