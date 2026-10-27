@@ -76,4 +76,20 @@ The app serves a local API on `http://127.0.0.1:8476/v1`, on this machine's loop
 
 `akou mcp` serves MCP on standard input and output, as a thin client of the local API; `akou skill install` and the plugin register it for you. Every tool, its parameters and the annotations a harness reads to decide what it may run without asking are in [MCP tools](reference/mcp.md), a page generated from the server's own tool list.
 
+It speaks the 2026-07-28 revision of the protocol, where each request carries its own version and there is no `initialize`, and the 2024 and 2025 revisions on the same process, so an older harness keeps working. A tool call the harness cancels stops its request to akou too.
+
+Any other harness that runs a local MCP server takes the same command. Some desktop apps start it with a short `PATH`: if the tools do not show up, put the full path that `command -v akou` prints in place of `akou`.
+
+| Harness | Where | What to add |
+|---|---|---|
+| Claude Code | a terminal | `claude mcp add akou -- akou mcp` |
+| Codex | `~/.codex/config.toml` | `[mcp_servers.akou]` with `command = "akou"` and `args = ["mcp"]` |
+| Claude Desktop | `claude_desktop_config.json` | `"mcpServers": { "akou": { "command": "akou", "args": ["mcp"] } }` |
+| Cursor | `~/.cursor/mcp.json` | `"mcpServers": { "akou": { "command": "akou", "args": ["mcp"] } }` |
+| VS Code | `.vscode/mcp.json` | `"servers": { "akou": { "type": "stdio", "command": "akou", "args": ["mcp"] } }` |
+
+`akou mcp --read-only`, or `AKOU_MCP_READONLY=1`, lists only the tools that change nothing: an agent can read and question calls, but cannot start, stop, edit, share or delete anything. Use it for an agent you do not want acting on your calls.
+
+With `AKOU_URL` pointing at another machine over plain `http`, `akou mcp` refuses to start, because the API key would cross the network unencrypted; use `https`, or set `AKOU_ALLOW_HTTP=1` on a network you trust. A loopback address is always allowed.
+
 The same commands drive a server when `AKOU_URL` is set, `akou transcribe` included: see [The command line against a server](server.md#the-command-line-against-a-server).

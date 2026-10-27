@@ -13,7 +13,7 @@ import { ApiClient } from "../src/main/cli/client.ts";
 import { isMediaHead, JOB_TOOLS, MAX_TOOL_WAIT, targetMode } from "../src/main/mcp/server.ts";
 import { CLI } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
-import { mcpClient } from "./mcp-helpers.ts";
+import { fakeApi, mcpClient } from "./mcp-helpers.ts";
 
 const WAV = join(import.meta.dir, "fixtures", "two-voices.wav");
 
@@ -118,6 +118,26 @@ describe("[SI-7] akou_transcribe", () => {
       expect(isMediaHead(ok)).toBe(true);
     for (const bad of [head("AKOU_API_KEY=x"), head('{"a":1}'), head("%PDF-1.7"), head()])
       expect(isMediaHead(bad)).toBe(false);
+  });
+});
+
+describe("akou_job_get reports progress while it waits", () => {
+  test("with a progress token, the wait sends progress before the job comes back", async () => {
+    const api = fakeApi((_m, path) =>
+      path.startsWith("/jobs/") ? { id: "job_1", status: "running" } : {},
+    );
+    const c = await mcpClient(api, "test", "server");
+    const seen: number[] = [];
+    try {
+      const r = await c.client.callTool(
+        { name: "akou_job_get", arguments: { id: "job_1", wait: 0 } },
+        { onprogress: (p) => seen.push(p.progress) },
+      );
+      expect(r.isError).not.toBe(true);
+    } finally {
+      await c.close();
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(1);
   });
 });
 
