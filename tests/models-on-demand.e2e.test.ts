@@ -628,3 +628,55 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
     expect((await rig.api("DELETE", "/models/nope")).status).toBe(404);
   });
 });
+
+describe("[SV-P4] #449: models_ready follows what a job that names no model loads", () => {
+  const health = async (rig: Rig) => {
+    const r = await fetch(`http://127.0.0.1:${rig.port}/healthz`);
+    return {
+      status: r.status,
+      ready: ((await r.json()) as { models_ready: boolean }).models_ready,
+    };
+  };
+
+  test("a server with only server.default_model's models on disk is ready; the live recognizer is not needed", async () => {
+    // The `best`-only server: its default recognizer and the helpers, no live recognizer.
+    const rig = await serverRig([B, "silero-vad", NEMOTRON], { "server.default_model": B });
+    try {
+      expect(rig.app.recognizer()).toBe("unavailable");
+      expect(await health(rig)).toEqual({ status: 200, ready: true });
+      // `GET /v1/server` still says `fast` cannot run here: its recognizer is not on disk.
+      const server = await get(rig, "/v1/server");
+      expect(server.body.presets.find((p: Body) => p.name === "fast").available).toBe(false);
+      // Positive control: a default whose recognizer is missing is not ready.
+      await setting(rig, "server.default_model", RECOGNIZER);
+      expect(await health(rig)).toEqual({ status: 200, ready: false });
+    } finally {
+      await rig.done();
+    }
+  });
+
+  test("the speaker model counts only when a job gets speaker labels by default", async () => {
+    const rig = await serverRig([B, "silero-vad"], { "server.default_model": B });
+    try {
+      expect(await health(rig)).toEqual({ status: 200, ready: true });
+      await setting(rig, "server.default_diarize", true);
+      expect(await health(rig)).toEqual({ status: 200, ready: false });
+    } finally {
+      await rig.done();
+    }
+  });
+
+  test("the live recognizer on disk does not make a server ready whose default is missing", async () => {
+    const rig = await serverRig([RECOGNIZER, "silero-vad", NEMOTRON], {
+      "server.default_model": B,
+    });
+    try {
+      expect(await health(rig)).toEqual({ status: 200, ready: false });
+      // Positive control: the default named on disk.
+      await setting(rig, "server.default_model", RECOGNIZER);
+      await until(async () => (await health(rig)).ready, 10_000, "the default ready");
+    } finally {
+      await rig.done();
+    }
+  });
+});

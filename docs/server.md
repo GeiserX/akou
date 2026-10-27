@@ -38,7 +38,7 @@ docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
   -v akou-data:/data -v akou-models:/models drumsergio/akou:1.3.1
 ```
 
-`curl -s http://127.0.0.1:8476/healthz` answers `{"ok":true,…,"models_ready":true}` once the pulled models are found. The server decodes any audio file with the ffmpeg inside the image, and `docker stop` ends it cleanly.
+`curl -s http://127.0.0.1:8476/healthz` answers `{"ok":true,…,"models_ready":true}` once the models of `server.default_model` are found (a server with only `best` pulled is ready without Parakeet). The server decodes any audio file with the ffmpeg inside the image, and `docker stop` ends it cleanly.
 
 Every program that sends jobs needs its own key. Create one in the running container, with a `jobs` scope and every host its `callback_url` may name:
 
@@ -266,7 +266,7 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 curl -s http://127.0.0.1:8476/healthz
 ```
 
-which answers `{"ok":true,…,"models_ready":true}` once the models are loaded. If it answers nothing, the log is the `StandardErrorPath` file.
+which answers `{"ok":true,…,"models_ready":true}` once the models a job with no `model` runs (`server.default_model`, its helpers, and the speaker models when `server.default_diarize` is on) are on disk and nothing is loading. If it answers nothing, the log is the `StandardErrorPath` file.
 
 ## Sending jobs to another akou
 

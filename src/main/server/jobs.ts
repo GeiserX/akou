@@ -749,6 +749,21 @@ export class JobService {
     return this.o.auto?.() ?? hardwareChoice();
   }
 
+  /**
+   * Whether a job that names no model has every model it loads on this disk (#449), the speaker
+   * models only with `diarize`: `/healthz`'s `models_ready`. False when `server.default_model`
+   * refuses every job.
+   */
+  defaultOnDisk(diarize: boolean): boolean {
+    let model: string;
+    try {
+      model = this.choose({}).model;
+    } catch {
+      return false;
+    }
+    return this.o.shelf.missing(this.o.shelf.needs(model, { diarize })).length === 0;
+  }
+
   /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */
   defaultRecognizer(): string {
     try {
