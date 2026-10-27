@@ -75,6 +75,7 @@ const DESIGN_TOOLS = [
   "akou_transcribe",
   "akou_job_get",
   "akou_jobs_list",
+  "akou_job_delete",
   "akou_devices",
 ];
 

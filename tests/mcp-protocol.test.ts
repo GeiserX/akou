@@ -10,6 +10,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
+import type { Tool } from "@modelcontextprotocol/client";
 import type { ApiClient, ApiResponse, RequestOptions } from "../src/main/cli/client.ts";
 import { CLI } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -31,13 +32,21 @@ const envelope = (version = MODERN) => ({
  * by id once every id in `ids` has one (or the bound runs out).
  */
 // biome-ignore lint/suspicious/noExplicitAny: JSON-RPC answers are inspected field by field.
-async function exchange(messages: object[], ids: number[]): Promise<Map<number, any>> {
+type Rpc = any;
+
+async function exchange(
+  messages: object[],
+  ids: number[],
+  args: string[] = [],
+  extra: Record<string, string> = {},
+): Promise<Map<number, Rpc>> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && !k.startsWith("AKOU_")) env[k] = v;
   }
   env.AKOU_HOME = box.dir;
-  const proc = Bun.spawn([process.execPath, CLI, "mcp"], {
+  Object.assign(env, extra);
+  const proc = Bun.spawn([process.execPath, CLI, "mcp", ...args], {
     env,
     stdin: "pipe",
     stdout: "pipe",
@@ -143,6 +152,40 @@ describe("akou mcp speaks the 2026-07-28 revision and the 2025 ones on the same 
     expect(list.resultType).toBeUndefined();
     expect(list.ttlMs).toBeUndefined();
   }, 30_000);
+});
+
+describe("akou mcp --read-only and AKOU_MCP_READONLY list only the tools that change nothing", () => {
+  const legacyList = [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "claude-code", version: "2.1" },
+      },
+    },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 2, method: "tools/list" },
+  ];
+  const writes = (got: Map<number, { result: { tools: Tool[] } }>) =>
+    got
+      .get(2)
+      ?.result.tools.filter((t) => t.annotations?.readOnlyHint !== true)
+      .map((t) => t.name);
+
+  test("the flag and the variable each drop every write tool; without them the writes are listed", async () => {
+    const flag = await exchange(legacyList, [1, 2], ["--read-only"]);
+    const env = await exchange(legacyList, [1, 2], [], { AKOU_MCP_READONLY: "1" });
+    const plain = await exchange(legacyList, [1, 2]);
+    expect(writes(flag)).toEqual([]);
+    expect(writes(env)).toEqual([]);
+    expect(flag.get(2)?.result.tools.map((t: Tool) => t.name)).toContain("akou_context");
+    // Positive control: the same binary with neither lists akou_start and akou_forget.
+    expect(writes(plain)).toContain("akou_start");
+    expect(writes(plain)).toContain("akou_forget");
+  }, 60_000);
 });
 
 /**

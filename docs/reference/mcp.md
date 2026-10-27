@@ -14,7 +14,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `text` | `string` | yes |  |
+| `text` | `string` | yes | The note, one line, such as "Ben ships the fix Friday". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -25,7 +25,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "properties": {
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The note, one line, such as \"Ben ships the fix Friday\"."
     }
   },
   "required": [
@@ -47,7 +48,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `question` | `string` | yes |  |
+| `question` | `string` | yes | The user's question, word for word, such as "what did Ben say about the budget?". |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
 
 <details markdown>
@@ -59,7 +60,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "properties": {
     "question": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The user's question, word for word, such as \"what did Ben say about the budget?\"."
     },
     "call": {
       "default": "live",
@@ -86,7 +88,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `key` | `string` | no |  |
+| `key` | `string` | no | One setting's key, such as "asr.live". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -96,7 +98,9 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "key": {
-      "type": "string"
+      "description": "One setting's key, such as \"asr.live\".",
+      "type": "string",
+      "minLength": 1
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -115,9 +119,9 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `question` | `string` | yes |  |
+| `question` | `string` | yes | The user's question, word for word, such as "what did Ben say about the budget?". |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
-| `budget` | `integer` | no |  |
+| `budget` | `integer` | no | The pack's size in tokens, 500 to 7000. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -128,7 +132,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "question": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The user's question, word for word, such as \"what did Ben say about the budget?\"."
     },
     "call": {
       "default": "live",
@@ -137,6 +142,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
     },
     "budget": {
       "default": 6000,
+      "description": "The pack's size in tokens, 500 to 7000.",
       "type": "integer",
       "minimum": 500,
       "maximum": 7000
@@ -161,7 +167,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
+| `id` | `string` | yes | The note's id from akou_get_notes, such as "n0003". |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
 
 <details markdown>
@@ -172,7 +178,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
   "type": "object",
   "properties": {
     "id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The note's id from akou_get_notes, such as \"n0003\"."
     },
     "call": {
       "default": "live",
@@ -222,7 +230,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
+| `id` | `string` | yes | A dictation's id from akou_dictation_list. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -232,7 +240,9 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A dictation's id from akou_dictation_list."
     }
   },
   "required": [
@@ -254,8 +264,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `q` | `string` | no |  |
-| `limit` | `integer` | no |  |
+| `q` | `string` | no | Only dictations whose text holds this, in any case. |
+| `limit` | `integer` | no | The most dictations per page, 1 to 100. |
 | `cursor` | `string` | no | The nextCursor of the previous page. |
 
 <details markdown>
@@ -266,10 +276,13 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "q": {
-      "type": "string"
+      "description": "Only dictations whose text holds this, in any case.",
+      "type": "string",
+      "minLength": 1
     },
     "limit": {
       "default": 20,
+      "description": "The most dictations per page, 1 to 100.",
       "type": "integer",
       "minimum": 1,
       "maximum": 100
@@ -295,8 +308,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
-| `text` | `string` | yes |  |
+| `id` | `string` | yes | The note's id from akou_get_notes, such as "n0003". |
+| `text` | `string` | yes | The note's new text. |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
 
 <details markdown>
@@ -307,11 +320,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
   "type": "object",
   "properties": {
     "id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The note's id from akou_get_notes, such as \"n0003\"."
     },
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The note's new text."
     },
     "call": {
       "default": "live",
@@ -333,13 +349,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 **Enhance notes with akou's provider**
 
-Ask akou's own provider to write the enhanced notes for the latest call. Prefer akou_enhance_context and write them yourself.
+Ask akou's own provider to write the enhanced notes for a call (default the latest). Prefer akou_enhance_context and write them yourself.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `template` | `string` | no |  |
+| `call` | `string` | no | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
+| `template` | `string` | no | The template to follow; omit for the call's own. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -348,8 +365,16 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 {
   "type": "object",
   "properties": {
+    "call": {
+      "default": "last",
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
+    },
     "template": {
-      "type": "string"
+      "description": "The template to follow; omit for the call's own.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -362,13 +387,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 **Context for enhanced notes**
 
-What you need to write enhanced notes for the latest call yourself: the template and a pack.
+What you need to write enhanced notes for a call yourself (default the latest): the template and a pack. Pass the `call` it answers to akou_enhanced_put, so the notes land on this call even if another one starts meanwhile.
 
 Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `template` | `string` | no |  |
+| `call` | `string` | no | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
+| `template` | `string` | no | The template to follow; omit for the call's own. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -377,8 +403,16 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 {
   "type": "object",
   "properties": {
+    "call": {
+      "default": "last",
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
+    },
     "template": {
-      "type": "string"
+      "description": "The template to follow; omit for the call's own.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -391,14 +425,15 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 **Save enhanced notes**
 
-Save the enhanced notes you wrote for the latest call. Every bullet must end with the segment ids it rests on, like [#l000031]; a bullet without a real citation is dropped. Place the user's own notes by id (`- {n0004}`); they are kept word for word.
+Save the enhanced notes you wrote for a call: the `call` akou_enhance_context answered (default the latest when saved). Every bullet must end with the segment ids it rests on, like [#l000031]; a bullet without a real citation is dropped. Place the user's own notes by id (`- {n0004}`); they are kept word for word.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `markdown` | `string` | yes |  |
-| `coversSeq` | `integer` | yes |  |
+| `call` | `string` | no | The call id akou_enhance_context answered; omit for the latest call at the time of saving. |
+| `markdown` | `string` | yes | The notes in Markdown, in the template's sections, each bullet cited. |
+| `coversSeq` | `integer` | yes | The `coversSeq` akou_enhance_context answered: what the notes were written from. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -407,14 +442,21 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 {
   "type": "object",
   "properties": {
-    "markdown": {
+    "call": {
+      "description": "The call id akou_enhance_context answered; omit for the latest call at the time of saving.",
       "type": "string",
       "minLength": 1
+    },
+    "markdown": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The notes in Markdown, in the template's sections, each bullet cited."
     },
     "coversSeq": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 9007199254740991
+      "maximum": 9007199254740991,
+      "description": "The `coversSeq` akou_enhance_context answered: what the notes were written from."
     }
   },
   "required": [
@@ -437,7 +479,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | yes |  |
+| `call` | `string` | yes | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -447,7 +489,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "call": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
     }
   },
   "required": [
@@ -469,9 +513,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | no |  |
-| `force` | `boolean` | no |  |
-| `model` | `"qwen" or "parakeet" or "fusion"` | no |  |
+| `call` | `string` | no | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
+| `force` | `boolean` | no | Run it again on a call that has a final pass. |
+| `model` | `"qwen" or "parakeet" or "fusion"` | no | The engine for this run only; omit for the setting. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -482,12 +526,16 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "properties": {
     "call": {
       "default": "last",
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
     },
     "force": {
+      "description": "Run it again on a call that has a final pass.",
       "type": "boolean"
     },
     "model": {
+      "description": "The engine for this run only; omit for the setting.",
       "type": "string",
       "enum": [
         "qwen",
@@ -512,7 +560,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
+| `id` | `string` | yes | The id akou_remember answered, such as "r0001". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -522,7 +570,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
   "type": "object",
   "properties": {
     "id": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The id akou_remember answered, such as \"r0001\"."
     }
   },
   "required": [
@@ -544,8 +594,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | yes |  |
-| `layer` | `"best" or "live" or "final"` | no |  |
+| `call` | `string` | yes | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
+| `layer` | `"best" or "live" or "final"` | no | "best": the final pass where it ran, else live; "live": as heard during the call; "final": only the final pass. |
 | `cursor` | `string` | no | The nextCursor of the previous page; leave it out for the first page. |
 
 <details markdown>
@@ -556,10 +606,13 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "call": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
     },
     "layer": {
       "default": "best",
+      "description": "\"best\": the final pass where it ran, else live; \"live\": as heard during the call; \"final\": only the final pass.",
       "type": "string",
       "enum": [
         "best",
@@ -591,7 +644,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `offset` | `integer` | no |  |
+| `offset` | `integer` | no | The first note to return: 0, or the `nextOffset` of the page before. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -602,6 +655,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "offset": {
       "default": 0,
+      "description": "The first note to return: 0, or the `nextOffset` of the page before.",
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
@@ -613,18 +667,17 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 </details>
 
-## akou_job_get
+## akou_job_delete
 
-**Read a transcription job**
+**Delete a transcription job**
 
-One transcription job by id, waiting up to `wait` seconds for it to end; a done job comes with its transcript in `result`. Read-only.
+Delete a transcription job: a queued one is dropped, a running one stopped, and its file and transcript removed for good. Only when the user asks, such as for a wrong upload.
 
-Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `id` | `string` | yes |  |
-| `wait` | `integer` | no | Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call. |
+| `id` | `string` | yes | The job id, such as "job_1". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -635,7 +688,44 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "id": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The job id, such as \"job_1\"."
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_job_get
+
+**Read a transcription job**
+
+One transcription job by id, waiting up to `wait` seconds for it to end; a done job comes with its transcript in `result`. `format: text` (or srt, vtt) returns the transcript alone, much shorter than the default JSON with every word's times: use it for a long file. Read-only.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | `string` | yes | The job id akou_transcribe or akou_jobs_list gave, such as "job_1". |
+| `wait` | `integer` | no | Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call. |
+| `format` | `"json" or "text" or "srt" or "vtt"` | no | The transcript's form: "json" (words with times), "text", or "srt" / "vtt" subtitles. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The job id akou_transcribe or akou_jobs_list gave, such as \"job_1\"."
     },
     "wait": {
       "default": 50,
@@ -643,6 +733,17 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
       "type": "integer",
       "minimum": 0,
       "maximum": 50
+    },
+    "format": {
+      "default": "json",
+      "description": "The transcript's form: \"json\" (words with times), \"text\", or \"srt\" / \"vtt\" subtitles.",
+      "type": "string",
+      "enum": [
+        "json",
+        "text",
+        "srt",
+        "vtt"
+      ]
     }
   },
   "required": [
@@ -658,13 +759,16 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 **List transcription jobs**
 
-The 20 newest transcription jobs this key submitted, newest first: id, title, state, preset, model and times, no transcript. `status` keeps one state. Read-only.
+The transcription jobs this key submitted, newest first: id, title, state, preset, model and times, no transcript. `status` keeps one state and `q` the jobs whose title or id holds a text; when `cursor` is not null, pass it back for older jobs. Read-only.
 
 Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `status` | `"queued" or "running" or "done" or "failed" or "cancelled"` | no |  |
+| `status` | `"queued" or "running" or "done" or "failed" or "cancelled"` | no | Only jobs in this state. |
+| `q` | `string` | no | Only jobs whose title, id or state holds this text, in any case. |
+| `limit` | `integer` | no | The most jobs per page, 1 to 200. |
+| `cursor` | `integer` | no | The `cursor` of the page before: the jobs older than it. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -674,6 +778,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "status": {
+      "description": "Only jobs in this state.",
       "type": "string",
       "enum": [
         "queued",
@@ -682,6 +787,24 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
         "failed",
         "cancelled"
       ]
+    },
+    "q": {
+      "description": "Only jobs whose title, id or state holds this text, in any case.",
+      "type": "string",
+      "minLength": 1
+    },
+    "limit": {
+      "default": 20,
+      "description": "The most jobs per page, 1 to 200.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "cursor": {
+      "description": "The `cursor` of the page before: the jobs older than it.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -700,9 +823,9 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `workspace` | `string` | no |  |
-| `limit` | `integer` | no |  |
-| `failed` | `boolean` | no |  |
+| `workspace` | `string` | no | Only this workspace's calls. |
+| `limit` | `integer` | no | The most calls to return, newest first, 1 to 1000. |
+| `failed` | `boolean` | no | Also the calls whose capture failed. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -712,15 +835,19 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "workspace": {
-      "type": "string"
+      "description": "Only this workspace's calls.",
+      "type": "string",
+      "minLength": 1
     },
     "limit": {
       "default": 20,
+      "description": "The most calls to return, newest first, 1 to 1000.",
       "type": "integer",
       "minimum": 1,
       "maximum": 1000
     },
     "failed": {
+      "description": "Also the calls whose capture failed.",
       "type": "boolean"
     }
   },
@@ -763,8 +890,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `text` | `string` | yes |  |
-| `coversSeq` | `integer` | yes |  |
+| `text` | `string` | yes | The whole memo, in Markdown, replacing the one before. |
+| `coversSeq` | `integer` | yes | The `cursor` of the last akou_context or akou_read the memo covers. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -775,12 +902,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
   "properties": {
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The whole memo, in Markdown, replacing the one before."
     },
     "coversSeq": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 9007199254740991
+      "maximum": 9007199254740991,
+      "description": "The `cursor` of the last akou_context or akou_read the memo covers."
     }
   },
   "required": [
@@ -797,14 +926,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 **Merge two speakers**
 
-Merge speaker `a` into speaker `b` when both are the same person.
+Merge speaker `a` into speaker `b` when both are the same person: `a`'s lines read as `b` from then on. Undo with akou_unmerge_speaker.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `a` | `string` | yes |  |
-| `b` | `string` | yes |  |
+| `a` | `string` | yes | The speaker to merge away, such as "c3". |
+| `b` | `string` | yes | The speaker to keep, such as "c2". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -814,10 +943,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "a": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The speaker to merge away, such as \"c3\"."
     },
     "b": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The speaker to keep, such as \"c2\"."
     }
   },
   "required": [
@@ -863,8 +996,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `speaker` | `string` | yes |  |
-| `name` | `string` | yes |  |
+| `speaker` | `string` | yes | A speaker id from the transcript: "you" for the microphone, then "c2", "c3"... |
+| `name` | `string` | yes | The person's name as the user says it, such as "Ben". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -874,11 +1007,14 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
   "type": "object",
   "properties": {
     "speaker": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A speaker id from the transcript: \"you\" for the microphone, then \"c2\", \"c3\"..."
     },
     "name": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The person's name as the user says it, such as \"Ben\"."
     }
   },
   "required": [
@@ -901,7 +1037,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | no |  |
+| `call` | `string` | no | Open the window on this call. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -911,7 +1047,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "call": {
-      "type": "string"
+      "description": "Open the window on this call.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -954,8 +1092,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
-| `since` | `integer` | no |  |
-| `lastSeconds` | `integer` | no |  |
+| `since` | `integer` | no | The `cursor` of the last akou_context or akou_read: only lines after it. |
+| `lastSeconds` | `integer` | no | Only the lines of the last N seconds, such as 120 for the last two minutes. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -970,11 +1108,13 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
       "type": "string"
     },
     "since": {
+      "description": "The `cursor` of the last akou_context or akou_read: only lines after it.",
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
     "lastSeconds": {
+      "description": "Only the lines of the last N seconds, such as 120 for the last two minutes.",
       "type": "integer",
       "minimum": 1,
       "maximum": 86400
@@ -996,7 +1136,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `text` | `string` | yes |  |
+| `text` | `string` | yes | The fact, in one sentence, such as "Ben owns the deploy". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1007,7 +1147,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "properties": {
     "text": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The fact, in one sentence, such as \"Ben owns the deploy\"."
     }
   },
   "required": [
@@ -1029,8 +1170,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | no |  |
-| `title` | `string` | yes |  |
+| `call` | `string` | no | A call: "live" (the one recording now), "last", or an id from akou_list_calls. |
+| `title` | `string` | yes | The new title, such as "Q3 planning". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1041,12 +1182,15 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: t
   "properties": {
     "call": {
       "default": "live",
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A call: \"live\" (the one recording now), \"last\", or an id from akou_list_calls."
     },
     "title": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 200
+      "maxLength": 200,
+      "description": "The new title, such as \"Q3 planning\"."
     }
   },
   "required": [
@@ -1068,7 +1212,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `force` | `boolean` | no |  |
+| `force` | `boolean` | no | Start the new part even when the call's last audio is over an hour old. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1078,6 +1222,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
   "type": "object",
   "properties": {
     "force": {
+      "description": "Start the new part even when the call's last audio is over an hour old.",
       "type": "boolean"
     }
   },
@@ -1120,9 +1265,9 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `query` | `string` | yes |  |
+| `query` | `string` | yes | The exact word, name or number to find, such as "Hetzner" or "40k". |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
-| `k` | `integer` | no |  |
+| `k` | `integer` | no | The most hits to return, 1 to 50. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1133,7 +1278,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "query": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The exact word, name or number to find, such as \"Hetzner\" or \"40k\"."
     },
     "call": {
       "default": "live",
@@ -1142,6 +1288,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
     },
     "k": {
       "default": 6,
+      "description": "The most hits to return, 1 to 50.",
       "type": "integer",
       "minimum": 1,
       "maximum": 50
@@ -1160,13 +1307,13 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 **Stop sharing**
 
-Stop sharing a call's live link, or every link when no `call` is named.
+Stop sharing a call's live link, or every link when no `call` is named. The people holding the link lose it for good; sharing again makes a new address.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | no |  |
+| `call` | `string` | no | The call whose link to stop; omit for every link. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1176,7 +1323,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: tr
   "type": "object",
   "properties": {
     "call": {
-      "type": "string"
+      "description": "The call whose link to stop; omit for every link.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -1195,9 +1344,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `call` | `string` | no |  |
-| `notes` | `boolean` | no |  |
-| `expires` | `string` | no |  |
+| `call` | `string` | no | The call to share; default "live". |
+| `notes` | `boolean` | no | Share the notepad too. |
+| `expires` | `string` | no | When the link turns off: "call-end", "call-end+2h" (the default), or a duration up to 24 hours like "90m" or "2h". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1207,13 +1356,18 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "call": {
-      "type": "string"
+      "description": "The call to share; default \"live\".",
+      "type": "string",
+      "minLength": 1
     },
     "notes": {
+      "description": "Share the notepad too.",
       "type": "boolean"
     },
     "expires": {
-      "type": "string"
+      "description": "When the link turns off: \"call-end\", \"call-end+2h\" (the default), or a duration up to 24 hours like \"90m\" or \"2h\".",
+      "type": "string",
+      "pattern": "^(call-end|call-end\\+2h|\\d{1,4} ?(m|min|h))$"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -1255,12 +1409,12 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `workspace` | `string` | no |  |
-| `title` | `string` | no |  |
-| `template` | `string` | no |  |
-| `call` | `string` | no | What to capture as the call side: "system", "app:ID" or "none" |
+| `workspace` | `string` | no | A workspace name, such as "work" or "acme": calls and vocabulary are kept per workspace. |
+| `title` | `string` | no | The call's title, such as "Q3 planning"; the invite's title when there is one. |
+| `template` | `string` | no | The note template for this call's enhanced notes; omit and akou picks one by title. |
+| `call` | `string` | no | What to capture as the call side: "system" (the whole computer), "none", or "app:ID" with an app id from akou_devices |
 | `mic` | `string` | no | The microphone: an input id from akou_devices, or "none" |
-| `vocab` | `string[]` | no |  |
+| `vocab` | `string[]` | no | Words known before the call for this call only: attendee names, title terms. |
 | `final` | `string` | no | The final pass for this call: "fusion" runs several speech engines after the call and combines their words, slower and more accurate; "qwen" or "parakeet" one model. Omit for the setting |
 | `withoutModels` | `boolean` | no | Record audio now and transcribe it later, when the speech models are not downloaded yet. |
 
@@ -1272,26 +1426,36 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "workspace": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "A workspace name, such as \"work\" or \"acme\": calls and vocabulary are kept per workspace."
     },
     "title": {
-      "type": "string"
+      "description": "The call's title, such as \"Q3 planning\"; the invite's title when there is one.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
     },
     "template": {
-      "type": "string"
+      "description": "The note template for this call's enhanced notes; omit and akou picks one by title.",
+      "type": "string",
+      "minLength": 1
     },
     "call": {
-      "description": "What to capture as the call side: \"system\", \"app:ID\" or \"none\"",
-      "type": "string"
+      "description": "What to capture as the call side: \"system\" (the whole computer), \"none\", or \"app:ID\" with an app id from akou_devices",
+      "type": "string",
+      "pattern": "^(system|none|app:.+)$"
     },
     "mic": {
       "description": "The microphone: an input id from akou_devices, or \"none\"",
       "type": "string"
     },
     "vocab": {
+      "description": "Words known before the call for this call only: attendee names, title terms.",
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "final": {
@@ -1365,7 +1529,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `name` | `string` | yes |  |
+| `name` | `string` | yes | A note template, such as "standup" or "general": the names akou_template_list shows. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1376,7 +1540,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "name": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "A note template, such as \"standup\" or \"general\": the names akou_template_list shows."
     }
   },
   "required": [
@@ -1415,16 +1580,19 @@ Parameters: none.
 
 **Transcribe a file on a server**
 
-Transcribe an audio or video file on this machine as a job on the akou server (`AKOU_URL`, server mode): uploads the file once and waits up to `wait` seconds. A job that ends in time comes back done with its transcript in `result`; one still queued or running comes back with its `id` for akou_job_get. A path that is missing or not an audio or video file is refused and nothing is sent.
+Transcribe an audio or video file on this machine as a job on the akou server (`AKOU_URL`, server mode): uploads the file once (up to 512 MB) and waits up to `wait` seconds. A job that ends in time comes back done with its transcript in `result`; one still queued or running comes back with its `id` for akou_job_get. `task: translate` writes the speech in English instead. A path that is missing, too large, or not an audio or video file is refused and nothing is sent.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `path` | `string` | yes | The file's path on this machine. |
+| `path` | `string` | yes | The file's absolute path on this machine, such as /Users/me/Downloads/note.m4a. |
 | `preset` | `"lite" or "fast" or "best" or "fusion" or "auto"` | no | How much accuracy matters; auto lets the server choose. |
-| `language` | `string` | no | A BCP-47 tag such as en or es, or auto. |
+| `language` | `string` | no | The spoken language as an ISO code such as en or es, or auto. |
 | `diarize` | `boolean` | no | Label the speakers. |
+| `title` | `string` | no | A name for the job in akou_jobs_list; default the file's name. |
+| `task` | `"transcribe" or "translate"` | no | "translate" writes the speech in English; default "transcribe". |
+| `keywords` | `string[]` | no | Up to 24 names and terms the speech holds, so the engine spells them right. |
 | `wait` | `integer` | no | Seconds to wait for the job to end, up to 50: a short voice note comes back done in the same call. |
 
 <details markdown>
@@ -1437,7 +1605,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
     "path": {
       "type": "string",
       "minLength": 1,
-      "description": "The file's path on this machine."
+      "description": "The file's absolute path on this machine, such as /Users/me/Downloads/note.m4a."
     },
     "preset": {
       "description": "How much accuracy matters; auto lets the server choose.",
@@ -1451,12 +1619,36 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       ]
     },
     "language": {
-      "description": "A BCP-47 tag such as en or es, or auto.",
+      "description": "The spoken language as an ISO code such as en or es, or auto.",
       "type": "string"
     },
     "diarize": {
       "description": "Label the speakers.",
       "type": "boolean"
+    },
+    "title": {
+      "description": "A name for the job in akou_jobs_list; default the file's name.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "task": {
+      "description": "\"translate\" writes the speech in English; default \"transcribe\".",
+      "type": "string",
+      "enum": [
+        "transcribe",
+        "translate"
+      ]
+    },
+    "keywords": {
+      "description": "Up to 24 names and terms the speech holds, so the engine spells them right.",
+      "maxItems": 24,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      }
     },
     "wait": {
       "default": 50,
@@ -1485,7 +1677,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `speaker` | `string` | yes |  |
+| `speaker` | `string` | yes | The speaker that was merged away. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1495,7 +1687,9 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "type": "object",
   "properties": {
     "speaker": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "The speaker that was merged away."
     }
   },
   "required": [
@@ -1540,12 +1734,12 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `term` | `string` | yes |  |
-| `heard` | `string[]` | no |  |
-| `scope` | `"call" or "workspace" or "global"` | no |  |
-| `workspace` | `string` | no |  |
-| `decode` | `boolean` | no |  |
-| `note` | `string` | no |  |
+| `term` | `string` | yes | The word as it should be written, such as "Vercel". |
+| `heard` | `string[]` | no | How the transcript wrote it, such as ["versal"]. |
+| `scope` | `"call" or "workspace" or "global"` | no | "call": fix the live call now and learn the word; "workspace" or "global": only write that vocabulary file. |
+| `workspace` | `string` | no | The workspace, with scope "workspace". |
+| `decode` | `boolean` | no | false: correct only how this call reads, without biasing recognition. |
+| `note` | `string` | no | Why the word is there, for the user reading the file. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1556,16 +1750,20 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
   "properties": {
     "term": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The word as it should be written, such as \"Vercel\"."
     },
     "heard": {
+      "description": "How the transcript wrote it, such as [\"versal\"].",
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "scope": {
       "default": "call",
+      "description": "\"call\": fix the live call now and learn the word; \"workspace\" or \"global\": only write that vocabulary file.",
       "type": "string",
       "enum": [
         "call",
@@ -1574,12 +1772,16 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       ]
     },
     "workspace": {
-      "type": "string"
+      "description": "The workspace, with scope \"workspace\".",
+      "type": "string",
+      "minLength": 1
     },
     "decode": {
+      "description": "false: correct only how this call reads, without biasing recognition.",
       "type": "boolean"
     },
     "note": {
+      "description": "Why the word is there, for the user reading the file.",
       "type": "string"
     }
   },
@@ -1602,8 +1804,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `terms` | `string[]` | yes |  |
-| `call` | `string` | no |  |
+| `terms` | `string[]` | yes | The terms, as akou_vocab_list shows them. |
+| `call` | `string` | no | A call whose proposals these are. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1616,11 +1818,15 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "minItems": 1,
       "type": "array",
       "items": {
-        "type": "string"
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The terms, as akou_vocab_list shows them."
     },
     "call": {
-      "type": "string"
+      "description": "A call whose proposals these are.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -1642,7 +1848,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `term` | `string` | yes |  |
+| `term` | `string` | yes | The word to check, such as "Kubernetes". |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1653,7 +1859,8 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "properties": {
     "term": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "description": "The word to check, such as \"Kubernetes\"."
     }
   },
   "required": [
@@ -1675,10 +1882,10 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `workspace` | `string` | no |  |
-| `call` | `string` | no |  |
-| `unconfirmed` | `boolean` | no |  |
-| `dictation` | `boolean` | no |  |
+| `workspace` | `string` | no | The files for this workspace, with the global one. |
+| `call` | `string` | no | A call's own words and proposals instead of the files. |
+| `unconfirmed` | `boolean` | no | Only the words waiting for the user's yes or no. |
+| `dictation` | `boolean` | no | Also the words the user fixed while dictating. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1688,15 +1895,21 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "workspace": {
-      "type": "string"
+      "description": "The files for this workspace, with the global one.",
+      "type": "string",
+      "minLength": 1
     },
     "call": {
-      "type": "string"
+      "description": "A call's own words and proposals instead of the files.",
+      "type": "string",
+      "minLength": 1
     },
     "unconfirmed": {
+      "description": "Only the words waiting for the user's yes or no.",
       "type": "boolean"
     },
     "dictation": {
+      "description": "Also the words the user fixed while dictating.",
       "type": "boolean"
     }
   },
@@ -1716,8 +1929,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `entries` | `object[]` | yes |  |
-| `call` | `string` | no |  |
+| `entries` | `object[]` | yes | The words to propose, each with how it was heard and why, when known. |
+| `call` | `string` | no | Propose into this call's workspace. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1749,10 +1962,13 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
         "required": [
           "term"
         ]
-      }
+      },
+      "description": "The words to propose, each with how it was heard and why, when known."
     },
     "call": {
-      "type": "string"
+      "description": "Propose into this call's workspace.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -1774,8 +1990,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `terms` | `string[]` | yes |  |
-| `call` | `string` | no |  |
+| `terms` | `string[]` | yes | The terms, as akou_vocab_list shows them. |
+| `call` | `string` | no | A call whose proposals these are. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1788,11 +2004,15 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
       "minItems": 1,
       "type": "array",
       "items": {
-        "type": "string"
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The terms, as akou_vocab_list shows them."
     },
     "call": {
-      "type": "string"
+      "description": "A call whose proposals these are.",
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [
@@ -1808,15 +2028,15 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 **Suggest words**
 
-Ranked candidate words from a call or a text, to propose to the user.
+Ranked candidate words from a call or a text, to propose to the user with akou_vocab_propose. Give `text` or `call`.
 
 Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `text` | `string` | no |  |
-| `call` | `string` | no |  |
-| `k` | `integer` | no |  |
+| `text` | `string` | no | A text to mine: an invite, an agenda, a document. |
+| `call` | `string` | no | A call to mine instead of a text. |
+| `k` | `integer` | no | The most words to return, 1 to 200. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -1826,13 +2046,18 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
   "type": "object",
   "properties": {
     "text": {
-      "type": "string"
+      "description": "A text to mine: an invite, an agenda, a document.",
+      "type": "string",
+      "minLength": 1
     },
     "call": {
-      "type": "string"
+      "description": "A call to mine instead of a text.",
+      "type": "string",
+      "minLength": 1
     },
     "k": {
       "default": 20,
+      "description": "The most words to return, 1 to 200.",
       "type": "integer",
       "minimum": 1,
       "maximum": 200

@@ -144,6 +144,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_transcribe: { path: join(import.meta.dir, "fixtures", "two-voices.wav"), wait: 0 },
   akou_job_get: { id: "job_1", wait: 0 },
   akou_jobs_list: {},
+  akou_job_delete: { id: "job_1" },
   akou_devices: {},
 };
 
@@ -191,7 +192,8 @@ export function sampleApi(n = 3): ApiClient {
     if (path.endsWith("/finalize")) return { call: "c1", model: "qwen" };
     if (path === "/share" && method === "GET") return { active: false, shares: [] };
     if (path === "/share" && method === "POST") return { id: "s1", call: "c1", url: "http://x" };
-    if (path === "/share") return { ok: true, stopped: 1 };
+    if (path === "/share")
+      return { ok: true, stopped: [{ id: "s1", call: "c1", url: "http://x", expiresAt: null }] };
     if (path === "/window") return { ok: true };
     if (path === "/config") {
       return { file: "/cfg/config.json", settings: { "asr.live": "auto" }, set: {}, issues: [] };
@@ -364,6 +366,8 @@ export function sampleApi(n = 3): ApiClient {
       return { jobs: Array.from({ length: Math.min(n, limit) }, (_, i) => job(i)), cursor: null };
     }
     if (path.endsWith("/result")) return transcript;
+    if (path.startsWith("/jobs/") && method === "DELETE")
+      return { id: "job_1", status: "done", deleted: true };
     if (path.startsWith("/jobs/")) return job(1);
     return {};
   };

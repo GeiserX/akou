@@ -94,6 +94,7 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_transcribe: UPLOADS,
   akou_job_get: READ,
   akou_jobs_list: READ,
+  akou_job_delete: DESTRUCTIVE,
   akou_devices: READ,
 };
 
@@ -207,7 +208,12 @@ describe("[PG-M2] every MCP tool carries annotations and a title", () => {
   test("every tool that deletes says it is destructive", async () => {
     const { tools, methods } = await methodsByTool();
     const deleting = [...methods].filter(([, m]) => m.has("DELETE")).map(([n]) => n);
-    expect(deleting.sort()).toEqual(["akou_delete_note", "akou_forget", "akou_share_off"]);
+    expect(deleting.sort()).toEqual([
+      "akou_delete_note",
+      "akou_forget",
+      "akou_job_delete",
+      "akou_share_off",
+    ]);
     expect(deleteProblems(tools, methods)).toEqual([]);
     // Positive control: akou_forget as it was, a plain write.
     const forget = tools.find((t) => t.name === "akou_forget") as Tool;

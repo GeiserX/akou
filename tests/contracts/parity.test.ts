@@ -85,6 +85,7 @@ describe("[TS-13] door parity", () => {
       `${job}: the mcp door lacks it and gives no reason`,
       "the mcp door has akou_transcribe, which no row maps",
       "the mcp door has akou_job_get, which no row maps",
+      "the mcp door has akou_job_delete, which no row maps",
       "the mcp door has akou_jobs_list, which no row maps",
     ]);
   });

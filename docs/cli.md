@@ -853,15 +853,17 @@ example: akou skill uninstall
 ```text
 akou mcp: Serve MCP on stdin and stdout for an agent (a thin client of the local API)
 
-usage: akou mcp
+usage: akou mcp [--read-only]
 
-      --json     ignored: MCP already speaks JSON-RPC on stdout
-  -h, --help     show this help
-      --restart  if akou takes the connection and never answers, restart it first, even for a command that only reads
+      --json       ignored: MCP already speaks JSON-RPC on stdout
+      --read-only  list only the tools that change nothing; AKOU_MCP_READONLY=1 does the same
+  -h, --help       show this help
+      --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 AKOU_URL serves a remote akou instead of the app here; a plain http AKOU_URL to another machine is refused (the key would cross the network unencrypted) unless AKOU_ALLOW_HTTP=1.
 
 example: akou mcp
+example: akou mcp --read-only
 ```
 
 ## serve
