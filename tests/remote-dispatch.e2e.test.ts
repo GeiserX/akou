@@ -782,8 +782,25 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
     { name: "a default a remote entry names", takes: " best", autoDownload: true },
   ]) {
     test(`[SV-P4] #449 ${c.name}, which only a remote runs, is ready while that remote is up`, async () => {
+      // A remote of its own that offers best, so the test can stop it.
+      const own = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (req) => {
+          const u = new URL(req.url);
+          if (u.pathname === "/v1/server")
+            return Response.json({
+              name: "akou",
+              version: "9.9.9",
+              mode: "server",
+              presets: [{ name: "best", available: true }],
+              capabilities: { jobs: true, events: true, webhooks: true },
+            });
+          if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+          return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+        },
+      });
       const pdir = tempDir("akou-primary-").dir;
-      const kf = keyFile(pdir, FAKE_KEY);
       const primary = await server({
         home: pdir,
         installed: true,
@@ -791,7 +808,7 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
         absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
         settings: {
           "server.default_model": "best",
-          "server.remotes": [`http://127.0.0.1:${fake.port} ${kf}${c.takes}`],
+          "server.remotes": [`http://127.0.0.1:${own.port} ${keyFile(pdir, FAKE_KEY)}${c.takes}`],
           "server.auto_download": c.autoDownload,
         },
       });
@@ -799,13 +816,11 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
         await remoteState(primary, "up");
         expect(await modelsReady(primary)).toBe(true);
         // Positive control: the remote gone, a default job waits on a model again.
-        const set = await primary.api("PATCH", "/config", {
-          "server.remotes": [`http://127.0.0.1:${freePort()} ${kf}${c.takes}`],
-        });
-        expect(set.status).toBe(200);
+        own.stop(true);
         await remoteState(primary, "down");
         expect(await modelsReady(primary)).toBe(false);
       } finally {
+        own.stop(true);
         await primary.close();
       }
     });
