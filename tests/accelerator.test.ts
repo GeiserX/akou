@@ -770,6 +770,88 @@ describe("GET /v1/server reports the accelerator", () => {
     expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("cpu");
   });
 
+  /** A rig on an NVIDIA box with the CUDA image, whose llama-server answers `answers` in turn, the last one from then on. */
+  async function lateGpu(
+    answers: string[],
+    o: { setting?: string; retryMs?: number[] } = {},
+  ): Promise<{ r: AppRig; asked: () => number }> {
+    let asked = 0;
+    const r = await appRig({
+      settings: { "asr.accelerator": o.setting ?? "cuda" },
+      accelerator: {
+        probe: machine("linux-x64", {
+          files: { "/dev/nvidia0": "" },
+          env: { AKOU_ACCELERATORS: "cuda,cpu", AKOU_LLAMA_SERVER: "/opt/llama/llama-server" },
+        }),
+        run: async () => ({ output: answers[Math.min(asked++, answers.length - 1)] }),
+        retryMs: o.retryMs ?? [20, 20, 20],
+      },
+    });
+    rigs.push(r);
+    return { r, asked: () => asked };
+  }
+
+  /** `/v1/server` once `ok` holds of its accelerator, polled. */
+  async function until(r: AppRig, ok: (a: AcceleratorState) => boolean) {
+    for (let i = 0; i < 100; i++) {
+      const b = (await r.api("GET", "/server")).body;
+      if (b.accelerator && ok(b.accelerator)) return b;
+      await Bun.sleep(20);
+    }
+    throw new Error(`never: ${JSON.stringify((await r.api("GET", "/server")).body.accelerator)}`);
+  }
+
+  test("[#456] an explicit cuda whose build lists nothing at start is asked again, and switches to the GPU once it appears", async () => {
+    const { r, asked } = await lateGpu([LIST_NONE, LIST_NONE, LIST_CUDA]);
+    const waiting = await until(r, (a) => a.verified);
+    expect(waiting.accelerator.active).toBe("cpu");
+    expect(waiting.accelerator.reason).toContain(
+      "llama-server lists no cuda device (it lists nothing)",
+    );
+    expect(waiting.accelerator.reason).toContain("asking again in");
+    const b = await until(r, (a) => a.active === "cuda");
+    expect(b.gpu).toBe("cuda");
+    expect(b.accelerator).toEqual({
+      setting: "cuda",
+      active: "cuda",
+      device: "NVIDIA GeForce RTX 3060",
+      verified: true,
+      available: ["cuda", "cpu"],
+      reason: "asr.accelerator is cuda",
+    });
+    expect(asked()).toBe(3);
+    const engines = b.engines as { id: string; provider: string }[];
+    expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("cuda");
+    expect(r.logs.some((l) => l.msg.startsWith("accelerator cuda (NVIDIA GeForce RTX 3060)"))).toBe(
+      true,
+    );
+  });
+
+  test("[#456] the checks stop after the last wait, and the reason says the CPU stays", async () => {
+    const { r, asked } = await lateGpu([LIST_NONE], { retryMs: [10, 10] });
+    const b = await until(r, (a) => a.reason.includes("stays on the CPU"));
+    expect(b.accelerator).toMatchObject({ active: "cpu", verified: true });
+    expect(asked()).toBe(3);
+    await Bun.sleep(80);
+    expect(asked()).toBe(3);
+  });
+
+  test("[#456] positive control: a build that lists other devices, or auto, is asked once", async () => {
+    // A list with devices, none of them CUDA, is a real answer, not a driver still starting.
+    const other = await lateGpu([LIST_UHD770, LIST_CUDA]);
+    const b = await until(other.r, (a) => a.verified);
+    expect(b.accelerator.reason).not.toContain("asking again");
+    await Bun.sleep(80);
+    expect(other.asked()).toBe(1);
+    expect((await other.r.api("GET", "/server")).body.accelerator.active).toBe("cpu");
+    // auto read the machine itself; an empty list there is not asked again either.
+    const auto = await lateGpu([LIST_NONE, LIST_CUDA], { setting: "auto" });
+    await until(auto.r, (a) => a.verified);
+    await Bun.sleep(80);
+    expect(auto.asked()).toBe(1);
+    expect((await auto.r.api("GET", "/server")).body.accelerator.active).toBe("cpu");
+  });
+
   test("a changed asr.accelerator applies to the next Qwen job, with no restart", async () => {
     const r = await rig(LIST_UHD770);
     await server(r);

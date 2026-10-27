@@ -19,7 +19,7 @@
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
 import { installTrust } from "../tls-trust.ts";
-import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
+import { bool, parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, isCompiled, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { dictateCommand, dictationsCommand } from "./commands/dictate.ts";
@@ -43,16 +43,32 @@ import { execve, largeCacheReexec } from "./large-cache.ts";
 const mcp: Command = {
   name: "mcp",
   summary: "Serve MCP on stdin and stdout for an agent (a thin client of the local API)",
-  usage: "akou mcp",
-  flags: { json: { type: "boolean", desc: "ignored: MCP already speaks JSON-RPC on stdout" } },
-  examples: ["akou mcp"],
-  run: async (ctx) => {
+  usage: "akou mcp [--read-only]",
+  flags: {
+    json: { type: "boolean", desc: "ignored: MCP already speaks JSON-RPC on stdout" },
+    "read-only": {
+      type: "boolean",
+      desc: "list only the tools that change nothing; AKOU_MCP_READONLY=1 does the same",
+    },
+  },
+  notes: [
+    "AKOU_URL serves a remote akou instead of the app here; a plain http AKOU_URL to another machine is refused (the key would cross the network unencrypted) unless AKOU_ALLOW_HTTP=1.",
+  ],
+  examples: ["akou mcp", "akou mcp --read-only"],
+  run: async (ctx, p) => {
     // Loaded only here, so the SDK never slows down the other commands.
-    const { runMcpStdio } = await import("../mcp/server.ts");
+    const { plainHttpRefusal, runMcpStdio } = await import("../mcp/server.ts");
+    const refusal = plainHttpRefusal(ctx.io.env);
+    if (refusal) {
+      ctx.io.err(`akou mcp: ${refusal}`);
+      return EXIT.usage;
+    }
+    const envReadOnly = (ctx.io.env.AKOU_MCP_READONLY ?? "").trim().toLowerCase();
     await runMcpStdio({
       client: ctx.client,
       version: ctx.version,
       remote: !!ctx.io.env.AKOU_URL?.trim(),
+      readOnly: bool(p, "read-only") || envReadOnly === "1" || envReadOnly === "true",
     });
     return EXIT.ok;
   },
