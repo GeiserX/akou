@@ -360,7 +360,9 @@ describe("signing secrets never reach a pull request", () => {
     // CLI only. The helper is checked from the archive a user downloads.
     const check = releaseWorkflow().jobs.app?.steps?.find((s) => s.run?.includes("spctl --assess"));
     const run = check?.run ?? "";
-    expect(run).toContain('tar -xzf dist/release/akou-diarize-*-darwin-arm64.tar.gz -C "$check/diarize"');
+    expect(run).toContain(
+      'tar -xzf dist/release/akou-diarize-*-darwin-arm64.tar.gz -C "$check/diarize"',
+    );
     expect(run).toContain('notarized_bin "$check/diarize/akou-diarize"');
     // notarized_bin checks the team and the hardened runtime, then the notarization.
     const fn = /notarized_bin\(\) \{\n([\s\S]*?)\n\}/.exec(run)?.[1] ?? "";
