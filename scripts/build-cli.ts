@@ -41,22 +41,20 @@ export function developerId(env: Env = process.env): string | null {
 }
 
 /**
- * `codesign`'s arguments for the CLI: the Developer ID with the hardened runtime, a secure
- * timestamp and Bun's entitlements, which notarization requires, or ad-hoc without one.
+ * `codesign`'s arguments for a native helper shipped on its own (`akou-diarize`): the Developer ID
+ * with the hardened runtime and a secure timestamp, which notarization requires, or ad-hoc without
+ * one. It needs no entitlements: the app runs the same binary under the hardened runtime.
  */
-export function cliSignArgs(env: Env = process.env): string[] {
+export function helperSignArgs(env: Env = process.env): string[] {
   const id = developerId(env);
   if (id === null) return ["-s", "-", "-f"];
-  return [
-    "-s",
-    id,
-    "-f",
-    "--options",
-    "runtime",
-    "--timestamp",
-    "--entitlements",
-    CLI_ENTITLEMENTS,
-  ];
+  return ["-s", id, "-f", "--options", "runtime", "--timestamp"];
+}
+
+/** `codesign`'s arguments for the CLI: a helper's, plus Bun's entitlements with a Developer ID. */
+export function cliSignArgs(env: Env = process.env): string[] {
+  const args = helperSignArgs(env);
+  return developerId(env) === null ? args : [...args, "--entitlements", CLI_ENTITLEMENTS];
 }
 
 /** The release name of this machine, or null where no CLI is released. */
@@ -134,15 +132,15 @@ export function compileCli(exe: string, target: string, version: string): string
 /**
  * Apple's notary service accepts the Developer ID signed binary, or the build fails. A bare binary
  * cannot be stapled, so it goes up in a zip and Gatekeeper finds the ticket online. The password
- * never reaches the log.
+ * never reaches the log. `what` names the binary in the messages.
  */
-export function notarizeCli(exe: string, env: Env = process.env): void {
+export function notarizeCli(exe: string, env: Env = process.env, what = "the CLI"): void {
   const appleId = env.ELECTROBUN_APPLEID ?? "";
   const password = env.ELECTROBUN_APPLEIDPASS ?? "";
   const team = env.ELECTROBUN_TEAMID ?? "";
   if (!appleId || !password || !team) {
     fail(
-      "a Developer ID signed CLI must be notarized: set ELECTROBUN_APPLEID, ELECTROBUN_APPLEIDPASS and ELECTROBUN_TEAMID",
+      `a Developer ID signed binary (${what}) must be notarized: set ELECTROBUN_APPLEID, ELECTROBUN_APPLEIDPASS and ELECTROBUN_TEAMID`,
     );
   }
   const zip = `${exe}.zip`;
@@ -168,10 +166,10 @@ export function notarizeCli(exe: string, env: Env = process.env): void {
       console.error(log.stdout || log.stderr);
     }
     fail(
-      `Apple did not notarize the CLI: ${said.status ?? (r.stderr || r.stdout).trim().slice(-800)}`,
+      `Apple did not notarize ${what}: ${said.status ?? (r.stderr || r.stdout).trim().slice(-800)}`,
     );
   }
-  console.log(`build-cli: notarized (submission ${said.id})`);
+  console.log(`build-cli: ${what} is notarized (submission ${said.id})`);
 }
 
 function main(): void {

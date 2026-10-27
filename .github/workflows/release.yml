@@ -19,7 +19,8 @@ name: release
 # Signing: a tag or a dispatch reads the secrets the `app` job names (MACOS_CERTIFICATE_P12 and its
 # password, the ELECTROBUN_DEVELOPER_ID identity, ELECTROBUN_TEAMID, ELECTROBUN_APPLEID,
 # ELECTROBUN_APPLEIDPASS) and fails when one is missing. Hutch signs the app with the Developer ID
-# and notarizes it, build-cli.ts does the same for the CLI, and the job checks both before upload.
+# and notarizes it, build-cli.ts does the same for the CLI and build-app.ts for the akou-diarize
+# archive, and the job checks all three before upload.
 
 on:
   push:
@@ -134,7 +135,7 @@ jobs:
     timeout-minutes: 45
     env:
       # Hutch signs the app with the Developer ID and notarizes it; build-cli.ts does the same for
-      # the CLI. A pushed tag (this workflow's only push trigger is v* tags) or a dispatch by hand
+      # the CLI, build-app.ts for the akou-diarize archive. A pushed tag (this workflow's only push trigger is v* tags) or a dispatch by hand
       # reads the secrets and fails without them. A pull request's dry run runs the branch's own
       # build scripts and must never have a signing secret in reach, so it builds ad-hoc (CI-16).
       SIGN: ${{ github.event_name != 'pull_request' }}
@@ -264,14 +265,15 @@ jobs:
       - name: check the CLI binary headless
         run: bun scripts/smoke-cli.ts
       # The files that ship, as a user gets them: Gatekeeper must see a notarized Developer ID app
-      # in the zip and in the DMG, and Apple must know the CLI's notarization (a bare binary cannot
-      # be stapled, so it is checked online, which can lag the notary's answer by a minute).
-      - name: the app and the CLI are signed by the Developer ID and notarized
+      # in the zip and in the DMG, and Apple must know the notarization of the CLI and of the
+      # diarization helper's own archive (a bare binary cannot be stapled, so it is checked online,
+      # which can lag the notary's answer by a minute).
+      - name: the app, the CLI and akou-diarize are signed by the Developer ID and notarized
         if: env.SIGN == 'true'
         run: |
           set -euo pipefail
           check="$RUNNER_TEMP/signed"
-          rm -rf "$check" && mkdir -p "$check/zip" "$check/dmg" "$check/cli"
+          rm -rf "$check" && mkdir -p "$check/zip" "$check/dmg" "$check/cli" "$check/diarize"
           signed_by_team() {
             info=$(codesign -dv --verbose=2 "$1" 2>&1)
             grep -qx "TeamIdentifier=$ELECTROBUN_TEAMID" <<<"$info" || { echo "::error::$1 is not signed by the Developer ID's team"; exit 1; }
@@ -288,19 +290,23 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$check/dmg" dist/release/akou-*-macos-arm64.dmg >/dev/null
           trap 'hdiutil detach "$check/dmg" >/dev/null' EXIT
           notarized_app "$check/dmg/akou.app"
+          notarized_bin() {
+            signed_by_team "$1"
+            for try in $(seq 1 12); do
+              if codesign --verify --strict --check-notarization -R=notarized "$1"; then
+                echo "ok: $1 is notarized"
+                return 0
+              fi
+              echo "the notarization of $1 is not visible yet (try $try of 12)"
+              sleep 10
+            done
+            echo "::error::Apple does not report $1 as notarized"
+            exit 1
+          }
           tar -xzf dist/release/akou-cli-*-darwin-arm64.tar.gz -C "$check/cli"
-          cli=$(echo "$check"/cli/*/akou)
-          signed_by_team "$cli"
-          for try in $(seq 1 12); do
-            if codesign --verify --strict --check-notarization -R=notarized "$cli"; then
-              echo "ok: the CLI is notarized"
-              exit 0
-            fi
-            echo "the CLI's notarization is not visible yet (try $try of 12)"
-            sleep 10
-          done
-          echo "::error::Apple does not report the CLI as notarized"
-          exit 1
+          notarized_bin "$(echo "$check"/cli/*/akou)"
+          tar -xzf dist/release/akou-diarize-*-darwin-arm64.tar.gz -C "$check/diarize"
+          notarized_bin "$check/diarize/akou-diarize"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos-arm64
