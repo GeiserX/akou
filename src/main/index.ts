@@ -3083,9 +3083,15 @@ export class AkouApp implements ApiApp {
       const wait = late ? waits[tries] : undefined;
       let st = confirmAccelerator(detected, answer);
       if (wait !== undefined) {
-        st = { ...st, reason: `${st.reason}; asking again in ${Math.ceil(wait / 1000)} s, since a driver still starting lists nothing` };
+        st = {
+          ...st,
+          reason: `${st.reason}; asking again in ${Math.ceil(wait / 1000)} s, since a driver still starting lists nothing`,
+        };
       } else if (late && tries > 0) {
-        st = { ...st, reason: `${st.reason}; asked ${tries + 1} times, so it stays on the CPU until akou restarts` };
+        st = {
+          ...st,
+          reason: `${st.reason}; asked ${tries + 1} times, so it stays on the CPU until akou restarts`,
+        };
       }
       this.accel = st;
       this.log(

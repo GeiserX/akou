@@ -769,7 +769,9 @@ describe("GET /v1/server reports the accelerator", () => {
     const { r, asked } = await lateGpu([LIST_NONE, LIST_NONE, LIST_CUDA]);
     const waiting = await until(r, (a) => a.verified);
     expect(waiting.accelerator.active).toBe("cpu");
-    expect(waiting.accelerator.reason).toContain("llama-server lists no cuda device (it lists nothing)");
+    expect(waiting.accelerator.reason).toContain(
+      "llama-server lists no cuda device (it lists nothing)",
+    );
     expect(waiting.accelerator.reason).toContain("asking again in");
     const b = await until(r, (a) => a.active === "cuda");
     expect(b.gpu).toBe("cuda");
