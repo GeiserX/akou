@@ -773,14 +773,16 @@ describe("GET /v1/server reports the accelerator", () => {
   /** A rig on an NVIDIA box with the CUDA image, whose llama-server answers `answers` in turn, the last one from then on. */
   async function lateGpu(
     answers: string[],
-    o: { setting?: string; retryMs?: number[] } = {},
+    o: { setting?: string; retryMs?: number[]; wsl?: boolean } = {},
   ): Promise<{ r: AppRig; asked: () => number }> {
     let asked = 0;
     const r = await appRig({
       settings: { "asr.accelerator": o.setting ?? "cuda" },
       accelerator: {
+        // Under WSL2 (#447) the GPU is /dev/dxg with the driver's libcuda, and no /dev/nvidia0.
         probe: machine("linux-x64", {
-          files: { "/dev/nvidia0": "" },
+          files: o.wsl ? { "/dev/dxg": "" } : { "/dev/nvidia0": "" },
+          ...(o.wsl ? { dirs: { "/usr/lib/wsl/lib": ["libcuda.so.1"] } } : {}),
           env: { AKOU_ACCELERATORS: "cuda,cpu", AKOU_LLAMA_SERVER: "/opt/llama/llama-server" },
         }),
         run: async () => ({ output: answers[Math.min(asked++, answers.length - 1)] }),
@@ -850,6 +852,24 @@ describe("GET /v1/server reports the accelerator", () => {
     await Bun.sleep(80);
     expect(auto.asked()).toBe(1);
     expect((await auto.r.api("GET", "/server")).body.accelerator.active).toBe("cpu");
+  });
+
+  test("[#447] [#456] WSL2: auto finds /dev/dxg and runs CUDA, and an explicit cuda there whose driver is late is asked again", async () => {
+    // auto on /dev/dxg alone: CUDA, confirmed by the build, asked once.
+    const auto = await lateGpu([LIST_CUDA], { setting: "auto", wsl: true });
+    const a = await until(auto.r, (s) => s.verified);
+    expect(a.accelerator).toMatchObject({
+      setting: "auto",
+      active: "cuda",
+      device: "NVIDIA GeForce RTX 3060",
+      reason: "an NVIDIA GPU at /dev/dxg",
+    });
+    expect(auto.asked()).toBe(1);
+    // An explicit cuda under WSL2 whose driver lists nothing at first gets the #456 retries.
+    const late = await lateGpu([LIST_NONE, LIST_CUDA], { wsl: true });
+    const b = await until(late.r, (s) => s.active === "cuda");
+    expect(b.accelerator.device).toBe("NVIDIA GeForce RTX 3060");
+    expect(late.asked()).toBe(2);
   });
 
   test("a changed asr.accelerator applies to the next Qwen job, with no restart", async () => {
