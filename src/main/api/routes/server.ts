@@ -64,7 +64,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`), and on a server with no speech engine (the single-file CLI), with `reason` saying where one is. `models_ready` says only whether the models are ready. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`), and on a server with no speech engine (the single-file CLI) while no remote it forwards jobs to is up, with `reason` saying where one is. `models_ready` says only whether the models are ready. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -72,9 +72,15 @@ export function rootRoutes(r: Router<ApiApp>): void {
     (c) => {
       const { loading, ready } = modelState(c.app);
       const queue = queueOf(c.app);
-      // No speech engine here (#436): never ready, so a client or a load balancer sends no work.
+      // No speech engine here (#436): never ready, so a client or a load balancer sends no work,
+      // unless a remote is up to run the jobs this server forwards.
       const none = c.app.noEngine?.() ?? null;
-      if (none) {
+      const remoteUp =
+        c.app
+          .jobs?.()
+          ?.remotes.view()
+          .some((x) => x.state === "up") ?? false;
+      if (none && !remoteUp) {
         return json(503, {
           ok: false,
           version: c.app.version,
@@ -122,7 +128,10 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const dictation = c.app.mode?.() === "server" ? (jobs?.dictationStats() ?? null) : null;
       // The live door: the streaming models a `hello` can name, once the route exists.
       const live = has("GET", "/live") ? (c.app.live?.() ?? null) : null;
-      const liveEngines = live?.enginesOnDisk() ?? [];
+      // No speech engine here (#436): nothing runs locally, so only what a remote offers is listed.
+      const none = c.app.noEngine?.() ?? null;
+      const forwards = remotes?.configured() ?? false;
+      const liveEngines = none ? [] : (live?.enginesOnDisk() ?? []);
       const offered = (name: string): boolean => {
         const p = PRESETS.find((x) => x.name === name);
         return !!p?.built && (c.app.presetAvailable?.(p.name) ?? ready);
@@ -199,12 +208,12 @@ export function serverRoutes(r: Router<ApiApp>): void {
         live: live ? { engines: liveEngines } : null,
         capabilities: {
           // In both modes: the desktop app takes file jobs with its one token (SV-J1).
-          jobs: has("POST", "/jobs"),
+          jobs: has("POST", "/jobs") && (!none || forwards),
           // Signed deliveries per key (SV-E2) come with the job route's `callback_url`, and only a
           // key has a secret to sign with: none in the desktop app, which has no key routes.
           webhooks: has("POST", "/jobs") && has("POST", "/keys"),
           events: has("GET", "/events"),
-          openai: has("POST", "/audio/transcriptions"),
+          openai: has("POST", "/audio/transcriptions") && (!none || forwards),
           // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.
           interactive: has("POST", "/audio/transcriptions") && (dictation?.slots ?? 0) > 0,
           // A job's `languages[]` bounds its `auto` language (`bound_languages` are the codes).
@@ -216,12 +225,12 @@ export function serverRoutes(r: Router<ApiApp>): void {
           // SV-C3: Bazarr's open routes answer only while `server.bazarr` is on.
           bazarr: has("POST", "/asr") && c.app.config().settings["server.bazarr"] === true,
           // A job's `task=translate` decodes into English (`translate_languages` are the sources).
-          translate: has("POST", "/jobs"),
+          translate: has("POST", "/jobs") && !none,
         },
         // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
         bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],
         // The ISO codes a translate job's `language` may name: the ones Canary or Whisper reads.
-        translate_languages: has("POST", "/jobs") ? TRANSLATE_LANGUAGES : [],
+        translate_languages: has("POST", "/jobs") && !none ? TRANSLATE_LANGUAGES : [],
         // SV-C2: the port Home Assistant's Wyoming integration connects to, null while it is off.
         wyoming_port: c.app.wyomingPort?.() ?? null,
         // SV-C4: where this API's description is, once the route serving it exists.

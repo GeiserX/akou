@@ -3384,11 +3384,16 @@ export class AkouApp implements ApiApp {
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
   engines(): { id: string; provider: string; installed: boolean }[] {
     const dir = this.cfg.settings["asr.modelsDir"];
+    // No speech engine in this process (#436): files on disk run nothing here.
     const onDisk = (m: ModelSpecEntry | undefined) =>
-      !!m && m.files.every((f) => existsSync(modelFile(dir, m.id, f.name)));
+      !this.o.noEngine && !!m && m.files.every((f) => existsSync(modelFile(dir, m.id, f.name)));
     const qwen = MODELS.find((m) => m.runtime === "llama-server" && m.serves.includes("final"));
     return [
-      { id: RECOGNIZER, provider: "cpu", installed: this.models().state === "ready" },
+      {
+        id: RECOGNIZER,
+        provider: "cpu",
+        installed: !this.o.noEngine && this.models().state === "ready",
+      },
       ...(qwen
         ? [{ id: qwen.id, provider: this.llamaPlan().provider, installed: onDisk(qwen) }]
         : []),

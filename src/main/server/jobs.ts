@@ -590,6 +590,8 @@ export class JobService {
 
   /** `server.dictation_slots`, bounded: the Workers of the dictation lane (DC-R2). */
   private laneSize(): number {
+    // No engine here (#436): no lane Worker can run, so a dictation queues for a remote.
+    if (this.noEngine()) return 0;
     const n = Math.floor(this.o.dictationSlots?.() ?? 0);
     return Number.isFinite(n) ? Math.min(MAX_DICTATION_SLOTS, Math.max(0, n)) : 0;
   }
@@ -766,9 +768,13 @@ export class JobService {
    * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept. Given the `job`,
    * only the models it runs count: no live-only model, the speaker models only with diarize.
    */
-  admit(model: string, job?: { diarize: boolean }): void {
+  admit(model: string, job?: { diarize: boolean }, preset?: string): void {
     const none = this.noEngine();
-    if (none) throw new ModelRefused(503, "no_engine", none);
+    if (none) {
+      // A forwarding front end (#436): a job a remote has offered is taken and runs there.
+      if (this.remotes.offered(preset ? [preset, model] : [model])) return;
+      throw new ModelRefused(503, "no_engine", none);
+    }
     this.o.shelf.admit(this.o.shelf.needs(model, job));
   }
 
@@ -884,9 +890,10 @@ export class JobService {
   ): { job: Job; existing: boolean } | { conflict: Job; fields: string[] } | { full: QueueFull } {
     // A dictation takes the lane when there is one: no queue limit, never a remote (DC-R2).
     const lane = this.interactive(j.interactive === true);
+    // With no engine (#436) a job runs on a remote or not at all: it waits for one, never runs here.
     const row: NewJob = lane
       ? { ...j, interactive: true, route: "local" }
-      : { ...j, interactive: false };
+      : { ...j, interactive: false, ...(this.noEngine() ? { route: "remote" as const } : {}) };
     const r = this.store.db.transaction(() => {
       const full = lane ? null : this.queueFull(j.key_id, j.idempotency_key);
       return full ? { full } : this.store.submit(row);

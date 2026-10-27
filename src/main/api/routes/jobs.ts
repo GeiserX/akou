@@ -153,7 +153,7 @@ export function chooseModel(
 ): ModelChoice {
   try {
     const choice = jobs.choose(ask, unknownIsAuto);
-    jobs.admit(choice.model, job);
+    jobs.admit(choice.model, job, choice.preset);
     return choice;
   } catch (err) {
     if (err instanceof ModelRefused) {
@@ -320,9 +320,10 @@ export function booleanOf(form: Form, name: string): boolean | null {
  * refusal waits for the body: `JobService.submit` makes the same check in its transaction.
  */
 export function requireRoomUnlessLane(jobs: JobService, key: string, idem: string | null): void {
-  // A server with no speech engine refuses before the upload too (#436).
+  // A server with no speech engine refuses before the upload too (#436), unless it has remotes to
+  // send the job to: then the model check after the fields decides.
   const none = jobs.noEngine();
-  if (none) throw new HttpError(503, "no_engine", none);
+  if (none && !jobs.remotes.configured()) throw new HttpError(503, "no_engine", none);
   if (!jobs.interactive(true)) requireQueueRoom(jobs, key, idem);
 }
 
@@ -489,6 +490,9 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       ? laneAsk(jobs, { model, preset: presetName })
       : { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
+    // A forwarded job runs here or not at all, and with no engine it cannot run here (#436).
+    const none = jobs.noEngine();
+    if (forwarded && none) throw new HttpError(503, "no_engine", none);
     try {
       // A translation runs the engine that reads its language, whatever the preset says.
       const choice =
