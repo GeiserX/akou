@@ -301,7 +301,10 @@ describe("[DK-M8] An app that takes the connection and never answers", () => {
  * A client for hung home `h` whose launch is a script that only writes a mark, given
  * `-a BUNDLE` as `open` gets it, the bundle a fake `akou.app` of `version` (#455).
  */
-function bundleClient(h: { env: Record<string, string | undefined>; cfg: string }, version: string) {
+function bundleClient(
+  h: { env: Record<string, string | undefined>; cfg: string },
+  version: string,
+) {
   const app = join(h.cfg, "akou.app");
   mkdirSync(join(app, "Contents"), { recursive: true });
   writeFileSync(
@@ -328,7 +331,9 @@ describe("[DK-M8] [T4.11] a hung app is not stopped for a relaunch of an older i
       const h = await hungHome();
       try {
         const { api, app, mark } = bundleClient(h, "1.2.0");
-        const err = (await api.request("POST", "/calls/live/stop").catch((e: unknown) => e)) as Error;
+        const err = (await api
+          .request("POST", "/calls/live/stop")
+          .catch((e: unknown) => e)) as Error;
         expect(err).toBeInstanceOf(Hung);
         expect(err.message).toBe(
           `akou is not answering (pid ${h.pid}), and the installed ${app} is 1.2.0, older than this command line (1.3.1), so it was not restarted and nothing was stopped; update the app to 1.3.1 or newer (brew upgrade --cask geiserx/akou/akou, or the DMG from https://github.com/GeiserX/akou/releases) and try again`,
@@ -348,7 +353,9 @@ describe("[DK-M8] [T4.11] a hung app is not stopped for a relaunch of an older i
       const h = await hungHome();
       try {
         const { api, mark } = bundleClient(h, "1.3.1");
-        const err = (await api.request("POST", "/calls/live/stop").catch((e: unknown) => e)) as Error;
+        const err = (await api
+          .request("POST", "/calls/live/stop")
+          .catch((e: unknown) => e)) as Error;
         // The fake launcher starts no app, so the relaunch fails, but after the stop and the launch.
         expect(err).toBeInstanceOf(Unreachable);
         expect(err.message).not.toContain("older than this command line");
