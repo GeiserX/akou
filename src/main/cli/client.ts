@@ -31,7 +31,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { processAlive, readLock } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
-import { APP_LOCK, RUNTIME_FILE } from "../app-info.ts";
+import { APP_LOCK, APP_VERSION, RUNTIME_FILE } from "../app-info.ts";
 import { APP_LOG } from "../app-log.ts";
 import { resolvePaths } from "../config/schema.ts";
 import {
@@ -234,6 +234,8 @@ export interface ClientOptions {
   note?: (line: string) => void;
   /** How long the app has to answer before it counts as hung (tests shorten it). */
   answerMs?: number;
+  /** This command line's version, which an installed app it launches must reach (`APP_VERSION`). */
+  version?: string;
 }
 
 export interface RequestOptions {
@@ -292,6 +294,44 @@ export const DEFAULT_LAUNCH = defaultLaunch();
 export function launchedBundle(cmd: readonly string[]): string | null {
   const i = cmd.indexOf("-a");
   return i >= 0 && cmd[i + 1] ? (cmd[i + 1] as string) : null;
+}
+
+/**
+ * The `x.y.z` of a macOS bundle's `CFBundleShortVersionString`, from its XML `Info.plist` (what
+ * the release writes), or null when there is none or it cannot be read.
+ */
+export function bundleVersion(bundle: string): string | null {
+  try {
+    const plist = readFileSync(join(bundle, "Contents", "Info.plist"), "utf8");
+    const m =
+      /<key>CFBundleShortVersionString<\/key>\s*<string>\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(
+        plist,
+      );
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `a` older than `b`, both `x.y.z` with an optional `-prerelease`: by major, minor and patch, and
+ * on a tie a prerelease is older than the release (`1.3.1-rc.1` before `1.3.1`).
+ */
+export function olderThan(a: string, b: string): boolean {
+  const [ca = "", pre = ""] = a.split(/-(.*)/s);
+  const [cb = "", preB = ""] = b.split(/-(.*)/s);
+  const pa = ca.split(".").map(Number);
+  const pb = cb.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0;
+  }
+  return pre !== "" && preB === "";
+}
+
+/** How to get an app of at least `cli`, the end of each message that refuses an older one. */
+function updateHint(cli: string): string {
+  return `update the app to ${cli} or newer (brew upgrade --cask geiserx/akou/akou, or the DMG from https://github.com/GeiserX/akou/releases) and try again`;
 }
 
 export class ApiClient {
@@ -498,6 +538,8 @@ export class ApiClient {
   private async doLaunch(waitMs: number): Promise<Runtime> {
     const cmd = this.launchCmd;
     if (!cmd || cmd.length === 0) throw new Unreachable("akou is not running");
+    const bundle = launchedBundle(cmd);
+    if (bundle) this.checkBundle(bundle);
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     // What the launched program prints. The app writes its own `app.log` (DK-M8); this file holds
     // what it printed before it could, such as a start that failed.
@@ -524,7 +566,6 @@ export class ApiClient {
       closeSync(log);
     }
     const see = `see ${join(this.configDir, LAUNCH_LOG)} and ${join(this.configDir, APP_LOG)}`;
-    const bundle = launchedBundle(cmd);
     const deadline = performance.now() + waitMs;
     let startingAt = performance.now();
     let bundleAt = Number.NEGATIVE_INFINITY;
@@ -554,6 +595,35 @@ export class ApiClient {
     throw new Unreachable(
       `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; ${see}`,
     );
+  }
+
+  /**
+   * An installed app older than this command line is never started: the CLI would then talk to an
+   * API it was not built for (#455). One whose version cannot be read is started, with a warning.
+   */
+  private checkBundle(bundle: string): void {
+    const cli = this.o.version ?? APP_VERSION;
+    const app = bundleVersion(bundle);
+    if (app === null) {
+      const line = `cannot read the version of ${bundle}; starting it anyway`;
+      this.notes.push(line);
+      this.o.note?.(line);
+      return;
+    }
+    if (olderThan(app, cli)) {
+      throw new Unreachable(
+        `akou is not running, and the installed ${bundle} is ${app}, older than this command line (${cli}), so it was not started; ${updateHint(cli)}`,
+      );
+    }
+  }
+
+  /** The version of the bundle this client would launch, when it is older than the CLI (#455). */
+  private olderBundle(): { bundle: string; app: string; cli: string } | null {
+    const bundle = this.launchCmd ? launchedBundle(this.launchCmd) : null;
+    if (!bundle) return null;
+    const cli = this.o.version ?? APP_VERSION;
+    const app = bundleVersion(bundle);
+    return app !== null && olderThan(app, cli) ? { bundle, app, cli } : null;
   }
 
   /** Does the app lock name a live process: an app past the start of its start, not answering yet? */
@@ -622,6 +692,14 @@ export class ApiClient {
     if ((await probe(rt.port, rest)) === "answers") {
       this.answeredAt = performance.now();
       return rt;
+    }
+    // A restart would start the installed app, and one older than this command line is never
+    // started (#455): the hung app is left as it is, not stopped for a relaunch that cannot follow.
+    const old = launch || this.o.restart === true ? this.olderBundle() : null;
+    if (old) {
+      throw new Hung(
+        `akou is not answering (pid ${rt.pid}), and the installed ${old.bundle} is ${old.app}, older than this command line (${old.cli}), so it was not restarted and nothing was stopped; ${updateHint(old.cli)}`,
+      );
     }
     const left = await stopAll(stopList(rows, rt.pid));
     if (left.length > 0) {
