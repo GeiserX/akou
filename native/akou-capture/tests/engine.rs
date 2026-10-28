@@ -121,6 +121,7 @@ impl Run {
             mic_default: false,
             call,
             faults,
+            status_every: engine::STATUS_EVERY,
         };
         let (o, e) = (out.clone(), err.clone());
         let handle = std::thread::spawn(move || {
@@ -412,6 +413,7 @@ fn run_frontend_as(
         mic_default: false,
         call,
         faults: Faults::none(),
+        status_every: engine::STATUS_EVERY,
     };
     let outcome = engine::run(
         cfg,
@@ -625,6 +627,7 @@ fn mic_buffers_from_before_capturing_do_not_grow_the_emit_latency() {
         mic_default: false,
         call: CallMode::System,
         faults: Faults::none(),
+        status_every: engine::STATUS_EVERY,
     };
     let (o, e) = (out.clone(), err.clone());
     let handle = std::thread::spawn(move || {
@@ -657,9 +660,9 @@ fn mic_buffers_from_before_capturing_do_not_grow_the_emit_latency() {
     );
 }
 
-/// A front end whose default output changes 400 ms in, well before the engine's once-a-second
-/// status poll. With `notify` it says so with `Event::Devices`, as the Windows device
-/// notifications do; without it the change waits for the poll.
+/// A front end whose default output changes 400 ms in. The run turns the timed status poll off,
+/// so with `notify` the change is seen through `Event::Devices`, as the Windows device
+/// notifications send it, and without it never.
 struct Notifying {
     notify: bool,
     /// The output the call side reports it opened.
@@ -734,6 +737,9 @@ impl Frontend for Notifying {
     fn close(self: Box<Self>) {}
 }
 
+/// Far past any run of the `Notifying` front end.
+const NO_POLL: Duration = Duration::from_secs(3_600);
+
 fn run_notifying(name: &str, notify: bool) -> (Vec<String>, Duration) {
     run_notifying_from(name, notify, None, false)
 }
@@ -761,6 +767,9 @@ fn run_notifying_from(
         mic_default: false,
         call: CallMode::System,
         faults: Faults::none(),
+        // No timed poll inside the run: only the open-time look and a notification can see the
+        // change, however slow the machine (a 1 s poll raced the 700 ms run on a slow runner).
+        status_every: NO_POLL,
     };
     let outcome = engine::run(
         cfg,
@@ -809,8 +818,8 @@ fn a_device_notification_rebuilds_the_changed_default_at_once() {
             .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
         "{lines:#?}"
     );
-    // Positive control: without the notification nothing looks before the poll, and the part
-    // (which ends 700 ms in, before the first poll at 1 s) never sees the change.
+    // Positive control: without the notification nothing looks at the devices after the change,
+    // so the part never sees it.
     let (lines, after) = run_notifying("no-notify.opus", false);
     assert!(
         after >= Duration::from_millis(300),
@@ -914,6 +923,7 @@ fn run_flaky(name: &str, fails: u32) -> (Vec<String>, usize) {
         mic_default: false,
         call: CallMode::None,
         faults: Faults::none(),
+        status_every: engine::STATUS_EVERY,
     };
     let outcome = engine::run(
         cfg,
@@ -1885,6 +1895,7 @@ mod faults {
             mic_default: false,
             call: CallMode::System,
             faults,
+            status_every: engine::STATUS_EVERY,
         };
         let outcome = engine::run(
             cfg,
