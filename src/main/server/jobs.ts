@@ -122,6 +122,47 @@ export const MEAN_OF_JOBS = 50;
 export const RETRY_AFTER_DEFAULT_S = 30;
 export const RETRY_AFTER_MAX_S = 3600;
 
+/** One running job as the ETA sees it (SV-Q5). */
+export interface RunningLeft {
+  /** Out on a remote: it takes no slot here. */
+  remote: boolean;
+  /** Seconds of its audio done so far. */
+  done_s: number;
+  /** Its audio's length; null while it decodes, or before a remote runs it and says. */
+  total_s: number | null;
+}
+
+/**
+ * Seconds until the queue is empty (SV-Q5). A running job has its audio still to do times the
+ * per-audio rate left, or the mean while its length is unknown (or before a job with audio is
+ * done); the queued jobs take the mean each, in the first free of `concurrency` slots. A job on
+ * a remote runs beside the slots. A queued long file counts at the mean: its length is known
+ * only at its decode. Null with no mean.
+ */
+export function queueEta(o: {
+  running: readonly RunningLeft[];
+  queued: number;
+  concurrency: number;
+  meanS: number | null;
+  perAudioS: number | null;
+}): number | null {
+  if (o.running.length + o.queued === 0) return 0;
+  const mean = o.meanS;
+  if (mean === null) return null;
+  const left = (r: RunningLeft) =>
+    r.total_s === null || o.perAudioS === null
+      ? mean
+      : Math.max(0, r.total_s - r.done_s) * o.perAudioS;
+  const slots = o.running.filter((r) => !r.remote).map(left);
+  while (slots.length < Math.max(1, o.concurrency)) slots.push(0);
+  for (let i = 0; i < o.queued; i++) {
+    const first = slots.indexOf(Math.min(...slots));
+    slots[first] = (slots[first] as number) + mean;
+  }
+  const remote = o.running.filter((r) => r.remote).map(left);
+  return Math.ceil(Math.max(0, ...slots, ...remote) - 1e-9);
+}
+
 /**
  * A running job is stalled (#407) once it has run `STALL_BASE_MS` plus `STALL_PER_AUDIO` times its
  * audio's length: far past a cold model load on a slow disk, diarization, and the slowest engine
@@ -151,7 +192,15 @@ export interface QueueStats {
   audio_seconds_last_hour: number;
   /** The mean running time of the last jobs, in seconds; null before one has ended. */
   mean_job_seconds: number | null;
-  /** Seconds until the queue is empty at that pace; null before a job has ended. */
+  /**
+   * Running seconds per second of audio over the last jobs that ended done (SV-Q5): their running
+   * times summed over their audio summed, so long files do not swing it; null before one is done.
+   */
+  seconds_per_audio_second: number | null;
+  /**
+   * Seconds until the queue is empty (SV-Q5): what the running jobs have left, plus the queued
+   * jobs at the mean in rounds of `concurrency`; 0 when empty, null before a job has ended.
+   */
   eta_seconds: number | null;
   /** The recognizers a job Worker holds loaded now, so a client can batch its jobs by them. */
   loaded: string[];
@@ -466,8 +515,11 @@ export class JobService {
   private closed = false;
   /** Jobs that ended in this process: when, and the seconds of audio of a done one (SV-Q4). */
   private ended: { at: number; audio_s: number }[] = [];
-  /** The running times of the last `MEAN_OF_JOBS` jobs this process ran, in ms. */
-  private runTimes: number[] = [];
+  /**
+   * The running times of the last `MEAN_OF_JOBS` jobs this process ran, in ms, with the seconds
+   * of audio of each (0 for a failed job): the mean and the per-audio rate (SV-Q5).
+   */
+  private runTimes: { ms: number; audio_s: number }[] = [];
   private readonly waiters = new Map<string, Set<Waiter>>();
   /** Where each job running here is (akou-5an.116); dropped when it ends. */
   private readonly progress = new Map<string, JobProgress>();
@@ -488,7 +540,14 @@ export class JobService {
    */
   private readonly sent = new Map<
     string,
-    { url: string; abort: AbortController; runningAt: number | null; audioS: number | null }
+    {
+      url: string;
+      abort: AbortController;
+      runningAt: number | null;
+      audioS: number | null;
+      /** Seconds of its audio the remote has done, for the ETA (SV-Q5). */
+      doneS: number;
+    }
   >();
   /**
    * A local job whose stall clock does not start at `running_at`: null while it waits for the GPU
@@ -637,7 +696,36 @@ export class JobService {
   /** The mean running time of the last jobs, in ms, or null before one has ended. */
   private meanRunMs(): number | null {
     if (this.runTimes.length === 0) return null;
-    return this.runTimes.reduce((a, b) => a + b, 0) / this.runTimes.length;
+    return this.runTimes.reduce((a, r) => a + r.ms, 0) / this.runTimes.length;
+  }
+
+  /** Running seconds per second of audio of the last jobs done with audio, or null (SV-Q5). */
+  private perAudioS(): number | null {
+    let ms = 0;
+    let audio = 0;
+    for (const r of this.runTimes) {
+      if (r.audio_s <= 0) continue;
+      ms += r.ms;
+      audio += r.audio_s;
+    }
+    return audio > 0 ? ms / 1000 / audio : null;
+  }
+
+  /** The queue's running jobs and where each is in its audio (SV-Q5); dictations are the lane's. */
+  private runningLeft(): RunningLeft[] {
+    const out: RunningLeft[] = [];
+    for (const job of this.store.running()) {
+      if (job.interactive) continue;
+      const remote = this.sent.get(job.id);
+      if (remote) {
+        const total = remote.runningAt === null ? null : remote.audioS;
+        out.push({ remote: true, done_s: remote.doneS, total_s: total });
+        continue;
+      }
+      const p = this.progress.get(job.id);
+      out.push({ remote: false, done_s: p?.done_s ?? 0, total_s: p?.total_s ?? null });
+    }
+    return out;
   }
 
   /** Seconds until `jobs` more have run at the current pace: rounds of `concurrency` jobs each. */
@@ -654,6 +742,7 @@ export class JobService {
     const since = this.now() - THROUGHPUT_WINDOW_MS;
     this.ended = this.ended.filter((e) => e.at > since);
     const mean = this.meanRunMs();
+    const perAudio = this.perAudioS();
     return {
       concurrency: this.concurrency(),
       max: this.o.queueMax?.() ?? 0,
@@ -664,9 +753,19 @@ export class JobService {
       jobs_last_hour: this.ended.length,
       audio_seconds_last_hour: Math.round(this.ended.reduce((a, e) => a + e.audio_s, 0)),
       mean_job_seconds: mean === null ? null : Math.round(mean / 100) / 10,
+      seconds_per_audio_second: perAudio === null ? null : Math.round(perAudio * 10_000) / 10_000,
       loaded: this.loaded(),
       stalled: this.stalled(),
-      eta_seconds: depth === 0 ? 0 : this.secondsFor(depth),
+      eta_seconds:
+        depth === 0
+          ? 0
+          : queueEta({
+              running: this.runningLeft(),
+              queued: c.queued,
+              concurrency: this.concurrency(),
+              meanS: mean === null ? null : mean / 1000,
+              perAudioS: perAudio,
+            }),
     };
   }
 
@@ -1693,7 +1792,7 @@ export class JobService {
         this.heldUntil.delete(j.id);
         const abort = new AbortController();
         this.remotes.hold(r.url);
-        this.sent.set(j.id, { url: r.url, abort, runningAt: null, audioS: null });
+        this.sent.set(j.id, { url: r.url, abort, runningAt: null, audioS: null, doneS: 0 });
         this.notify(j.id, "running");
         void this.runRemote({ ...j, status: "running" }, r.url, abort);
       }
@@ -1740,6 +1839,8 @@ export class JobService {
           out.runningAt ??= this.now();
           const total = s.progress?.total_s;
           if (typeof total === "number" && Number.isFinite(total)) out.audioS = total;
+          const done = s.progress?.done_s;
+          if (typeof done === "number" && Number.isFinite(done)) out.doneS = done;
         }
         if (s.status === "done") {
           const result = await this.remotes.result(url, rid, abort.signal);
@@ -1820,11 +1921,12 @@ export class JobService {
       this.served = this.served.filter((t) => t > now - THROUGHPUT_WINDOW_MS);
       return;
     }
-    const audio = end.status === "done" ? Number(end.result.duration_s) : 0;
-    this.ended.push({ at: now, audio_s: Number.isFinite(audio) ? audio : 0 });
+    const read = end.status === "done" ? Number(end.result.duration_s) : 0;
+    const audio = Number.isFinite(read) ? read : 0;
+    this.ended.push({ at: now, audio_s: audio });
     this.ended = this.ended.filter((e) => e.at > now - THROUGHPUT_WINDOW_MS);
     if (job.running_at !== null && job.running_at >= this.startedAt) {
-      this.runTimes.push(Math.max(0, now - job.running_at));
+      this.runTimes.push({ ms: Math.max(0, now - job.running_at), audio_s: audio });
       if (this.runTimes.length > MEAN_OF_JOBS) this.runTimes.shift();
     }
   }
