@@ -2,6 +2,37 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.4.0 — agents on MCP 2026-07-28 can use akou, and its MCP server no longer gives away keys or share links
+
+`akou mcp` spoke only the 2025 revisions of MCP, so an agent on the 2026-07-28 revision got "method not found" and could not use akou at all. A check of the same server found that it could send the API key unencrypted, and that a read-only tool a harness may run unasked handed out a live share link's token. This release fixes both. It also fixes smaller faults. A `-cuda` server under WSL2 ran on the CPU, the standalone `akou-diarize` from the releases page would not run on a Mac after a browser download, and the single-file CLI's server took jobs it could not run. The 8-hour soak did not run for this release. The only change to the call-recording helper (#464) makes its 1 s status poll a setting so a test can change it; the helper still passes the same 1 s, its tests pass, and the changed test passed 50 repeats.
+
+### MCP
+- **Agents on MCP 2026-07-28 can use akou** (#460). One `akou mcp` process answers clients on the new revision and on the 2024 and 2025 ones, which keep working unchanged. A cancelled tool call now also stops its request to akou.
+- **The API key is never sent over plain HTTP to another machine** (#460). `akou mcp` refuses an `http` `AKOU_URL` that points away from this computer, unless `AKOU_ALLOW_HTTP` is `1` or `true`. Loopback and `https` work as before.
+- **`akou_share_status` no longer shows the share link's token** (#460). The token is the whole credential to read the call. `akou_share_on`, which only runs when you ask, still gives the full link.
+- **A harness asks before it deletes or revokes** (#460). `akou_forget`, `akou_delete_note`, `akou_share_off` and the new `akou_job_delete` now carry the destructive mark.
+- **Size limits** (#460). `akou_transcribe` streams an upload from disk and stops at 512 MB, and an answer from the API stops at 16 MB.
+- **A read-only connection** (#460). `akou mcp --read-only` or `AKOU_MCP_READONLY=1` offers only the tools that change nothing.
+- **More from the job tools** (#460). `akou_job_get` can return text, SRT or VTT and reports progress while it waits; `akou_transcribe` takes a title, keywords and `task` translate; `akou_jobs_list` searches and pages. Enhanced notes name their call, so they no longer land on another call that started in between. Every parameter has a description, and three small crashes are gone.
+
+### Server
+- **A `-cuda` image under WSL2 uses the NVIDIA GPU** (#451). It ran Qwen on the CPU unless `AKOU_ACCELERATOR=cuda` was set, because it looked only for `/dev/nvidia0`, which WSL2 does not have. Nobody has tried it on a real WSL2 machine yet.
+- **A GPU whose driver comes up after akou starts is used once it appears** (#458). With `asr.accelerator` naming a GPU and an empty device list at start, akou now asks again for about 15 minutes instead of staying on the CPU until a restart. `GET /v1/server` shows the switch.
+- **`/healthz` no longer waits on Parakeet when the default model is `best`** (#453). `models_ready` now means a job with no model named can run, so a server with only `best` pulled says it is ready.
+
+### CLI
+- **The single-file CLI's `akou serve` says it cannot transcribe** (#454). It has no speech engine, yet it said it was ready and failed every job. Now `/healthz` answers 503 with the reason, jobs and live sessions get 503 `no_engine`, and another akou that lists it as a remote sends it nothing. With remotes of its own it passes jobs on to them.
+- **The CLI no longer starts an installed `akou.app` older than itself** (#457). It exits 69 and says how to update.
+
+### Desktop
+- **The pill flashes "still transcribing" for a dictation key pressed just after the last one ended** (#463). A press in the first 100 ms after the release got no flash.
+
+### Release
+- **The standalone `akou-diarize` archive is signed and notarized** (#452). In 1.3.0 and 1.3.1 it was only ad-hoc signed, so a Mac server set up from a browser download could not run it and speaker labels failed. The release now fails if it is not notarized.
+
+### Behind the scenes
+- Three tests that failed now and then on slow runners are fixed (#464, #467, #468), and 1.3.1's changelog no longer claims a CI fix that did not work (#450).
+
 ## 1.3.1 — the notes pane stays on your newest note, and a note goes out only on Enter
 
 During a call the notes pane opened at its oldest note, so you scrolled down by hand to see the newest one every time. A note you were still typing was saved after a 2 s pause and showed up half written, and Shift+Enter sent it when you wanted a new line. The calls list and the notes pane also showed a scrollbar all the time. The 8-hour soak did not run for this release: it exercises the call-recording helper, and only the window changed.
