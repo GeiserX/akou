@@ -105,7 +105,7 @@ export function watchTerminations(released: () => boolean) {
     readonly #gen = gen;
     override terminate(): void {
       if (this.#gen === gen) terminated.push({ released: released() });
-      return super.terminate();
+      super.terminate();
     }
   }
   return {
