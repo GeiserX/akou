@@ -762,8 +762,9 @@ export class JobService {
    * remote entry that names it first (while it is full only with `server.remotes_overflow` off,
    * since overflow runs the job here), or, for a default this server cannot run or fetch, any up
    * remote that offers it. False when `server.default_model` refuses every job and no remote
-   * takes it. `broken` is a recognizer that cannot load here (the live recognizer's, after its load
-   * failed): its files on disk do not count, and only a remote can take a job on it.
+   * takes it. With no engine here (#436) files on this disk count for nothing: only an up remote
+   * that offers it. `broken` is a recognizer that cannot load here (the live recognizer's, after
+   * its load failed): its files on disk do not count, and only a remote can take a job on it.
    */
   defaultOnDisk(diarize: boolean, broken: string | null = null): boolean {
     let choice: ModelChoice | null;
@@ -772,7 +773,10 @@ export class JobService {
     } catch {
       choice = null;
     }
+    // No engine here (#436): files on this disk run nothing, so only a remote can take the job.
+    const none = this.noEngine() !== null;
     if (
+      !none &&
       choice &&
       choice.model !== broken &&
       this.o.shelf.missing(this.o.shelf.needs(choice.model, { diarize })).length === 0
@@ -783,14 +787,19 @@ export class JobService {
     const takes = (url: string | null) => url !== null && url !== "pending";
     if (choice) {
       const names = [choice.preset, choice.model].filter((n) => n !== "custom" && n !== "auto");
-      // Unless overflow runs it here while that remote is full (routeOf): then it needs this disk.
-      const listed = this.remotes.pick(names, true);
-      if (listed === "busy" ? !(this.o.remotesOverflow?.() ?? false) : takes(listed)) return true;
-      // A default this server may fetch is accepted here and waits for its download.
-      try {
-        this.admit(choice.model, { diarize });
-        return false;
-      } catch {}
+      if (none) {
+        // Any up remote that offers it, as routeOf sends it; a full one takes it once it has room.
+        if (this.remotes.pick(names, false) !== null) return true;
+      } else {
+        // Unless overflow runs it here while that remote is full (routeOf): then it needs this disk.
+        const listed = this.remotes.pick(names, true);
+        if (listed === "busy" ? !(this.o.remotesOverflow?.() ?? false) : takes(listed)) return true;
+        // A default this server may fetch is accepted here and waits for its download.
+        try {
+          this.admit(choice.model, { diarize });
+          return false;
+        } catch {}
+      }
     }
     // What the job route sends to a remote when this server cannot run or fetch the default.
     const remote = this.remoteChoice({});

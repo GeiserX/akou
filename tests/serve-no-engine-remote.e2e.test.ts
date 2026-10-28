@@ -220,6 +220,39 @@ describe("[#436] a no-engine server with remotes forwards every job", () => {
   });
 });
 
+describe("[#436] a no-engine front end with the files on its disk is ready only through a remote", () => {
+  test("a remote that is up but offers nothing: models_ready false and the job refused; a remote offering fast: true", async () => {
+    // The worker has the engine but no files and may not fetch them: up, offering nothing.
+    const port = freePort();
+    const empty = await server({ installed: false, port });
+    const fdir = tempDir("akou-front-").dir;
+    // The front end has the files on its own disk (a models pull, or a shared home).
+    const front = await server({
+      installed: true,
+      noEngine: true,
+      remotes: [entry(fdir, empty, port)],
+    });
+    const up = await remoteState(front, "up");
+    expect(up.presets).toEqual([]);
+    const health = await fetch(`http://127.0.0.1:${front.port}/healthz`);
+    expect(((await health.json()) as Body).models_ready).toBe(false);
+    const refused = await submit(front, { language: "en" });
+    expect([refused.status, refused.body.error]).toEqual([503, "no_engine"]);
+    // Positive control: the same front end with a remote that offers fast is ready.
+    const port2 = freePort();
+    const worker = await server({ installed: true, port: port2 });
+    const fdir2 = tempDir("akou-front-").dir;
+    const front2 = await server({
+      installed: true,
+      noEngine: true,
+      remotes: [entry(fdir2, worker, port2)],
+    });
+    await remoteState(front2, "up");
+    const ready = await fetch(`http://127.0.0.1:${front2.port}/healthz`);
+    expect([ready.status, ((await ready.json()) as Body).models_ready]).toEqual([200, true]);
+  });
+});
+
 /**
  * `worker` behind a proxy whose `GET /v1/server` lists no engine as installed, so it offers its
  * presets only: a remote that lists `best` as available while its Qwen is not downloaded yet.
