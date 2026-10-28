@@ -2718,6 +2718,8 @@ export class AkouApp implements ApiApp {
     const c = this.manager.controller(id);
     if (!c || c.live) return { why: "the call is not ended" };
     if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
+    // No speech engine in this process (#436): a final-pass Worker could only fail.
+    if (this.o.noEngine) return { why: this.o.noEngine, unavailable: true };
     const parts = c.view.parts().map((p) => p.part);
     const audio = this.finalAudio({ id, dir: c.dir, parts });
     if (!audio)

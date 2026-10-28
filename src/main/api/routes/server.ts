@@ -138,7 +138,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const accel = c.app.accelerator?.() ?? null;
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
-      // Section 14: a preset a remote offers is available here too, since a job for it runs there.
+      // Section 14: a preset a remote offers is available here too, since a job for it runs there;
+      // not to another akou's probe, whose forwarded job would never be forwarded again.
       const jobs = c.app.jobs?.();
       const remotes = jobs?.remotes;
       // The desktop app dictates through its own engine, not a lane of the job queue.
@@ -148,8 +149,10 @@ export function serverRoutes(r: Router<ApiApp>): void {
       // No speech engine here (#436): nothing runs locally, so only what a remote offers is listed.
       const none = c.app.noEngine?.() ?? null;
       // Another akou's probe (#436): a job it forwards is never forwarded again, so with no engine
-      // this server takes none of them and offers that probe nothing.
-      const relays = !none || c.req.headers.get(FORWARDED_HEADER) === null;
+      // this server takes none of them and offers that probe nothing, and with one it offers that
+      // probe only what it runs itself, never what its own remotes offer.
+      const probe = c.req.headers.get(FORWARDED_HEADER) !== null;
+      const relays = !none || !probe;
       const forwards = relays && (remotes?.configured() ?? false);
       const liveEngines = none ? [] : (live?.enginesOnDisk() ?? []);
       const offered = (name: string): boolean => {
@@ -183,7 +186,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
             name: p.name,
             available:
               (p.name === "auto" ? autoAvailable : offered(p.name)) ||
-              (relays && (remotes?.offered([p.name]) ?? false)),
+              (!probe && (remotes?.offered([p.name]) ?? false)),
             engines: fused ? fused.engines : p.engines,
             diarizer: p.diarizer,
             fusion: fused ? fused.fuser : p.fusion,

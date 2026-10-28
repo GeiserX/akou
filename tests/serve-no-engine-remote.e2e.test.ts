@@ -383,3 +383,84 @@ describe("[#436] a no-engine server never runs a job an earlier server left queu
     }
   });
 });
+
+describe("[#436] a no-engine front end ends a leftover job no remote offers", () => {
+  /** A job a server with the engine queued on a new home while its model downloads (held). */
+  async function leftover(): Promise<{ home: string; key: string; id: string }> {
+    const first = await server({ installed: false, autoDownload: true });
+    const r = await submit(first, { preset: "fast", language: "en" });
+    expect([r.status, r.body]).toEqual([202, r.body]);
+    expect((await get(first, `/v1/jobs/${r.body.id}`)).body.status).toBe("queued");
+    open.splice(open.indexOf(first), 1);
+    await first.close();
+    return { home: first.dir, key: first.key, id: r.body.id };
+  }
+
+  test("once its one remote is probed and offers nothing it ends no_engine; with a remote that offers fast it runs there", async () => {
+    const release = reg.hold("a.onnx", 16);
+    try {
+      const a = await leftover();
+      const port = freePort();
+      const empty = await server({ installed: false, port });
+      const front = await server({
+        installed: false,
+        noEngine: true,
+        home: a.home,
+        remotes: [entry(tempDir("akou-front-").dir, empty, port)],
+      });
+      const end = await get({ ...front, key: a.key }, `/v1/jobs/${a.id}?wait=10`);
+      expect(end.body).toMatchObject({
+        id: a.id,
+        status: "failed",
+        error: { code: "no_engine", message: NO_ENGINE_REASON },
+      });
+      // Positive control: the same leftover with a remote that offers fast comes back done.
+      const b = await leftover();
+      const port2 = freePort();
+      const worker = await server({ installed: true, port: port2 });
+      const front2 = await server({
+        installed: false,
+        noEngine: true,
+        home: b.home,
+        remotes: [entry(tempDir("akou-front-").dir, worker, port2)],
+      });
+      const done = await get({ ...front2, key: b.key }, `/v1/jobs/${b.id}?wait=30`);
+      expect(done.body).toMatchObject({ id: b.id, status: "done" });
+    } finally {
+      release();
+    }
+  });
+});
+
+describe("[#436] another akou's probe is offered only what a server runs itself", () => {
+  test("a server with the engine but not the files offers its probe nothing its remote offers; a client still sees fast", async () => {
+    const wport = freePort();
+    const worker = await server({ installed: true, port: wport });
+    // The engine, no files and no download: fast is available here only through the worker.
+    const mport = freePort();
+    const middle = await server({
+      installed: false,
+      port: mport,
+      remotes: [entry(tempDir("akou-middle-").dir, worker, wport)],
+    });
+    await remoteState(middle, "up");
+    const fast = (b: Body) => b.presets.find((p: Body) => p.name === "fast").available;
+    // Positive control: a client that is not another akou sees fast, which runs on the worker.
+    expect(fast((await get(middle, "/v1/server")).body)).toBe(true);
+    const probed = await fetch(`http://127.0.0.1:${mport}/v1/server`, {
+      headers: { "akou-forwarded": "1" },
+    });
+    expect(fast(await probed.json())).toBe(false);
+    // A no-engine front end pointed at it is offered nothing, so it refuses the job at once
+    // instead of keeping one the middle server refuses (409) forever.
+    const front = await server({
+      installed: false,
+      noEngine: true,
+      remotes: [entry(tempDir("akou-front-").dir, middle, mport)],
+    });
+    const up = await remoteState(front, "up");
+    expect(up.presets).toEqual([]);
+    const r = await submit(front, { preset: "fast", language: "en" });
+    expect([r.status, r.body.error]).toEqual([503, "no_engine"]);
+  });
+});

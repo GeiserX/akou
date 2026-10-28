@@ -513,6 +513,7 @@ export class JobService {
       fetch: o.remoteFetch,
       probeMs: o.remoteProbeMs,
       onChange: () => {
+        this.failStranded();
         this.dispatch();
         this.pump();
       },
@@ -1656,15 +1657,19 @@ export class JobService {
 
   /**
    * With no engine here (#436), ends every queued job that can never run: one stored to run here
-   * (a dictation, or a job a primary forwarded), and every job while no remote is set. They were
-   * queued by a server that had an engine, on the same home.
+   * (a dictation, or a job a primary forwarded), every job while no remote is set, and, once every
+   * remote has been probed, one that could have run on that engine (route null) that no remote has
+   * offered. They were queued by a server that had an engine, on the same home.
    */
   private failStranded(): void {
     const none = this.noEngine();
     if (!none) return;
     const remotes = this.remotes.configured();
+    const settled = remotes && this.remotes.settled();
     for (const j of this.store.queued()) {
-      if (remotes && j.route !== "local") continue;
+      if (remotes && j.route === "remote") continue;
+      if (remotes && j.route === null && !(settled && !this.remotes.offered(this.namesOf(j))))
+        continue;
       this.conclude(j, { status: "failed", error: { code: "no_engine", message: none } });
     }
   }

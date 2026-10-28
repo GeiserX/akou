@@ -366,6 +366,11 @@ export class Remotes {
     }));
   }
 
+  /** Has every remote answered a probe, or failed one, since start? */
+  settled(): boolean {
+    return this.current().every((r) => r.state !== "unknown");
+  }
+
   /** Has a remote offered one of these names since start? Then a job for it may be accepted. */
   offered(names: readonly string[]): boolean {
     return this.current().some((r) => r.seen && names.some((n) => r.offers.has(n)));
