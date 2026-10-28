@@ -175,6 +175,16 @@ export function serverRoutes(r: Router<ApiApp>): void {
         ((PRESET_NAMES as readonly string[]).includes(auto.preset)
           ? offered(auto.preset)
           : relays && (jobs?.obtainable(auto.model) ?? false));
+      // #470: a remote takes a job that names no model by what `auto` resolves to here, the way the
+      // job route sends it: with no engine, any remote offering that preset or recognizer; with
+      // one, `remoteChoice` once it cannot run it. The remote's own `auto` resolves there, so it
+      // never counts.
+      const autoRemote =
+        !probe &&
+        !!jobs &&
+        (none && auto !== null
+          ? (remotes?.offered([auto.preset, auto.model]) ?? false)
+          : jobs.remoteChoice({}) !== null);
       return json(200, {
         name: "akou",
         version: c.app.version,
@@ -186,8 +196,9 @@ export function serverRoutes(r: Router<ApiApp>): void {
           return {
             name: p.name,
             available:
-              (p.name === "auto" ? autoAvailable : offered(p.name)) ||
-              (!probe && (remotes?.offered([p.name]) ?? false)),
+              p.name === "auto"
+                ? autoAvailable || autoRemote
+                : offered(p.name) || (!probe && (remotes?.offered([p.name]) ?? false)),
             engines: fused ? fused.engines : p.engines,
             diarizer: p.diarizer,
             fusion: fused ? fused.fuser : p.fusion,
