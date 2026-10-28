@@ -755,16 +755,21 @@ export class JobService {
    * this disk, or when a remote that is up takes it the way the queue routes it (section 14): a
    * remote entry that names it first, or, for a default this server cannot run or fetch, any up
    * remote that offers it. False when `server.default_model` refuses every job and no remote
-   * takes it.
+   * takes it. `broken` is a recognizer that cannot load here (the live recognizer's, after its load
+   * failed): its files on disk do not count, and only a remote can take a job on it.
    */
-  defaultOnDisk(diarize: boolean): boolean {
+  defaultOnDisk(diarize: boolean, broken: string | null = null): boolean {
     let choice: ModelChoice | null;
     try {
       choice = this.choose({});
     } catch {
       choice = null;
     }
-    if (choice && this.o.shelf.missing(this.o.shelf.needs(choice.model, { diarize })).length === 0)
+    if (
+      choice &&
+      choice.model !== broken &&
+      this.o.shelf.missing(this.o.shelf.needs(choice.model, { diarize })).length === 0
+    )
       return true;
     if (!this.remotes.configured()) return false;
     // A remote that is up but full still takes the job once it has room: no model to wait on.

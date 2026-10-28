@@ -679,4 +679,30 @@ describe("[SV-P4] #449: models_ready follows what a job that names no model load
       await rig.done();
     }
   });
+
+  test("a live recognizer that failed to load the default's model is not ready, files on disk or not", async () => {
+    // The default is the live recognizer's model, on disk, and its load failed: every default job
+    // would hit the same failure.
+    const installed = [RECOGNIZER, "silero-vad", NEMOTRON];
+    const failed = await serverRig(
+      installed,
+      { "server.default_model": RECOGNIZER },
+      {},
+      { createFails: "the model file is damaged" },
+    );
+    try {
+      await until(async () => failed.app.recognizer() === "unavailable", 10_000, "the load fails");
+      expect(await health(failed)).toEqual({ status: 200, ready: false });
+    } finally {
+      await failed.done();
+    }
+    // Positive control: the same rig whose load succeeds.
+    const loaded = await serverRig(installed, { "server.default_model": RECOGNIZER });
+    try {
+      await until(async () => (await health(loaded)).ready, 10_000, "the default ready");
+      expect(loaded.app.recognizer()).toBe("ready");
+    } finally {
+      await loaded.done();
+    }
+  });
 });
