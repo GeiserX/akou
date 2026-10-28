@@ -3,8 +3,8 @@
  *
  * `asr.accelerator` is `auto` or a llama.cpp backend: `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or
  * `rocm`. `auto` reads the machine once at start: Apple silicon has Metal; on Linux an NVIDIA device
- * node means CUDA and a DRI render node (Intel or AMD, by its PCI vendor) means Vulkan; on Windows
- * the NVIDIA driver's `nvcuda.dll` means CUDA and the Vulkan loader means Vulkan. `auto` never picks
+ * node (under WSL2, /dev/dxg with the driver's libcuda) means CUDA and a DRI render node (Intel or
+ * AMD, by its PCI vendor) means Vulkan; on Windows the NVIDIA driver's `nvcuda.dll` means CUDA and the Vulkan loader means Vulkan. `auto` never picks
  * SYCL or ROCm: Vulkan runs the same cards from a build a fraction of the size, with no vendor
  * runtime on the host.
  *
@@ -90,6 +90,22 @@ const PCI_VENDORS: Readonly<Record<string, Vendor>> = {
   "0x10de": "nvidia",
 };
 
+/**
+ * WSL2 has no /dev/nvidia0: every GPU is /dev/dxg, and only the Windows NVIDIA driver brings a
+ * libcuda. Where it lands depends on how the distro got it. A bare WSL2 distro sees it in
+ * /usr/lib/wsl/lib. A `--gpus all` container never has it there: the toolkit's legacy hook
+ * bind-mounts it into the image's own libs dir, and both the hook and CDI mount the driver store at
+ * /usr/lib/wsl/drivers/<store>/. An Intel or AMD GPU under WSL2 has /dev/dxg and no libcuda.
+ */
+function hasWslLibcuda(p: Probe): boolean {
+  const cuda = (d: string) => p.list(d).some((n) => n.startsWith("libcuda.so"));
+  const stores = "/usr/lib/wsl/drivers";
+  return (
+    ["/usr/lib/wsl/lib", "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu"].some(cuda) ||
+    p.list(stores).some((s) => cuda(`${stores}/${s}`))
+  );
+}
+
 /** The GPUs the machine shows, NVIDIA's device node first, then render nodes in order. */
 export function findDevices(p: Probe): Device[] {
   if (p.platform === "darwin-arm64") return [{ vendor: "apple", node: "metal", usable: true }];
@@ -107,6 +123,8 @@ export function findDevices(p: Probe): Device[] {
   // The NVIDIA Container Toolkit (`--gpus all`) and the host driver both create /dev/nvidia0.
   if (p.exists("/dev/nvidia0")) {
     out.push({ vendor: "nvidia", node: "/dev/nvidia0", usable: p.usable("/dev/nvidia0") });
+  } else if (p.exists("/dev/dxg") && hasWslLibcuda(p)) {
+    out.push({ vendor: "nvidia", node: "/dev/dxg", usable: p.usable("/dev/dxg") });
   }
   const renders = p
     .list("/dev/dri")

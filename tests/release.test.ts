@@ -19,6 +19,7 @@ import config, {
 import pkg from "../package.json" with { type: "json" };
 import {
   DESKTOP_PLATFORMS,
+  diarizeSteps,
   hutchEnv,
   PINS,
   pairedHutch,
@@ -29,6 +30,7 @@ import {
   CLI_ENTITLEMENTS,
   cliSignArgs,
   developerId,
+  helperSignArgs,
   hostTarget,
   MIN_BUN,
 } from "../scripts/build-cli.ts";
@@ -352,6 +354,22 @@ describe("signing secrets never reach a pull request", () => {
     expect(check?.run).toContain("source=Notarized Developer ID");
     expect(check?.run).toContain("--check-notarization -R=notarized");
   });
+
+  test("[#448] the akou-diarize archive is checked for the Developer ID and Apple's notarization", () => {
+    // 1.3.0 and 1.3.1 shipped it ad-hoc signed and nothing failed: the check read the app and the
+    // CLI only. The helper is checked from the archive a user downloads.
+    const check = releaseWorkflow().jobs.app?.steps?.find((s) => s.run?.includes("spctl --assess"));
+    const run = check?.run ?? "";
+    expect(run).toContain(
+      'tar -xzf dist/release/akou-diarize-*-darwin-arm64.tar.gz -C "$check/diarize"',
+    );
+    expect(run).toContain('notarized_bin "$check/diarize/akou-diarize"');
+    // notarized_bin checks the team and the hardened runtime, then the notarization.
+    const fn = /notarized_bin\(\) \{\n([\s\S]*?)\n\}/.exec(run)?.[1] ?? "";
+    expect(fn).toContain('signed_by_team "$1"');
+    expect(fn).toContain('codesign --verify --strict --check-notarization -R=notarized "$1"');
+    expect(fn).toContain("exit 1");
+  });
 });
 
 describe("the CLI's signature", () => {
@@ -373,6 +391,45 @@ describe("the CLI's signature", () => {
     const plist = readFileSync(CLI_ENTITLEMENTS, "utf8");
     expect(plist).toContain("<key>com.apple.security.cs.allow-jit</key>");
     expect(plist).toContain("<key>com.apple.security.cs.allow-unsigned-executable-memory</key>");
+  });
+});
+
+describe("[#448] the akou-diarize archive's signature", () => {
+  test("signed like the CLI before it is packed: with a Developer ID, the hardened runtime and a timestamp", () => {
+    expect(helperSignArgs({})).toEqual(["-s", "-", "-f"]);
+    expect(helperSignArgs({ ELECTROBUN_DEVELOPER_ID: "-" })).toEqual(["-s", "-", "-f"]);
+    expect(helperSignArgs({ ELECTROBUN_DEVELOPER_ID: "ABC123" })).toEqual([
+      "-s",
+      "ABC123",
+      "-f",
+      "--options",
+      "runtime",
+      "--timestamp",
+    ]);
+    const bin = "/stage/akou-diarize";
+    const steps = diarizeSteps(bin, "/out/akou-diarize-1.0.0-darwin-arm64.tar.gz", {
+      ELECTROBUN_DEVELOPER_ID: "ABC123",
+    });
+    expect(steps.sign).toEqual([
+      ["/usr/bin/codesign", "-s", "ABC123", "-f", "--options", "runtime", "--timestamp", bin],
+      ["/usr/bin/codesign", "--verify", "--strict", bin],
+    ]);
+    // The archive packs the file that was signed, alone at its top, not cargo's build output.
+    expect(steps.pack).toEqual([
+      "tar",
+      "-czf",
+      "/out/akou-diarize-1.0.0-darwin-arm64.tar.gz",
+      "-C",
+      "/stage",
+      "akou-diarize",
+    ]);
+    expect(diarizeSteps(bin, "/out/x.tar.gz", {}).sign[0]).toEqual([
+      "/usr/bin/codesign",
+      "-s",
+      "-",
+      "-f",
+      bin,
+    ]);
   });
 });
 

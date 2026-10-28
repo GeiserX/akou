@@ -156,6 +156,75 @@ describe("what the machine has", () => {
     expect(findDevices(machine("linux-arm64"))).toEqual([]);
   });
 
+  /** auto on this WSL2 machine finds the NVIDIA GPU at /dev/dxg and picks CUDA. */
+  function picksCudaOnDxg(dirs: Record<string, string[]>) {
+    const devices = findDevices(machine("linux-x64", { files: { "/dev/dxg": "" }, dirs }));
+    expect(devices).toEqual([{ vendor: "nvidia", node: "/dev/dxg", usable: true }]);
+    expect(chooseAccelerator("auto", devices, ["cpu", "cuda"])).toEqual({
+      active: "cuda",
+      reason: "an NVIDIA GPU at /dev/dxg",
+    });
+  }
+
+  test("[#447] WSL2 distro: /dev/dxg with the driver's libcuda in /usr/lib/wsl/lib is an NVIDIA GPU, and auto picks CUDA", () => {
+    picksCudaOnDxg({
+      "/usr/lib/wsl/lib": ["libcuda.so", "libcuda.so.1", "libcuda.so.1.1", "libdxcore.so"],
+    });
+  });
+
+  test("[#447] WSL2 --gpus all container, legacy hook: libcuda is in the image's libs dir and there is no /usr/lib/wsl/lib", () => {
+    picksCudaOnDxg({
+      "/usr/lib/x86_64-linux-gnu": ["libc.so.6", "libcuda.so.1", "libcuda.so.1.1", "libdxcore.so"],
+      "/usr/lib/wsl/drivers": ["nvdm.inf_amd64_0123456789abcdef"],
+      "/usr/lib/wsl/drivers/nvdm.inf_amd64_0123456789abcdef": ["libcuda.so.1.1", "nvidia-smi"],
+    });
+    // The same on an arm64 image, with only the libs dir mounted.
+    picksCudaOnDxg({ "/usr/lib/aarch64-linux-gnu": ["libcuda.so.1"] });
+  });
+
+  test("[#447] WSL2 --gpus all container, CDI: /usr/lib/wsl/lib has only libdxcore, libcuda is in the driver store", () => {
+    picksCudaOnDxg({
+      "/usr/lib/wsl/lib": ["libdxcore.so"],
+      "/usr/lib/wsl/drivers": ["nvdm.inf_amd64_0123456789abcdef"],
+      "/usr/lib/wsl/drivers/nvdm.inf_amd64_0123456789abcdef": [
+        "libcuda.so.1.1",
+        "libnvdxgdmal.so.1",
+      ],
+    });
+  });
+
+  test("[#447] positive control: /dev/dxg with no libcuda anywhere (an Intel or AMD GPU under WSL2) is not NVIDIA", () => {
+    const p = machine("linux-x64", {
+      files: { "/dev/dxg": "" },
+      dirs: {
+        "/usr/lib/wsl/lib": ["libdxcore.so", "libd3d12.so"],
+        "/usr/lib/x86_64-linux-gnu": ["libc.so.6", "libdxcore.so"],
+        "/usr/lib/wsl/drivers": ["iigd_dch.inf_amd64_0123456789abcdef"],
+        "/usr/lib/wsl/drivers/iigd_dch.inf_amd64_0123456789abcdef": ["libigd12umd64.so"],
+      },
+    });
+    expect(findDevices(p)).toEqual([]);
+    expect(findDevices(machine("linux-x64", { files: { "/dev/dxg": "" } }))).toEqual([]);
+    // libcuda with no /dev/dxg is not a GPU either: a plain Linux box with a CUDA library and no device.
+    expect(
+      findDevices(
+        machine("linux-x64", { dirs: { "/usr/lib/x86_64-linux-gnu": ["libcuda.so.1"] } }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("[#447] WSL2: /dev/nvidia0 wins over /dev/dxg, and a /dev/dxg this user cannot open is not usable", () => {
+    const wsl = { "/usr/lib/wsl/lib": ["libcuda.so.1"] };
+    const both = machine("linux-x64", { files: { "/dev/dxg": "", "/dev/nvidia0": "" }, dirs: wsl });
+    expect(findDevices(both)).toEqual([{ vendor: "nvidia", node: "/dev/nvidia0", usable: true }]);
+    const locked = machine("linux-x64", {
+      files: { "/dev/dxg": "" },
+      dirs: wsl,
+      denied: ["/dev/dxg"],
+    });
+    expect(findDevices(locked)).toEqual([{ vendor: "nvidia", node: "/dev/dxg", usable: false }]);
+  });
+
   test("Windows: the NVIDIA driver's nvcuda.dll, and the Vulkan loader any GPU driver installs", () => {
     const sys = join("C:\\Windows", "System32");
     const p = machine("win32-x64", {
@@ -737,14 +806,17 @@ describe("GET /v1/server reports the accelerator", () => {
   /** A rig on an NVIDIA box with the CUDA image, whose llama-server answers `answers` in turn, the last one from then on. */
   async function lateGpu(
     answers: string[],
-    o: { setting?: string; retryMs?: number[] } = {},
+    o: { setting?: string; retryMs?: number[]; wsl?: boolean } = {},
   ): Promise<{ r: AppRig; asked: () => number }> {
     let asked = 0;
     const r = await appRig({
       settings: { "asr.accelerator": o.setting ?? "cuda" },
       accelerator: {
+        // Under WSL2 (#447) the GPU is /dev/dxg with the driver's libcuda, and no /dev/nvidia0; a
+        // `--gpus all` container (legacy hook) has that libcuda in the image's libs dir.
         probe: machine("linux-x64", {
-          files: { "/dev/nvidia0": "" },
+          files: o.wsl ? { "/dev/dxg": "" } : { "/dev/nvidia0": "" },
+          ...(o.wsl ? { dirs: { "/usr/lib/x86_64-linux-gnu": ["libcuda.so.1"] } } : {}),
           env: { AKOU_ACCELERATORS: "cuda,cpu", AKOU_LLAMA_SERVER: "/opt/llama/llama-server" },
         }),
         run: async () => ({ output: answers[Math.min(asked++, answers.length - 1)] }),
@@ -814,6 +886,24 @@ describe("GET /v1/server reports the accelerator", () => {
     await Bun.sleep(80);
     expect(auto.asked()).toBe(1);
     expect((await auto.r.api("GET", "/server")).body.accelerator.active).toBe("cpu");
+  });
+
+  test("[#447] [#456] WSL2: auto finds /dev/dxg and runs CUDA, and an explicit cuda there whose driver is late is asked again", async () => {
+    // auto on /dev/dxg alone: CUDA, confirmed by the build, asked once.
+    const auto = await lateGpu([LIST_CUDA], { setting: "auto", wsl: true });
+    const a = await until(auto.r, (s) => s.verified);
+    expect(a.accelerator).toMatchObject({
+      setting: "auto",
+      active: "cuda",
+      device: "NVIDIA GeForce RTX 3060",
+      reason: "an NVIDIA GPU at /dev/dxg",
+    });
+    expect(auto.asked()).toBe(1);
+    // An explicit cuda under WSL2 whose driver lists nothing at first gets the #456 retries.
+    const late = await lateGpu([LIST_NONE, LIST_CUDA], { wsl: true });
+    const b = await until(late.r, (s) => s.active === "cuda");
+    expect(b.accelerator.device).toBe("NVIDIA GeForce RTX 3060");
+    expect(late.asked()).toBe(2);
   });
 
   test("a changed asr.accelerator applies to the next Qwen job, with no restart", async () => {
