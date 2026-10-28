@@ -5,8 +5,10 @@
  * - `GET /healthz`, no key: `{ok, version, models_ready, queue_depth, queue}`, 200 when the API
  *   answers, 503 while the models load (while the files download, and while the recognizer loads
  *   them) and while a job is stalled (`queue.stalled`, #407: running past `STALL_BASE_MS` plus
- *   `STALL_PER_AUDIO` times its audio). `models_ready` is true only once the recognizer is ready,
- *   whatever the jobs do. Docker's `HEALTHCHECK` calls it.
+ *   `STALL_PER_AUDIO` times its audio). `models_ready` is true once every model a job that names
+ *   no model loads is on disk (`server.default_model`, or what `auto` runs, with its helpers, and
+ *   the speaker models when `server.default_diarize` is on) and nothing is loading, and the live
+ *   recognizer did not fail to load it, or once an up remote takes that job (section 14), whatever the jobs do (#449); with no job queue, once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
  *   `queue` is the job queue's settings, depth, throughput and ETA (SV-Q4), in both modes.
  * - `GET /v1/server`, no key: what this akou is and can do, and a link to the OpenAPI file (SV-C4),
  *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
@@ -58,19 +60,37 @@ export function modelState(app: ApiApp): { loading: boolean; ready: boolean } {
   };
 }
 
+/**
+ * `/healthz`'s `models_ready` (#449): with a job queue, a job that names no model has everything
+ * it loads on disk (the recognizer `server.default_model` or `auto` resolves to, its helpers, the
+ * speaker models when `server.default_diarize` is on) and nothing loads, or an up remote takes it
+ * (section 14), so a server with only `best` never waits on Parakeet. Not when that recognizer is
+ * the live recognizer's and its load failed: a local job hits the same failure. With no queue, the
+ * recognizer's readiness.
+ */
+function jobModelsReady(app: ApiApp, state: { loading: boolean; ready: boolean }): boolean {
+  const jobs = app.jobs?.();
+  if (!jobs) return state.ready;
+  // A live recognizer whose load failed fails every local job on its model the same way.
+  const broken = app.recognizerFailed?.() ? RECOGNIZER : null;
+  return (
+    !state.loading && jobs.defaultOnDisk(app.config().settings["server.default_diarize"], broken)
+  );
+}
+
 export function rootRoutes(r: Router<ApiApp>): void {
   r.add(
     "GET",
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`), and on a server with no speech engine (the single-file CLI) while no remote it forwards jobs to is up, with `reason` saying where one is. `models_ready` says only whether the models are ready. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, and the live recognizer did not fail to load it, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes. On a server with no speech engine (the single-file CLI) it is 503 while no remote it forwards jobs to is up, with `reason` saying where one is.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
     },
     (c) => {
-      const { loading, ready } = modelState(c.app);
+      const state = modelState(c.app);
       const queue = queueOf(c.app);
       // No speech engine here (#436): never ready, so a client or a load balancer sends no work,
       // unless a remote is up to run the jobs this server forwards.
@@ -91,11 +111,11 @@ export function rootRoutes(r: Router<ApiApp>): void {
         });
       }
       // A job stuck at running (#407) is a server that takes jobs and ends none.
-      const ok = !loading && (queue?.stalled ?? 0) === 0;
+      const ok = !state.loading && (queue?.stalled ?? 0) === 0;
       return json(ok ? 200 : 503, {
         ok,
         version: c.app.version,
-        models_ready: ready,
+        models_ready: jobModelsReady(c.app, state),
         queue_depth: c.app.queueDepth?.() ?? 0,
         queue,
       });

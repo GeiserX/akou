@@ -4152,6 +4152,11 @@ export class AkouApp implements ApiApp {
     return this.asrState.state;
   }
 
+  recognizerFailed(): boolean {
+    // `startAsr` sets `asr` only once it starts a load: waiting for the files leaves it null.
+    return this.asr !== null && this.asrState.state === "unavailable";
+  }
+
   /** `server.admin_password_hash` as the file holds it now, read again only when the file changes. */
   private passwordHash = { stamp: "", hash: "" };
 

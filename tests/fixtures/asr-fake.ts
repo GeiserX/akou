@@ -182,6 +182,8 @@ export interface FakeOptions {
   slowMs?: number;
   /** Each recognizer load busy-waits this long (a big model on a slow disk). */
   loadMs?: number;
+  /** Creating the model set throws this message, as a model file the runtime cannot read does. */
+  createFails?: string;
   /** Each speaker-label pass busy-waits this long. */
   diarizeMs?: number;
   /** Each speaker-label pass fails with this message, as a missing `akou-diarize` does. */
@@ -645,6 +647,7 @@ export class FakeModels implements ModelSet {
 export const created: FakeModels[] = [];
 
 export function createModels(options: FakeOptions = {}, model?: string): ModelSet {
+  if (options.createFails !== undefined) throw new Error(options.createFails);
   const m = new FakeModels({ ...options, model: model ?? options.model });
   created.push(m);
   return m;
