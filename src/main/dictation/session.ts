@@ -979,13 +979,16 @@ export class DictationSession {
   /**
    * A key the helper swallowed and reported (DC-A4): Escape, Enter or Shift+Enter for the session
    * listening or the last one still transcribing; any other name is the dictation key, pressed
-   * while a dictation transcribes, which the helper refused.
+   * while a dictation transcribes, which the helper refused. A session the helper ended counts
+   * from its `session.ended`, while its last audio still drains, not only once it transcribes.
    */
   private key(name: string): void {
     const asked = KEY_ASKS[name];
     if (asked === undefined) {
-      if (!this.cur && (this.state === "transcribing" || this.state === "inserting"))
-        this.o.onBusy?.();
+      const busy = this.cur
+        ? this.cur.end !== null
+        : this.state === "transcribing" || this.state === "inserting";
+      if (busy) this.o.onBusy?.();
       return;
     }
     const c = this.cur ?? this.latest;
