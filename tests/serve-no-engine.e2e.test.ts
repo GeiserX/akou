@@ -10,10 +10,14 @@
  */
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { FinalAudioSpec } from "../src/main/asr/finalize-worker.ts";
+import { EXIT } from "../src/main/cli/client.ts";
 import { NO_ENGINE_REASON } from "../src/main/cli/commands/serve.ts";
 import { type AppRig, appRig, FAKE_MODELS, rawRequest } from "./api-helpers.ts";
 import { logOf, until } from "./capture-helpers.ts";
+import { cli } from "./cli-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 import { clip, newKey, SERVER, submit } from "./server-helpers.ts";
@@ -121,6 +125,30 @@ describe("[#436] akou serve with no speech engine", () => {
     const engine = await rig(false);
     const ek = await newKey(engine, "engine");
     expect((await submit(engine, ek.key, clip(["hello", "world"], 2))).status).toBe(202);
+  });
+
+  test("akou transcribe against it prints no_engine and the reason; with the engine it prints the text", async () => {
+    const t = tempDir("akou-no-engine-cli-");
+    cleanups.push(async () => t.cleanup());
+    const path = join(t.dir, "clip.wav");
+    writeFileSync(path, clip(["hello", "world"], 2));
+    const run = async (r: AppRig, argv: string[]) => {
+      const k = await newKey(r, `cli-${argv.length}`);
+      const env = { ...process.env, AKOU_URL: `http://127.0.0.1:${r.port}`, AKOU_API_KEY: k.key };
+      return cli(env, ["transcribe", path, "--preset", "fast", ...argv]);
+    };
+    const none = await rig(true);
+    const j = await run(none, ["--json"]);
+    expect(j.code).toBe(EXIT.unavailable);
+    expect(j.json).toMatchObject({ error: "no_engine", message: NO_ENGINE_REASON });
+    const h = await run(none, []);
+    expect(h.code).toBe(EXIT.unavailable);
+    expect(h.err).toContain("drumsergio/akou");
+    expect(h.err).not.toContain("update it");
+    // Positive control: the same command against a server with the engine takes the job.
+    const engine = await rig(false);
+    const ok = await run(engine, []);
+    expect(`${ok.code} ${ok.out}`).toBe("0 hello world");
   });
 
   test("GET /v1/live is refused before the upgrade with 503 no_engine; with the engine the socket opens", async () => {
