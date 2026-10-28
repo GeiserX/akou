@@ -4,7 +4,7 @@
  */
 
 /** The one version, stamped from `package.json` at release (DESIGN section 9). */
-export const APP_VERSION = "1.4.0";
+export const APP_VERSION = "1.4.1";
 /** `runtime.json` in the config folder: pid, port and version of the running app, mode 0600. */
 export const RUNTIME_FILE = "runtime.json";
 /** `akou.lock` in the config folder: the pid of the one app, taken early in its start. */
