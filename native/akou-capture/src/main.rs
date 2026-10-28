@@ -378,6 +378,7 @@ fn main() {
         mic_default: args.mic == "default",
         call: args.call,
         faults: args.faults,
+        status_every: engine::STATUS_EVERY,
     };
     let outcome = engine::run(
         cfg,
