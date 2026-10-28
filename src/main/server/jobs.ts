@@ -568,6 +568,7 @@ export class JobService {
       orphans++;
     }
     if (orphans > 0) this.o.log("info", `jobs: ${orphans} upload(s) no job names were deleted`);
+    this.failStranded();
     this.sweep();
     // clock: retention runs hourly; each run reads the store's own times.
     this.retention = setInterval(() => this.sweep(), RETENTION_SWEEP_MS);
@@ -1586,19 +1587,40 @@ export class JobService {
    * names also runs here while every remote that would take it is busy, instead of waiting.
    */
   private routeOf(j: Job): Route {
+    // No engine here (#436): a job never runs here, whatever route it was stored with; one that
+    // cannot go to a remote is ended by `failStranded`, the rest wait for a remote.
+    const none = this.noEngine() !== null;
+    if (none && (j.route === "local" || !this.remotes.configured())) return { where: "wait" };
     if (j.route === "local" || !this.remotes.configured()) return { where: "local" };
+    const route = none ? "remote" : j.route;
     const names = this.namesOf(j);
     // Back to the remote that already has it, so a returning remote's copy is followed, not redone.
     if (j.remote && this.remotes.up(j.remote, names)) return { where: "remote", url: j.remote };
-    const url = this.remotes.pick(names, j.route !== "remote");
+    const url = this.remotes.pick(names, route !== "remote");
     if (url === "busy" || url === "pending")
-      return overflowRoute(j.route, this.o.remotesOverflow?.() ?? false, url);
+      return overflowRoute(route, this.o.remotesOverflow?.() ?? false, url);
     if (url !== null) return { where: "remote", url };
-    return j.route === "remote" ? { where: "wait" } : { where: "local" };
+    return route === "remote" ? { where: "wait" } : { where: "local" };
+  }
+
+  /**
+   * With no engine here (#436), ends every queued job that can never run: one stored to run here
+   * (a dictation, or a job a primary forwarded), and every job while no remote is set. They were
+   * queued by a server that had an engine, on the same home.
+   */
+  private failStranded(): void {
+    const none = this.noEngine();
+    if (!none) return;
+    const remotes = this.remotes.configured();
+    for (const j of this.store.queued()) {
+      if (remotes && j.route !== "local") continue;
+      this.conclude(j, { status: "failed", error: { code: "no_engine", message: none } });
+    }
   }
 
   /** A setting that changes where a queued job runs was saved: route the queue again now. */
   reroute(): void {
+    this.failStranded();
     this.dispatch();
     this.pump();
   }
@@ -1703,7 +1725,8 @@ export class JobService {
           // The remote no longer offers it: asked again after its next probe.
           this.heldUntil.set(job.id, performance.now() + (this.o.remoteProbeMs ?? 30_000));
           void this.remotes.probeAll();
-        } else if (job.route === "remote") {
+        } else if (job.route === "remote" || this.noEngine()) {
+          // With no engine here (#436) a refused job has nowhere else to run either.
           this.conclude(job, {
             status: "failed",
             error: { code: e.code ?? "remote_refused", message: e.message },

@@ -72,8 +72,11 @@ async function server(o: {
   noEngine?: boolean;
   port?: number;
   remotes?: string[];
+  /** An AKOU_HOME another server used before; a new one otherwise. */
+  home?: string;
+  autoDownload?: boolean;
 }): Promise<Server> {
-  const t = tempDir("akou-noengine-");
+  const t = o.home ? { dir: o.home } : tempDir("akou-noengine-");
   const models = join(t.dir, "models");
   mkdirSync(models, { recursive: true });
   if (o.installed) for (const m of catalog) reg.install(models, m);
@@ -84,7 +87,7 @@ async function server(o: {
       "server.enabled": true,
       "api.bind": "127.0.0.1",
       "asr.modelsDir": models,
-      "server.auto_download": false,
+      "server.auto_download": o.autoDownload ?? false,
       ...(o.port ? { "api.port": o.port } : {}),
       ...(o.remotes ? { "server.remotes": o.remotes } : {}),
     },
@@ -100,7 +103,8 @@ async function server(o: {
     "keys",
     "create",
     "--name",
-    "client",
+    // A second server on the same home names a second key.
+    `client-${rig.port}`,
     "--scope",
     "jobs",
     "--json",
@@ -269,6 +273,63 @@ describe("[#436] a no-engine front end forwards a job a remote offers by preset 
       expect((await get(front, `/v1/jobs/${r.body.id}/result`)).body.text).toBe("hello world");
     } finally {
       proxy.stop();
+    }
+  });
+});
+
+describe("[#436] a primary pointed at a no-engine front end", () => {
+  test("a job only a remote can run ends failed with no_engine, never queued forever", async () => {
+    const wport = freePort();
+    const worker = await server({ installed: true, port: wport });
+    const fport = freePort();
+    const fdir = tempDir("akou-front-").dir;
+    const front = await server({
+      installed: false,
+      noEngine: true,
+      port: fport,
+      remotes: [entry(fdir, worker, wport)],
+    });
+    await remoteState(front, "up");
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({ installed: false, remotes: [entry(pdir, front, fport)] });
+    // The front end offers what its own remote offers, so the primary sends the job there.
+    await remoteState(primary, "up");
+    const r = await submit(primary, { preset: "fast", language: "en" });
+    expect([r.status, r.body]).toEqual([202, r.body]);
+    // A 5xx refusal made the primary mark the front end down, probe it up and resend for ever.
+    const end = await get(primary, `/v1/jobs/${r.body.id}?wait=15`);
+    expect(end.body).toMatchObject({
+      id: r.body.id,
+      status: "failed",
+      error: { code: "no_engine" },
+    });
+    // The front end is still up for the primary: a refusal is not an outage.
+    expect((await get(primary, "/v1/server")).body.remotes[0].state).toBe("up");
+  });
+});
+
+describe("[#436] a no-engine server never runs a job an earlier server left queued", () => {
+  test("a queued job from a server with the engine, on the same home, ends failed with no_engine", async () => {
+    const release = reg.hold("a.onnx", 16);
+    try {
+      // A server with the engine queues a job while its model downloads (held here).
+      const first = await server({ installed: false, autoDownload: true });
+      const r = await submit(first, { preset: "fast", language: "en" });
+      expect([r.status, r.body]).toEqual([202, r.body]);
+      expect((await get(first, `/v1/jobs/${r.body.id}`)).body.status).toBe("queued");
+      open.splice(open.indexOf(first), 1);
+      await first.close();
+      // The single-file CLI's server on that home: the job is ended, not run.
+      const later = await server({ installed: false, noEngine: true, home: first.dir });
+      // The job belongs to the key that sent it, which the home keeps.
+      const end = await get({ ...later, key: first.key }, `/v1/jobs/${r.body.id}?wait=10`);
+      expect(end.body).toMatchObject({
+        id: r.body.id,
+        status: "failed",
+        error: { code: "no_engine", message: NO_ENGINE_REASON },
+      });
+    } finally {
+      release();
     }
   });
 });

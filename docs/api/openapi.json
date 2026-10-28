@@ -6832,7 +6832,7 @@
             "$ref": "#/components/responses/415.multipart_required"
           },
           "422": {
-            "$ref": "#/components/responses/422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language"
+            "$ref": "#/components/responses/422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.no_engine.unknown_model.unsupported_language"
           },
           "429": {
             "$ref": "#/components/responses/429.queue_full"
@@ -10255,7 +10255,7 @@
           }
         }
       },
-      "422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.unknown_model.unsupported_language": {
+      "422.bad_field.callback_not_allowed.idempotency_conflict.missing_field.no_engine.unknown_model.unsupported_language": {
         "description": "Unprocessable",
         "content": {
           "application/json": {
@@ -10272,6 +10272,7 @@
                         "callback_not_allowed",
                         "idempotency_conflict",
                         "missing_field",
+                        "no_engine",
                         "unknown_model",
                         "unsupported_language"
                       ]

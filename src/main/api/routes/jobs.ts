@@ -430,6 +430,12 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
   }
   // A full queue answers before the upload is read: a client pacing itself sends no bytes twice.
   // With a dictation lane, only after it, since the body says whether the lane takes it (DC-R2).
+  // A forwarded job runs here or not at all, and with no engine it cannot run here (#436). A 4xx,
+  // not a 503: the primary reads a 5xx as this server down, probes it up again and resends the
+  // job forever; a 422 is a refusal, so it fails a job only a remote can run, or runs it itself.
+  const none = jobs.noEngine();
+  if (none && c.req.headers.get(FORWARDED_HEADER) !== null)
+    throw new HttpError(422, "no_engine", none);
   requireRoomUnlessLane(jobs, who.id, idem);
   const form = await formOf(c, jobs.uploadDir);
   // The job owns its file once submitted; every other file, and this one on a refusal, is deleted.
@@ -490,9 +496,6 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
       ? laneAsk(jobs, { model, preset: presetName })
       : { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
-    // A forwarded job runs here or not at all, and with no engine it cannot run here (#436).
-    const none = jobs.noEngine();
-    if (forwarded && none) throw new HttpError(503, "no_engine", none);
     try {
       // A translation runs the engine that reads its language, whatever the preset says.
       const choice =
@@ -626,6 +629,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "callback_not_allowed",
           "idempotency_conflict",
           "missing_field",
+          "no_engine",
           "unknown_model",
           "unsupported_language",
         ],
