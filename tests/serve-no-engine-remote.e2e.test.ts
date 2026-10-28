@@ -260,6 +260,38 @@ describe("[#436] a no-engine front end with the files on its disk is ready only 
   });
 });
 
+describe("[#469] a no-engine front end stays ready while a local models pull runs", () => {
+  test("/healthz is 200 through an up remote while the front end's own files download; a server with the engine is 503 while loading", async () => {
+    const release = reg.hold("a.onnx", 16);
+    try {
+      const port = freePort();
+      const worker = await server({ installed: true, port });
+      const front = await server({
+        installed: false,
+        noEngine: true,
+        remotes: [entry(tempDir("akou-front-").dir, worker, port)],
+      });
+      await remoteState(front, "up");
+      expect((await front.api("POST", "/models/pull")).status).toBe(202);
+      expect((await front.api("GET", "/models")).body.state).toBe("downloading");
+      // Files on this disk run nothing here: the remote still takes every job.
+      const health = await fetch(`http://127.0.0.1:${front.port}/healthz`);
+      const hb = (await health.json()) as Body;
+      expect([health.status, hb.ok, hb.models_ready]).toEqual([200, true, true]);
+      expect((await front.api("GET", "/models")).body.state).toBe("downloading");
+      // Positive control: a server with the engine is not ready while its models download.
+      const engine = await server({ installed: false });
+      expect((await engine.api("POST", "/models/pull")).status).toBe(202);
+      expect((await engine.api("GET", "/models")).body.state).toBe("downloading");
+      const busy = await fetch(`http://127.0.0.1:${engine.port}/healthz`);
+      const bb = (await busy.json()) as Body;
+      expect([busy.status, bb.ok, bb.models_ready]).toEqual([503, false, false]);
+    } finally {
+      release();
+    }
+  });
+});
+
 /**
  * `worker` behind a proxy whose `GET /v1/server` lists no engine as installed, so it offers its
  * presets only: a remote that lists `best` as available while its Qwen is not downloaded yet.
