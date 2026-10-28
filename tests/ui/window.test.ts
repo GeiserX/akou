@@ -760,8 +760,14 @@ describe("the notepad (DESIGN 5.1)", () => {
             5000,
             "the edit with its line break",
           );
-          expect(await page.$eval(`${row} .note-text`, (el) => (el as HTMLElement).innerText)).toBe(
-            "budget review\nand the second line",
+          // The row is drawn from the call's stream, which can bring the edit a moment after the
+          // save answers: until then the closed editor shows the text it had.
+          await until(
+            async () =>
+              (await page.$eval(`${row} .note-text`, (el) => (el as HTMLElement).innerText)) ===
+              "budget review\nand the second line",
+            5000,
+            "the notepad showing the edit",
           );
         },
       );

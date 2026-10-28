@@ -7,7 +7,7 @@ import type { EventDraft } from "../src/core/log/events.ts";
 import { EVENTS_FILE } from "../src/core/log/writer.ts";
 import { finalizeCall, JobWorker } from "../src/main/asr/finalize-worker.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { LogBuilder, T0 } from "./helpers.ts";
+import { LogBuilder, T0, watchTerminations } from "./helpers.ts";
 
 // A Bun Worker that is terminated, or that dies of an uncaught error, never runs the native
 // finalizers: the models it held stay in the process until it exits. Every way a Worker holding
@@ -44,24 +44,17 @@ export function createModels(options, model) {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Every `terminate` of a Worker, with whether the model set had been released by then. */
-const terminated: { released: boolean }[] = [];
+/** Every `terminate` of this test's Workers, with whether the model set had been released by then. */
 let marker = "";
-const terminate = Worker.prototype.terminate;
-beforeAll(() => {
-  Worker.prototype.terminate = function (this: Worker) {
-    terminated.push({ released: existsSync(marker) });
-    return terminate.call(this);
-  };
-});
-afterAll(() => {
-  Worker.prototype.terminate = terminate;
-});
+const watch = watchTerminations(() => existsSync(marker));
+const { terminated } = watch;
+beforeAll(watch.install);
+afterAll(watch.restore);
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
-  terminated.length = 0;
+  watch.reset();
 });
 
 function spec(name: string, options: Record<string, unknown> = {}) {
@@ -124,6 +117,20 @@ async function until(cond: () => boolean, ms = 5000): Promise<void> {
   const end = performance.now() + ms;
   while (!cond() && performance.now() < end) await Bun.sleep(10);
 }
+
+describe("[#466] a test counts only the terminates of its own Workers", () => {
+  test("a Worker made before the test and terminated during it is not counted; one made in it is", async () => {
+    const blank = () => URL.createObjectURL(new Blob([""], { type: "application/javascript" }));
+    const left = new Worker(blank());
+    watch.reset();
+    left.terminate();
+    expect(terminated).toEqual([]);
+    // Positive control: the same terminate of a Worker made after the reset is counted.
+    const own = new Worker(blank());
+    own.terminate();
+    expect(terminated).toEqual([{ released: false }]);
+  });
+});
 
 describe("a Worker that goes some other way still frees its models first", () => {
   test("a job Worker cancelled inside its model load frees what it loaded once the load returns", async () => {

@@ -45,7 +45,8 @@ const TEARDOWN_BUDGET: Duration = Duration::from_secs(2);
 const WRITER_DRAIN_BUDGET: Duration = Duration::from_secs(1);
 /// Level lines: four a second.
 const LEVEL_FRAMES: usize = TIMELINE_RATE as usize / 4;
-const STATUS_EVERY: Duration = Duration::from_secs(1);
+/// How often the loop asks the front end for its status: the default devices and whether they run.
+pub const STATUS_EVERY: Duration = Duration::from_secs(1);
 /// A mic rebuild that failed is tried again after 1 s, doubling up to this.
 const MIC_RETRY_MAX: Duration = Duration::from_secs(30);
 
@@ -55,6 +56,9 @@ pub struct RunConfig {
     pub mic_default: bool,
     pub call: CallMode,
     pub faults: Faults,
+    /// The status poll interval: `STATUS_EVERY` in the helper. A test that must see only what a
+    /// device notification causes sets it far past its own length.
+    pub status_every: Duration,
 }
 
 /// Set by SIGINT or SIGTERM: stop as if `stop` had arrived on stdin.
@@ -925,7 +929,7 @@ pub fn run(
         if !driven {
             p.set_now(clock::now());
         }
-        if last_status.elapsed() >= STATUS_EVERY {
+        if last_status.elapsed() >= cfg.status_every {
             last_status = Instant::now();
             p.poll_status(fe.as_mut(), &cfg.call, mic_default);
         }

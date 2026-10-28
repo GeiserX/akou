@@ -534,6 +534,7 @@ describe("the session's own edges", () => {
     const sent: AppToHelper[] = [];
     const logs: string[] = [];
     const appended: string[] = [];
+    let busy = 0;
     const s = new DictationSession({
       log,
       engine: () => ({
@@ -558,10 +559,33 @@ describe("the session's own edges", () => {
         appended.push(text);
         return true;
       },
+      onBusy: () => busy++,
     });
     if (o.secure) s.onMessage({ type: "secure_input", on: true });
-    return { s, sent, log, logs, appended };
+    return { s, sent, log, logs, appended, busy: () => busy };
   }
+
+  test("the dictation key read while the ended session's audio drains flashes the pill (DC-A4)", async () => {
+    const { s, sent, log, busy } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet());
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    // The helper refused the press (its session ended); the app reads it before the drain is over.
+    s.onMessage({ type: "key", name: RC });
+    expect(busy()).toBe(1);
+    await until(() => sent.some((c) => c.type === "insert"), 2000, "the insert");
+    expect(log.items()).toHaveLength(1);
+  });
+
+  test("positive control: the same press once the drain is over, while it transcribes, flashes once", async () => {
+    const { s, busy } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet());
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => s.state === "transcribing" || s.state === "inserting", 2000, "the decode");
+    s.onMessage({ type: "key", name: RC });
+    expect(busy()).toBe(1);
+  });
 
   test("Enter after the text went to the helper, before its receipt, still sends (DC-A4)", async () => {
     const { s, sent, logs } = session();
