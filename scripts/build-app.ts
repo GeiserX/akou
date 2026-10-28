@@ -21,7 +21,7 @@
  *    to `dist/release/akou-<version>-macos-arm64.{dmg,zip}`, the update feed Hutch makes
  *    (`stable-macos-arm64-update.json` and the bundle it names) beside them, under its own names,
  *    and the diarization helper alone to `dist/release/akou-diarize-<version>-darwin-arm64.tar.gz`,
- *    for a source checkout.
+ *    for a source checkout, signed like the CLI and notarized with a Developer ID (`diarizeSteps`).
  *
  * Nothing here opens the app. `scripts/smoke-app.ts` checks what was built.
  */
@@ -37,11 +37,11 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { BUILT, cliBuildPath } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
-import { compileCli, hostTarget } from "./build-cli.ts";
+import { compileCli, developerId, helperSignArgs, hostTarget, notarizeCli } from "./build-cli.ts";
 import { bundleName, checkDir, MANIFEST } from "./check-feed.ts";
 import { drift, sourceVersion } from "./stamp-version.ts";
 
@@ -116,6 +116,27 @@ export function setupName(version: string, hutchName: string): string {
 /** The release file holding the diarization helper alone. */
 export function diarizeArchive(version: string): string {
   return `akou-diarize-${version}-darwin-arm64.tar.gz`;
+}
+
+/**
+ * The commands that make the diarization helper's release archive from `bin`, a copy of the built
+ * helper: sign it the way the CLI is signed (`helperSignArgs`: with a Developer ID, the hardened
+ * runtime and a timestamp), verify the signature, then, after notarization when signed, pack it
+ * alone at the archive's top. Cargo leaves only the linker's ad-hoc signature, which Gatekeeper
+ * refuses on a binary downloaded in a browser (#448); Hutch signs only the app's own copy.
+ */
+export function diarizeSteps(
+  bin: string,
+  tgz: string,
+  env: Record<string, string | undefined> = process.env,
+): { sign: string[][]; pack: string[] } {
+  return {
+    sign: [
+      ["/usr/bin/codesign", ...helperSignArgs(env), bin],
+      ["/usr/bin/codesign", "--verify", "--strict", bin],
+    ],
+    pack: ["tar", "-czf", tgz, "-C", dirname(bin), basename(bin)],
+  };
 }
 
 /** `PAIRED_HUTCH_VERSION` in the installed `electrobun` npm bootstrap, or null. */
@@ -314,15 +335,21 @@ async function main(argv: string[]): Promise<void> {
   copyFileSync(feedManifest, join(RELEASE_DIR, MANIFEST));
   copyFileSync(join(ROOT, "artifacts", bundle), join(RELEASE_DIR, bundle));
   // The diarization helper on its own, the binary at the archive's top: a server run from a source
-  // checkout has no app to carry it (akou-5an.110). No AppleDouble files beside it.
+  // checkout has no app to carry it (akou-5an.110). Signed and notarized like the CLI (#448). No
+  // AppleDouble files beside it.
   const helper = join(ROOT, "native", "akou-diarize", "target", "release", "akou-diarize");
   if (existsSync(helper)) {
+    const stage = join(ROOT, "dist", "diarize");
+    rmSync(stage, { recursive: true, force: true });
+    mkdirSync(stage, { recursive: true });
+    const bin = join(stage, "akou-diarize");
+    copyFileSync(helper, bin);
     const tgz = join(RELEASE_DIR, diarizeArchive(version));
     rmSync(tgz, { force: true });
-    run(["tar", "-czf", tgz, "-C", dirname(helper), "akou-diarize"], {
-      ...process.env,
-      COPYFILE_DISABLE: "1",
-    });
+    const steps = diarizeSteps(bin, tgz);
+    for (const cmd of steps.sign) run(cmd);
+    if (developerId() !== null) notarizeCli(bin, process.env, "the diarization helper");
+    run(steps.pack, { ...process.env, COPYFILE_DISABLE: "1" });
   }
   const id = hutchEnv(process.env).ELECTROBUN_DEVELOPER_ID;
   const signed = id === "-" ? "ad-hoc signed, not notarized" : `signed by ${id}`;
