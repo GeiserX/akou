@@ -39,6 +39,7 @@ import { TRANSLATE_LANGUAGES } from "../../asr/transcribe-cpp.ts";
 import type { QueueStats } from "../../server/jobs.ts";
 import { hardwareChoice, type ModelChoice } from "../../server/model-store.ts";
 import { PRESET_NAMES, PRESETS } from "../../server/presets.ts";
+import { FORWARDED_HEADER } from "../../server/remotes.ts";
 import { SCOPES } from "../access.ts";
 import { caller } from "../caller.ts";
 import { json, type Router } from "../http.ts";
@@ -84,7 +85,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, and the live recognizer did not fail to load it, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, and the live recognizer did not fail to load it, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes. On a server with no speech engine (the single-file CLI) it is 503 while no up remote it forwards jobs to takes a job that names no model, with `reason` saying where one is.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -92,6 +93,20 @@ export function rootRoutes(r: Router<ApiApp>): void {
     (c) => {
       const state = modelState(c.app);
       const queue = queueOf(c.app);
+      // No speech engine here (#436): ready only while an up remote takes the job a request with
+      // no model sends, the verdict the job route refuses by, so a load balancer sends no work
+      // this server would refuse.
+      const none = c.app.noEngine?.() ?? null;
+      if (none && !jobModelsReady(c.app, state)) {
+        return json(503, {
+          ok: false,
+          version: c.app.version,
+          models_ready: false,
+          reason: none,
+          queue_depth: c.app.queueDepth?.() ?? 0,
+          queue,
+        });
+      }
       // A job stuck at running (#407) is a server that takes jobs and ends none.
       const ok = !state.loading && (queue?.stalled ?? 0) === 0;
       return json(ok ? 200 : 503, {
@@ -123,17 +138,26 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const accel = c.app.accelerator?.() ?? null;
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
-      // Section 14: a preset a remote offers is available here too, since a job for it runs there.
+      // Section 14: a preset a remote offers is available here too, since a job for it runs there;
+      // not to another akou's probe, whose forwarded job would never be forwarded again.
       const jobs = c.app.jobs?.();
       const remotes = jobs?.remotes;
       // The desktop app dictates through its own engine, not a lane of the job queue.
       const dictation = c.app.mode?.() === "server" ? (jobs?.dictationStats() ?? null) : null;
       // The live door: the streaming models a `hello` can name, once the route exists.
       const live = has("GET", "/live") ? (c.app.live?.() ?? null) : null;
-      const liveEngines = live?.enginesOnDisk() ?? [];
+      // No speech engine here (#436): nothing runs locally, so only what a remote offers is listed.
+      const none = c.app.noEngine?.() ?? null;
+      // Another akou's probe (#436): a job it forwards is never forwarded again, so with no engine
+      // this server takes none of them and offers that probe nothing, and with one it offers that
+      // probe only what it runs itself, never what its own remotes offer.
+      const probe = c.req.headers.get(FORWARDED_HEADER) !== null;
+      const relays = !none || !probe;
+      const forwards = relays && (remotes?.configured() ?? false);
+      const liveEngines = none ? [] : (live?.enginesOnDisk() ?? []);
       const offered = (name: string): boolean => {
         const p = PRESETS.find((x) => x.name === name);
-        return !!p?.built && (c.app.presetAvailable?.(p.name) ?? ready);
+        return relays && !!p?.built && (c.app.presetAvailable?.(p.name) ?? ready);
       };
       // SV-K1: `auto` runs what a request naming nothing runs (SERVER.md 12.1), so it is available
       // when that is, and says what it is; null when `server.default_model` refuses every job.
@@ -149,7 +173,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
         auto !== null &&
         ((PRESET_NAMES as readonly string[]).includes(auto.preset)
           ? offered(auto.preset)
-          : (jobs?.obtainable(auto.model) ?? false));
+          : relays && (jobs?.obtainable(auto.model) ?? false));
       return json(200, {
         name: "akou",
         version: c.app.version,
@@ -162,7 +186,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
             name: p.name,
             available:
               (p.name === "auto" ? autoAvailable : offered(p.name)) ||
-              (remotes?.offered([p.name]) ?? false),
+              (!probe && (remotes?.offered([p.name]) ?? false)),
             engines: fused ? fused.engines : p.engines,
             diarizer: p.diarizer,
             fusion: fused ? fused.fuser : p.fusion,
@@ -207,12 +231,12 @@ export function serverRoutes(r: Router<ApiApp>): void {
         live: live ? { engines: liveEngines } : null,
         capabilities: {
           // In both modes: the desktop app takes file jobs with its one token (SV-J1).
-          jobs: has("POST", "/jobs"),
+          jobs: has("POST", "/jobs") && (!none || forwards),
           // Signed deliveries per key (SV-E2) come with the job route's `callback_url`, and only a
           // key has a secret to sign with: none in the desktop app, which has no key routes.
           webhooks: has("POST", "/jobs") && has("POST", "/keys"),
           events: has("GET", "/events"),
-          openai: has("POST", "/audio/transcriptions"),
+          openai: has("POST", "/audio/transcriptions") && (!none || forwards),
           // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.
           interactive: has("POST", "/audio/transcriptions") && (dictation?.slots ?? 0) > 0,
           // A job's `languages[]` bounds its `auto` language (`bound_languages` are the codes).
@@ -224,12 +248,12 @@ export function serverRoutes(r: Router<ApiApp>): void {
           // SV-C3: Bazarr's open routes answer only while `server.bazarr` is on.
           bazarr: has("POST", "/asr") && c.app.config().settings["server.bazarr"] === true,
           // A job's `task=translate` decodes into English (`translate_languages` are the sources).
-          translate: has("POST", "/jobs"),
+          translate: has("POST", "/jobs") && !none,
         },
         // The ISO codes a job's `languages[]` may name: the ones the language-choosing engine has.
         bound_languages: has("POST", "/jobs") ? BOUND_LANGUAGES : [],
         // The ISO codes a translate job's `language` may name: the ones Canary or Whisper reads.
-        translate_languages: has("POST", "/jobs") ? TRANSLATE_LANGUAGES : [],
+        translate_languages: has("POST", "/jobs") && !none ? TRANSLATE_LANGUAGES : [],
         // SV-C2: the port Home Assistant's Wyoming integration connects to, null while it is off.
         wyoming_port: c.app.wyomingPort?.() ?? null,
         // SV-C4: where this API's description is, once the route serving it exists.

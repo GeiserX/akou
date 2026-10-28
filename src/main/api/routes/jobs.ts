@@ -153,7 +153,7 @@ export function chooseModel(
 ): ModelChoice {
   try {
     const choice = jobs.choose(ask, unknownIsAuto);
-    jobs.admit(choice.model, job);
+    jobs.admit(choice.model, job, choice.preset);
     return choice;
   } catch (err) {
     if (err instanceof ModelRefused) {
@@ -320,6 +320,10 @@ export function booleanOf(form: Form, name: string): boolean | null {
  * refusal waits for the body: `JobService.submit` makes the same check in its transaction.
  */
 export function requireRoomUnlessLane(jobs: JobService, key: string, idem: string | null): void {
+  // A server with no speech engine refuses before the upload too (#436), unless it has remotes to
+  // send the job to: then the model check after the fields decides.
+  const none = jobs.noEngine();
+  if (none && !jobs.remotes.configured()) throw new HttpError(503, "no_engine", none);
   if (!jobs.interactive(true)) requireQueueRoom(jobs, key, idem);
 }
 
@@ -426,6 +430,12 @@ async function submit(c: RoutedContext<ApiApp>): Promise<Response> {
   }
   // A full queue answers before the upload is read: a client pacing itself sends no bytes twice.
   // With a dictation lane, only after it, since the body says whether the lane takes it (DC-R2).
+  // A forwarded job runs here or not at all, and with no engine it cannot run here (#436). A 4xx,
+  // not a 503: the primary reads a 5xx as this server down, probes it up again and resends the
+  // job forever; a 422 is a refusal, so it fails a job only a remote can run, or runs it itself.
+  const none = jobs.noEngine();
+  if (none && c.req.headers.get(FORWARDED_HEADER) !== null)
+    throw new HttpError(422, "no_engine", none);
   requireRoomUnlessLane(jobs, who.id, idem);
   const form = await formOf(c, jobs.uploadDir);
   // The job owns its file once submitted; every other file, and this one on a refusal, is deleted.
@@ -619,10 +629,12 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "callback_not_allowed",
           "idempotency_conflict",
           "missing_field",
+          "no_engine",
           "unknown_model",
           "unsupported_language",
         ],
         429: ["queue_full"],
+        503: ["no_engine"],
       },
     },
     submit,

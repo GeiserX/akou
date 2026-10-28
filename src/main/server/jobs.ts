@@ -56,6 +56,7 @@ import {
   type Held,
   hardwareChoice,
   type ModelChoice,
+  ModelRefused,
   type ModelSource,
   type ModelStore,
   resolveModel,
@@ -234,6 +235,8 @@ export interface JobServiceOptions {
    * memory is free again once the queue is empty.
    */
   keepIdleWorkers?(): boolean;
+  /** Why this server has no speech engine (#436): every job is refused with `no_engine`. */
+  noEngine?(): string | null;
   /**
    * The owner's own models, in place of the default model's set: the desktop app's (its
    * recognizer, its final pass, dictation), whose `defaults` are what its settings name, so a job
@@ -510,6 +513,7 @@ export class JobService {
       fetch: o.remoteFetch,
       probeMs: o.remoteProbeMs,
       onChange: () => {
+        this.failStranded();
         this.dispatch();
         this.pump();
       },
@@ -565,6 +569,7 @@ export class JobService {
       orphans++;
     }
     if (orphans > 0) this.o.log("info", `jobs: ${orphans} upload(s) no job names were deleted`);
+    this.failStranded();
     this.sweep();
     // clock: retention runs hourly; each run reads the store's own times.
     this.retention = setInterval(() => this.sweep(), RETENTION_SWEEP_MS);
@@ -587,6 +592,8 @@ export class JobService {
 
   /** `server.dictation_slots`, bounded: the Workers of the dictation lane (DC-R2). */
   private laneSize(): number {
+    // No engine here (#436): no lane Worker can run, so a dictation queues for a remote.
+    if (this.noEngine()) return 0;
     const n = Math.floor(this.o.dictationSlots?.() ?? 0);
     return Number.isFinite(n) ? Math.min(MAX_DICTATION_SLOTS, Math.max(0, n)) : 0;
   }
@@ -756,8 +763,9 @@ export class JobService {
    * remote entry that names it first (while it is full only with `server.remotes_overflow` off,
    * since overflow runs the job here), or, for a default this server cannot run or fetch, any up
    * remote that offers it. False when `server.default_model` refuses every job and no remote
-   * takes it. `broken` is a recognizer that cannot load here (the live recognizer's, after its load
-   * failed): its files on disk do not count, and only a remote can take a job on it.
+   * takes it. With no engine here (#436) files on this disk count for nothing: only an up remote
+   * that offers it. `broken` is a recognizer that cannot load here (the live recognizer's, after
+   * its load failed): its files on disk do not count, and only a remote can take a job on it.
    */
   defaultOnDisk(diarize: boolean, broken: string | null = null): boolean {
     let choice: ModelChoice | null;
@@ -766,7 +774,10 @@ export class JobService {
     } catch {
       choice = null;
     }
+    // No engine here (#436): files on this disk run nothing, so only a remote can take the job.
+    const none = this.noEngine() !== null;
     if (
+      !none &&
       choice &&
       choice.model !== broken &&
       this.o.shelf.missing(this.o.shelf.needs(choice.model, { diarize })).length === 0
@@ -777,14 +788,19 @@ export class JobService {
     const takes = (url: string | null) => url !== null && url !== "pending";
     if (choice) {
       const names = [choice.preset, choice.model].filter((n) => n !== "custom" && n !== "auto");
-      // Unless overflow runs it here while that remote is full (routeOf): then it needs this disk.
-      const listed = this.remotes.pick(names, true);
-      if (listed === "busy" ? !(this.o.remotesOverflow?.() ?? false) : takes(listed)) return true;
-      // A default this server may fetch is accepted here and waits for its download.
-      try {
-        this.admit(choice.model, { diarize });
-        return false;
-      } catch {}
+      if (none) {
+        // Any up remote that offers it, as routeOf sends it; a full one takes it once it has room.
+        if (this.remotes.pick(names, false) !== null) return true;
+      } else {
+        // Unless overflow runs it here while that remote is full (routeOf): then it needs this disk.
+        const listed = this.remotes.pick(names, true);
+        if (listed === "busy" ? !(this.o.remotesOverflow?.() ?? false) : takes(listed)) return true;
+        // A default this server may fetch is accepted here and waits for its download.
+        try {
+          this.admit(choice.model, { diarize });
+          return false;
+        } catch {}
+      }
     }
     // What the job route sends to a remote when this server cannot run or fetch the default.
     const remote = this.remoteChoice({});
@@ -805,8 +821,19 @@ export class JobService {
    * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept. Given the `job`,
    * only the models it runs count: no live-only model, the speaker models only with diarize.
    */
-  admit(model: string, job?: { diarize: boolean }): void {
+  admit(model: string, job?: { diarize: boolean }, preset?: string): void {
+    const none = this.noEngine();
+    if (none) {
+      // A forwarding front end (#436): a job a remote has offered is taken and runs there.
+      if (this.remotes.offered(preset ? [preset, model] : [model])) return;
+      throw new ModelRefused(503, "no_engine", none);
+    }
     this.o.shelf.admit(this.o.shelf.needs(model, job));
+  }
+
+  /** Why this server has no speech engine (#436), or null when it has one. */
+  noEngine(): string | null {
+    return this.o.noEngine?.() ?? null;
   }
 
   private modelOf(j: Job): string {
@@ -916,9 +943,20 @@ export class JobService {
   ): { job: Job; existing: boolean } | { conflict: Job; fields: string[] } | { full: QueueFull } {
     // A dictation takes the lane when there is one: no queue limit, never a remote (DC-R2).
     const lane = this.interactive(j.interactive === true);
+    // With no engine (#436) a job runs on a remote or not at all: it waits for one, never runs here.
+    // A preset a remote offers is asked for by that name, as `remoteChoice` does: the engine id it
+    // resolved to here may be one no remote lists (fusion, or a Qwen not downloaded there yet).
+    const byPreset =
+      (PRESET_NAMES as readonly string[]).includes(j.preset) && this.remotes.offered([j.preset]);
     const row: NewJob = lane
       ? { ...j, interactive: true, route: "local" }
-      : { ...j, interactive: false };
+      : {
+          ...j,
+          interactive: false,
+          ...(this.noEngine()
+            ? { route: "remote" as const, ...(byPreset ? { model: null } : {}) }
+            : {}),
+        };
     const r = this.store.db.transaction(() => {
       const full = lane ? null : this.queueFull(j.key_id, j.idempotency_key);
       return full ? { full } : this.store.submit(row);
@@ -1601,19 +1639,44 @@ export class JobService {
    * names also runs here while every remote that would take it is busy, instead of waiting.
    */
   private routeOf(j: Job): Route {
+    // No engine here (#436): a job never runs here, whatever route it was stored with; one that
+    // cannot go to a remote is ended by `failStranded`, the rest wait for a remote.
+    const none = this.noEngine() !== null;
+    if (none && (j.route === "local" || !this.remotes.configured())) return { where: "wait" };
     if (j.route === "local" || !this.remotes.configured()) return { where: "local" };
+    const route = none ? "remote" : j.route;
     const names = this.namesOf(j);
     // Back to the remote that already has it, so a returning remote's copy is followed, not redone.
     if (j.remote && this.remotes.up(j.remote, names)) return { where: "remote", url: j.remote };
-    const url = this.remotes.pick(names, j.route !== "remote");
+    const url = this.remotes.pick(names, route !== "remote");
     if (url === "busy" || url === "pending")
-      return overflowRoute(j.route, this.o.remotesOverflow?.() ?? false, url);
+      return overflowRoute(route, this.o.remotesOverflow?.() ?? false, url);
     if (url !== null) return { where: "remote", url };
-    return j.route === "remote" ? { where: "wait" } : { where: "local" };
+    return route === "remote" ? { where: "wait" } : { where: "local" };
+  }
+
+  /**
+   * With no engine here (#436), ends every queued job that can never run: one stored to run here
+   * (a dictation, or a job a primary forwarded), every job while no remote is set, and, once every
+   * remote has been probed, one that could have run on that engine (route null) that no remote has
+   * offered. They were queued by a server that had an engine, on the same home.
+   */
+  private failStranded(): void {
+    const none = this.noEngine();
+    if (!none) return;
+    const remotes = this.remotes.configured();
+    const settled = remotes && this.remotes.settled();
+    for (const j of this.store.queued()) {
+      if (remotes && j.route === "remote") continue;
+      if (remotes && j.route === null && !(settled && !this.remotes.offered(this.namesOf(j))))
+        continue;
+      this.conclude(j, { status: "failed", error: { code: "no_engine", message: none } });
+    }
   }
 
   /** A setting that changes where a queued job runs was saved: route the queue again now. */
   reroute(): void {
+    this.failStranded();
     this.dispatch();
     this.pump();
   }
@@ -1718,7 +1781,8 @@ export class JobService {
           // The remote no longer offers it: asked again after its next probe.
           this.heldUntil.set(job.id, performance.now() + (this.o.remoteProbeMs ?? 30_000));
           void this.remotes.probeAll();
-        } else if (job.route === "remote") {
+        } else if (job.route === "remote" || this.noEngine()) {
+          // With no engine here (#436) a refused job has nowhere else to run either.
           this.conclude(job, {
             status: "failed",
             error: { code: e.code ?? "remote_refused", message: e.message },

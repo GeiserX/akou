@@ -76,6 +76,8 @@ export const ERROR_CODES = {
   no_draft_box: "The draft box needs the desktop window.",
   no_lan: "No private LAN address on this machine.",
   no_live_call: "Nothing is recording, so `live` names no call; `last` names the latest.",
+  no_engine:
+    "This server carries no speech engine (the single-file CLI); the message names the image or the checkout that has one.",
   no_live_engine: "No streaming model can run the live words here; the message says why.",
   no_remote: "No remote dictation server is set.",
   no_tailnet: "This machine is not on a tailnet.",

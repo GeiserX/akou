@@ -20,9 +20,12 @@ export function liveRoutes(r: Router<ApiApp>): void {
       modes: ["server"],
       upgrade: "websocket",
       ok: 101,
-      errors: { 426: ["upgrade_required"], 503: ["no_live_engine"] },
+      errors: { 426: ["upgrade_required"], 503: ["no_engine", "no_live_engine"] },
     },
     (c) => {
+      // No speech engine in this process (#436): refused before the upgrade, naming where one is.
+      const none = c.app.noEngine?.() ?? null;
+      if (none) throw new HttpError(503, "no_engine", none);
       const live = c.app.live?.() ?? null;
       if (!live) {
         throw new HttpError(503, "no_live_engine", "this server has no recognizer for live words");

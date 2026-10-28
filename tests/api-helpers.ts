@@ -109,6 +109,8 @@ export interface RigOptions {
    * recognizer and no stand-in for the accelerator probe. Only model-gated tests set it.
    */
   realModels?: boolean;
+  /** The single-file CLI's server: no speech engine, with this reason (#436). */
+  noEngine?: string;
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -183,6 +185,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.quitStepMs ? { quitStepMs: o.quitStepMs } : {}),
     ...(o.bundle !== undefined ? { bundle: o.bundle } : {}),
     ...(o.interfaces ? { interfaces: o.interfaces } : {}),
+    ...(o.noEngine ? { noEngine: o.noEngine } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

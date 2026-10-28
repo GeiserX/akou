@@ -312,7 +312,12 @@ export class Remotes {
 
   /** What a remote offers, from its two probe requests; throws the `RemoteError` it answers with. */
   private async ask(r: Remote): Promise<Offer> {
-    const s = await this.request(r, "/server", { keyed: false });
+    // Marked as a probe from another akou: a server with no engine (#436) offers it nothing, since
+    // a job sent on would be forwarded again.
+    const s = await this.request(r, "/server", {
+      keyed: false,
+      headers: { [FORWARDED_HEADER]: "1" },
+    });
     if (s.status !== 200 || s.body?.name !== "akou" || s.body?.capabilities?.jobs !== true) {
       throw new RemoteError(
         "down",
@@ -359,6 +364,11 @@ export class Remotes {
       version: r.version,
       checked_at: r.checkedAt === null ? null : new Date(r.checkedAt).toISOString(),
     }));
+  }
+
+  /** Has every remote answered a probe, or failed one, since start? */
+  settled(): boolean {
+    return this.current().every((r) => r.state !== "unknown");
   }
 
   /** Has a remote offered one of these names since start? Then a job for it may be accepted. */

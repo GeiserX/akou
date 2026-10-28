@@ -230,6 +230,8 @@ export interface ApiApp {
    * while it is still loading them, or after it failed to. Absent: ready once the files are.
    */
   recognizer?(): "loading" | "ready" | "unavailable";
+  /** Why this server has no speech engine (#436), or null when it has one. */
+  noEngine?(): string | null;
   /**
    * The live recognizer tried to load its model (`RECOGNIZER`) and failed, so a job on that model
    * would fail the same way; false while it waits for the files, loads, or runs. Absent: false.

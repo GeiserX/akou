@@ -91,9 +91,13 @@ export const transcribeCommand: Command = {
     const priority = str(p, "priority");
     if (priority !== undefined) form.append("priority", priority);
     // An akou with no job routes (one older than file jobs in the desktop app, or one whose job
-    // queue did not start) says so on `GET /v1/server`, before any upload.
+    // queue did not start) says so on `GET /v1/server`, before any upload. One that has the route
+    // but takes no job (#436: the single-file CLI's server, with no engine and no remote) gets the
+    // upload anyway, so its own refusal (`no_engine` and where to run one) is what is printed.
+    // `languages_bound` is true exactly where the job route exists.
     const server = await api(ctx, "GET", "/server");
-    if (server.body?.capabilities?.jobs !== true) {
+    const caps = server.body?.capabilities;
+    if (caps?.jobs !== true && caps?.languages_bound !== true) {
       const message = ctx.io.env.AKOU_URL?.trim()
         ? "the akou at AKOU_URL takes no file jobs"
         : "the akou on this machine takes no file jobs: update it, or set AKOU_URL to an akou server (`akou help transcribe`)";

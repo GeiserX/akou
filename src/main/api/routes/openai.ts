@@ -566,6 +566,7 @@ const OPENAI_ERRORS: RouteDoc["errors"] = {
   422: ["bad_field", "decode_failed", "missing_field", "too_long", "unsupported_language"],
   429: ["queue_full"],
   499: ["cancelled"],
+  503: ["no_engine"],
   500: [
     "diarize_unavailable",
     "engine_unavailable",

@@ -469,6 +469,12 @@ export interface AppOptions {
   /** How often the in-call upgrade reviews a call's closed utterances, ms. Tests only. */
   liveReviewEveryMs?: number;
   version?: string;
+  /**
+   * This process carries no speech engine, and why: the single-file CLI's `akou serve` (#436). The
+   * live recognizer never starts, `/healthz` is 503 with the reason, and a job or a live session is
+   * refused at once with `no_engine`.
+   */
+  noEngine?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /**
    * Write `app.log` in the config folder and run the watchdog (DK-M8). The two entry points set
@@ -1334,6 +1340,10 @@ export class AkouApp implements ApiApp {
    * `recognizerOnNewModels` starts it when they arrive.
    */
   private startAsr(s: Settings): void {
+    if (this.o.noEngine) {
+      this.asrState = { state: "unavailable", reason: this.o.noEngine };
+      return;
+    }
     const waits = this.o.models === undefined || this.o.modelRegistry !== undefined;
     this.asrAwaitingModels = waits && !modelsPresent(s["asr.modelsDir"], this.registry());
     if (this.asrAwaitingModels) {
@@ -2708,6 +2718,8 @@ export class AkouApp implements ApiApp {
     const c = this.manager.controller(id);
     if (!c || c.live) return { why: "the call is not ended" };
     if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
+    // No speech engine in this process (#436): a final-pass Worker could only fail.
+    if (this.o.noEngine) return { why: this.o.noEngine, unavailable: true };
     const parts = c.view.parts().map((p) => p.part);
     const audio = this.finalAudio({ id, dir: c.dir, parts });
     if (!audio)
@@ -3374,11 +3386,16 @@ export class AkouApp implements ApiApp {
   /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
   engines(): { id: string; provider: string; installed: boolean }[] {
     const dir = this.cfg.settings["asr.modelsDir"];
+    // No speech engine in this process (#436): files on disk run nothing here.
     const onDisk = (m: ModelSpecEntry | undefined) =>
-      !!m && m.files.every((f) => existsSync(modelFile(dir, m.id, f.name)));
+      !this.o.noEngine && !!m && m.files.every((f) => existsSync(modelFile(dir, m.id, f.name)));
     const qwen = MODELS.find((m) => m.runtime === "llama-server" && m.serves.includes("final"));
     return [
-      { id: RECOGNIZER, provider: "cpu", installed: this.models().state === "ready" },
+      {
+        id: RECOGNIZER,
+        provider: "cpu",
+        installed: !this.o.noEngine && this.models().state === "ready",
+      },
       ...(qwen
         ? [{ id: qwen.id, provider: this.llamaPlan().provider, installed: onDisk(qwen) }]
         : []),
@@ -4097,6 +4114,7 @@ export class AkouApp implements ApiApp {
         dictationSlots: () => (server ? s()["server.dictation_slots"] : 0),
         dictationEngine: () => s()["server.dictation_engine"],
         keepIdleWorkers: () => server,
+        noEngine: () => this.noEngine(),
         ...(server ? {} : { ownerHeld: () => this.appHeld() }),
         ...(server
           ? {}
@@ -4125,6 +4143,11 @@ export class AkouApp implements ApiApp {
       this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
       this.modelSweep.unref?.();
     }
+  }
+
+  /** Why this process has no speech engine (#436), or null when it has one. */
+  noEngine(): string | null {
+    return this.o.noEngine ?? null;
   }
 
   recognizer(): "loading" | "ready" | "unavailable" {

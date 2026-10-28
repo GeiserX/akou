@@ -119,7 +119,7 @@ export interface ModelChoice {
 export class ModelRefused extends Error {
   override name = "ModelRefused";
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 404 | 409 | 422 | 503,
     readonly code: string,
     message: string,
     readonly details: Record<string, unknown> = {},
