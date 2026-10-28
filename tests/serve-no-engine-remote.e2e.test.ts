@@ -234,8 +234,15 @@ describe("[#436] a no-engine front end with the files on its disk is ready only 
     });
     const up = await remoteState(front, "up");
     expect(up.presets).toEqual([]);
+    // Not ready by its status code, which is what a load balancer reads: the job below is refused.
     const health = await fetch(`http://127.0.0.1:${front.port}/healthz`);
-    expect(((await health.json()) as Body).models_ready).toBe(false);
+    const hb = (await health.json()) as Body;
+    expect([health.status, hb.ok, hb.models_ready, hb.reason]).toEqual([
+      503,
+      false,
+      false,
+      NO_ENGINE_REASON,
+    ]);
     const refused = await submit(front, { language: "en" });
     expect([refused.status, refused.body.error]).toEqual([503, "no_engine"]);
     // Positive control: the same front end with a remote that offers fast is ready.
@@ -311,7 +318,7 @@ describe("[#436] a no-engine front end forwards a job a remote offers by preset 
 });
 
 describe("[#436] a primary pointed at a no-engine front end", () => {
-  test("a job only a remote can run ends failed with no_engine, never queued forever", async () => {
+  test("sees it down and runs a job only a remote can run on its next remote; a probe without the header still sees it offer fast", async () => {
     const wport = freePort();
     const worker = await server({ installed: true, port: wport });
     const fport = freePort();
@@ -323,21 +330,31 @@ describe("[#436] a primary pointed at a no-engine front end", () => {
       remotes: [entry(fdir, worker, wport)],
     });
     await remoteState(front, "up");
+    // Positive control: to a client that is not another akou, the front end offers what its
+    // remote offers; the header is what makes the difference.
+    const plain = (await get(front, "/v1/server")).body;
+    expect(plain.capabilities.jobs).toBe(true);
+    expect(plain.presets.find((p: Body) => p.name === "fast").available).toBe(true);
+    // The front end first, the engine server second: the primary must skip the front end, which
+    // refuses every forwarded job.
     const pdir = tempDir("akou-primary-").dir;
-    const primary = await server({ installed: false, remotes: [entry(pdir, front, fport)] });
-    // The front end offers what its own remote offers, so the primary sends the job there.
-    await remoteState(primary, "up");
+    const primary = await server({
+      installed: false,
+      remotes: [entry(pdir, front, fport), entry(pdir, worker, wport)],
+    });
+    await until(
+      async () => {
+        const rs: Body[] = (await get(primary, "/v1/server")).body.remotes;
+        return rs[0]?.state === "down" && rs[1]?.state === "up";
+      },
+      10_000,
+      "the primary to see the front end down and the engine server up",
+    );
     const r = await submit(primary, { preset: "fast", language: "en" });
     expect([r.status, r.body]).toEqual([202, r.body]);
-    // A 5xx refusal made the primary mark the front end down, probe it up and resend for ever.
-    const end = await get(primary, `/v1/jobs/${r.body.id}?wait=15`);
-    expect(end.body).toMatchObject({
-      id: r.body.id,
-      status: "failed",
-      error: { code: "no_engine" },
-    });
-    // The front end is still up for the primary: a refusal is not an outage.
-    expect((await get(primary, "/v1/server")).body.remotes[0].state).toBe("up");
+    const end = await get(primary, `/v1/jobs/${r.body.id}?wait=30`);
+    expect(end.body).toMatchObject({ id: r.body.id, status: "done" });
+    expect((await get(primary, `/v1/jobs/${r.body.id}/result`)).body.text).toBe("hello world");
   });
 });
 
