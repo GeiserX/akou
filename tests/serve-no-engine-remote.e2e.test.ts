@@ -215,3 +215,60 @@ describe("[#436] a no-engine server with remotes forwards every job", () => {
     expect((await fetch(`http://127.0.0.1:${alone.port}/healthz`)).status).toBe(503);
   });
 });
+
+/**
+ * `worker` behind a proxy whose `GET /v1/server` lists no engine as installed, so it offers its
+ * presets only: a remote that lists `best` as available while its Qwen is not downloaded yet.
+ */
+function presetsOnly(worker: Server): { port: number; stop(): void } {
+  const base = `http://127.0.0.1:${worker.port}`;
+  const s = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      const headers = new Headers();
+      for (const h of ["authorization", "content-type", "accept"]) {
+        const v = req.headers.get(h);
+        if (v) headers.set(h, v);
+      }
+      const res = await fetch(`${base}${url.pathname}${url.search}`, {
+        method: req.method,
+        headers,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
+      });
+      const type = { "content-type": res.headers.get("content-type") ?? "application/json" };
+      if (url.pathname !== "/v1/server") {
+        return new Response(await res.arrayBuffer(), { status: res.status, headers: type });
+      }
+      const body: Body = await res.json();
+      for (const e of body.engines ?? []) e.installed = false;
+      return Response.json(body, { status: res.status });
+    },
+  });
+  return { port: s.port as number, stop: () => s.stop(true) };
+}
+
+describe("[#436] a no-engine front end forwards a job a remote offers by preset name only", () => {
+  test("preset=fast to a remote that lists fast but no installed engine comes back done", async () => {
+    const worker = await server({ installed: true, port: freePort() });
+    const proxy = presetsOnly(worker);
+    try {
+      const fdir = tempDir("akou-front-").dir;
+      const front = await server({
+        installed: false,
+        noEngine: true,
+        remotes: [entry(fdir, worker, proxy.port)],
+      });
+      const up = await remoteState(front, "up");
+      expect(up.presets).toEqual(expect.arrayContaining(["fast"]));
+      const r = await submit(front, { preset: "fast", language: "en" });
+      expect([r.status, r.body]).toEqual([202, r.body]);
+      const done = await get(front, `/v1/jobs/${r.body.id}?wait=30`);
+      expect(done.body).toMatchObject({ id: r.body.id, status: "done" });
+      expect((await get(front, `/v1/jobs/${r.body.id}/result`)).body.text).toBe("hello world");
+    } finally {
+      proxy.stop();
+    }
+  });
+});

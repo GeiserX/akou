@@ -891,9 +891,19 @@ export class JobService {
     // A dictation takes the lane when there is one: no queue limit, never a remote (DC-R2).
     const lane = this.interactive(j.interactive === true);
     // With no engine (#436) a job runs on a remote or not at all: it waits for one, never runs here.
+    // A preset a remote offers is asked for by that name, as `remoteChoice` does: the engine id it
+    // resolved to here may be one no remote lists (fusion, or a Qwen not downloaded there yet).
+    const byPreset =
+      (PRESET_NAMES as readonly string[]).includes(j.preset) && this.remotes.offered([j.preset]);
     const row: NewJob = lane
       ? { ...j, interactive: true, route: "local" }
-      : { ...j, interactive: false, ...(this.noEngine() ? { route: "remote" as const } : {}) };
+      : {
+          ...j,
+          interactive: false,
+          ...(this.noEngine()
+            ? { route: "remote" as const, ...(byPreset ? { model: null } : {}) }
+            : {}),
+        };
     const r = this.store.db.transaction(() => {
       const full = lane ? null : this.queueFull(j.key_id, j.idempotency_key);
       return full ? { full } : this.store.submit(row);
