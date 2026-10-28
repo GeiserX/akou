@@ -155,7 +155,11 @@ for (const noEngine of [false, true]) {
   describe(`[#470] ${kind}: auto is available by what it resolves to here, not by the remote's auto`, () => {
     test("auto is best here, the remote offers fast and its own auto: auto is not available, and a job with no model is refused", async () => {
       const remote = fakeRemote(true);
-      const p = await primary({ noEngine, defaultModel: "best", remotePort: remote.srv.port as number });
+      const p = await primary({
+        noEngine,
+        defaultModel: "best",
+        remotePort: remote.srv.port as number,
+      });
       try {
         await until(
           async () => (await serverInfo(p)).remotes?.[0]?.state === "up",
@@ -177,7 +181,11 @@ for (const noEngine of [false, true]) {
 
     test("auto is fast here, the remote offers fast but not its own auto: auto is available, and a job with no model goes to the remote", async () => {
       const remote = fakeRemote(false);
-      const p = await primary({ noEngine, defaultModel: "fast", remotePort: remote.srv.port as number });
+      const p = await primary({
+        noEngine,
+        defaultModel: "fast",
+        remotePort: remote.srv.port as number,
+      });
       try {
         await until(
           async () => (await serverInfo(p)).remotes?.[0]?.state === "up",
