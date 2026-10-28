@@ -108,9 +108,9 @@ describe("SV-Q5: queueEta", () => {
   });
 
   test("empty is 0; with no job ended there is no ETA", () => {
-    expect(
-      queueEta({ running: [], queued: 0, concurrency: 1, meanS: null, perAudioS: null }),
-    ).toBe(0);
+    expect(queueEta({ running: [], queued: 0, concurrency: 1, meanS: null, perAudioS: null })).toBe(
+      0,
+    );
     expect(
       queueEta({ running: [], queued: 1, concurrency: 1, meanS: null, perAudioS: null }),
     ).toBeNull();
@@ -234,23 +234,21 @@ function service(localAudioS: number) {
   return { svc, clock, jobs, add, polls: () => polls, turns: () => turns };
 }
 
-/** Runs one remote job of `audioS` seconds to its end in `runS` seconds on the fake clock. */
-async function runOne(s: ReturnType<typeof service>, audioS: number, runS: number): Promise<void> {
-  const ended = s.svc.queueStats().jobs_last_hour;
-  const j: RemoteJob = { status: "running", total_s: audioS, done_s: 0 };
-  s.add("remote", j);
-  const seen = s.polls();
-  await until(() => s.polls() >= seen + 2, 4_000, "the remote to run the job");
-  s.clock.t += runS * 1000;
-  j.status = "done";
-  await until(() => s.svc.queueStats().jobs_last_hour === ended + 1, 4_000, "the job to end");
+/**
+ * The jobs that ended, as `measure` records them: their running time and audio. The live jobs
+ * of these tests never end (a local one waits for its GPU turn, a remote one runs on), so the
+ * history a long-lived server has is set here.
+ */
+function ran(s: ReturnType<typeof service>, ...jobs: [audioS: number, runS: number][]): void {
+  const runs = (s.svc as unknown as { runTimes: { ms: number; audio_s: number }[] }).runTimes;
+  for (const [audio_s, runS] of jobs) runs.push({ ms: runS * 1000, audio_s });
 }
 
 describe("SV-Q5: the queue's numbers on a live service", () => {
   test("one long file running with an empty queue: eta_seconds is its audio left, not one mean", async () => {
     const s = service(300);
     // A short job ran: 10 s of audio in 2 s.
-    await runOne(s, 10, 2);
+    ran(s, [10, 2]);
     expect(s.svc.queueStats()).toMatchObject({
       mean_job_seconds: 2,
       seconds_per_audio_second: 0.2,
@@ -264,7 +262,7 @@ describe("SV-Q5: the queue's numbers on a live service", () => {
 
   test("a job out on a remote: what it has left, from the remote's progress, beside the local slot", async () => {
     const s = service(300);
-    await runOne(s, 10, 2);
+    ran(s, [10, 2]);
     s.add("local");
     await until(() => s.turns() === 1, 4_000, "the local job to know its length");
     const far: RemoteJob = { status: "running", total_s: 1000, done_s: 0 };
@@ -279,17 +277,18 @@ describe("SV-Q5: the queue's numbers on a live service", () => {
     await until(() => s.svc.queueStats().eta_seconds === 60, 4_000, "the remote's progress");
   });
 
-  test("short and long jobs mixed: the per-audio rate holds while the per-job mean swings", async () => {
+  test("short and long jobs mixed: the per-audio rate holds while the per-job mean swings", () => {
     const s = service(300);
-    // Ten short notes, 10 s of audio in 1 s each.
-    for (let i = 0; i < 10; i++) await runOne(s, 10, 1);
-    const short = s.svc.queueStats();
-    expect(short).toMatchObject({ mean_job_seconds: 1, seconds_per_audio_second: 0.1 });
+    // Ten short notes, 10 s of audio in 1 s each; a failed job has no audio and no say in the rate.
+    ran(s, ...Array.from({ length: 10 }, (): [number, number] => [10, 1]), [0, 5]);
+    expect(s.svc.queueStats().seconds_per_audio_second).toBe(0.1);
+    const short = s.svc.queueStats().mean_job_seconds as number;
     // Four long files on the same box, at the same pace: 6000 s of audio in 600 s each.
-    for (let i = 0; i < 4; i++) await runOne(s, 6000, 600);
+    ran(s, [6000, 600], [6000, 600], [6000, 600], [6000, 600]);
     const mixed = s.svc.queueStats();
-    // The mean went from 1 s to over 170 s; the box's pace did not move.
-    expect(mixed.mean_job_seconds as number).toBeGreaterThan(170);
+    // The mean went from about 1 s to over 160 s; the box's pace did not move.
+    expect(short).toBeLessThan(2);
+    expect(mixed.mean_job_seconds as number).toBeGreaterThan(160);
     expect(mixed.seconds_per_audio_second).toBe(0.1);
   });
 });
