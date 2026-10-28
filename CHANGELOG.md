@@ -2,6 +2,14 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.4.1 — a front end that only forwards jobs stays healthy during a models pull, and `auto` is listed as available only when a job without a model can run
+
+Two faults in 1.4.0 made a server report the wrong thing about itself. A front end with no speech engine, which forwards every job to its remotes, answered 503 on `/healthz` for as long as a local models pull ran, so a load balancer could drop it while it kept taking jobs. And `GET /v1/server` listed `auto` as available whenever a remote listed its own `auto`, even though a job without a model runs what `auto` resolves to on this server, so the listing and the job route could disagree. The 8-hour soak did not run for this release: it exercises the call-recording helper, and neither fix touches it.
+
+### Server
+- **A front end with no speech engine stays healthy while a local models pull runs** (#472). Files on its own disk run nothing, so `/healthz` now leaves local downloads out of `ok` and `models_ready` on such a server. A server with an engine still answers 503 while its models download or load.
+- **`auto` is available in `GET /v1/server` only when a job without a model would run** (#473). It now counts a remote the way the job route sends it the job: one that offers what `auto` resolves to on this server. A remote's own `auto` flag no longer counts.
+
 ## 1.4.0 — agents on MCP 2026-07-28 can use akou, and its MCP server no longer gives away keys or share links
 
 `akou mcp` spoke only the 2025 revisions of MCP, so an agent on the 2026-07-28 revision got "method not found" and could not use akou at all. A check of the same server found that it could send the API key unencrypted, and that a read-only tool a harness may run unasked handed out a live share link's token. This release fixes both. It also fixes smaller faults. A `-cuda` server under WSL2 ran on the CPU, the standalone `akou-diarize` from the releases page would not run on a Mac after a browser download, and the single-file CLI's server took jobs it could not run. The 8-hour soak did not run for this release. The only change to the call-recording helper (#464) makes its 1 s status poll a setting so a test can change it; the helper still passes the same 1 s, its tests pass, and the changed test passed 50 repeats.
