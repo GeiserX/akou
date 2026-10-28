@@ -682,8 +682,8 @@ describe("[SV-P4] #449: models_ready follows what a job that names no model load
 
   test("a live recognizer that failed to load the default's model is not ready, files on disk or not", async () => {
     // The default is the live recognizer's model, on disk, and its load failed: every default job
-    // would hit the same failure.
-    const installed = [RECOGNIZER, "silero-vad", NEMOTRON];
+    // would hit the same failure. Every model of the catalog, so the live recognizer starts its load.
+    const installed = [RECOGNIZER, B, C, "silero-vad", NEMOTRON];
     const failed = await serverRig(
       installed,
       { "server.default_model": RECOGNIZER },
@@ -691,7 +691,12 @@ describe("[SV-P4] #449: models_ready follows what a job that names no model load
       { createFails: "the model file is damaged" },
     );
     try {
-      await until(async () => failed.app.recognizer() === "unavailable", 10_000, "the load fails");
+      await until(
+        async () => failed.app.asrState.reason?.includes("damaged") ?? false,
+        10_000,
+        "the load fails",
+      );
+      expect(failed.app.recognizer()).toBe("unavailable");
       expect(await health(failed)).toEqual({ status: 200, ready: false });
     } finally {
       await failed.done();
