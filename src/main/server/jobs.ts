@@ -5,7 +5,7 @@
  * - **One pipeline.** A job's upload is decoded to 16 kHz mono and run through the finalize
  *   Worker's mono pass (SV-J7). The result has one shape (SV-J4) whichever door asked for it:
  *   `POST /v1/jobs`, the OpenAI endpoint or `akou transcribe`.
- * - **A queue a backlog can lean on** (SV-Q1 to SV-Q4). Up to `server.concurrency` jobs run at
+ * - **A queue a backlog can lean on** (SV-Q1 to SV-Q5). Up to `server.concurrency` jobs run at
  *   once, each in its own Worker with its models loaded; the next is the highest `priority`, then
  *   the oldest, except that among jobs of one priority a job on a model an idle Worker holds goes
  *   first, so a switch of preset does not reload a model (at most `WARM_PASS_LIMIT` times past one
