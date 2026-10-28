@@ -771,6 +771,126 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
     }
   });
 
+  const modelsReady = async (s: Server): Promise<boolean> =>
+    (
+      (await (await fetch(`http://127.0.0.1:${s.port}/healthz`)).json()) as {
+        models_ready: boolean;
+      }
+    ).models_ready;
+
+  for (const c of [
+    // The default cannot be fetched here, so the job route sends it to any remote that offers it.
+    { name: "a default this server cannot fetch", takes: "", autoDownload: false },
+    // The default could be fetched, but the remote entry names it, so the queue sends it there first.
+    { name: "a default a remote entry names", takes: " best", autoDownload: true },
+  ]) {
+    test(`[SV-P4] #449 ${c.name}, which only a remote runs, is ready while that remote is up`, async () => {
+      // A remote of its own that offers best, so the test can stop it.
+      const own = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (req) => {
+          const u = new URL(req.url);
+          if (u.pathname === "/v1/server")
+            return Response.json({
+              name: "akou",
+              version: "9.9.9",
+              mode: "server",
+              presets: [{ name: "best", available: true }],
+              capabilities: { jobs: true, events: true, webhooks: true },
+            });
+          if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+          return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+        },
+      });
+      const pdir = tempDir("akou-primary-").dir;
+      const primary = await server({
+        home: pdir,
+        installed: true,
+        keyName: "archive",
+        absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
+        settings: {
+          "server.default_model": "best",
+          "server.remotes": [`http://127.0.0.1:${own.port} ${keyFile(pdir, FAKE_KEY)}${c.takes}`],
+          "server.auto_download": c.autoDownload,
+        },
+      });
+      try {
+        await remoteState(primary, "up");
+        expect(await modelsReady(primary)).toBe(true);
+        // Positive control: the remote gone, a default job waits on a model again.
+        own.stop(true);
+        await remoteState(primary, "down");
+        expect(await modelsReady(primary)).toBe(false);
+      } finally {
+        own.stop(true);
+        await primary.close();
+      }
+    });
+  }
+
+  for (const c of [
+    // Overflow runs the next default job here while the remote is full, and best is not on disk.
+    { overflow: true, ready: false },
+    // Positive control: without overflow the next default job waits for the remote's room.
+    { overflow: false, ready: true },
+  ]) {
+    test(`[SV-P4] #449 a default a busy remote entry names is ${c.ready ? "ready" : "not ready"} with remotes_overflow ${c.overflow ? "on" : "off"}`, async () => {
+      // A remote that offers best, takes jobs and never finishes them, so two make it busy.
+      let posts = 0;
+      const own = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          const u = new URL(req.url);
+          if (u.pathname === "/v1/server")
+            return Response.json({
+              name: "akou",
+              version: "9.9.9",
+              mode: "server",
+              presets: [{ name: "best", available: true }],
+              capabilities: { jobs: true, events: true, webhooks: true },
+            });
+          if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+          if (u.pathname === "/v1/jobs" && req.method === "POST") {
+            await req.formData();
+            posts++;
+            return Response.json({ id: `job_HELD${posts}`, status: "queued" }, { status: 202 });
+          }
+          if (u.pathname.startsWith("/v1/jobs/job_HELD")) {
+            if (req.method === "DELETE") return Response.json({ ok: true });
+            await Bun.sleep(200);
+            return Response.json({ id: u.pathname.split("/").pop(), status: "running" });
+          }
+          return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+        },
+      });
+      const pdir = tempDir("akou-primary-").dir;
+      const primary = await server({
+        home: pdir,
+        installed: true,
+        keyName: "archive",
+        absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
+        settings: {
+          "server.default_model": "best",
+          "server.remotes": [`http://127.0.0.1:${own.port} ${keyFile(pdir, FAKE_KEY)} best`],
+          "server.auto_download": true,
+          "server.remotes_overflow": c.overflow,
+        },
+      });
+      try {
+        await remoteState(primary, "up");
+        expect(await modelsReady(primary)).toBe(true);
+        for (let i = 0; i < 2; i++) expect((await submit(primary, {})).status).toBe(202);
+        await until(async () => posts === 2, 10_000, "the remote to hold two jobs");
+        expect(await modelsReady(primary)).toBe(c.ready);
+      } finally {
+        own.stop(true);
+        await primary.close();
+      }
+    });
+  }
+
   test("with no remote ever seen offering best, best is still 409 preset_unavailable", async () => {
     const pdir = tempDir("akou-primary-").dir;
     const primary = await server({
