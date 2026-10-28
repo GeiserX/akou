@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JobWorker } from "../src/main/asr/finalize-worker.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
+import { watchTerminations } from "./helpers.ts";
 
 // A job Worker that is terminated still holding its models keeps them for the life of the process:
 // a terminated Bun Worker never runs the native finalizers. So `close` of an idle Worker has it free
@@ -35,24 +36,17 @@ export function createModels(options, model) {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Every `terminate` of a Worker, with whether the model set had been released by then. */
-const terminated: { released: boolean }[] = [];
+/** Every `terminate` of this test's Workers, with whether the model set had been released by then. */
 let marker = "";
-const terminate = Worker.prototype.terminate;
-beforeAll(() => {
-  Worker.prototype.terminate = function (this: Worker) {
-    terminated.push({ released: existsSync(marker) });
-    return terminate.call(this);
-  };
-});
-afterAll(() => {
-  Worker.prototype.terminate = terminate;
-});
+const watch = watchTerminations(() => existsSync(marker));
+const { terminated } = watch;
+beforeAll(watch.install);
+afterAll(watch.restore);
 
 const workers: JobWorker[] = [];
 afterEach(() => {
   for (const w of workers.splice(0)) w.cancel();
-  terminated.length = 0;
+  watch.reset();
 });
 
 function worker(name: string, options: Record<string, unknown> = {}, releaseMs?: number) {

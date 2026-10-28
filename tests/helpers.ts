@@ -92,6 +92,39 @@ export function tempDir(prefix = "akou-test-"): { dir: string; cleanup: () => vo
 }
 
 /**
+ * Every `terminate` of a Worker made since the last `reset`, with `released()` read at that moment.
+ * `install` puts a subclass in place of the global `Worker`, so only the Workers made while it is in
+ * place are watched: a Worker another file or an earlier test left behind is terminated whenever its
+ * own retire ends, and once landed in the middle of a test that then read it as its own (#466).
+ */
+export function watchTerminations(released: () => boolean) {
+  const Real = globalThis.Worker;
+  let gen = 0;
+  const terminated: { released: boolean }[] = [];
+  class Watched extends Real {
+    readonly #gen = gen;
+    override terminate(): void {
+      if (this.#gen === gen) terminated.push({ released: released() });
+      super.terminate();
+    }
+  }
+  return {
+    terminated,
+    install: () => {
+      globalThis.Worker = Watched;
+    },
+    restore: () => {
+      globalThis.Worker = Real;
+    },
+    /** Between tests: the Workers made so far are no longer watched. */
+    reset: () => {
+      gen++;
+      terminated.length = 0;
+    },
+  };
+}
+
+/**
  * The JSON lines a fake process has appended to `file` so far. A line still being written has no
  * newline yet and is left for the next read: parsed, it threw `JSON Parse error: Unexpected EOF`.
  */
