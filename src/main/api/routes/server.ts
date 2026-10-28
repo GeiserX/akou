@@ -74,9 +74,9 @@ function jobModelsReady(app: ApiApp, state: { loading: boolean; ready: boolean }
   if (!jobs) return state.ready;
   // A live recognizer whose load failed fails every local job on its model the same way.
   const broken = app.recognizerFailed?.() ? RECOGNIZER : null;
-  return (
-    !state.loading && jobs.defaultOnDisk(app.config().settings["server.default_diarize"], broken)
-  );
+  // No engine here (#436, #469): a local download loads nothing a job runs, only a remote does.
+  const loading = state.loading && !app.noEngine?.();
+  return !loading && jobs.defaultOnDisk(app.config().settings["server.default_diarize"], broken);
 }
 
 export function rootRoutes(r: Router<ApiApp>): void {
@@ -85,7 +85,7 @@ export function rootRoutes(r: Router<ApiApp>): void {
     "/healthz",
     {
       id: "server.health",
-      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, and the live recognizer did not fail to load it, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes. On a server with no speech engine (the single-file CLI) it is 503 while no up remote it forwards jobs to takes a job that names no model, with `reason` saying where one is.",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load, and while a job is stalled: running more than 300 s plus 5 times its audio (`queue.stalled`). `models_ready` says only whether the models are ready: every model a job that names no model loads (`server.default_model` or what `auto` runs, its helpers, and the speaker models when `server.default_diarize` is on) is on disk and none is loading, and the live recognizer did not fail to load it, or a remote that is up takes that job; it never waits on a model that job does not use. `queue` is the job queue's settings, depth, throughput and ETA, in both modes. On a server with no speech engine (the single-file CLI) it is 503 while no up remote it forwards jobs to takes a job that names no model, with `reason` saying where one is, and a models pull on its own disk never makes it 503: no job runs those files there.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -107,8 +107,9 @@ export function rootRoutes(r: Router<ApiApp>): void {
           queue,
         });
       }
-      // A job stuck at running (#407) is a server that takes jobs and ends none.
-      const ok = !state.loading && (queue?.stalled ?? 0) === 0;
+      // A job stuck at running (#407) is a server that takes jobs and ends none. With no engine
+      // (#469) a local models pull loads nothing a job runs, so it does not make this 503.
+      const ok = (none || !state.loading) && (queue?.stalled ?? 0) === 0;
       return json(ok ? 200 : 503, {
         ok,
         version: c.app.version,
