@@ -753,7 +753,8 @@ export class JobService {
    * Whether a job that names no model can run without waiting on a model (#449), the speaker
    * models only with `diarize`: `/healthz`'s `models_ready`. True when every model it loads is on
    * this disk, or when a remote that is up takes it the way the queue routes it (section 14): a
-   * remote entry that names it first, or, for a default this server cannot run or fetch, any up
+   * remote entry that names it first (while it is full only with `server.remotes_overflow` off,
+   * since overflow runs the job here), or, for a default this server cannot run or fetch, any up
    * remote that offers it. False when `server.default_model` refuses every job and no remote
    * takes it. `broken` is a recognizer that cannot load here (the live recognizer's, after its load
    * failed): its files on disk do not count, and only a remote can take a job on it.
@@ -776,7 +777,9 @@ export class JobService {
     const takes = (url: string | null) => url !== null && url !== "pending";
     if (choice) {
       const names = [choice.preset, choice.model].filter((n) => n !== "custom" && n !== "auto");
-      if (takes(this.remotes.pick(names, true))) return true;
+      // Unless overflow runs it here while that remote is full (routeOf): then it needs this disk.
+      const listed = this.remotes.pick(names, true);
+      if (listed === "busy" ? !(this.o.remotesOverflow?.() ?? false) : takes(listed)) return true;
       // A default this server may fetch is accepted here and waits for its download.
       try {
         this.admit(choice.model, { diarize });
