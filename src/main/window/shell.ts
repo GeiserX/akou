@@ -194,6 +194,40 @@ export function titleBarStyle(platform: string): "hiddenInset" | "default" {
   return platform === "darwin" ? "hiddenInset" : "default";
 }
 
+/** One native step of the window's raise (DK-M9); `native.ts` runs them in order. */
+export type RaiseStep =
+  | "restore"
+  | "restoreNoActivate"
+  | "joinAllSpaces"
+  | "showInactive"
+  | "leaveAllSpaces";
+
+/**
+ * How each OS puts the main window in front without taking the keyboard (DK-M9), from the
+ * ElectroBun 2.0.1 native code:
+ * - macOS: `showInactive` is `orderFrontRegardless`, no app activation. Joining every Space for
+ *   that moment brings the window to the Space the user is on. A minimized window is restored
+ *   first with `deminiaturize:`.
+ * - Windows: the SDK's restore is `SW_RESTORE`, which activates, so a minimized window is restored
+ *   with `SW_SHOWNOACTIVATE`; `showInactive` then puts it at the top without activating it. The
+ *   Spaces calls are a no-op there.
+ * - Linux: the SDK's restore is `gtk_window_present`, which activates, and nothing restores
+ *   without it, so a minimized window stays minimized: the indicator keeps showing and the
+ *   notification says the call started. The Spaces calls are a no-op there.
+ */
+export function raiseSteps(platform: string, minimized: boolean): RaiseStep[] {
+  if (platform === "darwin")
+    return [
+      ...(minimized ? (["restore"] as const) : []),
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ];
+  if (platform === "win32")
+    return [...(minimized ? (["restoreNoActivate"] as const) : []), "showInactive"];
+  return minimized ? [] : ["showInactive"];
+}
+
 export type TrayMenuItem =
   | { type: "normal"; label: string; action: string; enabled?: boolean; checked?: boolean }
   | { type: "separator" };

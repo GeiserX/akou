@@ -45,6 +45,7 @@ import {
   placeIndicator,
   QUIT_QUESTION,
   type Rect,
+  raiseSteps,
   Shell,
   type ShellApp,
   type ShellState,
@@ -890,6 +891,7 @@ async function eventShell(
     state?: ReturnType<typeof memoryState>;
     live?: boolean;
     minimizedPollMs?: number;
+    platform?: string;
   } = {},
 ) {
   let watcher: (call: string, e: LogEvent) => void = () => {};
@@ -906,7 +908,7 @@ async function eventShell(
   } as unknown as Bridge;
   const a = fakeApp({ live: o.live ?? true, settings: o.settings });
   const shell = new Shell(a.app, bridge, f.ui, {
-    platform: "darwin",
+    platform: o.platform ?? "darwin",
     setLoginItem: async () => {},
     state: o.state,
     minimizedPollMs: o.minimizedPollMs,
@@ -1213,21 +1215,77 @@ describe("[DK-M9] a call an agent starts brings the window forward where the use
     await shell.close();
   });
 
-  test("the native raise orders the window front on the user's Space and never activates akou", () => {
-    // native.ts is the one module the tests cannot load: its source is the check.
+  test("each OS's raise steps: restore without the keyboard where the OS can, never where it cannot", () => {
+    // macOS: deminiaturize, then in front on the user's Space with no activation.
+    expect(raiseSteps("darwin", false)).toEqual([
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ]);
+    expect(raiseSteps("darwin", true)).toEqual([
+      "restore",
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ]);
+    // Windows: never the SDK's restore (SW_RESTORE activates); SW_SHOWNOACTIVATE instead.
+    expect(raiseSteps("win32", false)).toEqual(["showInactive"]);
+    expect(raiseSteps("win32", true)).toEqual(["restoreNoActivate", "showInactive"]);
+    // Linux: the SDK's restore presents the window, which activates it: a minimized window stays.
+    expect(raiseSteps("linux", false)).toEqual(["showInactive"]);
+    expect(raiseSteps("linux", true)).toEqual([]);
+    // No OS but macOS restores through the SDK's activating `unminimize`.
+    for (const p of ["win32", "linux", "freebsd"])
+      expect(raiseSteps(p, true)).not.toContain("restore");
+  });
+
+  test("on Linux a minimized window stays minimized and the indicator keeps showing; on Windows it comes back and the indicator goes", async () => {
+    const f = fakeUi({ platform: "linux" });
+    const linux = await eventShell(f, { minimizedPollMs: 5, platform: "linux" });
+    linux.shell.show();
+    linux.feed("call.created");
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    linux.a.announce(agentStart());
+    expect(f.log).toContain("raise");
+    await Bun.sleep(30);
+    expect(f.indicator()?.visible).toBe(true);
+    await linux.shell.close();
+
+    const g = fakeUi({ platform: "win32" });
+    const win = await eventShell(g, { minimizedPollMs: 5, platform: "win32" });
+    win.shell.show();
+    win.feed("call.created");
+    g.minimize(true);
+    await until(() => g.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    win.a.announce(agentStart());
+    await until(() => g.indicator()?.visible === false, 1000, "the indicator gone after the raise");
+    await win.shell.close();
+  });
+
+  test("native.ts runs each raise step as the call it names (the source only, not what the OS does)", () => {
+    // native.ts is the one module the tests cannot load: its source is the check. It proves which
+    // SDK or user32 call each step maps to and that the raise calls nothing else; whether macOS
+    // activates akou on a deminiaturize, and the Space move, are release checklist steps.
     const src = readFileSync(
       join(import.meta.dir, "..", "src", "main", "window", "native.ts"),
       "utf8",
     );
     const body = src.match(/raise: \(\) => \{([\s\S]*?)\n {8}\},/)?.[1] ?? "";
-    const calls = [...body.matchAll(/win\.(\w+)\(([^)]*)\)/g)].map((m) => `${m[1]}(${m[2]})`);
-    expect(calls).toEqual([
-      "isMinimized()",
-      "unminimize()",
-      "setVisibleOnAllWorkspaces(true)",
-      "showInactive()",
-      "setVisibleOnAllWorkspaces(false)",
+    const steps = [...body.matchAll(/step === "(\w+)"\) (\w+(?:\.\w+)?)\(([^)]*)\)/g)].map(
+      (m) => `${m[1]} -> ${m[2]}(${m[3]})`,
+    );
+    expect(steps).toEqual([
+      "restore -> win.unminimize()",
+      "restoreNoActivate -> restoreNoActivate(win.ptr)",
+      "joinAllSpaces -> win.setVisibleOnAllWorkspaces(true)",
+      "showInactive -> win.showInactive()",
+      "leaveAllSpaces -> win.setVisibleOnAllWorkspaces(false)",
     ]);
+    expect(body).toContain("raiseSteps(process.platform, win.isMinimized())");
+    expect(body).not.toMatch(/\.(show|focus|activate)\(/);
+    expect(src).toContain("user32.symbols.ShowWindow(hwnd, SW_SHOWNOACTIVATE)");
+    expect(src).toContain("const SW_SHOWNOACTIVATE = 4;");
     // The window it raises was opened hidden and without activation.
     expect(src).toContain("...(hidden ? { hidden: true, activate: false } : {})");
   });

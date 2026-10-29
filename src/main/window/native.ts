@@ -18,7 +18,13 @@ import type { DraftRpc } from "../../ui/dictation-protocol.ts";
 import type { IndicatorRpc } from "../../ui/indicator-protocol.ts";
 import type { PillRpc } from "../../ui/pill-protocol.ts";
 import type { AkouRpc } from "../../ui/protocol.ts";
-import type { NativeTray, NativeUi, NativeWindow, TrayMenuItem } from "./shell.ts";
+import {
+  type NativeTray,
+  type NativeUi,
+  type NativeWindow,
+  raiseSteps,
+  type TrayMenuItem,
+} from "./shell.ts";
 
 /** A streamed answer or a long follow can outlive the SDK's default request timeout. */
 const MAX_REQUEST_MS = 600_000;
@@ -45,6 +51,25 @@ function noActivate(hwnd: Pointer | null): void {
   }
 }
 
+/** `ShowWindow`'s command that restores a minimized window without activating it. */
+const SW_SHOWNOACTIVATE = 4;
+
+/**
+ * Restores a minimized window without taking the keyboard (DK-M9, Windows). The SDK's
+ * `unminimize` is `SW_RESTORE`, which activates the window, so through user32 directly.
+ */
+function restoreNoActivate(hwnd: Pointer | null): void {
+  if (!hwnd) return;
+  const user32 = dlopen("user32.dll", {
+    ShowWindow: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+  });
+  try {
+    user32.symbols.ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+  } finally {
+    user32.close();
+  }
+}
+
 export function electrobunUi(): NativeUi {
   return {
     openWindow({ hidden, title, url, rpc, frame, titleBarStyle }) {
@@ -66,15 +91,15 @@ export function electrobunUi(): NativeUi {
           win.show();
           win.focus();
         },
-        // DK-M9. `showInactive` is `orderFrontRegardless` on macOS: in front of the app in front,
-        // with no activation, so the keyboard stays where the user is typing. Joining every Space
-        // for that moment puts the window on the Space the user is on; leaving them again keeps it
-        // there, so the user is never moved to the Space it was on.
+        // DK-M9: each OS's steps are `raiseSteps` in shell.ts, which says why.
         raise: () => {
-          if (win.isMinimized()) win.unminimize();
-          win.setVisibleOnAllWorkspaces(true);
-          win.showInactive();
-          win.setVisibleOnAllWorkspaces(false);
+          for (const step of raiseSteps(process.platform, win.isMinimized())) {
+            if (step === "restore") win.unminimize();
+            else if (step === "restoreNoActivate") restoreNoActivate(win.ptr);
+            else if (step === "joinAllSpaces") win.setVisibleOnAllWorkspaces(true);
+            else if (step === "showInactive") win.showInactive();
+            else if (step === "leaveAllSpaces") win.setVisibleOnAllWorkspaces(false);
+          }
         },
         isMinimized: () => win.isMinimized(),
         close: () => win.close(),

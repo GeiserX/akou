@@ -12,6 +12,7 @@ import {
   appForShell,
   type NativeUi,
   type Rect,
+  raiseSteps,
   Shell,
   type ShellOptions,
 } from "../src/main/window/shell.ts";
@@ -91,8 +92,9 @@ export interface FakeUi {
  * focus event follows `show`. Messages sent to a page before it booted are lost, as ElectroBun's
  * are when the page has not registered its handlers yet.
  */
-export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
+export function fakeUi(opts: { focusOnShow?: boolean; platform?: string } = {}): FakeUi {
   const focusOnShow = opts.focusOnShow ?? true;
+  const platform = opts.platform ?? "darwin";
   let reopenFn: () => void = () => {};
   let frameFn: (r: Rect) => void = () => {};
   let closeFn: () => void = () => {};
@@ -132,10 +134,12 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
             minimized = false;
             if (focusOnShow) focusFn(true);
           },
-          // In front on the user's Space without the focus: no focus event follows.
+          // In front on the user's Space without the focus: no focus event follows. It restores a
+          // minimized window only where the OS's steps do (`raiseSteps`).
           raise: () => {
             log.push("raise");
-            minimized = false;
+            const steps = raiseSteps(platform, minimized);
+            if (steps.includes("restore") || steps.includes("restoreNoActivate")) minimized = false;
           },
           isMinimized: () => {
             minimizedReads++;
