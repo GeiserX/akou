@@ -280,6 +280,14 @@ export function healthDot(v: CallView | null, ch: "mic" | "call", hasLevel: bool
   return hasLevel ? "ok" : "none";
 }
 
+/**
+ * The capture sides recording nothing now, the call's first: those whose newest-part health is
+ * dead, stalled or out of buffers, as the window's dots show them. The tray menu warns of each.
+ */
+export function lostChannels(v: CallView): ("mic" | "call")[] {
+  return (["call", "mic"] as const).filter((ch) => DEAD_STATES.has(healthDot(v, ch, true)));
+}
+
 export function banner(i: BannerInput): Banner | null {
   const v = i.view;
   if (!v?.call) return null;

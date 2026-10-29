@@ -174,6 +174,10 @@ export interface AppStatus {
     reviewName?: string;
     /** The agents following the call's questions (`akou events -f --type ask`); absent from an older app. */
     listening?: string[];
+    /** Epoch ms the call's first part started, or null before one; absent from an older app. */
+    startedAt?: number | null;
+    /** The capture sides that record nothing now (`lostChannels`); absent from an older app. */
+    lost?: ("mic" | "call")[];
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   /** Every final pass running now, with how far it is; absent from an older app. */
@@ -268,8 +272,11 @@ export interface AkouRpc {
         data: unknown;
       };
       status: AppStatus;
-      /** The tray, the hotkey or `akou open` asks the page to show a call. */
-      showCall: { call?: string };
+      /**
+       * The tray, the hotkey or `akou open` asks the page to show a call; with `ask`, the tray's
+       * Ask about this call, which focuses the ask box too.
+       */
+      showCall: { call?: string; ask?: boolean };
       /** The application menu's Settings… asks the page to open its settings. */
       showSettings: Record<string, never>;
       /** Quit during a recording (DK-M3): a question with Cancel the default; answered by `answerQuit`. */

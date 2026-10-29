@@ -71,7 +71,7 @@ When the open call has a recording, a player bar sits under the transcript: play
 
 ## The menu bar
 
-akou keeps an item in the macOS menu bar, the akou mark, with a red dot while a call records. Its menu stops the recording, starts a dictation, brings the window back, turns **Open at login** on or off, and quits akou. The application menu, **akou** beside the Apple menu while the window is in front, has **Settings…** and **Install Command-Line Tool…**, which puts the `akou` command on your `PATH` ([The command line](getting-started.md#the-command-line)).
+akou keeps an item in the macOS menu bar: the akou mark, which turns into a filled disc with the mark cut out while a call records, with the call's elapsed time beside it (`0:23`). While a call records its menu names the call, its workspace and how long it has run, warns when the microphone or the system audio is lost, and has Pause or Resume, Stop recording and **Ask about this call…**, which opens the window with the ask box ready. It also starts a dictation, brings the window back and quits akou. **Open akou at login** is in Settings, under General. The application menu, **akou** beside the Apple menu while the window is in front, has **Settings…** and **Install Command-Line Tool…**, which puts the `akou` command on your `PATH` ([The command line](getting-started.md#the-command-line)).
 
 ![The akou item in the menu bar with its red recording dot and its menu open: Stop recording, Start dictation, Show akou, Open at login, Quit akou](images/screenshots/menu-bar.png)
 

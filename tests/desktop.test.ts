@@ -85,7 +85,8 @@ function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {})
     config: () => ({
       settings: { "app.hotkey": "", "app.openAtLogin": false, ...o.settings },
     }),
-    saveSetting: async () => {},
+    pauseLive: async () => {},
+    resumeLive: async () => {},
     quit: async () => {
       state.quits++;
     },

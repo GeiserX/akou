@@ -108,11 +108,12 @@ export function showFatal(msg: string): void {
   document.body.classList.add("fatal");
 }
 
-/** The tray, the hotkey or `akou open CALL` asks for a call. */
-export function showCall(call?: string): void {
+/** The tray, the hotkey or `akou open CALL` asks for a call; `ask` focuses the ask box too. */
+export function showCall(call?: string, ask = false): void {
   if (!current) return;
   const target = call ?? current.status?.live?.call ?? current.status?.last?.call;
   if (target) current.openCall(target, call !== undefined);
+  if (ask) document.getElementById("ask-input")?.focus();
 }
 
 /**

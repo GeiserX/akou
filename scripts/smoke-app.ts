@@ -78,7 +78,7 @@ const TAR =
       : "tar";
 /** The tray images each system loads (src/main/window/shell.ts `trayImage`). */
 const TRAY = MAC
-  ? ["akou-template.png", "akou-recording-macos.png"]
+  ? ["akou-template.png", "akou-recording-template.png"]
   : process.platform === "win32"
     ? ["akou.ico", "akou-recording.ico"]
     : ["akou.png", "akou-recording.png"];

@@ -260,8 +260,10 @@ export interface ShellApp {
     by?: string;
   }): Promise<{ ok: true; call: string } | { ok: false; code: string; message: string }>;
   stopLive(): Promise<void>;
+  /** Pause and resume the live call, as the window's buttons do. */
+  pauseLive(): Promise<void>;
+  resumeLive(): Promise<void>;
   config(): { settings: Record<string, unknown> };
-  saveSetting(key: "app.openAtLogin", value: boolean): Promise<void>;
   quit(): Promise<void>;
   openSettingsPane(pane: SettingsPane): Promise<boolean>;
   /** Shows the window through the app, so the app knows it has one. */
@@ -310,10 +312,13 @@ export function appForShell(app: AkouApp): ShellApp {
       const live = app.manager.live();
       if (live) await app.manager.stop(live.id);
     },
-    config: () => app.config(),
-    saveSetting: async (key, value) => {
-      await app.saveConfig({ ...app.config().file, [key]: value });
+    pauseLive: async () => {
+      await app.manager.pause();
     },
+    resumeLive: async () => {
+      await app.manager.resume();
+    },
+    config: () => app.config(),
     quit: () => app.quit(),
     openSettingsPane: (pane) => app.openSettingsPane(pane),
     openWindow: (call) => app.openWindow(call),
@@ -631,8 +636,8 @@ function fitInto(want: Rect, areas: readonly Rect[], min: { width: number; heigh
 
 /**
  * The tray image for a platform: a template PNG on macOS, an ICO on Windows, a PNG elsewhere. While
- * a call records, the mark's dot is red; a template image cannot hold a colour, so on macOS that
- * one is a plain image.
+ * a call records, macOS gets the mark cut out of a filled disc, a template too, so the menu bar inks
+ * it on any bar; Windows and Linux get the mark with its dot red.
  */
 export function trayImage(
   platform: string,
@@ -640,9 +645,8 @@ export function trayImage(
   dir = TRAY_DIR,
 ): { image: string; template: boolean } {
   if (platform === "darwin") {
-    return recording
-      ? { image: join(dir, "akou-recording-macos.png"), template: false }
-      : { image: join(dir, "akou-template.png"), template: true };
+    const name = recording ? "akou-recording-template.png" : "akou-template.png";
+    return { image: join(dir, name), template: true };
   }
   const name = recording ? "akou-recording" : "akou";
   if (platform === "win32") return { image: join(dir, `${name}.ico`), template: false };
@@ -707,13 +711,20 @@ export function appMenu(platform: string): AppMenuItem[] | null {
 }
 
 /** The dictation item of the tray's menu (DC-O4), or none while dictation is off. */
-function dictationItem(state: string | undefined): TrayMenuItem[] {
+function dictationItem(state: string | undefined, key: string): TrayMenuItem[] {
   switch (state) {
     case undefined:
     case "off":
       return [];
     case "idle":
-      return [{ type: "normal", label: "Start dictation", action: "dictate" }];
+      // The tray menu takes no accelerator, so the key is in the label, as the app menu names it.
+      return [
+        {
+          type: "normal",
+          label: key ? `Start dictation (${key})` : "Start dictation",
+          action: "dictate",
+        },
+      ];
     case "listening":
       return [{ type: "normal", label: "■ Stop dictation", action: "dictate-stop" }];
     case "starting":
@@ -725,36 +736,114 @@ function dictationItem(state: string | undefined): TrayMenuItem[] {
   }
 }
 
-/** The tray's menu for the app's state. */
+/** How long a call title may run in the tray menu's header before it is cut with an ellipsis. */
+export const TRAY_TITLE_MAX = 40;
+
+/** What the tray menu's warning line says for a capture side that records nothing. */
+const LOST: Record<"mic" | "call", string> = {
+  call: "⚠ System audio lost",
+  mic: "⚠ Microphone lost",
+};
+
+/** The call's elapsed time at `now`, from its first part's start; null before one or with no clock. */
+export function callElapsedMs(live: AppStatus["live"], now: number | undefined): number | null {
+  if (!live || live.startedAt == null || now === undefined) return null;
+  return Math.max(0, now - live.startedAt);
+}
+
+/** An elapsed time as whole minutes in words, for the tray menu's header: `23 min`, `1 h 5 min`. */
+export function minutesText(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return "under 1 min";
+  const h = Math.floor(m / 60);
+  if (h === 0) return `${m} min`;
+  return m % 60 === 0 ? `${h} h` : `${h} h ${m % 60} min`;
+}
+
+/** An elapsed time as `h:mm`, the macOS tray title's clock: `0:23` is 23 minutes. */
+export function hoursMinutes(ms: number): string {
+  const m = Math.floor(ms / 60_000);
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+}
+
+/** How long until a call's elapsed minute changes, so the tray moves once a minute. */
+export function nextMinuteIn(startedAt: number, now: number): number {
+  return 60_000 - (Math.max(0, now - startedAt) % 60_000);
+}
+
+/** The header of the tray menu while a call is live: what records, where, and for how long. */
+function liveHeader(live: NonNullable<AppStatus["live"]>, now: number | undefined): string {
+  // A status from a fake or an older app may lack a field: the header shows what is there.
+  const t = (live.title ?? "").trim() || "Untitled call";
+  const title = t.length > TRAY_TITLE_MAX ? `${t.slice(0, TRAY_TITLE_MAX - 1).trimEnd()}…` : t;
+  const ms = callElapsedMs(live, now);
+  return [title, live.workspace, ms === null ? "" : minutesText(ms)].filter(Boolean).join(" · ");
+}
+
+/**
+ * The tray's menu for the app's state. While a call is live: a header naming it, a warning per
+ * capture side that records nothing, Pause or Resume, Stop, and Ask about this call. Idle: Record.
+ * Then dictation, Show akou and Quit. Open at login is in Settings.
+ */
 export function trayMenu(o: {
-  live: boolean;
-  openAtLogin: boolean;
+  live: AppStatus["live"];
+  /** Epoch ms, for the header's elapsed time. */
+  now?: number;
   /** The dictation session's state; absent or `off` without dictation. */
   dictation?: string;
+  /** The dictation key as the app names it (`⌘ Right`), empty before the helper binds one. */
+  dictationKey?: string;
 }): TrayMenuItem[] {
+  const sep: TrayMenuItem = { type: "separator" };
+  const live = o.live;
+  const call: TrayMenuItem[] = live
+    ? [
+        { type: "normal", label: liveHeader(live, o.now), action: "none", enabled: false },
+        ...(live.lost ?? []).map(
+          (ch): TrayMenuItem => ({
+            type: "normal",
+            label: LOST[ch],
+            action: "none",
+            enabled: false,
+          }),
+        ),
+        sep,
+        live.state === "paused"
+          ? { type: "normal", label: "▶ Resume", action: "resume" }
+          : { type: "normal", label: "❚❚ Pause", action: "pause" },
+        { type: "normal", label: "■ Stop recording", action: "stop" },
+        sep,
+        { type: "normal", label: "Ask about this call…", action: "ask" },
+        sep,
+      ]
+    : [{ type: "normal", label: "● Record", action: "record" }];
   return [
-    o.live
-      ? { type: "normal", label: "■ Stop recording", action: "stop" }
-      : { type: "normal", label: "● Record", action: "record" },
-    ...dictationItem(o.dictation),
+    ...call,
+    ...dictationItem(o.dictation, o.dictationKey ?? ""),
     { type: "normal", label: "Show akou", action: "show" },
-    { type: "separator" },
-    { type: "normal", label: "Open at login", action: "login", checked: o.openAtLogin },
-    { type: "separator" },
+    sep,
     { type: "normal", label: "Quit akou", action: "quit" },
   ];
 }
 
 /**
- * The tray's title: what a glance at the menu bar needs beside the image. A recording call has
- * none, since the mark's red dot says it. A dictation shows while it listens or transcribes,
- * whatever the pill setting (DC-O4), since it lasts seconds and a call's state is back right after.
+ * The tray's title: what a glance at the menu bar needs beside the image. A dictation shows while
+ * it listens or transcribes, whatever the pill setting (DC-O4), since it lasts seconds and a call's
+ * state is back right after; then a share; then a paused call's bars. On macOS a recording call
+ * shows its elapsed time as `h:mm`, moved once a minute. Windows has no title beside a tray icon,
+ * and an AppIndicator label shows on some Linux panels only, so there the menu's header carries it.
  */
-export function trayTitle(s: Pick<AppStatus, "live" | "share">, dictation?: string): string {
+export function trayTitle(
+  s: Pick<AppStatus, "live" | "share">,
+  dictation?: string,
+  o: { platform?: string; now?: number } = {},
+): string {
   if (dictation === "listening") return "● dictating";
   if (dictation === "transcribing" || dictation === "inserting") return "… transcribing";
   if (s.share?.active) return "● shared";
-  return s.live?.state === "paused" ? "❚❚" : "";
+  if (s.live?.state === "paused") return "❚❚";
+  const ms = callElapsedMs(s.live, o.now);
+  return o.platform === "darwin" && ms !== null ? hoursMinutes(ms) : "";
 }
 
 /** The dictation pill while it is open (DC-O1). */
@@ -778,6 +867,12 @@ export class Shell implements WindowShell {
   private tray: NativeTray | null = null;
   /** Whether the tray shows the recording mark, so the image is set only when that changes. */
   private recordingMark = false;
+  /** The tray's last title and menu, so a refresh in the same state sets neither again. */
+  private trayShown = { title: "", menu: "" };
+  /** The next move of the tray's elapsed minute while a call is live. */
+  private minute: ReturnType<typeof setTimeout> | null = null;
+  /** The login item as last applied, so a changed setting applies at the next refresh (DK-L2). */
+  private loginOn: boolean | null = null;
   private hotkey: string | null = null;
   private quitting = false;
   /** The quit question is up; a second quit waits for its answer instead of asking again. */
@@ -847,8 +942,10 @@ export class Shell implements WindowShell {
     const accel = hotkeyFor(String(s["app.hotkey"] ?? ""), this.o.platform);
     if (this.ui.registerShortcut(accel, () => void this.toggle("hotkey"))) this.hotkey = accel;
     else this.o.onLog?.("warn", `the hotkey ${accel} is taken by another app`);
+    // Set before it is applied, so one that fails is not tried again at every refresh.
+    this.loginOn = s["app.openAtLogin"] === true;
     try {
-      await this.o.setLoginItem(s["app.openAtLogin"] === true);
+      await this.o.setLoginItem(this.loginOn);
     } catch (err) {
       this.o.onLog?.("warn", `login item: ${(err as Error).message}`);
     }
@@ -874,7 +971,11 @@ export class Shell implements WindowShell {
         if (m.kind === "chip" && !this.pill) this.chipNotice(m.chip);
       }) ?? (() => {});
     const unhealth = this.bridge.app.watch((call, e) => {
-      if (e.type === "health") this.notify({ type: "capture", call, ch: e.ch, state: e.state });
+      if (e.type === "health") {
+        this.notify({ type: "capture", call, ch: e.ch, state: e.state });
+        // The tray menu's warning line follows the capture's health.
+        void this.refresh();
+      }
       // The indicator lives with the recording: from the call's start (or a new part) to its end.
       if (e.type === "call.created" || e.type === "part.started") this.openIndicator();
       else if (e.type === "part.ended" || e.type === "call.ended" || e.type === "call.failed")
@@ -1093,16 +1194,23 @@ export class Shell implements WindowShell {
       case "dictate-stop":
         await this.app.dictation?.control("stop");
         break;
+      case "pause":
+        await this.app.pauseLive();
+        break;
+      case "resume":
+        await this.app.resumeLive();
+        break;
+      case "ask": {
+        // The window on the live call, with the ask box focused. The call is read now: a refresh
+        // may not have run since it started.
+        const call = ((await this.app.status()) as { live?: { call?: string } | null }).live?.call;
+        await this.app.openWindow();
+        if (call) this.toPage((send) => send.showCall({ call, ask: true }));
+        break;
+      }
       case "show":
         await this.app.openWindow();
         break;
-      case "login": {
-        const on = this.app.config().settings["app.openAtLogin"] !== true;
-        await this.app.saveSetting("app.openAtLogin", on);
-        await this.o.setLoginItem(on);
-        await this.refresh();
-        break;
-      }
       case "quit":
         await this.quitApp();
         break;
@@ -1111,22 +1219,59 @@ export class Shell implements WindowShell {
 
   private async refresh(): Promise<void> {
     const s = (await this.app.status()) as unknown as AppStatus;
+    if (!this.tray) return;
     this.live = !!s.live;
+    // clock: the default of the injected `now`; tests pass their own.
+    const now = this.o.now?.() ?? Date.now();
     const dictation = this.app.dictation?.state();
-    this.tray?.setTitle(trayTitle(s, dictation));
+    const title = trayTitle(s, dictation, { platform: this.o.platform, now });
+    if (title !== this.trayShown.title) this.tray.setTitle(title);
     const recording = trayRecording(s);
     // No display, nobody sees the mark, and a new status item then crashes the SDK: leave it.
     if (recording !== this.recordingMark && this.ui.workAreas().length > 0) {
       this.recordingMark = recording;
-      this.tray?.setImage(trayImage(this.o.platform, recording));
+      this.tray.setImage(trayImage(this.o.platform, recording));
     }
-    this.tray?.setMenu(
-      trayMenu({
-        live: this.live,
-        openAtLogin: this.app.config().settings["app.openAtLogin"] === true,
-        dictation,
-      }),
-    );
+    const key = this.app.dictation?.hotkey() ?? "";
+    const items = trayMenu({
+      live: s.live,
+      now,
+      dictation,
+      dictationKey: key ? hotkeyLabel(key, this.o.platform) : "",
+    });
+    const menu = JSON.stringify(items);
+    if (menu !== this.trayShown.menu) this.tray.setMenu(items);
+    this.trayShown = { title, menu };
+    this.nextMinute(s.live, now);
+    await this.syncLogin();
+  }
+
+  /** While a call is live, a refresh when its elapsed minute moves: the title and the header. */
+  private nextMinute(live: AppStatus["live"], now: number): void {
+    if (this.minute) clearTimeout(this.minute);
+    this.minute = null;
+    if (live?.startedAt == null) return;
+    // clock: the tray's elapsed minute moves in real time.
+    this.minute = setTimeout(() => {
+      this.minute = null;
+      void this.refresh();
+    }, nextMinuteIn(live.startedAt, now) + 50);
+    this.minute.unref?.();
+  }
+
+  /**
+   * Applies `app.openAtLogin` when it changed since it was last applied: Settings, `akou config
+   * set` and `PATCH /config` all save it, and the save asks for a refresh (DK-L2).
+   */
+  private async syncLogin(): Promise<void> {
+    const on = this.app.config().settings["app.openAtLogin"] === true;
+    if (this.loginOn === null || on === this.loginOn) return;
+    this.loginOn = on;
+    try {
+      await this.o.setLoginItem(on);
+    } catch (err) {
+      this.o.onLog?.("warn", `login item: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -1488,8 +1633,11 @@ export class Shell implements WindowShell {
     this.window?.close();
     this.window = null;
     if (this.hotkey) this.ui.unregisterShortcut(this.hotkey);
+    if (this.minute) clearTimeout(this.minute);
+    this.minute = null;
     this.tray?.remove();
     this.tray = null;
     this.recordingMark = false;
+    this.trayShown = { title: "", menu: "" };
   }
 }
