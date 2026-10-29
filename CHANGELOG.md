@@ -2,6 +2,26 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.5.0 — the agent following a call answers the ask box, and a failed ask hands your agent the question
+
+A question typed in the ask box only ever went to akou's own provider, a second agent run on the same subscription. When that provider was out of quota or set to none, the box answered with excerpts, even with an agent already following the call. Now the question goes to that agent first, and akou's provider is the fallback. When neither answers, "Copy context for my agent" used to copy the whole context pack, without the question and with akou's notes to an agent that read as the user's ask; it now hands over the question word for word and where to find the call. A new `command` provider runs a program of your own. And a server's queue ETA now counts the long file running now, so a client stops picking a busy box. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Ask
+- **The agent following a call answers the ask box** (#477). An agent watching `akou events -f --type ask --client NAME` counts as listening while its long poll is open and for 35 s after; `GET /calls/{id}` and `akou_status` show `listening`. A question you type waits up to `ask.agentWaitSeconds` (0 to 300, default 30) for that agent, and the window says who it was sent to. With no agent listening, or none answering in time, akou's provider runs as before, and a failure line names both routes. If the agent answers while the provider runs, the run stops. A question an agent asks itself goes straight to the provider.
+- **Three ways to answer** (#477): `POST /calls/{id}/asks/{ask}/answer`, the `akou_answer` MCP tool and `akou answer ASK "TEXT"` (`-` reads stdin). The answer is labelled with the agent that gave it, citations are matched to the call's lines, and a second answer from the same agent gets 409 `already_answered`. An answer that arrives later is added under the first, never in its place. A harness that cannot be woken can read `live.unanswered` in `akou_status`.
+- **With an agent listening, the box asks even with no provider set** (#477).
+- **A `command` provider** (#477). `provider.kind` `command` runs your own program (`provider.command`, an argument list run with no shell) with the prompt on standard input; its standard output is the answer. It is set in the config file only, never over the API or from the window, because it decides what runs on your computer. Use it to point at `claude -p` or `codex exec` with your own flags, or at a wrapper that picks one of your accounts ([providers](docs/providers.md#a-command-of-your-own)).
+- **The account the harness ran on is visible** (#477). Usage-limit and login failures name `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when set, and `akou doctor` shows it. akou never reads, sets or switches them.
+- **A failed ask hands your agent the question, not a wall of call text** (#475). The hand-off starts with your question word for word, then the call id, the part of the call it covers, the `akou context` command and `akou_context` call that fetch the pack, and at most 8 matching lines. The pack itself is never pasted, so akou's notes to an agent stay out of your message. The ask box and `akou ask` name the route that did not answer.
+- **API change for `POST /calls/{id}/ask`** (#475). The fallback reply's `context` field, which held the whole pack, is now `handoff`, plus `route`, the route that failed. `context` was never in the OpenAPI document; a client that read it should read `handoff`. `POST /calls/{id}/context` returns the same `handoff`.
+- The skill watches `ask` events and answers with `akou_answer` (#477).
+
+### Server
+- **The queue ETA counts what the running job has left** (#476). `queue.eta_seconds` in `/healthz` and `GET /v1/server` was the jobs left times the mean job time, so one long file running with nothing queued read as a few seconds. Each slot now starts with the audio its job has left times the server's rate, and a job on a remote counts with the progress the remote reports. The rate is published as `queue.seconds_per_audio_second`, which long files no longer swing the way they swing `mean_job_seconds`. Still a gap: a queued long file counts at the mean until it is decoded.
+
+### Window
+- Opening a settings sub-page no longer scrolls it by a few pixels (#477).
+
 ## 1.4.1 — a front end that only forwards jobs stays healthy during a models pull, and `auto` is listed as available only when a job without a model can run
 
 Two faults in 1.4.0 made a server report the wrong thing about itself. A front end with no speech engine, which forwards every job to its remotes, answered 503 on `/healthz` for as long as a local models pull ran, so a load balancer could drop it while it kept taking jobs. And `GET /v1/server` listed `auto` as available whenever a remote listed its own `auto`, even though a job without a model runs what `auto` resolves to on this server, so the listing and the job route could disagree. The 8-hour soak did not run for this release: it exercises the call-recording helper, and neither fix touches it.
