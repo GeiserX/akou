@@ -304,6 +304,32 @@ describe("[decision] Waiting for an agent that has left: a hang-up", () => {
   });
 });
 
+describe("[decision] Waiting for an agent that has left: the call ended", () => {
+  test("a call's end ends every presence on it at once, an open poll included, and a later poll does not count", () => {
+    const now = 0;
+    let told = 0;
+    const l = new Listeners(
+      () => now,
+      () => told++,
+    );
+    l.open("c1", "a")();
+    const open = l.open("c1", "b");
+    l.open("c2", "a")();
+    expect(l.listening("c1")).toEqual(["a", "b"]);
+    const before = told;
+    l.end("c1");
+    expect(l.listening("c1")).toEqual([]);
+    expect(told).toBe(before + 1);
+    // The poll still open when the call ended returns normally: it brings nothing back.
+    open();
+    expect(l.listening("c1")).toEqual([]);
+    l.open("c1", "late")();
+    expect(l.listening("c1")).toEqual([]);
+    // Another call keeps its own.
+    expect(l.listening("c2")).toEqual(["a"]);
+  });
+});
+
 describe("[decision] A question typed in the ask box never reaches the agent following the call: a pasted hand-off", () => {
   test("a hand-off of a logged question says how to post the answer back to the box; the question stays first", () => {
     const h = { question: "when do we ship?", call: "01CALL", tz: "UTC", excerpts: [] };

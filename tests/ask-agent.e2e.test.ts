@@ -486,3 +486,44 @@ describe("[decision] Waiting for an agent that has left", () => {
     LONG,
   );
 });
+
+// Last in the file: it ends the call every other case asks about.
+describe("[decision] Waiting for an agent that has left: the call ended", () => {
+  test(
+    "an agent whose watch stopped on `call.ended` is not waited for within the grace: the provider answers at once",
+    async () => {
+      await setWait(10);
+      // As `akou events -f --type ask` does: poll `ask` and the call's end, stop after the end,
+      // with a poll that returns normally (no hang-up).
+      let cursor = 0;
+      const watch = (async () => {
+        for (;;) {
+          const res = await fetch(
+            `http://127.0.0.1:${rig.port}/v1/calls/${id}/events?types=ask,call.ended,call.failed&wait=5&after=${cursor}`,
+            { headers: { authorization: `Bearer ${rig.token}`, "x-akou-client": "watcher" } },
+          );
+          const b = (await res.json()) as { events: LogEvent[]; cursor: number };
+          cursor = b.cursor;
+          if (b.events.some((e) => e.type === "call.ended" || e.type === "call.failed")) return;
+        }
+      })();
+      await until(
+        async () =>
+          ((await rig.api("GET", `/calls/${id}`)).body.listening ?? []).includes("watcher"),
+        5000,
+        "watcher to be listening",
+      );
+      expect((await rig.api("POST", `/calls/${id}/stop`)).status).toBe(200);
+      await watch;
+      expect((await rig.api("GET", `/calls/${id}`)).body.listening).toEqual([]);
+      const frames = await userAsk("catch me up");
+      expect(frames.find((f) => f.event === "routed")?.data).toEqual({
+        to: "provider",
+        why: "no agent is following this call",
+      });
+      expect(frames.at(-1)?.data).toMatchObject({ answered: true, model: "fake/1.0" });
+      expect(frames.at(-1)?.ms).toBeLessThan(5000);
+    },
+    LONG,
+  );
+});

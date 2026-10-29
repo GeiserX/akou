@@ -4,7 +4,9 @@
  * is open, and for `LISTEN_GRACE_MS` after it ends, which covers the gap between two polls (the
  * CLI polls again at once, every 25 s at most). There is no subscribe call and no lease to renew:
  * the long poll is how the question reaches the agent, so it being open is exactly the fact the
- * ask box needs. When the agent's watch dies, the presence ends on its own.
+ * ask box needs. When the agent's watch dies, the presence ends on its own. When the call ends, every
+ * presence on it ends at once: a watch stops on `call.ended`, so the grace would only make the ask
+ * box wait for an agent that will never read the question.
  *
  * In memory only, never in the log: who is following a call says nothing about the call itself.
  */
@@ -33,6 +35,7 @@ export class Listeners {
    * hung up during the poll (its watch was stopped), so it stops counting at once, with no grace.
    */
   open(call: string, client: string): (gone?: boolean) => void {
+    if (this.ended.has(call)) return () => {};
     let byClient = this.calls.get(call);
     if (!byClient) {
       byClient = new Map();
@@ -52,6 +55,16 @@ export class Listeners {
       if (gone && p.inFlight === 0 && byClient.get(client) === p) byClient.delete(client);
       this.changed();
     };
+  }
+
+  /** The calls that ended: nobody follows their questions any more. */
+  private readonly ended = new Set<string>();
+
+  /** The call ended or failed: every presence on it ends now, with no grace, and none starts again. */
+  end(call: string): void {
+    if (this.ended.size > 1000) this.ended.clear();
+    this.ended.add(call);
+    if (this.calls.delete(call)) this.changed();
   }
 
   /** The asks whose reply was the excerpts, because no model answered: `call/ask`. */

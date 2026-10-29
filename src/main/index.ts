@@ -1462,6 +1462,8 @@ export class AkouApp implements ApiApp {
     if (happened && this.appLog) this.appLog.line("info", `call ${id}: ${happened}`);
     // A pass that has ended has no figure any more, before anyone reads the status for its end.
     if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
+    // A watch stops on the call's end, so nobody follows its questions any more (listeners.ts).
+    if (e.type === "call.ended" || e.type === "call.failed") this.listeners.end(id);
     // A language the recognizer just detected may bring its word list.
     if (e.type === "seg" && e.lang) {
       const c = this.manager.controller(id);
