@@ -2833,7 +2833,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written.",
+        "description": "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written. A question the user typed in the ask box goes first to the agent following the call, when one is (`ask.agentWaitSeconds`); an agent's own question goes straight to the provider.",
         "parameters": [
           {
             "name": "id",
