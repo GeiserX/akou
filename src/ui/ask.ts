@@ -289,7 +289,8 @@ export class AskPane {
    * saved call opens on its last cited answer, and an agent's question shows when it lands.
    */
   restore(): void {
-    if (this.open && !this.running) {
+    // A question asked here keeps its card; later answers to it are added under it.
+    if (this.open && !this.running && this.open.ask !== this.shown) {
       this.more();
       return;
     }
@@ -299,7 +300,12 @@ export class AskPane {
       ?.qa()
       .filter((x) => x.answer)
       .at(-1);
-    if (!last?.answer || last.ask.id === this.shown) return;
+    if (!last?.answer) return;
+    // The card drawn from the log is open too: an answer that lands later goes under it.
+    if (last.ask.id === this.shown) {
+      this.more();
+      return;
+    }
     this.shown = last.ask.id;
     const by = last.ask.by === "user" ? "" : `asked by ${last.ask.by.replace(/^agent:/, "agent ")}`;
     const block = this.block(last.ask.q);
@@ -310,6 +316,7 @@ export class AskPane {
     replace(block.answer, ...citedText(first.text, v ?? null, first.cites, this.d.cite));
     for (const a of rest) block.card.append(this.extra(a));
     replace(this.out, block.root);
+    this.open = { ask: last.ask.id, drawn: last.answers.length, card: block.card, main: null };
   }
 
   /** Answers to the open question that arrived after its card was drawn, added under it. */

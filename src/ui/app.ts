@@ -386,11 +386,7 @@ class App {
     this.status = s;
     titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
-    // With no assistant the ask box searches the call instead (OW-2).
-    // An agent following the call answers the box itself, so it asks even with no assistant.
-    const listening = s.live?.listening ?? [];
-    this.askPane.setSearch(s.provider?.id === "none" && listening.length === 0);
-    this.askPane.setListening(listening);
+    this.askRoute();
     this.livePicker.follow(s.live);
     // The live menu reads its models again when the speech models or the live call change.
     const liveKey = JSON.stringify([s.models?.state, s.live?.call, s.live?.setup]);
@@ -413,6 +409,19 @@ class App {
     }
     void this.loadCalls();
     this.paint();
+  }
+
+  /**
+   * Who answers the ask box for the call the column shows. With no assistant the box searches the
+   * call instead (OW-2). An agent following the call answers the box itself, so it asks even with
+   * no assistant; only the live call has agents following it, so a saved call never names one.
+   */
+  private askRoute(): void {
+    const s = this.status;
+    if (!s) return;
+    const listening = s.live && s.live.call === this.callId ? (s.live.listening ?? []) : [];
+    this.askPane.setSearch(s.provider?.id === "none" && listening.length === 0);
+    this.askPane.setListening(listening);
   }
 
   /** Shows a call: a new follower, every pane reset. */
@@ -440,6 +449,7 @@ class App {
     this.transcript.reset();
     this.notepad.reset();
     this.askPane.reset();
+    this.askRoute();
     this.player.stop();
     this.meters(null);
     this.drawPeople(null);

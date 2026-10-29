@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
+import { sseFrames } from "../src/core/net/sse.ts";
 import { HarnessProvider } from "../src/main/llm/harness.ts";
 import {
   type CompleteRequest,
@@ -19,6 +20,7 @@ import {
   type ProviderId,
 } from "../src/main/llm/provider.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
+import { PageServer } from "../src/main/window/page-server.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -248,6 +250,72 @@ describe("[decision] A question typed in the ask box never reaches the agent fol
         });
       } finally {
         await agent.stop();
+      }
+    },
+    LONG,
+  );
+});
+
+describe("[decision] A question typed in the ask box never reaches the agent following the call: the window in a browser", () => {
+  test(
+    "the headless app's window asks over its page server with its session: the question is the user's and goes to the agent; a plain API client naming itself user does not",
+    async () => {
+      await setWait(10);
+      const before = provider.requests.length;
+      const page = new PageServer({ bridge: new Bridge(rig.app), bundle: new Map() });
+      const agent = fakeAgent("browser-agent", (a) => {
+        void answerAs("browser-agent", a.id, "Deploy to Hetzner.");
+      });
+      try {
+        await agent.ready();
+        // The page's own way in, as `src/ui/web.ts` does it: the one-time code for a session.
+        const code = /#k=(.+)$/.exec(page.openUrl(id))?.[1];
+        const s = await fetch(`${page.origin}/session`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+          body: JSON.stringify({ code }),
+        });
+        const { session } = (await s.json()) as { session: string };
+        const r = await fetch(`${page.origin}/api/v1/calls/${id}/ask`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session}`,
+            "content-type": "application/json",
+            "sec-fetch-site": "same-origin",
+          },
+          body: JSON.stringify({ question: "deploy from the browser?", stream: true }),
+        });
+        expect(r.status).toBe(200);
+        const frames: { event: string; data: unknown }[] = [];
+        for await (const f of sseFrames(r.body as ReadableStream<Uint8Array>)) {
+          if (f.event !== "comment") frames.push({ event: f.event, data: JSON.parse(f.data) });
+        }
+        expect(frames.find((f) => f.event === "routed")?.data).toMatchObject({
+          to: "agent",
+          clients: ["browser-agent"],
+        });
+        expect(frames.at(-1)?.data).toMatchObject({ answered: true, by: "agent:browser-agent" });
+        expect(provider.requests.length).toBe(before);
+        const asked = (await events()).filter(
+          (e) => e.type === "ask" && e.q === "deploy from the browser?",
+        );
+        expect(asked.map((e) => (e as { by?: string }).by)).toEqual(["user"]);
+        // The control: an API client cannot claim to be the user with a header, so its question
+        // is an agent's and never waits for the agent following the call.
+        const api = await rig.api(
+          "POST",
+          `/calls/${id}/ask`,
+          { question: "deploy as the user?" },
+          { "x-akou-client": "user" },
+        );
+        expect(api.body).toMatchObject({ answered: true, model: "fake/1.0" });
+        const claimed = (await events()).filter(
+          (e) => e.type === "ask" && e.q === "deploy as the user?",
+        );
+        expect(claimed.map((e) => (e as { by?: string }).by)).toEqual(["agent:user"]);
+      } finally {
+        await agent.stop();
+        await page.stop();
       }
     },
     LONG,
