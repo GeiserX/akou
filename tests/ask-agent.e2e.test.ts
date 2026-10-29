@@ -189,6 +189,27 @@ afterAll(async () => {
   wavDir?.cleanup();
 });
 
+// First in the file: an agent that stops its watch still counts for the 35 s grace (listeners.ts),
+// so the case with nobody listening runs before any agent has watched this call.
+describe("[decision] Waiting for an agent that has left: nobody watching", () => {
+  test(
+    "no agent listening: the provider runs at once, and `routed` says no agent follows the call",
+    async () => {
+      await setWait(10);
+      expect((await rig.api("GET", `/calls/${id}`)).body.listening).toEqual([]);
+      const frames = await userAsk("deploy?");
+      expect(frames.some((f) => f.event === "routed" && f.data.to === "agent")).toBe(false);
+      expect(frames.find((f) => f.event === "routed")?.data).toEqual({
+        to: "provider",
+        why: "no agent is following this call",
+      });
+      expect(frames.at(-1)?.data).toMatchObject({ answered: true, model: "fake/1.0" });
+      expect(frames.at(-1)?.ms).toBeLessThan(5000);
+    },
+    LONG,
+  );
+});
+
 describe("[decision] A question typed in the ask box never reaches the agent following the call", () => {
   test(
     "with an agent long-polling `ask`, the user's question goes to it, and its answer fills the box with `by` and citations; the provider is never run",
@@ -379,23 +400,6 @@ describe("[decision] An agent waits on its own question", () => {
 });
 
 describe("[decision] Waiting for an agent that has left", () => {
-  test(
-    "no agent listening: the provider runs at once, and `routed` says no agent follows the call",
-    async () => {
-      await setWait(10);
-      expect((await rig.api("GET", `/calls/${id}`)).body.listening).toEqual([]);
-      const frames = await userAsk("deploy?");
-      expect(frames.some((f) => f.event === "routed" && f.data.to === "agent")).toBe(false);
-      expect(frames.find((f) => f.event === "routed")?.data).toEqual({
-        to: "provider",
-        why: "no agent is following this call",
-      });
-      expect(frames.at(-1)?.data).toMatchObject({ answered: true, model: "fake/1.0" });
-      expect(frames.at(-1)?.ms).toBeLessThan(5000);
-    },
-    LONG,
-  );
-
   test(
     "positive control: `ask.agentWaitSeconds` 0 never waits, with an agent listening",
     async () => {
