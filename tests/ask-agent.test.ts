@@ -285,3 +285,20 @@ describe("[decision] A provider command set over the API", () => {
     expect(a).toMatchObject({ ok: false, kind: "missing" });
   });
 });
+
+describe("[decision] Waiting for an agent that has left: a hang-up", () => {
+  test("a client that hung up mid-poll stops counting at once; a normal end keeps the grace", () => {
+    const now = 0;
+    const l = new Listeners(() => now);
+    l.open("c1", "a")(true);
+    expect(l.listening("c1")).toEqual([]);
+    l.open("c1", "b")();
+    expect(l.listening("c1")).toEqual(["b"]);
+    // Another poll of the same client still open keeps it, whatever the first one did.
+    const second = l.open("c1", "c");
+    l.open("c1", "c")(true);
+    expect(l.listening("c1")).toEqual(["b", "c"]);
+    second(true);
+    expect(l.listening("c1")).toEqual(["b"]);
+  });
+});

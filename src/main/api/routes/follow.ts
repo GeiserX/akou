@@ -414,7 +414,8 @@ export function followRoutes(r: Router<ApiApp>): void {
       try {
         events = await readEvents();
       } finally {
-        listening?.();
+        // A client that hung up mid-poll stopped its watch: it no longer listens.
+        listening?.(c.req.signal.aborted);
       }
       return json(200, { call: id, events, cursor });
       async function readEvents(): Promise<LogEvent[]> {

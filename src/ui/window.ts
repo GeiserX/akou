@@ -55,6 +55,7 @@ const rpc = Electroview.defineRPC<AkouRpc>({
         const sink = askers.get(m.stream);
         if (!sink) return;
         if (m.kind === "excerpts") sink.excerpts(m.data as never);
+        else if (m.kind === "routed") sink.routed?.(m.data as never);
         else if (m.kind === "token") sink.token(m.data as string);
         else if (m.kind === "answer") {
           askers.delete(m.stream);

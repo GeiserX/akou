@@ -131,6 +131,7 @@ export function windowRpc(
             question,
             {
               excerpts: (d) => asked("excerpts", d),
+              routed: (d) => asked("routed", d),
               token: (t) => asked("token", t),
               answer: (d) => asked("answer", d),
               error: (d) => asked("error", d),
