@@ -122,7 +122,7 @@ const FINAL_QWEN = { kind: "module", path: "x", model: "x", final: QWEN } as unk
 const URL_ = "http://remote.example";
 
 interface RemoteJob {
-  status: "running" | "done";
+  status: "queued" | "running" | "done";
   total_s: number;
   done_s: number;
 }
@@ -290,5 +290,30 @@ describe("SV-Q5: the queue's numbers on a live service", () => {
     expect(short).toBeLessThan(2);
     expect(mixed.mean_job_seconds as number).toBeGreaterThan(160);
     expect(mixed.seconds_per_audio_second).toBe(0.1);
+  });
+
+  test("a forwarded job that waited long in the remote's queue leaves the box's own pace alone", async () => {
+    const s = service(300);
+    ran(s, [10, 2]);
+    s.add("local");
+    await until(() => s.turns() === 1, 4_000, "the local job to know its length");
+    const far: RemoteJob = { status: "queued", total_s: 60, done_s: 0 };
+    s.add("remote", far);
+    await until(() => s.jobs.size === 1, 4_000, "the job to reach the remote");
+    // It waits 6000 s in the remote's queue, then runs there and ends.
+    s.clock.t += 6_000_000;
+    far.status = "done";
+    far.done_s = 60;
+    await until(() => s.svc.queueStats().running === 1, 4_000, "the remote job to end");
+    // It counts in the hour's throughput, but its 6000 s from the send hold the remote's queue and
+    // pace, not this box's: the mean and the rate stay this box's own, and the local 300 s file
+    // still has 60 s left.
+    expect(s.svc.queueStats()).toMatchObject({
+      jobs_last_hour: 1,
+      audio_seconds_last_hour: 60,
+      mean_job_seconds: 2,
+      seconds_per_audio_second: 0.2,
+      eta_seconds: 60,
+    });
   });
 });

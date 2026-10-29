@@ -1909,6 +1909,8 @@ export class JobService {
   /**
    * A job that ended counts in the hour's throughput; its running time counts in the mean when this
    * process ran it from its start (not a job failed while it waited, or one a restart interrupted).
+   * A job sent to a remote is never timed: `dispatch` hands it on as its queued row, `running_at`
+   * null, so the remote's queue and pace stay out of this box's mean and per-audio rate (SV-Q5).
    */
   private measure(
     job: Job,
