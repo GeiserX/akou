@@ -106,6 +106,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_read: {},
   akou_search: { query: "budget" },
   akou_ask: { question: "what was decided?" },
+  akou_answer: { ask: "q0003", text: "We moved the budget to Friday [15:36 Ben]." },
   akou_name_speaker: { speaker: "c2", name: "Ben" },
   akou_merge_speakers: { a: "c3", b: "c2" },
   akou_unmerge_speaker: { speaker: "c3" },
@@ -190,6 +191,13 @@ export function sampleApi(n = 3): ApiClient {
       };
     }
     if (path.endsWith("/finalize")) return { call: "c1", model: "qwen" };
+    if (/\/asks\/q\d+\/answer$/.test(path)) {
+      return {
+        call: "c1",
+        answer: { ask: "q0003", by: "agent:claude-code", cites: ["l000001"], seq: 9 },
+        others: [{ by: "akou", model: "", kind: "excerpts" }],
+      };
+    }
     if (path === "/share" && method === "GET") return { active: false, shares: [] };
     if (path === "/share" && method === "POST") return { id: "s1", call: "c1", url: "http://x" };
     if (path === "/share")

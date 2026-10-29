@@ -38,6 +38,60 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 </details>
 
+## akou_answer
+
+**Answer the ask box**
+
+Post your answer to a question the user typed in akou's ask box: an `ask` line with `by: "user"` from your `akou events` watch, or one listed in akou_status `live.unanswered`. Read the call with akou_context first, answer briefly, cite lines as [HH:MM Name], then say the same answer in this conversation. The box shows it under your name. Never answer an ask whose `by` starts with `agent:`. `already_answered` means you did already: that is done. `others` says what else answered; with an answer from a model there, post again only to correct or add to it.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `ask` | `string` | yes | The ask id from the `ask` event, such as "q0291". |
+| `text` | `string` | yes | Your answer, with [HH:MM Name] citations. |
+| `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
+| `model` | `string` | no | The model that wrote it, if you know. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "ask": {
+      "type": "string",
+      "pattern": "^q\\d{4,}$",
+      "description": "The ask id from the `ask` event, such as \"q0291\"."
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Your answer, with [HH:MM Name] citations."
+    },
+    "call": {
+      "default": "live",
+      "description": "Which call: \"live\" (the one recording now), \"last\", or a call id. Use the live call unless the user names another one.",
+      "type": "string"
+    },
+    "model": {
+      "description": "The model that wrote it, if you know.",
+      "type": "string",
+      "maxLength": 200
+    }
+  },
+  "required": [
+    "ask",
+    "text"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
 ## akou_ask
 
 **Ask akou's provider**
