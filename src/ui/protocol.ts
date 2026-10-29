@@ -84,7 +84,10 @@ export interface AskAnswer {
   reason?: string;
   /** Why no model answered, by kind: `missing`, `auth`, `exhausted`, `cancelled` or `other`. */
   errorKind?: string;
-  context?: string;
+  /** Which route did not answer, in plain words, when none did. */
+  route?: string;
+  /** What "Copy context for my agent" hands over: the question, then where to read the call. */
+  handoff?: string;
 }
 
 export interface Transport {

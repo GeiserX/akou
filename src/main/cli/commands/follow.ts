@@ -7,6 +7,7 @@
 import { mentions, nameWords } from "../../../core/mention.ts";
 import { type LearnedItem, learnedNote } from "../../../core/vocab/learned.ts";
 import { readSse } from "../../llm/provider.ts";
+import { contextCommand } from "../../query/handoff.ts";
 import type { Parsed } from "../args.ts";
 import { bool, duration, int, str } from "../args.ts";
 import { type ApiResponse, EXIT } from "../client.ts";
@@ -284,7 +285,7 @@ function askDone(ctx: Ctx, q: string, b: Body, streamed: boolean): number {
   }
   ctx.io.out(b.text);
   ctx.io.err(
-    `akou: no model answered (${b.reason}); \`akou context "${q}"\` prints what an agent answers from`,
+    `akou: ${b.route ?? "akou's assistant"} did not answer (${b.reason}); \`${contextCommand(q, typeof b.call === "string" ? b.call : null)}\` prints what an agent answers from`,
   );
   return EXIT.unavailable;
 }

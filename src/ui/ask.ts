@@ -301,8 +301,11 @@ export class AskPane {
     );
   }
 
-  /** "Copy context for my agent": the pack, for the user's own agent when akou has none. */
-  private copyContext(ctx: string): HTMLElement {
+  /**
+   * "Copy context for my agent": the hand-off the app built (the question, then where the agent
+   * reads the call), for the user's own agent. Never the pack itself: pasted, it buries the question.
+   */
+  private copyContext(handoff: string): HTMLElement {
     return h(
       "button",
       {
@@ -310,8 +313,12 @@ export class AskPane {
         type: "button",
         on: {
           click: () =>
-            void navigator.clipboard.writeText(ctx).then(
-              () => toast("The context is on the clipboard: paste it to your agent.", "info"),
+            void navigator.clipboard.writeText(handoff).then(
+              () =>
+                toast(
+                  "The question and where to read the call are on the clipboard: paste them to your agent.",
+                  "info",
+                ),
               () => toast("The clipboard is not available here."),
             ),
         },
@@ -375,11 +382,15 @@ export class AskPane {
           return;
         }
         status.textContent = "No answer";
+        // One line: which route did not answer and why, never a quiet switch to the excerpts.
         const why = askUnavailable(a.reason, a.errorKind);
+        const route = a.route
+          ? `${a.route[0]?.toUpperCase()}${a.route.slice(1)} did not answer. `
+          : "";
         answer.replaceChildren(
-          h("span", {}, `${why ? `${why} ` : ""}The excerpts below are what matched.`),
+          h("span", {}, `${route}${why ? `${why} ` : ""}The excerpts below are what matched.`),
         );
-        if (a.context) answer.append(this.copyContext(a.context));
+        if (a.handoff) answer.append(this.copyContext(a.handoff));
       },
       error: (e) => {
         this.running = null;
@@ -392,7 +403,7 @@ export class AskPane {
   /**
    * No assistant: the words are a search of the call (`GET /calls/{id}/search`), which writes
    * nothing to the call and shows only lines that match, under one muted label, never an answer
-   * card. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" copies the pack
+   * card. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" copies the hand-off
    * of `POST /calls/{id}/context`, which changes nothing either.
    */
   private search(call: string, q: string): void {
@@ -451,13 +462,15 @@ export class AskPane {
           found.textContent =
             hits.length > 0 ? "Excerpts from the call" : "No line has these words.";
           // The pack is fetched now, not on the click: WebKit copies only inside the click itself.
-          void this.d.t.request<{ pack?: string }>("POST", `${path}/context`, { question: q }).then(
-            (c) => {
-              if (!cancelled && c.status === 200 && typeof c.body?.pack === "string")
-                root.append(this.copyContext(c.body.pack));
-            },
-            () => {},
-          );
+          void this.d.t
+            .request<{ handoff?: string }>("POST", `${path}/context`, { question: q })
+            .then(
+              (c) => {
+                if (!cancelled && c.status === 200 && typeof c.body?.handoff === "string")
+                  root.append(this.copyContext(c.body.handoff));
+              },
+              () => {},
+            );
         },
         (err: Error) => {
           if (cancelled) return;
