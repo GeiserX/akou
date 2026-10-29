@@ -1475,6 +1475,75 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+describe("[decision] A question typed in the ask box never reaches the agent following the call", () => {
+  test(
+    "the box names the agent following the call, and its later answer is added under its own label",
+    async () => {
+      const t = tempDir("akou-wav-");
+      const provider = new FakeProvider();
+      await withRig({ provider, helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Agent answers" });
+        const page = await rig.open(id);
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await until(async () => (await rowIds(page)).length === 1, 5000, "the row");
+        // No agent is following: the muted line is hidden and the provider answers.
+        expect(await page.locator(".ask-route").isVisible()).toBe(false);
+        provider.answer = () => "Move the build.";
+        await page.fill("#ask-input", "what about the build?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Move the build.",
+          5000,
+          "the provider's answer",
+        );
+        expect(await text(page, "#ask-out .ask-status")).toBe("answered by fake/1.0");
+        // Positive control: nothing else answered yet, so nothing is added under it.
+        expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+        const events = await rig.api("GET", `/calls/${id}/events?types=ask&wait=0`);
+        const askId = (events.body.events as { id: string }[]).at(-1)?.id as string;
+        const agent = { "x-akou-client": "claude-code" };
+        const posted = await rig.api(
+          "POST",
+          `/calls/${id}/asks/${askId}/answer`,
+          { text: "Move it to the new box." },
+          agent,
+        );
+        expect(posted.status).toBe(200);
+        await until(
+          async () => (await page.locator("#ask-out .more-answer").count()) === 1,
+          5000,
+          "the agent's later answer",
+        );
+        expect(await text(page, "#ask-out .more-answer .ask-status")).toBe(
+          "answered by claude-code (the agent following the call)",
+        );
+        expect(await text(page, "#ask-out .more-answer .answer")).toBe("Move it to the new box.");
+        // The first answer stays as it was.
+        expect(await text(page, "#ask-out .a-card > .answer")).toBe("Move the build.");
+        // A window opened later draws every answer from the log.
+        const again = await rig.open(id);
+        await until(
+          async () => (await again.locator("#ask-out .more-answer").count()) === 1,
+          5000,
+          "every answer on a fresh window",
+        );
+        expect(await text(again, "#ask-out .a-card .lbl .ask-status")).toBe("answered by fake/1.0");
+        // An agent watching the call's questions is named under the box.
+        void rig.api("GET", `/calls/${id}/events?types=ask&wait=5`, undefined, agent);
+        await until(
+          async () =>
+            (await text(page, ".ask-route")) ===
+            "Questions go to claude-code, which is following this call.",
+          8000,
+          "the muted line",
+        );
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
 /** How many text rows a box shows, how much of its text is hidden, and whether it scrolls. */
 const rowsOf = (page: Page, sel: string) =>
   page.$eval(sel, (el) => {

@@ -85,6 +85,12 @@ export interface AskSink {
 }
 
 export interface AskAnswer {
+  /** The `ask` event's id, when the question was logged. */
+  ask?: string;
+  /** Who answered, when the agent following the call did: `agent:claude-code`. */
+  by?: string;
+  /** Why the agent following the call did not answer first, when the question waited for it. */
+  agentReason?: string;
   answered: boolean;
   text: string;
   kind: "answer" | "excerpts" | "naming";
@@ -166,6 +172,8 @@ export interface AppStatus {
     /** The live model's and the second pass's names, as the button says them; absent from an older app. */
     name?: string;
     reviewName?: string;
+    /** The agents following the call's questions (`akou events -f --type ask`); absent from an older app. */
+    listening?: string[];
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   /** Every final pass running now, with how far it is; absent from an older app. */

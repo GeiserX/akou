@@ -21,6 +21,12 @@
  * the first status says which, the box shows neither Ask's words nor Search's. With an assistant
  * it is Ask again.
  *
+ * A question typed here goes first to the agent following the call, when one is (DESIGN 5.5): a
+ * muted line under the box names it, the status says it was sent and how long the box waits, and
+ * its answer is labelled "answered by <client> (the agent following the call)". With an agent
+ * following, the box asks even with no assistant. An answer that arrives later, from the agent or
+ * the provider, is added under the first, never replacing it; a call opened later shows them all.
+ *
  * With an assistant, focus in the box and typing in it ask the app to get the provider ready
  * (`POST /provider/warm`, at most every `WARM_EVERY_MS`), and so does an answer arriving while the
  * box has focus: the harness then starts while the user types instead of after Enter (#383).
@@ -98,6 +104,14 @@ export function excerptLine(line: string): string {
   return line.replace(/^#[lf]\d{6,} /, "");
 }
 
+/** The status words for one answer: who answered it. */
+export function answerLabel(a: { by?: string; model?: string }): string {
+  if (a.by?.startsWith("agent:")) {
+    return `answered by ${a.by.slice("agent:".length)} (the agent following the call)`;
+  }
+  return a.model ? `answered by ${a.model}` : "";
+}
+
 /** How often the box asks the app to keep the provider ready while it has focus. */
 export const WARM_EVERY_MS = 20_000;
 
@@ -116,8 +130,13 @@ export class AskPane {
   private shown: string | null = null;
   /** When the box last asked the app to get the provider ready (`warm`). */
   private warmedAt = 0;
+  /** The question asked here whose card is open, and how many of its answers it draws. */
+  private open: { ask: string; drawn: number; card: HTMLElement } | null = null;
+  /** The muted line under the box naming the agents that get its questions first. */
+  private readonly route = h("p", { class: "ask-route", attrs: { hidden: "" } });
 
   constructor(private readonly d: AskDeps) {
+    this.form.after(this.route);
     this.form.addEventListener("submit", (e) => {
       e.preventDefault();
       this.ask(this.input.value);
@@ -155,6 +174,17 @@ export class AskPane {
     this.form.addEventListener("focusout", (e) => {
       if (e.relatedTarget && !this.form.contains(e.relatedTarget as Node)) this.menu(false);
     });
+  }
+
+  /** The agents following the call's questions, from the status: named in the muted line. */
+  setListening(clients: readonly string[]): void {
+    const text =
+      clients.length > 0
+        ? `Questions go to ${clients.join(" and ")}, which ${clients.length > 1 ? "are" : "is"} following this call.`
+        : "";
+    if (this.route.textContent === text) return;
+    this.route.textContent = text;
+    this.route.toggleAttribute("hidden", text === "");
   }
 
   /** Search when no assistant is set up, Ask when one is (the status's `provider.id`). */
@@ -248,6 +278,10 @@ export class AskPane {
    * saved call opens on its last cited answer, and an agent's question shows when it lands.
    */
   restore(): void {
+    if (this.open && !this.running) {
+      this.more();
+      return;
+    }
     if (this.running || (this.out.childElementCount > 0 && this.shown === null)) return;
     const v = this.d.view();
     const last = v
@@ -258,15 +292,38 @@ export class AskPane {
     this.shown = last.ask.id;
     const by = last.ask.by === "user" ? "" : `asked by ${last.ask.by.replace(/^agent:/, "agent ")}`;
     const block = this.block(last.ask.q);
-    block.status.textContent = [by, last.answer.model ? `answered by ${last.answer.model}` : ""]
-      .filter(Boolean)
-      .join(" · ");
+    const [first, ...rest] = last.answers;
+    if (!first) return;
+    block.status.textContent = [by, answerLabel(first)].filter(Boolean).join(" · ");
     block.status.title = block.status.textContent;
-    replace(
-      block.answer,
-      ...citedText(last.answer.text, v ?? null, last.answer.cites, this.d.cite),
-    );
+    replace(block.answer, ...citedText(first.text, v ?? null, first.cites, this.d.cite));
+    for (const a of rest) block.card.append(this.extra(a));
     replace(this.out, block.root);
+  }
+
+  /** Answers to the open question that arrived after its card was drawn, added under it. */
+  private more(): void {
+    const open = this.open;
+    const qa = open
+      ? this.d
+          .view()
+          ?.qa()
+          .find((x) => x.ask.id === open.ask)
+      : undefined;
+    if (!open || !qa) return;
+    for (const a of qa.answers.slice(open.drawn)) open.card.append(this.extra(a));
+    open.drawn = Math.max(open.drawn, qa.answers.length);
+  }
+
+  /** One more answer to a question already answered: its own label, then its cited text. */
+  private extra(a: { by?: string; model: string; text: string; cites: string[] }): HTMLElement {
+    const label = answerLabel(a);
+    return h(
+      "div",
+      { class: "more-answer" },
+      h("span", { class: "ask-status", attrs: { title: label } }, label),
+      h("div", { class: "answer" }, ...citedText(a.text, this.d.view(), a.cites, this.d.cite)),
+    );
   }
 
   /** One question and its answer card, with the matching excerpts under it. */
@@ -275,18 +332,19 @@ export class AskPane {
     cards: HTMLElement;
     status: HTMLElement;
     answer: HTMLElement;
+    card: HTMLElement;
   } {
     const cards = h("div", { class: "evidence" });
     const answer = h("div", { class: "answer", attrs: { "aria-live": "polite" } });
     const status = h("span", { class: "ask-status" });
-    const root = h(
-      "section",
-      { class: "qa" },
-      h("p", { class: "question" }, q),
-      h("div", { class: "a-card" }, h("div", { class: "lbl" }, "Answer", status), answer),
-      cards,
+    const card = h(
+      "div",
+      { class: "a-card" },
+      h("div", { class: "lbl" }, "Answer", status),
+      answer,
     );
-    return { root, cards, status, answer };
+    const root = h("section", { class: "qa" }, h("p", { class: "question" }, q), card, cards);
+    return { root, cards, status, answer, card };
   }
 
   /** The excerpts as cards: each with its citation chip, then its lines. */
@@ -347,11 +405,12 @@ export class AskPane {
     this.running?.cancel();
     this.input.value = "";
     this.shown = null;
+    this.open = null;
     if (this.searching) {
       this.search(call, q);
       return;
     }
-    const { root, cards, status, answer } = this.block(q);
+    const { root, cards, status, answer, card } = this.block(q);
     answer.classList.add("streaming");
     status.textContent = "Looking in the call…";
     // The last question and its answer are what the column shows (WINDOW section 6.2).
@@ -362,6 +421,15 @@ export class AskPane {
         replace(cards, ...this.cards(data.excerpts));
         status.textContent = "Asking…";
       },
+      routed: (r) => {
+        if (r.to === "agent") {
+          const who = (r.clients ?? []).join(" and ") || "the agent following the call";
+          status.textContent = `Sent to ${who}, waiting up to ${r.waitSeconds ?? 0} s`;
+        } else {
+          status.textContent = r.why ? `Asking akou's assistant: ${r.why}` : "Asking…";
+        }
+        status.title = status.textContent;
+      },
       token: (t) => {
         streamed += t;
         answer.textContent = streamed;
@@ -369,6 +437,15 @@ export class AskPane {
       answer: (a: AskAnswer) => {
         this.running = null;
         answer.classList.remove("streaming");
+        status.title = "";
+        // Answers that land later (the agent after the provider, or the other way) go under this one.
+        if (a.ask && a.kind !== "naming") {
+          const qa = this.d
+            .view()
+            ?.qa()
+            .find((x) => x.ask.id === a.ask);
+          this.open = { ask: a.ask, drawn: qa?.answers.length ?? (a.answered ? 1 : 0), card };
+        }
         // The question took the harness started early: start the next one for a follow-up.
         if (document.activeElement === this.input) this.warm(true);
         if (a.kind === "naming") {
@@ -377,7 +454,8 @@ export class AskPane {
           return;
         }
         if (a.answered) {
-          status.textContent = a.model ? `answered by ${a.model}` : "";
+          status.textContent = answerLabel(a);
+          status.title = status.textContent;
           replace(answer, ...citedText(a.text, this.d.view(), a.cites, this.d.cite));
           return;
         }
@@ -387,8 +465,16 @@ export class AskPane {
         const route = a.route
           ? `${a.route[0]?.toUpperCase()}${a.route.slice(1)} did not answer. `
           : "";
+        // Both routes that failed, in one line: the agent following the call, then the provider.
+        const agent = a.agentReason
+          ? `${a.agentReason[0]?.toUpperCase()}${a.agentReason.slice(1)}. `
+          : "";
         answer.replaceChildren(
-          h("span", {}, `${route}${why ? `${why} ` : ""}The excerpts below are what matched.`),
+          h(
+            "span",
+            {},
+            `${agent}${route}${why ? `${why} ` : ""}The excerpts below are what matched.`,
+          ),
         );
         if (a.handoff) answer.append(this.copyContext(a.handoff));
       },
