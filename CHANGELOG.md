@@ -2,6 +2,19 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.6.0 — the recording icon is visible on any menu bar, and the tray says what is recording
+
+On macOS the recording icon in the menu bar was a mid-grey mark with a red dot, and on a translucent dark bar the grey all but vanished, so you could not tell a call was recording. The tray menu did not help: it never said which call was recording or for how long, and it had no way to pause or to ask about the call. Now the recording icon has its own shape, the menu names the call and controls it, and the menu bar shows how long the call has run. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Tray and menu bar
+- **The recording icon shows on any menu bar** (#479). On macOS it is now a template image, so the menu bar inks it for dark, light and translucent bars and with the menu open. It differs from idle by its shape, a filled disc with the akou mark cut out, not by a colour. Windows and Linux keep the mark with a red dot.
+- **The menu bar shows how long the call has run** (#479). On macOS a recording call shows its elapsed time beside the icon as `h:mm` (`0:23`), counted from the call's first part, so an app restarted mid-call shows the call's own time. It moves once a minute. A paused call still shows `❚❚`, and a dictation or a share still takes the place. Windows and most Linux panels show no text beside a tray icon, so there the menu carries the time.
+- **The menu names the call and controls it** (#479). While a call records, the menu starts with its title, workspace and elapsed minutes (`Weekly sync · work · 23 min`), warns when the microphone or the system audio records nothing, and has Pause or Resume, Stop recording and **Ask about this call…**, which opens the window on the call with the ask box ready.
+- **Open at login moved to Settings only** (#479). The tray no longer has it. Changing `app.openAtLogin` from Settings, `akou config set` or `PATCH /config` now writes or removes the login item at once; before, only the tray applied it.
+
+### Status
+- `GET /status` and `akou_status` carry `live.startedAt`, when the call's first part started, and `live.lost`, the capture sides that record nothing now (#479).
+
 ## 1.5.0 — the agent following a call answers the ask box, and a failed ask hands your agent the question
 
 A question typed in the ask box only ever went to akou's own provider, a second agent run on the same subscription. When that provider was out of quota or set to none, the box answered with excerpts, even with an agent already following the call. Now the question goes to that agent first, and akou's provider is the fallback. When neither answers, "Copy context for my agent" used to copy the whole context pack, without the question and with akou's notes to an agent that read as the user's ask; it now hands over the question word for word and where to find the call. A new `command` provider runs a program of your own. And a server's queue ETA now counts the long file running now, so a client stops picking a busy box. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
