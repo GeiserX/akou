@@ -111,8 +111,18 @@ describe("[decision] Provider unavailable answered with nothing: the hand-off ca
 
   test("the command quotes what a shell would expand", () => {
     expect(contextCommand('say "hi" $HOME `x` \\', null)).toBe(
-      'akou context "say \\"hi\\" \\$HOME \\`x\\` \\\\"',
+      `akou context 'say "hi" $HOME \`x\` \\'`,
     );
-    expect(contextCommand("what?", ID)).toBe(`akou context "what?" -c ${ID}`);
+    expect(contextCommand("what?", ID)).toBe(`akou context 'what?' -c ${ID}`);
+    // `!` inside double quotes is history expansion in an interactive bash; single quotes keep it.
+    expect(contextCommand("did we !deploy?", null)).toBe("akou context 'did we !deploy?'");
+    expect(contextCommand("it's done", null)).toBe(`akou context 'it'\\''s done'`);
+  });
+
+  test.skipIf(process.platform === "win32")("a shell reads the question back word for word", () => {
+    const question = `it's "done" $HOME \`x\` !deploy \\ ''`;
+    const arg = contextCommand(question, null).slice("akou context ".length);
+    const r = Bun.spawnSync(["sh", "-c", `printf %s ${arg}`]);
+    expect(r.stdout.toString()).toBe(question);
   });
 });

@@ -35,10 +35,14 @@ export interface HandoffInput {
   excerpts: readonly ExcerptBlock[];
 }
 
-/** `akou context "…" -c ID`, with the question escaped for a shell's double quotes. */
+/**
+ * `akou context '…' -c ID`, with the question in single quotes, where a shell expands nothing: no
+ * `$`, no backticks, and no `!` history expansion in an interactive bash. An apostrophe closes the
+ * quote, adds an escaped `'` and reopens it.
+ */
 export function contextCommand(question: string, call: string | null): string {
-  const q = question.replace(/[\\"$`]/g, (c) => `\\${c}`);
-  return `akou context "${q}"${call ? ` -c ${call}` : ""}`;
+  const q = question.replace(/'/g, `'\\''`);
+  return `akou context '${q}'${call ? ` -c ${call}` : ""}`;
 }
 
 /** The text handed to the user's agent: the question first, then where to read, then a short excerpt. */

@@ -193,7 +193,7 @@ describe("asking", () => {
         // The route that failed is named; the hand-off starts with the question, not the pack.
         expect(r.body.route).toBe("the coding agent akou runs");
         expect(r.body.handoff.split("\n")[0]).toBe("deploy?");
-        expect(r.body.handoff).toContain(`akou context "deploy?" -c ${r.body.call}`);
+        expect(r.body.handoff).toContain(`akou context 'deploy?' -c ${r.body.call}`);
         expect(r.body.handoff).not.toMatch(/^LIVE|Question analysis/m);
         // No answer is logged for the question.
         const log = await events();
@@ -436,7 +436,7 @@ describe("the CLI", () => {
       const t = io();
       expect(await runCli(["ask", "deploy?"], t.io, { launch: null })).toBe(69);
       expect(t.out.join("\n")).toStartWith("No model answered (no harness found)");
-      expect(t.err.join("\n")).toContain('akou context "deploy?"');
+      expect(t.err.join("\n")).toContain("akou context 'deploy?'");
     } finally {
       provider.fail = null;
     }
