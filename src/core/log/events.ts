@@ -257,6 +257,11 @@ export interface Answer extends Envelope {
   cites: string[];
   model: string;
   pack: { mode: string; tokens: number };
+  /**
+   * Who answered: `agent:<client>` when the agent following the call answered the ask box
+   * (`POST /calls/{id}/asks/{ask}/answer`). Absent: akou's own provider, as every older answer.
+   */
+  by?: Author;
 }
 
 export interface Enhanced extends Envelope {
@@ -611,6 +616,7 @@ const SPECS: { [T in EventType]: Spec } = {
     cites: req("string[]"),
     model: req("string"),
     pack: req("object"),
+    by: opt("author"),
   },
   enhanced: {
     rev: req("int"),

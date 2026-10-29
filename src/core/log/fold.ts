@@ -276,7 +276,13 @@ export interface ProposalView {
 
 export interface QaView {
   ask: Ask;
+  /** The latest answer: what a pack quotes. */
   answer?: Answer;
+  /**
+   * Every answer, oldest first: akou's provider and the agent following the call may both answer
+   * one question, and each is shown under its own label.
+   */
+  answers: Answer[];
 }
 
 export interface FinalState {
@@ -626,12 +632,18 @@ export class CallView {
         this._chunks.push(e);
         break;
       case "ask":
-        this._asks.set(e.id, { ask: e, answer: this._asks.get(e.id)?.answer });
+        this._asks.set(e.id, {
+          ask: e,
+          answer: this._asks.get(e.id)?.answer,
+          answers: this._asks.get(e.id)?.answers ?? [],
+        });
         break;
       case "answer": {
         const qa = this._asks.get(e.ask);
-        if (qa) qa.answer = e;
-        else this.issues.push(`answer at seq ${e.seq} for unknown ask "${e.ask}"`);
+        if (qa) {
+          qa.answer = e;
+          qa.answers.push(e);
+        } else this.issues.push(`answer at seq ${e.seq} for unknown ask "${e.ask}"`);
         break;
       }
       case "enhanced":

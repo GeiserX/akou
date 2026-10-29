@@ -9,6 +9,7 @@
  */
 
 export const ERROR_CODES = {
+  already_answered: "This agent already answered that question in the ask box: that is done.",
   already_final: "The final pass already ran; send `force` to run it again.",
   already_recording: "A call is already recording; `already_recording` names it.",
   apps_unavailable: "One app cannot be captured on this system; the message says why.",
@@ -71,6 +72,7 @@ export const ERROR_CODES = {
   model_in_use: "The model is in use or downloading.",
   models_missing: "The speech models are not downloaded yet.",
   multipart_required: "An upload needs `Content-Type: multipart/form-data`.",
+  no_ask: "The call has no question with that ask id.",
   no_audio: "There is no audio to send.",
   no_calls: "There are no calls yet, so `last` names none.",
   no_draft_box: "The draft box needs the desktop window.",

@@ -314,7 +314,12 @@ export async function enhance(o: EnhanceOptions): Promise<EnhanceResult> {
     ].join("\n");
     const r: CompleteResult = await runProvider(
       o.provider,
-      { system: MAP_SYSTEM, prompt, maxTokens: MAP_MAX_TOKENS },
+      {
+        system: MAP_SYSTEM,
+        prompt,
+        maxTokens: MAP_MAX_TOKENS,
+        meta: { task: "enhance", call: o.q.view.call?.id },
+      },
       () => {},
       { signal: o.signal, timeoutMs: o.timeoutMs },
     );
@@ -332,7 +337,12 @@ export async function enhance(o: EnhanceOptions): Promise<EnhanceResult> {
   if (mapCalls > 0) input = buildEnhanceInput(o.q, o.template, o);
   const r = await runProvider(
     o.provider,
-    { system: ENHANCE_SYSTEM, prompt: input.prompt, maxTokens: REDUCE_MAX_TOKENS },
+    {
+      system: ENHANCE_SYSTEM,
+      prompt: input.prompt,
+      maxTokens: REDUCE_MAX_TOKENS,
+      meta: { task: "enhance", call: o.q.view.call?.id },
+    },
     () => {},
     { signal: o.signal, timeoutMs: o.timeoutMs },
   );

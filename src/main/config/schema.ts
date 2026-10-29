@@ -107,6 +107,8 @@ export interface SettingSpec {
   also?: readonly number[];
   /** One of these values, for a string or for each item of a list. */
   values?: readonly string[];
+  /** A `string[]` whose items may be empty (an argument list: `--tools ""`). */
+  emptyItems?: boolean;
   default: SettingValue;
   /** The environment variable that overrides the file. */
   env?: string;
@@ -595,9 +597,9 @@ export const SETTINGS = {
   },
   "provider.kind": {
     type: "string",
-    values: ["harness", "openai-compatible", "anthropic", "none"],
+    values: ["harness", "openai-compatible", "anthropic", "command", "none"],
     default: "harness",
-    doc: "What answers questions and writes enhanced notes: your own Claude Code or Codex (`harness`), an OpenAI-compatible server, the Anthropic API with your key, or `none` (excerpts only).",
+    doc: "What answers questions and writes enhanced notes: your own Claude Code or Codex (`harness`), an OpenAI-compatible server, the Anthropic API with your key, a program you name in `provider.command` (`command`), or `none` (excerpts only). With `none`, an agent following the call can still answer the ask box (`ask.agentWaitSeconds`).",
   },
   "provider.harness": {
     type: "string",
@@ -610,6 +612,22 @@ export const SETTINGS = {
     default: "",
     apiWritable: false,
     doc: "Pin the harness program by absolute path. Empty: look it up on PATH and through the login shell.",
+  },
+  "provider.command": {
+    type: "string[]",
+    default: [],
+    emptyItems: true,
+    // It decides what program runs on this machine: set in the config file only, never over the
+    // API and never from the window, like `provider.harnessPath`.
+    apiWritable: false,
+    windowWritable: false,
+    doc: "With `provider.kind` `command`: the program and its arguments, as a list, run with no shell. The prompt goes on stdin as plain text and stdin is then closed; the answer is what it prints on stdout. `{system}`, `{question}`, `{call}`, `{ask}` and `{task}` inside an argument are replaced (the system prompt goes at the top of stdin when no argument has `{system}`), and the same values are in AKOU_QUESTION, AKOU_CALL_ID, AKOU_ASK_ID and AKOU_TASK. A non-zero exit fails the run, with the last line of stderr as the reason. Set it in the config file only.",
+  },
+  "provider.commandLabel": {
+    type: "string",
+    max: 80,
+    default: "",
+    doc: 'The name the window shows for `provider.command` in "answered by" and when it did not answer. Empty: the program\'s file name.',
   },
   "provider.baseUrl": {
     type: "string",
@@ -655,6 +673,13 @@ export const SETTINGS = {
     values: ["auto", "on", "off"],
     default: "auto",
     doc: "Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`.",
+  },
+  "ask.agentWaitSeconds": {
+    type: "integer",
+    min: 0,
+    max: 300,
+    default: 30,
+    doc: "When an agent is following the call (its `akou events -f` watch includes `ask`), how long a question typed in the ask box waits for that agent to answer it before akou's own provider runs. 0: never wait for an agent. An agent's answer that comes later is still added to the card.",
   },
   "agent.summary_every_minutes": {
     type: "integer",
@@ -1127,7 +1152,10 @@ export function validateSetting(
       return { ok: true, key, value };
     }
     case "string[]": {
-      if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v !== "")) {
+      if (
+        !Array.isArray(value) ||
+        !value.every((v) => typeof v === "string" && (v !== "" || spec.emptyItems))
+      ) {
         return { ok: false, error: `${key}: must be a list of non-empty strings` };
       }
       const bad = spec.values && value.find((v) => !spec.values?.includes(v));

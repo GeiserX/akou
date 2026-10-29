@@ -214,6 +214,7 @@ import {
 import { sendWebhook, webhookDoneDraft, webhookProblem } from "./handoff/webhook.ts";
 import { ImportError, type ImportResult, importHarkViewer } from "./import/hark-viewer.ts";
 import { AnthropicProvider } from "./llm/anthropic.ts";
+import { CommandProvider } from "./llm/command.ts";
 import {
   type Discovery,
   discoverHarnesses,
@@ -235,8 +236,10 @@ import {
 } from "./notes/enhance.ts";
 import { listPresets, type Preset } from "./notes/presets.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
+import { unansweredAsks } from "./query/agent-answer.ts";
 import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
+import { Listeners } from "./query/listeners.ts";
 import {
   MEMO_MIN_INTERVAL_MS,
   memoByProvider,
@@ -654,6 +657,13 @@ export class AkouApp implements ApiApp {
   private readonly watchers = new Set<(call: string, e: LogEvent) => void>();
   /** Told when the status changes without a log event (a share viewer came or went). */
   private readonly statusWatchers = new Set<() => void>();
+  /** The agents following each call's questions; a change re-reads the status in the window. */
+  readonly listeners = new Listeners(
+    () => this.clock.now(),
+    () => {
+      for (const fn of this.statusWatchers) fn();
+    },
+  );
   /** Told after every start and share, with who asked (`onAnnounce`). */
   private readonly announceWatchers = new Set<(a: Announcement) => void>();
   /** The window in a browser, started the first time a headless app is asked to show it. */
@@ -916,6 +926,12 @@ export class AkouApp implements ApiApp {
           model: s["provider.model"],
           apiKey: s["provider.apiKey"],
         });
+      case "command":
+        return new CommandProvider({
+          argv: s["provider.command"],
+          label: s["provider.commandLabel"],
+          env: this.o.env ?? process.env,
+        });
       case "anthropic":
         return new AnthropicProvider({
           apiKey: s["provider.apiKey"],
@@ -959,8 +975,21 @@ export class AkouApp implements ApiApp {
       !this.o.provider &&
       this.discovery === null &&
       this.cfg.settings["provider.harnessPath"] === "";
-    if (a.ok) return { state: "available", id: p.id, harness, detail: a.detail };
-    return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
+    // The account the harness runs on, when the app's own environment names one: shown in the
+    // local window and CLI only, never written to a call.
+    const configDir = p instanceof HarnessProvider ? p.configDir() : undefined;
+    const extra = {
+      ...(configDir ? { configDir } : {}),
+      ...(p instanceof CommandProvider ? { label: p.label() } : {}),
+    };
+    if (a.ok) return { state: "available", id: p.id, harness, detail: a.detail, ...extra };
+    return {
+      state: checking ? "checking" : "unavailable",
+      id: p.id,
+      harness,
+      reason: a.reason,
+      ...extra,
+    };
   }
 
   /**
@@ -2498,6 +2527,11 @@ export class AkouApp implements ApiApp {
             // Their names, as the Record row's button and the call header say them.
             ...liveNames(this.liveRan.get(live.id)),
             levels: this.levels(live.id),
+            // The agents following this call's questions, which the ask box sends them to first.
+            listening: this.listeners.listening(live.id),
+            // The user's questions of the last minutes no agent answered, for an agent that has
+            // no watch to wake it: it answers them when the user next speaks to it.
+            unanswered: unansweredAsks(live.view, this.clock.now()),
           }
         : null,
       last: last

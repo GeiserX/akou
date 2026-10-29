@@ -330,6 +330,17 @@ const OUT = {
     callText: CALL_TEXT.nullable(),
   }),
   ask: z.object({ answered: z.boolean(), callText: CALL_TEXT }),
+  answer: z.object({
+    ask: z.string(),
+    cites: z.array(z.string()),
+    others: z.array(
+      z.object({
+        by: z.string(),
+        model: z.string(),
+        kind: z.string().describe("`model`: it answered; `excerpts`: akou showed only the lines"),
+      }),
+    ),
+  }),
   speaker: z.object({ spk: z.string(), name: z.string() }),
   rename: z.object({ call: z.string(), title: z.string() }),
   merge: z.object({ from: z.string(), into: z.string() }),
@@ -552,6 +563,7 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_read: { title: "Read new lines", hints: READ },
   akou_search: { title: "Search a call", hints: READ },
   akou_ask: { title: "Ask akou's provider", hints: PROVIDER },
+  akou_answer: { title: "Answer the ask box", hints: WRITE },
   akou_name_speaker: { title: "Name a speaker", hints: IDEMPOTENT },
   akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
   akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
@@ -1156,6 +1168,41 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
   ask.disable();
+
+  tool(
+    "akou_answer",
+    {
+      description:
+        'Post your answer to a question the user typed in akou\'s ask box: an `ask` line with `by: "user"` from your `akou events` watch, or one listed in akou_status `live.unanswered`. Read the call with akou_context first, answer briefly, cite lines as [HH:MM Name], then say the same answer in this conversation. The box shows it under your name. Never answer an ask whose `by` starts with `agent:`. `already_answered` means you did already: that is done. `others` says what else answered; with an answer from a model there, post again only to correct or add to it.',
+      inputSchema: z.object({
+        ask: z
+          .string()
+          .regex(/^q\d{4,}$/)
+          .describe('The ask id from the `ask` event, such as "q0291".'),
+        text: z.string().min(1).max(4000).describe("Your answer, with [HH:MM Name] citations."),
+        call: CALL,
+        model: z.string().max(200).optional().describe("The model that wrote it, if you know."),
+      }),
+      outputSchema: OUT.answer,
+    },
+    async (a) => {
+      const r = await req("POST", `/calls/${id(a.call)}/asks/${a.ask}/answer`, {
+        body: { text: a.text, ...(a.model ? { model: a.model } : {}) },
+      });
+      return asResult(r, (b) => {
+        const others = (b.others as Body[]) ?? [];
+        const said = others.map((o) =>
+          o.kind === "excerpts"
+            ? "akou showed only the excerpts"
+            : `${o.by} (${o.model}) also answered`,
+        );
+        return {
+          text: `Answered ${a.ask} in the ask box with ${b.answer.cites.length} citation(s)${said.length > 0 ? `; ${said.join("; ")}` : ""}.`,
+          data: { ask: a.ask, cites: b.answer.cites, others },
+        };
+      });
+    },
+  );
 
   // --- speakers, notes, memory, memo ------------------------------------------------------------
 

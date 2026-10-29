@@ -2,9 +2,10 @@
  * The provider interface (docs/DESIGN.md section 5.3): whatever does the thinking for the ask box
  * and Enhance. akou brokers a small context and the provider answers it, token by token.
  *
- * Four providers share this interface: the user's own coding harness (`harness`, the default), an
+ * Five providers share this interface: the user's own coding harness (`harness`, the default), an
  * OpenAI-compatible server (`openai-compatible`), the Anthropic API with the user's own key
- * (`anthropic`), and `none`, which answers nothing and leaves the caller to show excerpts.
+ * (`anthropic`), a program the user names (`command`), and `none`, which answers nothing and
+ * leaves the caller to show excerpts.
  *
  * Failures are typed, so a caller can say why and fall back to excerpts instead of showing nothing
  * (TRAPS "Provider unavailable answered with nothing"):
@@ -16,7 +17,7 @@
  * - `other`: anything else, including no answer within the deadline.
  */
 
-export type ProviderId = "harness" | "openai-compatible" | "anthropic" | "none";
+export type ProviderId = "harness" | "openai-compatible" | "anthropic" | "command" | "none";
 
 export type ProviderErrorKind = "missing" | "exhausted" | "auth" | "cancelled" | "other";
 
@@ -42,6 +43,16 @@ export interface CompleteRequest {
    * it; the others answer the prompt alone.
    */
   session?: { id: string; resume: boolean };
+  /**
+   * What the run is for, which a user's own command (`provider.kind` `command`) reads as
+   * `{task}`, `{question}`, `{call}` and `{ask}`. The other providers ignore it.
+   */
+  meta?: {
+    task: "ask" | "enhance" | "memo" | "other";
+    question?: string;
+    call?: string;
+    ask?: string;
+  };
 }
 
 /** Tokens one run spent, as the provider reported them. */

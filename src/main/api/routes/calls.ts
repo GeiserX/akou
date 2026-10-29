@@ -362,7 +362,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls/:id",
     {
       id: "calls.get",
-      doc: "One call: its title, workspace, state, parts, speakers, health, the final pass and the log cursor.",
+      doc: "One call: its title, workspace, state, parts, speakers, health, the final pass, the log cursor, and `listening`: the agents following its questions, which a question typed in the ask box goes to first.",
       access: "read",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -371,7 +371,11 @@ export function callRoutes(r: Router<ApiApp>): void {
     },
     async (c) => {
       const call = await callOf(c);
-      return json(200, callDetail(call, c.app, c.app.now()));
+      return json(200, {
+        ...callDetail(call, c.app, c.app.now()),
+        // The agents following the call's questions, which the ask box sends them to first.
+        listening: c.app.listeners?.listening(call.id) ?? [],
+      });
     },
   );
 
