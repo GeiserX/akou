@@ -8,7 +8,8 @@
  * AKOU_* variables), `FAKE_ANSWER` (what to print, default "The answer [15:41 Ben]."),
  * `FAKE_EXIT` (exit code, default 0), `FAKE_STDERR` (text written to stderr before exiting),
  * `FAKE_DELAY_MS` (a pause before answering, for deadlines and cancelling), `FAKE_PIDFILE` (a
- * file that receives this process's pid).
+ * file that receives this process's pid), `FAKE_ESCAPE_PID` (start a long-lived child in a
+ * session of its own that inherits stdout, and write its pid to this file).
  */
 
 import { writeFileSync } from "node:fs";
@@ -23,6 +24,16 @@ if (process.env.FAKE_RECORD) {
     process.env.FAKE_RECORD,
     JSON.stringify({ argv: process.argv.slice(2), stdin, env }),
   );
+}
+if (process.env.FAKE_ESCAPE_PID) {
+  const g = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60000)"], {
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+    detached: true,
+  });
+  g.unref();
+  writeFileSync(process.env.FAKE_ESCAPE_PID, String(g.pid));
 }
 const delay = Number(process.env.FAKE_DELAY_MS ?? 0);
 if (delay > 0) await Bun.sleep(delay);

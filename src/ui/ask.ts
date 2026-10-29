@@ -465,15 +465,11 @@ export class AskPane {
         status.title = "";
         // Answers that land later (the agent after the provider, or the other way) go under this one.
         if (a.ask && a.kind !== "naming") {
-          const qa = this.d
-            .view()
-            ?.qa()
-            .find((x) => x.ask.id === a.ask);
-          const main = a.answered ? answerKey(a) : null;
-          const drawn = qa?.answers.length ?? 0;
-          // Already in the call: the card's own answer is among the first `drawn`.
-          const seen = qa?.answers.some((x) => answerKey(x) === main) ?? false;
-          this.open = { ask: a.ask, drawn, card, main: seen ? null : main };
+          // This card shows only its own answer, so every logged answer but that one is still to
+          // draw, one that landed while the question ran included (the log follow skips a running
+          // card).
+          this.open = { ask: a.ask, drawn: 0, card, main: a.answered ? answerKey(a) : null };
+          this.more();
         }
         // The question took the harness started early: start the next one for a follow-up.
         if (document.activeElement === this.input) this.warm(true);

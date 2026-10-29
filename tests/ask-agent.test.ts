@@ -281,6 +281,34 @@ describe("[decision] A provider command set over the API", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")(
+    "a command that answered and exited is done, even with a descendant holding its stdout",
+    async () => {
+      const t = tempDir();
+      const pidfile = join(t.dir, "escaped.pid");
+      try {
+        const p = new CommandProvider({
+          argv: [process.execPath, FAKE_COMMAND],
+          env: { ...process.env, FAKE_ESCAPE_PID: pidfile },
+          label: "fake",
+        });
+        const t0 = performance.now();
+        const r = await runProvider(p, { system: "S", prompt: "P", maxTokens: 10 }, () => {});
+        expect(r.text).toBe("The answer [15:41 Ben].");
+        expect(performance.now() - t0).toBeLessThan(5000);
+        // Positive control: the escaped descendant really was still holding the pipe.
+        const pid = Number(readFileSync(pidfile, "utf8"));
+        expect(() => process.kill(pid, 0)).not.toThrow();
+      } finally {
+        try {
+          process.kill(Number(readFileSync(pidfile, "utf8")), "SIGKILL");
+        } catch {}
+        t.cleanup();
+      }
+    },
+    10_000,
+  );
+
   test("an empty command is `missing`, with where to set it", async () => {
     const a = await new CommandProvider({ argv: [] }).available();
     expect(a).toMatchObject({ ok: false, kind: "missing" });
@@ -327,6 +355,16 @@ describe("[decision] Waiting for an agent that has left: the call ended", () => 
     expect(l.listening("c1")).toEqual([]);
     // Another call keeps its own.
     expect(l.listening("c2")).toEqual(["a"]);
+  });
+
+  test("an ended call that is restarted counts its watches again", () => {
+    const l = new Listeners(() => 0);
+    l.end("c1");
+    l.open("c1", "a");
+    expect(l.listening("c1")).toEqual([]);
+    l.resume("c1");
+    l.open("c1", "a");
+    expect(l.listening("c1")).toEqual(["a"]);
   });
 });
 

@@ -1464,6 +1464,8 @@ export class AkouApp implements ApiApp {
     if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
     // A watch stops on the call's end, so nobody follows its questions any more (listeners.ts).
     if (e.type === "call.ended" || e.type === "call.failed") this.listeners.end(id);
+    // An ended call restarted within the hour is live again: its watches count once more.
+    if (e.type === "part.started") this.listeners.resume(id);
     // A language the recognizer just detected may bring its word list.
     if (e.type === "seg" && e.lang) {
       const c = this.manager.controller(id);

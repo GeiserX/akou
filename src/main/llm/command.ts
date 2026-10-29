@@ -30,6 +30,8 @@ import {
 
 const STDERR_KEEP = 16_384;
 const KILL_GRACE_MS = 2000;
+/** How long the pipes may stay open after the program exits. */
+const PIPE_GRACE_MS = 1000;
 
 export interface CommandProviderOptions {
   argv: readonly string[];
@@ -154,8 +156,12 @@ export class CommandProvider implements Provider {
         }
         text += dec.decode();
       })();
+      // A descendant that inherited the pipes (and left the group) can hold them open after the
+      // program is gone; once it has exited, the pipes get a short grace and are then abandoned.
       const code = await proc.exited;
-      await Promise.all([outDone, errDone]);
+      // clock: a grace for pipes a descendant may hold open.
+      const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
+      await Promise.race([Promise.all([outDone, errDone]), grace]);
       if (signal.aborted) throw new ProviderError("cancelled", "cancelled");
       if (code !== 0) {
         const last =

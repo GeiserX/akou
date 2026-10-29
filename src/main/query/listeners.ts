@@ -67,6 +67,11 @@ export class Listeners {
     if (this.calls.delete(call)) this.changed();
   }
 
+  /** The ended call was restarted (a new part): agents may follow its questions again. */
+  resume(call: string): void {
+    this.ended.delete(call);
+  }
+
   /** The asks whose reply was the excerpts, because no model answered: `call/ask`. */
   private readonly excerptsOnly = new Set<string>();
 
