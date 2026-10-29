@@ -215,7 +215,14 @@ const events: Command = {
     // A mention watcher asks for `seg` too, to know when lines were committed, and prints none.
     const follow = bool(p, "follow");
     const mention = bool(p, "mention");
-    const extra = [...(follow ? ENDS : []), ...(mention ? ["seg"] : [])];
+    // A watcher of questions asks for `answer` too, and skips a question already answered by the
+    // time it reads it: starting the watch again never hands it questions settled before it ran.
+    const settle = follow && kept?.has("ask") === true && !kept.has("answer");
+    const extra = [
+      ...(follow ? ENDS : []),
+      ...(mention ? ["seg"] : []),
+      ...(settle ? ["answer"] : []),
+    ];
     const types = kept ? [...new Set([...kept, ...extra])].join(",") : undefined;
     const since = int(p, "since", 0, Number.MAX_SAFE_INTEGER) ?? 0;
     const client = clientFlag(str(p, "client"));
@@ -249,7 +256,10 @@ const events: Command = {
     }
     for (;;) {
       let ended = false;
+      const answered = new Set<string>();
+      if (settle) for (const e of r.events as Body[]) if (e.type === "answer") answered.add(e.ask);
       for (const e of r.events as Body[]) {
+        if (e.type === "ask" && answered.has(e.id)) continue;
         if (!kept || kept.has(e.type)) ctx.io.out(JSON.stringify(e));
         if (ENDS.includes(e.type)) ended = true;
       }

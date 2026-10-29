@@ -1252,6 +1252,66 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
   );
 
   test(
+    "after a question asked here, another saved call still opens on its own last answer, and so does the first one again",
+    async () => {
+      let a = "";
+      let b = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => {
+              standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5F6G7J");
+              x.add({ type: "ask", id: "q1", q: "what about the build?", by: "user" });
+              x.add({
+                type: "answer",
+                ask: "q1",
+                text: "Move it to the new box.",
+                cites: [],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+            }).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          provider.answer = () => "Ana spoke first.";
+          await page.fill("#ask-input", "who spoke first?");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .a-card .answer")) === "Ana spoke first.",
+            5000,
+            "the answer in the first call",
+          );
+          // Another call: the column shows that call's last answer, not an empty column.
+          await page.click(`#calls button[data-id="${b}"]`);
+          await until(
+            async () => (await text(page, "#ask-out .question")) === "what about the build?",
+            5000,
+            "the other call's last answer",
+          );
+          expect(await text(page, "#ask-out .a-card .answer")).toBe("Move it to the new box.");
+          expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+          // Back to the first call: its own question, now in its log, is drawn once.
+          await page.click(`#calls button[data-id="${a}"]`);
+          await until(
+            async () => (await text(page, "#ask-out .question")) === "who spoke first?",
+            5000,
+            "the first call's answer again",
+          );
+          expect(await text(page, "#ask-out .a-card .answer")).toBe("Ana spoke first.");
+          expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[akou-dzm.19] an assistant that is missing or signed out is said in plain words that point at Settings, never a setting's key",
     async () => {
       let id = "";

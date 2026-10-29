@@ -112,6 +112,11 @@ export function answerLabel(a: { by?: string; model?: string }): string {
   return a.model ? `answered by ${a.model}` : "";
 }
 
+/** One answer told apart from the others to the same question: who gave it, and its text. */
+function answerKey(a: { by?: string; text: string }): string {
+  return `${a.by ?? ""}\n${a.text}`;
+}
+
 /** How often the box asks the app to keep the provider ready while it has focus. */
 export const WARM_EVERY_MS = 20_000;
 
@@ -130,8 +135,13 @@ export class AskPane {
   private shown: string | null = null;
   /** When the box last asked the app to get the provider ready (`warm`). */
   private warmedAt = 0;
-  /** The question asked here whose card is open, and how many of its answers it draws. */
-  private open: { ask: string; drawn: number; card: HTMLElement } | null = null;
+  /**
+   * The question asked here whose card is open: how many of the call's answers to it were already
+   * there when its card was drawn, and the answer the card itself shows (author and text), which
+   * is skipped once if it reaches the call after the card did.
+   */
+  private open: { ask: string; drawn: number; card: HTMLElement; main: string | null } | null =
+    null;
   /** The muted line under the box naming the agents that get its questions first. */
   private readonly route = h("p", { class: "ask-route", attrs: { hidden: "" } });
 
@@ -214,6 +224,7 @@ export class AskPane {
     this.running?.cancel();
     this.running = null;
     this.shown = null;
+    this.open = null;
     this.menu(false);
     replace(this.out);
     this.renderPresets();
@@ -311,7 +322,14 @@ export class AskPane {
           .find((x) => x.ask.id === open.ask)
       : undefined;
     if (!open || !qa) return;
-    for (const a of qa.answers.slice(open.drawn)) open.card.append(this.extra(a));
+    for (const a of qa.answers.slice(open.drawn)) {
+      // The answer the card shows can reach the call after the card: it is drawn once, not twice.
+      if (open.main !== null && answerKey(a) === open.main) {
+        open.main = null;
+        continue;
+      }
+      open.card.append(this.extra(a));
+    }
     open.drawn = Math.max(open.drawn, qa.answers.length);
   }
 
@@ -444,7 +462,11 @@ export class AskPane {
             .view()
             ?.qa()
             .find((x) => x.ask.id === a.ask);
-          this.open = { ask: a.ask, drawn: qa?.answers.length ?? (a.answered ? 1 : 0), card };
+          const main = a.answered ? answerKey(a) : null;
+          const drawn = qa?.answers.length ?? 0;
+          // Already in the call: the card's own answer is among the first `drawn`.
+          const seen = qa?.answers.some((x) => answerKey(x) === main) ?? false;
+          this.open = { ask: a.ask, drawn, card, main: seen ? null : main };
         }
         // The question took the harness started early: start the next one for a follow-up.
         if (document.activeElement === this.input) this.warm(true);

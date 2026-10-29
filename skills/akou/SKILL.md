@@ -38,7 +38,7 @@ Then start the monitor once, in the background, so each line reaches you as it i
 akou events -f --type ask,health,share.started,share.stopped --mention --client claude-code
 ```
 
-When the monitor's timeout ends while the call is still live, start it again at once with the same command. A watch that is not running means questions typed in the box no longer reach you.
+When the monitor's timeout ends while the call is still live, start it again at once with the same command. It never prints again a question that was already answered, by you, another agent or akou's assistant, so only an open question or a new one reaches you. A watch that is not running means questions typed in the box no longer reach you.
 
 Each line is one JSON event. `health` with `state: dead`: tell the user at once (section 6). `share.started` or `share.stopped`: a share link of the call opened or closed; say so in one line. `mention`: the user's name was said on the call; tell them who and when (`[15:41 Ben]`) and read the lines around it with `akou_read`. The monitor never prints what was said, and it stops when the call ends.
 
