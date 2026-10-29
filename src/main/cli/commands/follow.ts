@@ -421,12 +421,12 @@ const answer: Command = {
     model: { type: "string", value: "M", desc: "the model that wrote the answer, if you know it" },
   },
   examples: [
-    'akou answer q0291 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3',
-    "akou answer q0291 - < answer.txt",
+    'akou answer q0007 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3',
+    "akou answer q0007 - < answer.txt",
   ],
   run: async (ctx, p) => {
     const [askId, ...words] = p.positional;
-    if (!askId || !/^q\d{4,}$/.test(askId)) return usage(ctx, "answer needs the ask id (q0291)");
+    if (!askId || !/^q\d{4,}$/.test(askId)) return usage(ctx, "answer needs the ask id (q0007)");
     let text = words.join(" ").trim();
     if (text === "-") text = ((await ctx.io.readStdin?.()) ?? "").trim();
     if (text === "") return usage(ctx, "answer needs the text, or - to read it from stdin");

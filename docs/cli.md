@@ -377,8 +377,8 @@ usage: akou answer ASK "TEXT" | akou answer ASK -   [-c CALL] [--client NAME] [-
   -h, --help         show this help
       --restart      if akou takes the connection and never answers, restart it first, even for a command that only reads
 
-example: akou answer q0291 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3
-example: akou answer q0291 - < answer.txt
+example: akou answer q0007 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3
+example: akou answer q0007 - < answer.txt
 ```
 
 ## presets

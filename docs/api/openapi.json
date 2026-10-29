@@ -2994,7 +2994,7 @@
             "name": "ask",
             "in": "path",
             "required": true,
-            "description": "The ask's id, `q0291`, from its `ask` event.",
+            "description": "The ask's id, `q0007`, from its `ask` event.",
             "schema": {
               "type": "string"
             }

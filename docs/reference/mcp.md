@@ -48,7 +48,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `ask` | `string` | yes | The ask id from the `ask` event, such as "q0291". |
+| `ask` | `string` | yes | The ask id from the `ask` event, such as "q0007". |
 | `text` | `string` | yes | Your answer, with [HH:MM Name] citations. |
 | `call` | `string` | no | Which call: "live" (the one recording now), "last", or a call id. Use the live call unless the user names another one. |
 | `model` | `string` | no | The model that wrote it, if you know. |
@@ -63,7 +63,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
     "ask": {
       "type": "string",
       "pattern": "^q\\d{4,}$",
-      "description": "The ask id from the `ask` event, such as \"q0291\"."
+      "description": "The ask id from the `ask` event, such as \"q0007\"."
     },
     "text": {
       "type": "string",

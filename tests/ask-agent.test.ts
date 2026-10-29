@@ -333,10 +333,10 @@ describe("[decision] Waiting for an agent that has left: the call ended", () => 
 describe("[decision] A question typed in the ask box never reaches the agent following the call: a pasted hand-off", () => {
   test("a hand-off of a logged question says how to post the answer back to the box; the question stays first", () => {
     const h = { question: "when do we ship?", call: "01CALL", tz: "UTC", excerpts: [] };
-    const with_ = agentHandoff({ ...h, ask: "q0291" });
+    const with_ = agentHandoff({ ...h, ask: "q0007" });
     expect(with_.split("\n")[0]).toBe("when do we ship?");
-    expect(with_).toContain("`akou answer q0291 '<your answer>' -c 01CALL`");
-    expect(with_).toContain('akou_answer tool with {"call":"01CALL","ask":"q0291"}');
+    expect(with_).toContain("`akou answer q0007 '<your answer>' -c 01CALL`");
+    expect(with_).toContain('akou_answer tool with {"call":"01CALL","ask":"q0007"}');
     // Positive control: with no ask id there is nothing to answer back to.
     expect(agentHandoff(h)).not.toContain("akou answer");
   });

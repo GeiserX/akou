@@ -1178,7 +1178,7 @@ export function createMcpServer(o: McpOptions): McpServer {
         ask: z
           .string()
           .regex(/^q\d{4,}$/)
-          .describe('The ask id from the `ask` event, such as "q0291".'),
+          .describe('The ask id from the `ask` event, such as "q0007".'),
         text: z.string().min(1).max(4000).describe("Your answer, with [HH:MM Name] citations."),
         call: CALL,
         model: z.string().max(200).optional().describe("The model that wrote it, if you know."),
