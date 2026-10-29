@@ -68,8 +68,17 @@ export interface FollowSink {
   closed(reason: string): void;
 }
 
+/** Where the app sent a question: the agent following the call first, or akou's provider. */
+export interface AskRouted {
+  to: "agent" | "provider";
+  clients?: string[];
+  waitSeconds?: number;
+  why?: string;
+}
+
 export interface AskSink {
   excerpts(data: { excerpts: { citation: string; lines: string[] }[] }): void;
+  routed?(data: AskRouted): void;
   token(t: string): void;
   answer(data: AskAnswer): void;
   error(data: { error: string; message: string }): void;
@@ -242,7 +251,11 @@ export interface AkouRpc {
         kind: "open" | "event" | "partial" | "level" | "read" | "alive" | "closed";
         data?: unknown;
       };
-      asked: { stream: string; kind: "excerpts" | "token" | "answer" | "error"; data: unknown };
+      asked: {
+        stream: string;
+        kind: "excerpts" | "routed" | "token" | "answer" | "error";
+        data: unknown;
+      };
       status: AppStatus;
       /** The tray, the hotkey or `akou open` asks the page to show a call. */
       showCall: { call?: string };

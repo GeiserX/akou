@@ -672,7 +672,7 @@ export const SETTINGS = {
     type: "string",
     values: ["auto", "on", "off"],
     default: "auto",
-    doc: "Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`.",
+    doc: "Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness` and `command`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`.",
   },
   "ask.agentWaitSeconds": {
     type: "integer",

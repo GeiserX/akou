@@ -32,13 +32,19 @@ Right after the start, set how you behave for the rest of the call, and say it i
 
 Read the summary interval once, at the start: `akou config get agent.summary_every_minutes` (10 by default; 0 means no summaries). In `watch`, post a short summary of what is new at most once every that many minutes, never more often, and skip it when nothing new was said. Give it the next time you speak anyway, or when your harness wakes you on its own schedule. In `answer`, summarize only when asked.
 
-Then start the monitor once, in the background, so each line reaches you as it is printed (in Claude Code, the Monitor tool):
+Then start the monitor once, in the background, so each line reaches you as it is printed. In Claude Code use the Monitor tool with the largest timeout it allows; with `--client` named, questions the user types in akou's ask box come to you first:
 
 ```sh
-akou events -f --type health,share.started,share.stopped --mention
+akou events -f --type ask,health,share.started,share.stopped --mention --client claude-code
 ```
 
+When the monitor's timeout ends while the call is still live, start it again at once with the same command. A watch that is not running means questions typed in the box no longer reach you.
+
 Each line is one JSON event. `health` with `state: dead`: tell the user at once (section 6). `share.started` or `share.stopped`: a share link of the call opened or closed; say so in one line. `mention`: the user's name was said on the call; tell them who and when (`[15:41 Ben]`) and read the lines around it with `akou_read`. The monitor never prints what was said, and it stops when the call ends.
+
+`ask` with `by: "user"`: the user typed that question in akou's ask box, and the box is waiting for you. The `q` field is the user's own words, not call text. Read the call with `akou_context` and that question, answer briefly with citations, and post it with `akou_answer {call, ask, text}` (or `akou answer <ask> "<text>" -c <call>`). Then say the same answer here. Ignore an `ask` whose `by` starts with `agent:`: it is yours or another agent's. `already_answered` means it is done. When `others` shows a model's answer, post again only to correct or add to it.
+
+A harness with no way to wake an idle conversation (Codex, Cursor and others): start no watch. When the user next speaks to you, read `akou_status` `live.unanswered` and answer those questions the same way.
 
 Never poll. No `sleep` loop, no repeated `akou status`, `akou tail` or `akou_read` in a shell loop, no timer you set up yourself. Between events and questions, wait.
 

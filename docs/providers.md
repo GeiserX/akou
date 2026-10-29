@@ -7,9 +7,56 @@ A provider is what akou asks when it needs a model: to answer a question in the 
 | `harness` (the default) | Your own Claude Code or Codex, installed on this computer | Wherever that program sends it: your subscription with Anthropic or OpenAI |
 | `openai-compatible` | A server you name: Ollama, LM Studio, llama.cpp, vLLM, or OpenAI | The address in `provider.baseUrl`. A local model keeps it on your machine |
 | `anthropic` | The Anthropic API with your own key | Anthropic, under your API account |
-| `none` | Nothing | Nowhere. Questions get the matching excerpts instead of an answer, and the window's ask box becomes "Search this call" |
+| `command` | A program you name in the config file (`provider.command`), such as a wrapper that picks one of your accounts | Wherever that program sends it |
+| `none` | Nothing | Nowhere. Questions get the matching excerpts instead of an answer, and the window's ask box becomes "Search this call" while no agent follows the call |
 
 When the provider cannot answer (the program is missing, a usage limit is reached, you are logged out, or no answer comes within `provider.timeoutSeconds`), akou says why and shows the excerpts it found. It never queues the request or retries it quietly.
+
+## The agent following the call answers first
+
+When an agent follows the call (Claude Code that started or attached to it with the `akou` skill, and keeps its `akou events -f --type ask,… --client claude-code` watch running), a question you type in the ask box goes to that agent first. It answers inside its own conversation, the one where you started the call, on its own login, and posts the same answer back to the box with `akou_answer` or `akou answer`. The box shows it with its citations and "answered by claude-code (the agent following the call)".
+
+- Under the box, one muted line says which agent questions go to before you ask.
+- The box waits up to `ask.agentWaitSeconds` (30 s by default) for that answer. If none comes, or no agent is following, the provider above answers as usual, and the box says which route answered or which did not and why. A line like "claude-code did not answer within 30 s. The coding agent akou runs did not answer: usage limit until 01:00." names both.
+- An agent's answer that arrives while the provider is still running stops that run, so a second subscription is not spent on a question already answered. One that arrives later is added to the card under its own label; it never replaces what is there.
+- With `provider.kind` `none`, the agent is the only route: the box waits with the excerpts shown, and the agent's answer fills it when it comes.
+- A question an agent asks (`akou ask`, `akou_ask`) never waits on an agent.
+- An agent with no way to wake an idle conversation (Codex today) starts no watch; it finds the questions waiting for it in `akou status`'s `live.unanswered` the next time you talk to it.
+
+## A command of your own
+
+`provider.kind` `command` runs the program in `provider.command`, an argument list run with no shell, instead of akou's own Claude Code or Codex call. Use it when you have several accounts or a wrapper that picks one: akou never chooses an account for you. Plain text goes in and out:
+
+- The prompt goes on standard input, which is then closed. Your program prints the answer on standard output and exits 0.
+- `{system}`, `{question}`, `{call}`, `{ask}` and `{task}` (`ask`, `enhance`, `memo`, or `other`) inside an argument are replaced by their values. With no `{system}` argument the system prompt goes at the top of standard input. The same values are in `AKOU_QUESTION`, `AKOU_CALL_ID`, `AKOU_ASK_ID` and `AKOU_TASK`.
+- A non-zero exit fails the run, and the last line of standard error is the reason. A usage-limit or login message there reads as one in the window. `provider.timeoutSeconds` applies.
+- `provider.commandLabel` is the name the window shows; empty, the program's file name.
+- It is set in the config file only, never over the API or from the window, because it decides what runs on your computer. Sessions, resume and starting the program early are not supported.
+
+Examples (`~/.config/akou/config.json`):
+
+```json
+{ "provider.kind": "command",
+  "provider.command": ["claude", "-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--system-prompt", "{system}"] }
+```
+
+```json
+{ "provider.kind": "command",
+  "provider.command": ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral", "-"] }
+```
+
+A wrapper that picks an account, then runs one of those:
+
+```sh
+#!/bin/sh
+# ~/bin/akou-ask: answer on the work account
+export CLAUDE_CONFIG_DIR="$HOME/.claude-work"
+exec claude -p --tools "" --strict-mcp-config --no-session-persistence --system-prompt "$1"
+```
+
+with `"provider.command": ["/Users/you/bin/akou-ask", "{system}"]` and `"provider.commandLabel": "Claude (work)"`.
+
+**Which account the harness runs on.** akou's own `harness` call runs on whatever login its environment gives it. An app started from an agent's shell inherits that shell's `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, which may be another account than the one you expect. akou never reads, sets or switches these. It only says so: `akou doctor`, `akou status` and the line for a usage limit or a login failure name the setting the harness ran with, in your window and terminal only, never in the call.
 
 ## When akou calls the provider
 
@@ -42,7 +89,7 @@ flowchart LR
 | Rolling memo | After at least 3 minutes and 1,500 tokens of new speech, every time | Off unless `memo.provider` is `on` |
 | Re-enhance after the final layer | Once, when the final transcript lands after notes were written from the live one | Never on its own: run `akou enhance` again (the window does not offer it) |
 
-`memo.provider` is `auto` by default: on for `openai-compatible` and `anthropic`, off for `harness`, because it would spend your subscription every few minutes while you are not looking. Set it to `off` to stop it for every provider. An agent following the call can still write the memo with `akou_memo_put`.
+`memo.provider` is `auto` by default: on for `openai-compatible` and `anthropic`, off for `harness` and `command`, because it would spend your subscription every few minutes while you are not looking. Set it to `off` to stop it for every provider. An agent following the call can still write the memo with `akou_memo_put`.
 
 Re-enhancing is also skipped, in favour of the button, when a person or an agent wrote the notes, because running it would replace their work.
 

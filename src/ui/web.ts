@@ -181,6 +181,7 @@ class HttpTransport implements Transport {
           if (f.event === "comment") continue;
           const data = JSON.parse(f.data);
           if (f.event === "excerpts") sink.excerpts(data);
+          else if (f.event === "routed") sink.routed?.(data);
           else if (f.event === "token") sink.token(data.t);
           else if (f.event === "answer") sink.answer(data);
           else if (f.event === "error") sink.error(data);

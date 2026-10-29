@@ -28,8 +28,11 @@ export class Listeners {
     private readonly onChange?: () => void,
   ) {}
 
-  /** A poll by `client` on `call` began. Returns the function that ends it. */
-  open(call: string, client: string): () => void {
+  /**
+   * A poll by `client` on `call` began. Returns the function that ends it; `gone` says the client
+   * hung up during the poll (its watch was stopped), so it stops counting at once, with no grace.
+   */
+  open(call: string, client: string): (gone?: boolean) => void {
     let byClient = this.calls.get(call);
     if (!byClient) {
       byClient = new Map();
@@ -41,11 +44,12 @@ export class Listeners {
     byClient.set(client, p);
     this.changed();
     let done = false;
-    return () => {
+    return (gone = false) => {
       if (done) return;
       done = true;
       p.inFlight = Math.max(0, p.inFlight - 1);
       p.lastSeen = this.now();
+      if (gone && p.inFlight === 0 && byClient.get(client) === p) byClient.delete(client);
       this.changed();
     };
   }

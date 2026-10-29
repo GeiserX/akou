@@ -102,6 +102,33 @@ describe("the skill text", () => {
     }
   });
 
+  test("[judging] The agent's watch dies after five minutes: the monitor includes `ask`, sets a timeout and is restarted", () => {
+    const watchRules = (text: string) => {
+      const line = /```sh\n(akou events -f [^\n]*)\n```/.exec(text)?.[1] ?? "";
+      return {
+        ask: /--type [^ ]*\bask\b/.test(line),
+        client: /--client [a-z]/.test(line),
+        timeout: /largest timeout/.test(text),
+        restart: /start it again at once/.test(text),
+      };
+    };
+    expect(watchRules(SKILL)).toEqual({ ask: true, client: true, timeout: true, restart: true });
+    // The answer route the watch leads to, and the rules around it.
+    for (const must of ["akou_answer", 'by: "user"', "agent:", "already_answered", "unanswered"])
+      expect(SKILL).toContain(must);
+    // Positive control: the monitor line as it was, with no ask and no restart, fails.
+    const before = SKILL.replace(
+      /akou events -f --type ask,([^\n]*) --client claude-code/,
+      "akou events -f --type $1",
+    ).replace("start it again at once", "carry on");
+    expect(watchRules(before)).toEqual({
+      ask: false,
+      client: false,
+      timeout: true,
+      restart: false,
+    });
+  });
+
   test("its version is the app's version, which is package.json's", () => {
     expect(skillVersion(SKILL)).toBe(APP_VERSION);
     expect(APP_VERSION).toBe(PKG.version);

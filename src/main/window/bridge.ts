@@ -39,9 +39,13 @@ export interface ApiReply {
   body: any;
 }
 
-/** The streamed answer of the ask box: `excerpts` at once, `token`s, then `answer` or `error`. */
+/**
+ * The streamed answer of the ask box: `excerpts` at once, `routed` (to the agent following the
+ * call, or to akou's provider), `token`s, then `answer` or `error`.
+ */
 export interface AskSink {
   excerpts(data: unknown): void;
+  routed(data: unknown): void;
   token(t: string): void;
   answer(data: unknown): void;
   error(data: { error: string; message: string }): void;
@@ -157,6 +161,7 @@ export class Bridge {
         continue;
       }
       if (frame.event === "excerpts") sink.excerpts(data);
+      else if (frame.event === "routed") sink.routed(data);
       else if (frame.event === "token") sink.token((data as { t: string }).t);
       else if (frame.event === "answer") sink.answer(data);
       else if (frame.event === "error") sink.error(data as { error: string; message: string });
