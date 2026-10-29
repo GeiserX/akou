@@ -170,9 +170,11 @@ function fakeAgent(client: string, onAsk: (ask: { id: string; q: string }) => vo
       await loop;
       await until(
         async () => {
+          // From the log's end, so the poll waits and is cut off rather than answered.
+          const end = (await rig.api("GET", `/calls/${id}/events?after=${cursor}`)).body.cursor;
           const hang = new AbortController();
           const poll = fetch(
-            `http://127.0.0.1:${rig.port}/v1/calls/${id}/events?types=ask&wait=5&after=${cursor}`,
+            `http://127.0.0.1:${rig.port}/v1/calls/${id}/events?types=ask&wait=5&after=${end}`,
             {
               headers: { authorization: `Bearer ${rig.token}`, "x-akou-client": client },
               signal: hang.signal,
