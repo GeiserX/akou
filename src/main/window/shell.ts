@@ -109,6 +109,13 @@ export interface NativeWindow {
   size?(): { width: number; height: number };
   /** Sizes the window, its top-left corner kept (the re-fit's nudge). */
   setSize?(width: number, height: number): void;
+  /**
+   * Puts the window in front on the Space the user is on, restored if minimized, without taking
+   * the keyboard from the app in front (DK-M9).
+   */
+  raise?(): void;
+  /** Is it minimized? The SDK has no event for a minimize or a restore, so the shell asks (DK-F1). */
+  isMinimized?(): boolean;
 }
 
 /** The floating indicator's window: always on top, never takes the focus when shown. */
@@ -187,6 +194,40 @@ export function titleBarStyle(platform: string): "hiddenInset" | "default" {
   return platform === "darwin" ? "hiddenInset" : "default";
 }
 
+/** One native step of the window's raise (DK-M9); `native.ts` runs them in order. */
+export type RaiseStep =
+  | "restore"
+  | "restoreNoActivate"
+  | "joinAllSpaces"
+  | "showInactive"
+  | "leaveAllSpaces";
+
+/**
+ * How each OS puts the main window in front without taking the keyboard (DK-M9), from the
+ * ElectroBun 2.0.1 native code:
+ * - macOS: `showInactive` is `orderFrontRegardless`, no app activation. Joining every Space for
+ *   that moment brings the window to the Space the user is on. A minimized window is restored
+ *   first with `deminiaturize:`.
+ * - Windows: the SDK's restore is `SW_RESTORE`, which activates, so a minimized window is restored
+ *   with `SW_SHOWNOACTIVATE`; `showInactive` then puts it at the top without activating it. The
+ *   Spaces calls are a no-op there.
+ * - Linux: the SDK's restore is `gtk_window_present`, which activates, and nothing restores
+ *   without it, so a minimized window stays minimized: the indicator keeps showing and the
+ *   notification says the call started. The Spaces calls are a no-op there.
+ */
+export function raiseSteps(platform: string, minimized: boolean): RaiseStep[] {
+  if (platform === "darwin")
+    return [
+      ...(minimized ? (["restore"] as const) : []),
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ];
+  if (platform === "win32")
+    return [...(minimized ? (["restoreNoActivate"] as const) : []), "showInactive"];
+  return minimized ? [] : ["showInactive"];
+}
+
 export type TrayMenuItem =
   | { type: "normal"; label: string; action: string; enabled?: boolean; checked?: boolean }
   | { type: "separator" };
@@ -215,6 +256,8 @@ export interface NativeUi {
     rpc: WindowRpc;
     frame?: Rect;
     titleBarStyle: "hiddenInset" | "default";
+    /** Opened hidden, so the shell shows it its own way (`raise`, DK-M9). */
+    hidden?: boolean;
   }): {
     window: NativeWindow;
     send: WindowSend;
@@ -268,6 +311,8 @@ export interface ShellApp {
   openSettingsPane(pane: SettingsPane): Promise<boolean>;
   /** Shows the window through the app, so the app knows it has one. */
   openWindow(call?: string): Promise<unknown>;
+  /** Tells the app the shell opened its window by itself (DK-M9), as `openWindow` would. */
+  adoptWindow?(w: WindowShell): void;
   /** Every start and share from any door, with who asked. Returns the unsubscribe function. */
   onAnnounce(fn: (a: Announcement) => void): () => void;
   /** Dictation (docs/ux/DICTATION.md DC-O4); absent where the app runs none (server mode). */
@@ -322,6 +367,7 @@ export function appForShell(app: AkouApp): ShellApp {
     quit: () => app.quit(),
     openSettingsPane: (pane) => app.openSettingsPane(pane),
     openWindow: (call) => app.openWindow(call),
+    adoptWindow: (w) => app.adoptWindow(w),
     onAnnounce: (fn) => app.onAnnounce(fn),
     dictation: {
       state: () => app.dictation()?.status().state ?? "off",
@@ -361,6 +407,8 @@ export interface ShellOptions {
   installCli?(): Promise<InstallOutcome>;
   /** Where the window's frame is kept between runs. None: forgotten at quit. */
   state?: { load(): ShellState; save(s: ShellState): void };
+  /** How often the shell asks whether the window is minimized during a call. Tests pass their own. */
+  minimizedPollMs?: number;
 }
 
 /** The quit question (DK-M3), asked in the window; Cancel is the default. */
@@ -369,6 +417,13 @@ export const QUIT_QUESTION: Omit<QuitQuestion, "id"> = {
   detail: "Everything recorded so far is kept.",
   confirm: "Stop and quit",
 };
+
+/**
+ * How often, while a call's indicator and the main window are both open, the shell asks whether
+ * the window is minimized (DK-F1): the SDK sends no event for a minimize or a restore. One cheap
+ * native read a second, and none at all outside a call or with the window closed.
+ */
+export const MINIMIZED_POLL_MS = 1000;
 
 /** How long the window must stay still after a move or resize before the page is measured. */
 const MEASURE_SETTLE_MS = 250;
@@ -887,7 +942,11 @@ export class Shell implements WindowShell {
     window: IndicatorWindow;
     rpc: IndicatorRpcHandlers;
     frame: Rect;
+    /** Whether it was last shown or hidden, so a check that finds nothing changed does nothing. */
+    shown?: boolean;
   } | null = null;
+  /** Asks whether the main window is minimized while the indicator and the window are both open. */
+  private minimizedPoll: ReturnType<typeof setInterval> | null = null;
   /** Bumped by every close, so an open still reading the status knows it is stale. */
   private indicatorGen = 0;
   /**
@@ -1034,12 +1093,28 @@ export class Shell implements WindowShell {
   private onAnnounce(a: Announcement): void {
     const origin = originOf(a.by);
     if (a.what === "share") this.notify({ type: "shared", call: a.call, origin });
-    else if (a.ok) this.notify({ type: "started", call: a.call, origin });
-    else this.notify({ type: "refused", code: a.code, origin });
+    else if (a.ok) {
+      this.notify({ type: "started", call: a.call, origin });
+      // A call an agent started shows the window where the user is (DK-M9). The window, the tray
+      // and the hotkey start as `user`, and an attach is never announced: none of them raise it.
+      if (
+        origin !== "window" &&
+        !this.quitting &&
+        this.app.config().settings["app.showOnAgentStart"] !== false
+      ) {
+        // Not through `app.openWindow`, whose `show` takes the focus; a headless app (the login
+        // item) learns of the window here instead, for its status and its watchdog.
+        this.app.adoptWindow?.(this);
+        this.show(a.call, { raise: true });
+      }
+    } else this.notify({ type: "refused", code: a.code, origin });
   }
 
-  /** Brings the window forward, creating it when there is none; on a call when one is named. */
-  show(call?: string): void {
+  /**
+   * Brings the window forward, creating it when there is none; on a call when one is named. With
+   * `raise`, it is put in front on the user's Space without taking the keyboard (DK-M9).
+   */
+  show(call?: string, o: { raise?: boolean } = {}): void {
     if (!this.window) {
       this.rpc = windowRpc(
         this.bridge,
@@ -1062,6 +1137,7 @@ export class Shell implements WindowShell {
         rpc: this.rpc,
         frame,
         titleBarStyle: titleBarStyle(this.o.platform),
+        ...(o.raise ? { hidden: true } : {}),
       });
       this.frame = frame;
       this.window = w.window;
@@ -1087,15 +1163,20 @@ export class Shell implements WindowShell {
         this.pending = [];
         // A window closed with the question up answers Cancel.
         if (this.question) this.answerQuit(this.question.id, false);
-        this.showIndicator();
+        this.syncIndicator();
       });
       w.window.onFocus((focused) => {
         this.focused = focused;
-        this.showIndicator();
+        // A minimize takes the focus and a click that restores gives it back: check now rather
+        // than at the next poll.
+        this.syncIndicator();
         if (focused) this.measure();
       });
     }
-    this.window.show();
+    const win = this.window;
+    if (o.raise && win.raise) win.raise();
+    else win.show();
+    this.syncIndicator();
     if (call) this.toPage((send) => send.showCall({ call }));
   }
 
@@ -1385,15 +1466,47 @@ export class Shell implements WindowShell {
     w.window.onClose(() => {
       if (this.indicator === ind) this.closeIndicator();
     });
-    this.showIndicator();
+    this.syncIndicator();
   }
 
-  /** Shown while the main window does not have the focus, without taking it. */
-  private showIndicator(): void {
+  /**
+   * The indicator shows, without taking the focus, only while the main window is closed or
+   * minimized (DK-F1): an open window already says the same. The SDK has no minimize event, so
+   * while both are open the shell asks the window every `MINIMIZED_POLL_MS`, and on each focus
+   * change.
+   */
+  private syncIndicator(): void {
     const ind = this.indicator;
+    const win = this.window;
+    const watch = ind !== null && win?.isMinimized !== undefined;
+    if (watch && !this.minimizedPoll) {
+      // clock: the SDK sends no minimize event, so the window is asked in real time.
+      this.minimizedPoll = setInterval(
+        () => this.syncIndicator(),
+        this.o.minimizedPollMs ?? MINIMIZED_POLL_MS,
+      );
+      this.minimizedPoll.unref?.();
+    } else if (!watch) this.stopMinimizedPoll();
     if (!ind) return;
-    if (this.focused) ind.window.hide();
-    else ind.window.showInactive();
+    const show = !win || this.minimized(win);
+    if (ind.shown === show) return;
+    ind.shown = show;
+    if (show) ind.window.showInactive();
+    else ind.window.hide();
+  }
+
+  private minimized(win: NativeWindow): boolean {
+    try {
+      return win.isMinimized?.() === true;
+    } catch {
+      // A window the SDK already let go of: its close event is on the way.
+      return false;
+    }
+  }
+
+  private stopMinimizedPoll(): void {
+    if (this.minimizedPoll) clearInterval(this.minimizedPoll);
+    this.minimizedPoll = null;
   }
 
   private closeIndicator(): void {
@@ -1401,6 +1514,7 @@ export class Shell implements WindowShell {
     const ind = this.indicator;
     if (!ind) return;
     this.indicator = null;
+    this.stopMinimizedPoll();
     const store = this.o.state;
     try {
       if (store) store.save({ ...store.load(), indicator: ind.frame });

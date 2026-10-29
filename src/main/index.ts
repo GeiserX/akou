@@ -1976,6 +1976,15 @@ export class AkouApp implements ApiApp {
    * address of the window in a browser instead: the page server, started the first time, with a
    * one-time code in the fragment.
    */
+  /**
+   * The desktop shell opened its window by itself (an agent's start, DK-M9) in an app started
+   * headless: from now on the app has a window, as after `openWindow`, so status and the
+   * watchdog see it.
+   */
+  adoptWindow(w: WindowShell): void {
+    this.window ??= w;
+  }
+
   async openWindow(call?: string): Promise<{ shown: true } | { url: string }> {
     if (this.quitting) throw new HttpError(503, "quitting", "akou is quitting");
     if (call !== undefined) await this.call(call);

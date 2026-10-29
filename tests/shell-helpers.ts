@@ -12,6 +12,7 @@ import {
   appForShell,
   type NativeUi,
   type Rect,
+  raiseSteps,
   Shell,
   type ShellOptions,
 } from "../src/main/window/shell.ts";
@@ -64,6 +65,12 @@ export interface FakeUi {
   viewport: (v: { width: number; height: number; dpr: number }) => Promise<unknown>;
   /** The user closed the window (its close button). */
   closeWindow: () => void;
+  /** The user minimized (true) the main window or restored it (false); no event, as in the SDK. */
+  minimize: (on: boolean) => void;
+  /** How many times the shell asked whether the main window is minimized. */
+  minimizedReads: () => number;
+  /** For each main window opened, whether it was opened hidden (DK-M9 shows it itself). */
+  hiddenOpens: boolean[];
   /** The displays' work areas, the primary first. */
   areas: Rect[];
   /** The floating indicator: what it was opened with and whether it shows; null before the first. */
@@ -85,11 +92,14 @@ export interface FakeUi {
  * focus event follows `show`. Messages sent to a page before it booted are lost, as ElectroBun's
  * are when the page has not registered its handlers yet.
  */
-export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
+export function fakeUi(opts: { focusOnShow?: boolean; platform?: string } = {}): FakeUi {
   const focusOnShow = opts.focusOnShow ?? true;
+  const platform = opts.platform ?? "darwin";
   let reopenFn: () => void = () => {};
   let frameFn: (r: Rect) => void = () => {};
   let closeFn: () => void = () => {};
+  let minimized = false;
+  let minimizedReads = 0;
   let ind: ReturnType<FakeUi["indicator"]> = null;
   let indFrame: (r: Rect) => void = () => {};
   const log: string[] = [];
@@ -110,6 +120,8 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       log.push(`window ${o.url}`);
       f.frames.push(o.frame);
       f.titleBars.push(o.titleBarStyle);
+      f.hiddenOpens.push(o.hidden === true);
+      minimized = false;
       rpc = o.rpc;
       booted = false;
       const page = (line: string) => {
@@ -119,7 +131,19 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
         window: {
           show: () => {
             log.push("show");
+            minimized = false;
             if (focusOnShow) focusFn(true);
+          },
+          // In front on the user's Space without the focus: no focus event follows. It restores a
+          // minimized window only where the OS's steps do (`raiseSteps`).
+          raise: () => {
+            log.push("raise");
+            const steps = raiseSteps(platform, minimized);
+            if (steps.includes("restore") || steps.includes("restoreNoActivate")) minimized = false;
+          },
+          isMinimized: () => {
+            minimizedReads++;
+            return minimized;
           },
           close: () => log.push("close"),
           zoom: () => log.push("zoom"),
@@ -278,6 +302,12 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       log.push("closed by the user");
       closeFn();
     },
+    // No event either way: the SDK has none for a minimize. A test sends the focus change itself.
+    minimize: (on) => {
+      minimized = on;
+    },
+    minimizedReads: () => minimizedReads,
+    hiddenOpens: [],
     areas: [{ x: 0, y: 0, width: 1440, height: 875 }],
     indicator: () => ind,
     moveIndicator: (r) => {

@@ -108,6 +108,7 @@ const MAIN: Layout = [
       "asr.languages",
       LIVE,
       "app.floatingIndicator",
+      "app.showOnAgentStart",
       "app.hotkey",
     ],
   },

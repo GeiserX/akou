@@ -19,6 +19,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { BUILT, builtCopies, MAIN_OUT } from "../electrobun.config.ts";
 import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
+import type { Announcement } from "../src/main/index.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
 import { DEFAULT_HOTKEY, hotkeyWarning } from "../src/main/window/hotkey.ts";
 import { indicatorEvent, indicatorRpc, indicatorStatus } from "../src/main/window/indicator.ts";
@@ -35,6 +36,7 @@ import {
 } from "../src/main/window/install-cli.ts";
 import { windowRpc } from "../src/main/window/rpc.ts";
 import {
+  appForShell,
   fitIndicator,
   hotkeyFor,
   INDICATOR_MAX_WIDTH,
@@ -44,6 +46,7 @@ import {
   placeIndicator,
   QUIT_QUESTION,
   type Rect,
+  raiseSteps,
   Shell,
   type ShellApp,
   type ShellState,
@@ -69,6 +72,7 @@ function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {})
     openedOn: undefined as string | undefined,
   };
   let shell: Shell | null = null;
+  let announce: (a: Announcement) => void = () => {};
   const app: ShellApp = {
     status: async () => ({
       live: state.live ? { call: "c1", state: "recording" } : null,
@@ -96,9 +100,18 @@ function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {})
       state.openedOn = call;
       shell?.show(call);
     },
-    onAnnounce: () => () => {},
+    onAnnounce: (fn) => {
+      announce = fn;
+      return () => {};
+    },
   };
-  return { app, state, bind: (s: Shell) => (shell = s) };
+  return {
+    app,
+    state,
+    bind: (s: Shell) => (shell = s),
+    /** A door told the app it started (or refused) a call, as `AkouApp.start` announces it. */
+    announce: (a: Announcement) => announce(a),
+  };
 }
 
 const bridgeStub = {
@@ -878,6 +891,8 @@ async function eventShell(
     settings?: Record<string, unknown>;
     state?: ReturnType<typeof memoryState>;
     live?: boolean;
+    minimizedPollMs?: number;
+    platform?: string;
   } = {},
 ) {
   let watcher: (call: string, e: LogEvent) => void = () => {};
@@ -894,9 +909,10 @@ async function eventShell(
   } as unknown as Bridge;
   const a = fakeApp({ live: o.live ?? true, settings: o.settings });
   const shell = new Shell(a.app, bridge, f.ui, {
-    platform: "darwin",
+    platform: o.platform ?? "darwin",
     setLoginItem: async () => {},
     state: o.state,
+    minimizedPollMs: o.minimizedPollMs,
   });
   a.bind(shell);
   await shell.start();
@@ -906,7 +922,7 @@ async function eventShell(
 }
 
 describe("[DK-F1] the floating indicator, in the shell", () => {
-  test("created on call.created, hidden while the main window has the focus, closed on part.ended", async () => {
+  test("created on call.created, hidden while the main window is open, closed on part.ended", async () => {
     const f = fakeUi();
     const store = memoryState();
     const { shell, feed } = await eventShell(f, { state: store });
@@ -917,11 +933,12 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     expect(ind).toMatchObject({ visible: true, closed: false, opened: 1 });
     // At the top right of the primary work area the first time.
     expect(ind?.frame).toEqual({ x: 1440 - INDICATOR_SIZE.width - 16, y: 16, ...INDICATOR_SIZE });
-    // The main window comes forward with the focus: the indicator steps aside.
+    // The main window opens: the indicator steps aside, and stays aside when the window loses the
+    // focus, since the window still says the same on screen.
     shell.show();
     expect(f.indicator()?.visible).toBe(false);
     f.focus(false);
-    expect(f.indicator()?.visible).toBe(true);
+    expect(f.indicator()?.visible).toBe(false);
     f.focus(true);
     f.closeWindow();
     expect(f.indicator()?.visible).toBe(true);
@@ -1058,6 +1075,299 @@ describe("[DK-F1] fitIndicator and placeIndicator", () => {
       ...INDICATOR_SIZE,
     });
   });
+});
+
+describe("[DK-F1] the indicator shows only while the main window is closed or minimized", () => {
+  test("open window: no indicator, focused or not; minimized: the indicator; restored: gone; closed: back; call end: closed", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f, { minimizedPollMs: 5 });
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    // No main window: the indicator is how the call is seen.
+    expect(f.indicator()?.visible).toBe(true);
+    shell.show();
+    expect(f.indicator()?.visible).toBe(false);
+    // Another app in front, the window still on screen: one window saying it is enough.
+    f.focus(false);
+    await Bun.sleep(30);
+    expect(f.indicator()?.visible).toBe(false);
+    // Minimized, with no event for it: the shell finds out and shows the indicator.
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    // Restored (no focus event either): the indicator goes.
+    f.minimize(false);
+    await until(() => f.indicator()?.visible === false, 1000, "the indicator gone after a restore");
+    // Minimized again, then brought back by a click that gives it the focus.
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    f.minimize(false);
+    f.focus(true);
+    expect(f.indicator()?.visible).toBe(false);
+    // Closed: the indicator at once.
+    f.closeWindow();
+    expect(f.indicator()?.visible).toBe(true);
+    // Opened again during the call: gone again.
+    shell.show();
+    expect(f.indicator()?.visible).toBe(false);
+    feed("part.ended", { part: 1, reason: "stop" });
+    expect(f.indicator()).toMatchObject({ closed: true, visible: false });
+    await shell.close();
+  });
+
+  test("a call that starts with the window open opens the indicator hidden; a minimize shows it", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f, { minimizedPollMs: 5 });
+    shell.show();
+    f.focus(false);
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    expect(f.indicator()?.visible).toBe(false);
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    await shell.close();
+  });
+
+  test("the minimize check runs only while a call's indicator and the window are both open", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f, { minimizedPollMs: 5 });
+    shell.show();
+    await Bun.sleep(30);
+    // No call: nothing is asked of the window.
+    expect(f.minimizedReads()).toBe(0);
+    feed("call.created");
+    await until(() => f.minimizedReads() > 2, 1000, "the minimize check");
+    // The call ends: the check stops with the indicator.
+    feed("part.ended", { part: 1, reason: "stop" });
+    const after = f.minimizedReads();
+    await Bun.sleep(40);
+    expect(f.minimizedReads()).toBe(after);
+    // A call with no window open asks nothing either: there is no window to minimize.
+    f.closeWindow();
+    feed("call.created");
+    await until(() => f.indicator()?.opened === 2, 1000, "the second indicator");
+    const closed = f.minimizedReads();
+    await Bun.sleep(40);
+    expect(f.minimizedReads()).toBe(closed);
+    await shell.close();
+  });
+});
+
+describe("[DK-M9] a call an agent starts brings the window forward where the user is", () => {
+  const agentStart = (by = "agent:claude-code"): Announcement => ({
+    what: "start",
+    by,
+    ok: true,
+    call: "c1",
+  });
+
+  test("an agent's start opens the window hidden and raises it on the call, without the focus", async () => {
+    const f = fakeUi();
+    const { shell, a } = await eventShell(f, { minimizedPollMs: 5 });
+    a.announce(agentStart());
+    expect(f.log.filter((l) => l.startsWith("window"))).toEqual([`window ${WINDOW_URL}`]);
+    // Opened hidden, then put in front by the raise: never `show`, which takes the keyboard.
+    expect(f.hiddenOpens).toEqual([true]);
+    expect(f.log).toContain("raise");
+    expect(f.log).not.toContain("show");
+    await f.boot();
+    expect(f.log).toContain("call c1");
+    // The window is open and minimized when the next agent starts a call: restored and raised.
+    f.minimize(true);
+    a.announce(agentStart("agent:cli"));
+    expect(f.log.filter((l) => l === "raise")).toHaveLength(2);
+    expect(f.log.filter((l) => l.startsWith("window"))).toHaveLength(1);
+    expect(f.log).not.toContain("show");
+    await shell.close();
+  });
+
+  test("the window's, the tray's and the hotkey's starts, a refused start and the setting off raise nothing", async () => {
+    const f = fakeUi();
+    const { shell, a } = await eventShell(f);
+    // The window, the tray and the hotkey all start as the user.
+    a.announce(agentStart("user"));
+    a.announce({ what: "start", by: "agent:claude-code", ok: false, code: "models_missing" });
+    a.announce({ what: "share", by: "agent:claude-code", call: "c1" });
+    expect(f.log.filter((l) => l.startsWith("window") || l === "raise")).toEqual([]);
+    await shell.close();
+
+    const g = fakeUi();
+    const off = await eventShell(g, { settings: { "app.showOnAgentStart": false } });
+    off.a.announce(agentStart());
+    expect(g.log.filter((l) => l.startsWith("window") || l === "raise")).toEqual([]);
+    await off.shell.close();
+
+    // Positive control: the same start with the setting on raises the window.
+    const h = fakeUi();
+    const on = await eventShell(h, { settings: { "app.showOnAgentStart": true } });
+    on.a.announce(agentStart());
+    expect(h.log).toContain("raise");
+    await on.shell.close();
+  });
+
+  test("an agent's start hides the indicator; a minimize brings it back", async () => {
+    const f = fakeUi();
+    const { shell, a, feed } = await eventShell(f, { minimizedPollMs: 5 });
+    feed("call.created");
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator");
+    a.announce(agentStart());
+    expect(f.indicator()?.visible).toBe(false);
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    await shell.close();
+  });
+
+  test("each OS's raise steps: restore without the keyboard where the OS can, never where it cannot", () => {
+    // macOS: deminiaturize, then in front on the user's Space with no activation.
+    expect(raiseSteps("darwin", false)).toEqual([
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ]);
+    expect(raiseSteps("darwin", true)).toEqual([
+      "restore",
+      "joinAllSpaces",
+      "showInactive",
+      "leaveAllSpaces",
+    ]);
+    // Windows: never the SDK's restore (SW_RESTORE activates); SW_SHOWNOACTIVATE instead.
+    expect(raiseSteps("win32", false)).toEqual(["showInactive"]);
+    expect(raiseSteps("win32", true)).toEqual(["restoreNoActivate", "showInactive"]);
+    // Linux: the SDK's restore presents the window, which activates it: a minimized window stays.
+    expect(raiseSteps("linux", false)).toEqual(["showInactive"]);
+    expect(raiseSteps("linux", true)).toEqual([]);
+    // No OS but macOS restores through the SDK's activating `unminimize`.
+    for (const p of ["win32", "linux", "freebsd"])
+      expect(raiseSteps(p, true)).not.toContain("restore");
+  });
+
+  test("on Linux a minimized window stays minimized and the indicator keeps showing; on Windows it comes back and the indicator goes", async () => {
+    const f = fakeUi({ platform: "linux" });
+    const linux = await eventShell(f, { minimizedPollMs: 5, platform: "linux" });
+    linux.shell.show();
+    linux.feed("call.created");
+    f.minimize(true);
+    await until(() => f.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    linux.a.announce(agentStart());
+    expect(f.log).toContain("raise");
+    await Bun.sleep(30);
+    expect(f.indicator()?.visible).toBe(true);
+    await linux.shell.close();
+
+    const g = fakeUi({ platform: "win32" });
+    const win = await eventShell(g, { minimizedPollMs: 5, platform: "win32" });
+    win.shell.show();
+    win.feed("call.created");
+    g.minimize(true);
+    await until(() => g.indicator()?.visible === true, 1000, "the indicator after a minimize");
+    win.a.announce(agentStart());
+    await until(() => g.indicator()?.visible === false, 1000, "the indicator gone after the raise");
+    await win.shell.close();
+  });
+
+  test("native.ts runs each raise step as the call it names (the source only, not what the OS does)", () => {
+    // native.ts is the one module the tests cannot load: its source is the check. It proves which
+    // SDK or user32 call each step maps to and that the raise calls nothing else; whether macOS
+    // activates akou on a deminiaturize, and the Space move, are release checklist steps.
+    const src = readFileSync(
+      join(import.meta.dir, "..", "src", "main", "window", "native.ts"),
+      "utf8",
+    );
+    const body = src.match(/raise: \(\) => \{([\s\S]*?)\n {8}\},/)?.[1] ?? "";
+    const steps = [...body.matchAll(/step === "(\w+)"\) (\w+(?:\.\w+)?)\(([^)]*)\)/g)].map(
+      (m) => `${m[1]} -> ${m[2]}(${m[3]})`,
+    );
+    expect(steps).toEqual([
+      "restore -> win.unminimize()",
+      "restoreNoActivate -> restoreNoActivate(win.ptr)",
+      "joinAllSpaces -> win.setVisibleOnAllWorkspaces(true)",
+      "showInactive -> win.showInactive()",
+      "leaveAllSpaces -> win.setVisibleOnAllWorkspaces(false)",
+    ]);
+    expect(body).toContain("raiseSteps(process.platform, win.isMinimized())");
+    expect(body).not.toMatch(/\.(show|focus|activate)\(/);
+    expect(src).toContain("user32.symbols.ShowWindow(hwnd, SW_SHOWNOACTIVATE)");
+    expect(src).toContain("const SW_SHOWNOACTIVATE = 4;");
+    // The window it raises was opened hidden and without activation.
+    expect(src).toContain("...(hidden ? { hidden: true, activate: false } : {})");
+  });
+
+  test(
+    "a headless app learns of the window an agent's start opened: status says open, the watchdog reads it open",
+    async () => {
+      // The login item's start: a shell with its tray, and no window registered with the app.
+      const rig = await appRig();
+      const f = fakeUi();
+      const shell = new Shell(appForShell(rig.app), new Bridge(rig.app), f.ui, {
+        platform: "darwin",
+        setLoginItem: async () => {},
+      });
+      await shell.start();
+      const status = async () => (await rig.api("GET", "/status")).body.app.window;
+      // What the watchdog publishes as "the window was open" (`windowOpen` in index.ts).
+      const watchdogRead = () => rig.app.window?.isOpen?.() ?? false;
+      expect(await status()).toBe("none (headless)");
+      expect(watchdogRead()).toBe(false);
+      const r = await rig.api(
+        "POST",
+        "/calls",
+        { workspace: "work" },
+        { "X-Akou-Client": "codex" },
+      );
+      expect(r.status).toBe(201);
+      await until(() => f.log.includes("raise"), 2000, "the raise");
+      // Raised without the focus, and registered with the app.
+      expect(f.log).not.toContain("show");
+      expect(rig.app.window).toBe(shell);
+      expect(await status()).toBe("open");
+      expect(watchdogRead()).toBe(true);
+      // Closed by the user: the watchdog reads it closed again.
+      f.closeWindow();
+      expect(watchdogRead()).toBe(false);
+      await rig.api("POST", `/calls/${r.body.call}/stop`, {});
+      await shell.close();
+      await rig.close();
+    },
+    LONG,
+  );
+
+  test(
+    "over the real app: an API start raises the window; the tray's start and an attach do not",
+    async () => {
+      const rig = await appRig();
+      const { shell, f } = await shellOn(rig);
+      const raises = () => f.log.filter((l) => l === "raise").length;
+      // The tray's Record starts as the user: no window.
+      await shell.toggle("tray");
+      await until(async () => (await rig.api("GET", "/calls/live")).status === 200, 5000, "live");
+      expect(raises()).toBe(0);
+      expect(f.log.filter((l) => l.startsWith("window"))).toEqual([]);
+      // An attach to that call started nothing: no window either.
+      const attach = await rig.api(
+        "POST",
+        "/calls",
+        { attach: true },
+        { "X-Akou-Client": "codex" },
+      );
+      expect(attach.status).toBe(200);
+      expect(raises()).toBe(0);
+      await shell.toggle("tray");
+      await until(async () => (await rig.api("GET", "/calls/live")).status === 404, 10_000, "idle");
+      // An agent's start through the API: the window, raised.
+      const r = await rig.api(
+        "POST",
+        "/calls",
+        { workspace: "work" },
+        { "X-Akou-Client": "codex" },
+      );
+      expect(r.status).toBe(201);
+      await until(() => raises() === 1, 2000, "the raise");
+      expect(f.hiddenOpens).toEqual([true]);
+      await rig.api("POST", `/calls/${r.body.call}/stop`, {});
+      await shell.close();
+      await rig.close();
+    },
+    LONG,
+  );
 });
 
 /** Markers carried by everything a call holds that the indicator must never receive. */

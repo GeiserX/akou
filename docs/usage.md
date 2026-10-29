@@ -28,7 +28,9 @@ The Record row at the top holds everything a new call needs:
 
 ![A call being recorded: the elapsed time, the microphone and call meters, Stop, the live transcript, a note already added and a second one being typed](images/screenshots/recording.png)
 
-While a call records, the row shows **REC**, the elapsed time, **Stop**, and buttons to mute your microphone and to pause. While the meeting app is in front, a small floating bar shows the time, the levels, Mute, Ask and Stop. It carries no transcript text, so it can stay up during a screen share; Settings turns it off (**Floating bar while recording**).
+While a call records, the row shows **REC**, the elapsed time, **Stop**, and buttons to mute your microphone and to pause. While the akou window is closed or minimized, a small floating bar shows the time, the levels, Mute, Ask and Stop. It carries no transcript text, so it can stay up during a screen share; Settings turns it off (**Floating bar while recording**).
+
+When an agent starts a call (`akou start`, the MCP tool or the API), akou shows its window on that call, in front, on the desktop you are on, without taking the keyboard from the app you are typing in. Settings turns this off (**Show akou when an agent starts a call**). A start from the window, the menu bar's Record or the shortcut leaves the window as it is.
 
 The first Record asks macOS for the microphone and for the system audio of the call. See [Permissions](getting-started.md#permissions).
 
