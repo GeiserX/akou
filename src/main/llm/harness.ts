@@ -682,6 +682,20 @@ export class HarnessProvider implements Provider {
     rmSync(HarnessProvider.sessionDir(id), { recursive: true, force: true });
   }
 
+  /**
+   * The account the harness runs on, when the app's environment names one: `CLAUDE_CONFIG_DIR
+   * /path` for Claude Code, `CODEX_HOME /path` for Codex. An app started from an agent's shell
+   * inherits that shell's, which may be another login than the one the user expects; akou never
+   * changes it, it only says so.
+   */
+  configDir(): string | undefined {
+    const t = this.o.target();
+    if ("none" in t) return undefined;
+    const name = t.kind === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+    const v = (this.o.env ?? process.env)[name]?.trim();
+    return v ? `${name} ${v}` : undefined;
+  }
+
   /** `claude-code/2.1.281`, or null with no harness. */
   label(): string | null {
     const t = this.o.target();
@@ -822,7 +836,17 @@ export class HarnessProvider implements Provider {
       // Started early and gone before it said a word: it never read this question.
       if (early && code !== 0 && !saidAnything) throw new EarlyHarnessGone();
       const report = parser.report();
-      const failure = classifyRun(t.kind, code, report, stderr);
+      const classified = classifyRun(t.kind, code, report, stderr);
+      // A usage limit or a login is about the account: say which one the run used.
+      const account = this.configDir();
+      const failure =
+        classified && account && (classified.kind === "exhausted" || classified.kind === "auth")
+          ? new ProviderError(
+              classified.kind,
+              `${classified.message} (it ran with ${account})`,
+              classified.resetsAt,
+            )
+          : classified;
       if (failure) {
         this.o.onLog?.("warn", `harness: ${failure.message}`);
         throw failure;

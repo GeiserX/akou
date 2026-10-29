@@ -36,13 +36,14 @@ async function nextEvents(
   ctx: Ctx,
   call: string,
   cursor: number,
-  o: { types?: string; launch?: boolean; wait?: number } = {},
+  o: { types?: string; launch?: boolean; wait?: number; client?: string } = {},
 ): Promise<Body> {
   const r = await api(ctx, "GET", `/calls/${call}/events`, {
     query: { after: cursor, wait: o.wait ?? 25, types: o.types },
     timeoutMs: 40_000,
     signal: ctx.io.signal,
     ...(o.launch === false ? { launch: false } : {}),
+    ...(o.client ? { client: o.client } : {}),
   });
   if (r.status !== 200) throw Object.assign(new Error("events"), { response: r });
   return r.body;
@@ -126,6 +127,21 @@ const tail: Command = {
   },
 };
 
+/**
+ * `--client NAME` as the `X-Akou-Client` header: the author pattern's letters only, so the name
+ * the ask box shows ("Questions go to claude-code") is the one the API records.
+ */
+export function clientFlag(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const name = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 40);
+  return name === "" ? undefined : name;
+}
+
 /** The events that end a call: `events -f` stops after them. */
 const ENDS = ["call.ended", "call.failed"];
 
@@ -160,11 +176,20 @@ async function printMentions(
 const events: Command = {
   name: "events",
   summary: "The call's log events as JSON lines, one object per line; -f follows until it ends",
-  usage: "akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention]",
+  usage: "akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention] [--client NAME]",
   flags: {
     call: callFlag("live"),
     follow: { type: "boolean", short: "f", desc: "keep printing until the call ends" },
-    type: { type: "string", value: "T,…", desc: "only these event types: health,seg,answer" },
+    type: {
+      type: "string",
+      value: "T,…",
+      desc: "only these event types: health,seg,ask,answer,share.started,share.stopped",
+    },
+    client: {
+      type: "string",
+      value: "NAME",
+      desc: "who is following (claude-code); with -f and ask, questions typed in the ask box go to you first",
+    },
     since: { type: "string", value: "SEQ", desc: "events after this cursor (default: all)" },
     mention: {
       type: "boolean",
@@ -173,6 +198,7 @@ const events: Command = {
     json: { type: "boolean", desc: "accepted; the output is always JSON lines" },
   },
   examples: [
+    "akou events -f --type ask,health,share.started,share.stopped --mention --client claude-code",
     "akou events -f --type health,answer",
     "akou events -c last --since 120",
     "akou events -f --type health,share.started,share.stopped --mention",
@@ -191,6 +217,7 @@ const events: Command = {
     const extra = [...(follow ? ENDS : []), ...(mention ? ["seg"] : [])];
     const types = kept ? [...new Set([...kept, ...extra])].join(",") : undefined;
     const since = int(p, "since", 0, Number.MAX_SAFE_INTEGER) ?? 0;
+    const client = clientFlag(str(p, "client"));
     // Never launches the app: a stream of a call that is not running has nothing to say (PG-S3).
     let r: Body;
     try {
@@ -199,6 +226,7 @@ const events: Command = {
         types,
         launch: false,
         wait: follow ? 25 : 0,
+        client,
       });
     } catch (err) {
       const res = (err as { response?: Body }).response;
@@ -231,7 +259,7 @@ const events: Command = {
       }
       if (!follow || ended || ctx.io.signal?.aborted) return EXIT.ok;
       try {
-        r = await nextEvents(ctx, id, cursor, { types, launch: false });
+        r = await nextEvents(ctx, id, cursor, { types, launch: false, client });
       } catch (err) {
         const res = (err as { response?: Body }).response;
         if (res) return finish(ctx, res, () => "");
@@ -371,6 +399,47 @@ const ask: Command = {
   },
 };
 
+const answer: Command = {
+  name: "answer",
+  summary: "Answer a question typed in the ask box, as the agent following the call",
+  usage:
+    'akou answer ASK "TEXT" | akou answer ASK -   [-c CALL] [--client NAME] [--model M] [--json]',
+  flags: {
+    call: callFlag("live"),
+    client: { type: "string", value: "NAME", desc: "who answers (claude-code); shown in the box" },
+    model: { type: "string", value: "M", desc: "the model that wrote the answer, if you know it" },
+  },
+  examples: [
+    'akou answer q0291 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3',
+    "akou answer q0291 - < answer.txt",
+  ],
+  run: async (ctx, p) => {
+    const [askId, ...words] = p.positional;
+    if (!askId || !/^q\d{4,}$/.test(askId)) return usage(ctx, "answer needs the ask id (q0291)");
+    let text = words.join(" ").trim();
+    if (text === "-") text = ((await ctx.io.readStdin?.()) ?? "").trim();
+    if (text === "") return usage(ctx, "answer needs the text, or - to read it from stdin");
+    const client = clientFlag(str(p, "client"));
+    const r = await api(ctx, "POST", `/calls/${ref(p)}/asks/${askId}/answer`, {
+      body: { text, model: str(p, "model") },
+      ...(client ? { client } : {}),
+    });
+    // 409: this agent already answered it, which is the same as done.
+    if (r.status === 409 && r.body?.error === "already_answered") {
+      if (ctx.json) ctx.io.out(JSON.stringify(r.body));
+      else ctx.io.err(`akou: ${askId} is already answered by you`);
+      return EXIT.ok;
+    }
+    return finish(ctx, r, (b) => {
+      const others = (b.others as Body[]).map((o) =>
+        o.kind === "excerpts" ? "akou showed the excerpts" : `${o.by} (${o.model}) answered too`,
+      );
+      const cites = (b.answer.cites as string[]).length;
+      return `Answered ${askId} in the ask box, ${cites} citation${cites === 1 ? "" : "s"}${others.length > 0 ? `; ${others.join("; ")}` : ""}.`;
+    });
+  },
+};
+
 /** The question `--preset NAME` asks of the call, filled in for it, or the exit code. */
 async function presetQuestion(ctx: Ctx, p: Parsed, name: string): Promise<string | number> {
   const speaker = str(p, "speaker");
@@ -439,4 +508,4 @@ const search: Command = {
   },
 };
 
-export const followCommands: Command[] = [tail, events, context, ask, presets, search];
+export const followCommands: Command[] = [tail, events, context, ask, answer, presets, search];

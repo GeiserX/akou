@@ -117,6 +117,7 @@ const MAIN: Layout = [
       "provider.kind",
       ASSISTANT_USE,
       "memo.provider",
+      "ask.agentWaitSeconds",
       "agent.summary_every_minutes",
       ">assistant",
     ],
@@ -133,6 +134,8 @@ const PROVIDER_KEYS = [
   "provider.model",
   "provider.baseUrl",
   "provider.timeoutSeconds",
+  "provider.command",
+  "provider.commandLabel",
 ];
 
 /** The assistant's details that apply to each kind, first; the others follow under their own title. */
@@ -150,6 +153,7 @@ const FOR_KIND: Record<string, string[]> = {
     "provider.apiKey",
     "provider.timeoutSeconds",
   ],
+  command: ["provider.command", "provider.commandLabel", "provider.timeoutSeconds"],
   none: [],
 };
 

@@ -28,7 +28,9 @@ export const FORMAT_TIMEOUT_API_SECONDS = 4;
 export function formatTimeoutMs(seconds: number | null | undefined, provider: ProviderId): number {
   if (typeof seconds === "number" && seconds > 0) return Math.round(seconds * 1000);
   return (
-    (provider === "harness" ? FORMAT_TIMEOUT_HARNESS_SECONDS : FORMAT_TIMEOUT_API_SECONDS) * 1000
+    (provider === "harness" || provider === "command"
+      ? FORMAT_TIMEOUT_HARNESS_SECONDS
+      : FORMAT_TIMEOUT_API_SECONDS) * 1000
   );
 }
 

@@ -53,9 +53,21 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["harness", "Claude Code or Codex"],
       ["anthropic", "Anthropic API"],
       ["openai-compatible", "An OpenAI-compatible server"],
+      ["command", "A command you set in the config file"],
       ["none", "Nothing, the matching parts only"],
     ],
   },
+  "ask.agentWaitSeconds": {
+    label: "Wait for the agent following the call",
+    help: "A question you type goes to that agent first. 0: never wait for it.",
+    unit: "seconds",
+  },
+  "provider.command": {
+    label: "Command",
+    help: "Set in the config file.",
+    empty: "Not set",
+  },
+  "provider.commandLabel": { label: "Its name in the window", empty: "The program's name" },
   "agent.summary_every_minutes": {
     label: "An agent following a call sums it up every",
     help: "Claude Code or Codex never posts a summary more often. 0: no summaries.",
