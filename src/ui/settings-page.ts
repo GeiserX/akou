@@ -679,7 +679,9 @@ export class SettingsPage {
           void this.saveTyped();
           this.sub = name;
           this.draw();
-          this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+          // The page opens at its top: focusing the back button must not scroll it, which it
+          // does when the page is a few pixels taller than the window.
+          this.col.querySelector<HTMLElement>(".pg-back")?.focus({ preventScroll: true });
         },
       );
     }
