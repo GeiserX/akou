@@ -1252,6 +1252,66 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
   );
 
   test(
+    "after a question asked here, another saved call still opens on its own last answer, and so does the first one again",
+    async () => {
+      let a = "";
+      let b = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => {
+              standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5F6G7J");
+              x.add({ type: "ask", id: "q1", q: "what about the build?", by: "user" });
+              x.add({
+                type: "answer",
+                ask: "q1",
+                text: "Move it to the new box.",
+                cites: [],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+            }).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          provider.answer = () => "Ana spoke first.";
+          await page.fill("#ask-input", "who spoke first?");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .a-card .answer")) === "Ana spoke first.",
+            5000,
+            "the answer in the first call",
+          );
+          // Another call: the column shows that call's last answer, not an empty column.
+          await page.click(`#calls button[data-id="${b}"]`);
+          await until(
+            async () => (await text(page, "#ask-out .question")) === "what about the build?",
+            5000,
+            "the other call's last answer",
+          );
+          expect(await text(page, "#ask-out .a-card .answer")).toBe("Move it to the new box.");
+          expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+          // Back to the first call: its own question, now in its log, is drawn once.
+          await page.click(`#calls button[data-id="${a}"]`);
+          await until(
+            async () => (await text(page, "#ask-out .question")) === "who spoke first?",
+            5000,
+            "the first call's answer again",
+          );
+          expect(await text(page, "#ask-out .a-card .answer")).toBe("Ana spoke first.");
+          expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[akou-dzm.19] an assistant that is missing or signed out is said in plain words that point at Settings, never a setting's key",
     async () => {
       let id = "";
@@ -1470,6 +1530,217 @@ describe("the side column (WINDOW section 6)", () => {
         expect(await hiddenOffenders(page)).toEqual([]);
       });
       t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[decision] A question typed in the ask box never reaches the agent following the call", () => {
+  test(
+    "the box names the agent following the call, and its later answer is added under its own label",
+    async () => {
+      const t = tempDir("akou-wav-");
+      const provider = new FakeProvider();
+      await withRig({ provider, helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Agent answers" });
+        const page = await rig.open(id);
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await until(async () => (await rowIds(page)).length === 1, 5000, "the row");
+        // No agent is following: the muted line is hidden and the provider answers.
+        expect(await page.locator(".ask-route").isVisible()).toBe(false);
+        provider.answer = () => "Move the build.";
+        await page.fill("#ask-input", "what about the build?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Move the build.",
+          5000,
+          "the provider's answer",
+        );
+        expect(await text(page, "#ask-out .ask-status")).toBe("answered by fake/1.0");
+        // Positive control: nothing else answered yet, so nothing is added under it.
+        expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+        const events = await rig.api("GET", `/calls/${id}/events?types=ask&wait=0`);
+        const askId = (events.body.events as { id: string }[]).at(-1)?.id as string;
+        const agent = { "x-akou-client": "claude-code" };
+        const posted = await rig.api(
+          "POST",
+          `/calls/${id}/asks/${askId}/answer`,
+          { text: "Move it to the new box." },
+          agent,
+        );
+        expect(posted.status).toBe(200);
+        await until(
+          async () => (await page.locator("#ask-out .more-answer").count()) === 1,
+          5000,
+          "the agent's later answer",
+        );
+        expect(await text(page, "#ask-out .more-answer .ask-status")).toBe(
+          "answered by claude-code (the agent following the call)",
+        );
+        expect(await text(page, "#ask-out .more-answer .answer")).toBe("Move it to the new box.");
+        // The first answer stays as it was.
+        expect(await text(page, "#ask-out .a-card > .answer")).toBe("Move the build.");
+        // A window opened later draws every answer from the log.
+        const again = await rig.open(id);
+        await until(
+          async () => (await again.locator("#ask-out .more-answer").count()) === 1,
+          5000,
+          "every answer on a fresh window",
+        );
+        expect(await text(again, "#ask-out .a-card .lbl .ask-status")).toBe("answered by fake/1.0");
+        // An agent watching the call's questions is named under the box.
+        void rig.api("GET", `/calls/${id}/events?types=ask&wait=5`, undefined, agent);
+        await until(
+          async () =>
+            (await text(page, ".ask-route")) ===
+            "Questions go to claude-code, which is following this call.",
+          8000,
+          "the muted line",
+        );
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[decision] A question typed in the ask box never reaches the agent following the call: a saved call", () => {
+  test(
+    "with an agent following the live call and no assistant, a saved call's box searches and names no agent; the live call's box asks and names it",
+    async () => {
+      const t = tempDir("akou-wav-");
+      let saved = "";
+      // No provider passed: the rig's config says `provider.kind` none.
+      await withRig(
+        {
+          helperArgs: ["--wav", silentWav(t.dir)],
+          seed: (home) => {
+            saved = seedCall(home, standardCall).id;
+          },
+        },
+        async (rig) => {
+          const live = await rig.startCall({ title: "Agent follows" });
+          const agent = { "x-akou-client": "claude-code" };
+          // The poll may still be open when the rig closes: its failure is not this test's.
+          const poll = rig
+            .api("GET", `/calls/${live}/events?types=ask&wait=2`, undefined, agent)
+            .catch(() => null);
+          await until(
+            async () =>
+              ((await rig.api("GET", "/status")).body.live?.listening ?? []).includes(
+                "claude-code",
+              ),
+            5000,
+            "the agent listening on the live call",
+          );
+          const page = await rig.open(saved);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await until(
+            async () =>
+              (await page.getAttribute("#ask-input", "placeholder")) === "Search this call",
+            5000,
+            "the saved call's search box",
+          );
+          expect(await page.locator(".ask-route").isVisible()).toBe(false);
+          // The live call: its agent is named and the box asks.
+          await page.click(`#calls button[data-id="${live}"]`);
+          await until(
+            async () =>
+              (await text(page, ".ask-route")) ===
+              "Questions go to claude-code, which is following this call.",
+            5000,
+            "the muted line on the live call",
+          );
+          expect(await page.getAttribute("#ask-input", "placeholder")).toBe("Ask about this call");
+          // And back: the saved call searches again.
+          await page.click(`#calls button[data-id="${saved}"]`);
+          await until(
+            async () =>
+              (await page.getAttribute("#ask-input", "placeholder")) === "Search this call",
+            5000,
+            "the saved call's search box again",
+          );
+          expect(await page.locator(".ask-route").isVisible()).toBe(false);
+          await poll;
+        },
+      );
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[decision] Two answers to one question: the card drawn from the log", () => {
+  test(
+    "a saved call opened on its last answer adds an agent's later answer under it, also after another call was shown",
+    async () => {
+      let a = "";
+      let b = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => {
+              standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5F6G7J");
+              x.add({ type: "ask", id: "q1", q: "what about the build?", by: "user" });
+              x.add({
+                type: "answer",
+                ask: "q1",
+                text: "Move it to the new box.",
+                cites: [],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+            }).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(b);
+          await until(
+            async () => (await text(page, "#ask-out .question")) === "what about the build?",
+            5000,
+            "the call's last answer",
+          );
+          // Positive control: nothing else answered yet, so nothing is added under it.
+          expect(await page.locator("#ask-out .more-answer").count()).toBe(0);
+          const answer = (client: string, body: string) =>
+            rig.api(
+              "POST",
+              `/calls/${b}/asks/q1/answer`,
+              { text: body },
+              { "x-akou-client": client },
+            );
+          expect((await answer("claude-code", "Later: the new box.")).status).toBe(200);
+          await until(
+            async () => (await page.locator("#ask-out .more-answer").count()) === 1,
+            5000,
+            "the agent's later answer",
+          );
+          expect(await text(page, "#ask-out .more-answer .answer")).toBe("Later: the new box.");
+          // Another call, then back: the card is drawn from the log again, and still takes more.
+          await page.click(`#calls button[data-id="${a}"]`);
+          await until(
+            async () => (await page.locator("#ask-out .qa").count()) === 0,
+            5000,
+            "the other call, with nothing asked",
+          );
+          await page.click(`#calls button[data-id="${b}"]`);
+          await until(
+            async () => (await page.locator("#ask-out .more-answer").count()) === 1,
+            5000,
+            "the first call's card with its later answer",
+          );
+          expect((await answer("codex", "Also: the new box.")).status).toBe(200);
+          await until(
+            async () => (await page.locator("#ask-out .more-answer").count()) === 2,
+            5000,
+            "the second later answer",
+          );
+          expect(await text(page, "#ask-out .a-card > .answer")).toBe("Move it to the new box.");
+        },
+      );
     },
     UI_TIMEOUT,
   );

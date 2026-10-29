@@ -10,9 +10,12 @@
  *   still 200: the matching excerpts, labelled, with the reason, the `route` that did not answer,
  *   `answered: false`, and the `handoff` for "Copy context for my agent" (the question, then a
  *   reference to the pack and a short excerpt, never the pasted pack), never nothing (TRAPS "Provider unavailable answered with
- *   nothing"). With `stream`, Server-Sent Events: `excerpts` at once, a `token` per piece of the
+ *   nothing"). With `stream`, Server-Sent Events: `excerpts` at once, `routed` (a user's question:
+ *   to the agent following the call, or to the provider, and why), a `token` per piece of the
  *   answer, then `answer` with the same body as the plain reply. A client that goes away cancels
- *   the provider run.
+ *   the provider run. A question the user typed waits up to `ask.agentWaitSeconds` for the agent
+ *   following the call (`akou_answer`) before the provider runs; `by` names that agent when it
+ *   answered, and `agentReason` says why it did not.
  * - `POST /provider/warm`: the ask box has focus, so a question may follow. The harness provider
  *   starts its program now, so its start-up overlaps the typing (#383); nothing is sent to it until
  *   a question is asked, and it stops after a minute with no question. Other providers do nothing.
@@ -21,6 +24,7 @@
 import type { EventDraft } from "../../../core/log/events.ts";
 import type { CallView } from "../../../core/log/fold.ts";
 import { ProviderError } from "../../llm/provider.ts";
+import { agentRoute } from "../../query/agent-answer.ts";
 import { ASK_SYSTEM, type AskOptions, ask, excerptsFor } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
 import { handoffFor } from "../../query/handoff.ts";
@@ -120,7 +124,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
     "/calls/:id/ask",
     {
       id: "calls.ask",
-      doc: "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written.",
+      doc: "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written. A question the user typed in the ask box goes first to the agent following the call, when one is (`ask.agentWaitSeconds`); an agent's own question goes straight to the provider.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -149,6 +153,14 @@ export function queryRoutes(r: Router<ApiApp>): void {
           c.app.write(id, typeof d === "function" ? (call) => d(call.view) : d),
         timeoutMs: c.app.providerTimeoutMs(),
         sessions: c.app.askSessions?.(),
+        // A question the user typed goes to the agent following the call first (DESIGN 5.5).
+        agents: agentRoute({
+          listening: c.app.listeners?.listening(id) ?? [],
+          waitMs: (c.app.config().settings["ask.agentWaitSeconds"] as number) * 1000,
+          subscribe: (fn) => c.app.subscribe(id, fn),
+          view: () => q.view,
+        }),
+        onFallback: (ask: string) => c.app.listeners?.fellBack(id, ask),
       };
       if (!b.stream) {
         try {
@@ -230,6 +242,7 @@ function sseAnswer(
           ...opts,
           signal: ac.signal,
           onExcerpts: (excerpts) => send("excerpts", { call: id, excerpts }),
+          onRouted: (r) => send("routed", r),
           onToken: (t) => send("token", { t }),
         });
         send("answer", { call: id, ...r });

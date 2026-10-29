@@ -68,14 +68,29 @@ export interface FollowSink {
   closed(reason: string): void;
 }
 
+/** Where the app sent a question: the agent following the call first, or akou's provider. */
+export interface AskRouted {
+  to: "agent" | "provider";
+  clients?: string[];
+  waitSeconds?: number;
+  why?: string;
+}
+
 export interface AskSink {
   excerpts(data: { excerpts: { citation: string; lines: string[] }[] }): void;
+  routed?(data: AskRouted): void;
   token(t: string): void;
   answer(data: AskAnswer): void;
   error(data: { error: string; message: string }): void;
 }
 
 export interface AskAnswer {
+  /** The `ask` event's id, when the question was logged. */
+  ask?: string;
+  /** Who answered, when the agent following the call did: `agent:claude-code`. */
+  by?: string;
+  /** Why the agent following the call did not answer first, when the question waited for it. */
+  agentReason?: string;
   answered: boolean;
   text: string;
   kind: "answer" | "excerpts" | "naming";
@@ -157,6 +172,8 @@ export interface AppStatus {
     /** The live model's and the second pass's names, as the button says them; absent from an older app. */
     name?: string;
     reviewName?: string;
+    /** The agents following the call's questions (`akou events -f --type ask`); absent from an older app. */
+    listening?: string[];
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   /** Every final pass running now, with how far it is; absent from an older app. */
@@ -245,7 +262,11 @@ export interface AkouRpc {
         kind: "open" | "event" | "partial" | "level" | "read" | "alive" | "closed";
         data?: unknown;
       };
-      asked: { stream: string; kind: "excerpts" | "token" | "answer" | "error"; data: unknown };
+      asked: {
+        stream: string;
+        kind: "excerpts" | "routed" | "token" | "answer" | "error";
+        data: unknown;
+      };
       status: AppStatus;
       /** The tray, the hotkey or `akou open` asks the page to show a call. */
       showCall: { call?: string };

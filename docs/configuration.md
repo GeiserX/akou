@@ -153,9 +153,11 @@ The tables below are generated from the settings registry in [src/main/config/sc
 
 | Key | Default | What it does |
 |---|---|---|
-| `provider.kind` | `"harness"` | What answers questions and writes enhanced notes: your own Claude Code or Codex (`harness`), an OpenAI-compatible server, the Anthropic API with your key, or `none` (excerpts only). |
+| `provider.kind` | `"harness"` | What answers questions and writes enhanced notes: your own Claude Code or Codex (`harness`), an OpenAI-compatible server, the Anthropic API with your key, a program you name in `provider.command` (`command`), or `none` (excerpts only). With `none`, an agent following the call can still answer the ask box (`ask.agentWaitSeconds`). |
 | `provider.harness` | `"auto"` | Which harness `harness` runs. `auto`: Claude Code if found, else Codex. |
 | `provider.harnessPath` (file only) | `""` | Pin the harness program by absolute path. Empty: look it up on PATH and through the login shell. |
+| `provider.command` (file only) | `[]` | With `provider.kind` `command`: the program and its arguments, as a list, run with no shell. The prompt goes on stdin as plain text and stdin is then closed; the answer is what it prints on stdout. `{system}`, `{question}`, `{call}`, `{ask}` and `{task}` inside an argument are replaced (the system prompt goes at the top of stdin when no argument has `{system}`), and the same values are in AKOU_QUESTION, AKOU_CALL_ID, AKOU_ASK_ID and AKOU_TASK. A non-zero exit fails the run, with the last line of stderr as the reason. Set it in the config file only. |
+| `provider.commandLabel` | `""` | The name the window shows for `provider.command` in "answered by" and when it did not answer. Empty: the program's file name. |
 | `provider.baseUrl` (window or file) | `""` | Server address for `openai-compatible` (Ollama: `http://127.0.0.1:11434/v1`), or another Anthropic API address. Set it in the akou window or the config file, never over the API: it decides where your key and transcripts are sent. |
 | `provider.model` | `""` | Model id for `openai-compatible` (required) and `anthropic` (empty: the default model). |
 | `provider.apiKey` | `""` | API key for `openai-compatible` (optional) or `anthropic` (required). On macOS it is saved in the Keychain, never in the config file; elsewhere in the config file. Never shown back or logged. |
@@ -166,7 +168,13 @@ The tables below are generated from the settings registry in [src/main/config/sc
 
 | Key | Default | What it does |
 |---|---|---|
-| `memo.provider` | `"auto"` | Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`. |
+| `memo.provider` | `"auto"` | Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness` and `command`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`. |
+
+### ask
+
+| Key | Default | What it does |
+|---|---|---|
+| `ask.agentWaitSeconds` | `30` | When an agent is following the call (its `akou events -f` watch includes `ask`), how long a question typed in the ask box waits for that agent to answer it before akou's own provider runs. 0: never wait for an agent. An agent's answer that comes later is still added to the card. |
 
 ### agent
 

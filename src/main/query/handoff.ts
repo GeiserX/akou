@@ -9,7 +9,8 @@
  * 2. A reference the agent can follow: the call's id, the span of the call the question is about,
  *    and the exact `akou context` command and `akou_context` call that fetch the pack. The pack is
  *    passed by reference, never pasted: a pasted pack is a wall of text that costs tokens and buries
- *    the question.
+ *    the question. When the question was logged, the `akou answer` command and `akou_answer` call
+ *    that post the agent's answer back to the ask box.
  * 3. Last, for an agent that cannot reach akou, a short excerpt of the lines that matched, quoted as
  *    call text (PG-Z1). Never the whole window.
  *
@@ -33,6 +34,8 @@ export interface HandoffInput {
   /** The span of the call the pack covers, wall-clock ms. */
   window?: { from: number; to: number };
   excerpts: readonly ExcerptBlock[];
+  /** The `ask` event's id, when the question was logged: the agent answers it back to the box. */
+  ask?: string;
 }
 
 /**
@@ -56,6 +59,11 @@ export function agentHandoff(h: HandoffInput): string {
     `This is about a call recorded in akou${h.call ? `: call ${h.call}${span}` : span}.`,
     `Read what the call says before you answer: run \`${contextCommand(h.question, h.call)}\`, or call the akou_context tool with ${JSON.stringify(h.call ? { call: h.call, question: h.question } : { question: h.question })}.`,
   ];
+  if (h.ask) {
+    out.push(
+      `Then post your answer to akou's ask box: run \`akou answer ${h.ask} '<your answer>'${h.call ? ` -c ${h.call}` : ""}\`, or call the akou_answer tool with ${JSON.stringify(h.call ? { call: h.call, ask: h.ask } : { ask: h.ask })} and your text.`,
+    );
+  }
   const lines: string[] = [];
   let left = HANDOFF_MAX_LINES;
   for (const b of h.excerpts) {
@@ -80,6 +88,7 @@ export function handoffFor(
   question: string,
   pack: ContextPack,
   excerpts: readonly ExcerptBlock[],
+  ask?: string,
 ): string {
   const first = pack.lines[0];
   const last = pack.lines.at(-1);
@@ -89,5 +98,6 @@ export function handoffFor(
     tz: q.tz,
     ...(first && last ? { window: { from: first.w0, to: last.w1 } } : {}),
     excerpts,
+    ...(ask ? { ask } : {}),
   });
 }

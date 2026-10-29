@@ -136,6 +136,16 @@ export const PARITY: readonly Row[] = [
     note: "akou_ask is listed only when a provider can answer, and hidden from a harness client when that harness is the provider (src/main/mcp/server.ts askListed)",
   },
   {
+    action: "Answer a question typed in the ask box, as the agent following the call",
+    cli: ["answer"],
+    api: ["POST /calls/:id/asks/:ask/answer"],
+    mcp: ["akou_answer"],
+    window: {
+      none: "the window is where the user asks; the agent following the call answers, and the box shows it",
+    },
+    note: "the agent learns of the question from its `akou events -f --type ask --client NAME` watch, or from akou_status `live.unanswered`",
+  },
+  {
     action: "Start the harness before a question",
     cli: {
       none: "`akou ask` sends its question at once: there is no typing for the start to overlap",

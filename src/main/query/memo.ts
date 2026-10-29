@@ -198,7 +198,8 @@ export interface MemoUpdater {
 export function memoByProvider(kind: string, setting: string): boolean {
   if (kind === "none" || setting === "off") return false;
   if (setting === "on") return true;
-  return kind !== "harness";
+  // A user's own command is often a harness behind a wrapper: never run unattended by default.
+  return kind !== "harness" && kind !== "command";
 }
 
 export const MEMO_SYSTEM = [
@@ -234,7 +235,12 @@ export class ProviderMemoUpdater implements MemoUpdater {
   async update(input: MemoUpdateInput, signal: AbortSignal) {
     const r = await runProvider(
       this.provider,
-      { system: MEMO_SYSTEM, prompt: memoPrompt(input), maxTokens: input.maxTokens },
+      {
+        system: MEMO_SYSTEM,
+        prompt: memoPrompt(input),
+        maxTokens: input.maxTokens,
+        meta: { task: "memo" },
+      },
       () => {},
       { signal, timeoutMs: this.timeoutMs },
     );

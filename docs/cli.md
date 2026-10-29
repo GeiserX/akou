@@ -310,17 +310,19 @@ example: akou tail -f --last 2m
 ```text
 akou events: The call's log events as JSON lines, one object per line; -f follows until it ends
 
-usage: akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention]
+usage: akou events [-c CALL] [-f] [--type T,…] [--since SEQ] [--mention] [--client NAME]
 
-  -c, --call CALL  live, last or a call id (default: live)
-  -f, --follow     keep printing until the call ends
-      --type T,…   only these event types: health,seg,answer
-      --since SEQ  events after this cursor (default: all)
-      --mention    also a mention row when user.name is said on the call channel: time and speaker, never the text
-      --json       accepted; the output is always JSON lines
-  -h, --help       show this help
-      --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
+  -c, --call CALL    live, last or a call id (default: live)
+  -f, --follow       keep printing until the call ends
+      --type T,…     only these event types: health,seg,ask,answer,share.started,share.stopped
+      --client NAME  who is following (claude-code); with -f and ask, questions typed in the ask box go to you first
+      --since SEQ    events after this cursor (default: all)
+      --mention      also a mention row when user.name is said on the call channel: time and speaker, never the text
+      --json         accepted; the output is always JSON lines
+  -h, --help         show this help
+      --restart      if akou takes the connection and never answers, restart it first, even for a command that only reads
 
+example: akou events -f --type ask,health,share.started,share.stopped --mention --client claude-code
 example: akou events -f --type health,answer
 example: akou events -c last --since 120
 example: akou events -f --type health,share.started,share.stopped --mention
@@ -359,6 +361,24 @@ usage: akou ask "QUESTION" | akou ask --preset NAME [--speaker NAME]   [-c CALL]
 example: akou ask "what did we decide about the release?"
 example: akou ask --preset decisions
 example: akou ask --preset speaker --speaker Ben
+```
+
+## answer
+
+```text
+akou answer: Answer a question typed in the ask box, as the agent following the call
+
+usage: akou answer ASK "TEXT" | akou answer ASK -   [-c CALL] [--client NAME] [--model M] [--json]
+
+  -c, --call CALL    live, last or a call id (default: live)
+      --client NAME  who answers (claude-code); shown in the box
+      --model M      the model that wrote the answer, if you know it
+      --json         print the answer as JSON, errors included
+  -h, --help         show this help
+      --restart      if akou takes the connection and never answers, restart it first, even for a command that only reads
+
+example: akou answer q0007 "We agreed to ship on Friday [15:41 Ben]." -c 01J8Z3
+example: akou answer q0007 - < answer.txt
 ```
 
 ## presets
@@ -896,6 +916,7 @@ example: akou serve
 | One call's record | none: `show` prints the transcript; no command prints the record itself | `GET /calls/:id` | none: the tools read it internally (akou_vocab_propose, akou_enhanced_put); none returns it | none: the window builds its view from the call list and the followed log |
 | Context pack | `context` | `POST /calls/:id/context` | `akou_context` | `src/ui/ask.ts` |
 | Ask | `ask` | `POST /calls/:id/ask` | `akou_ask` | `src/ui/window.ts` |
+| Answer a question typed in the ask box, as the agent following the call | `answer` | `POST /calls/:id/asks/:ask/answer` | `akou_answer` | none: the window is where the user asks; the agent following the call answers, and the box shows it |
 | Start the harness before a question | none: `akou ask` sends its question at once: there is no typing for the start to overlap | `POST /provider/warm` | none: an agent sends its question at once: there is no typing for the start to overlap | `src/ui/ask.ts` |
 | Ask presets | `presets`, `ask` | `GET /presets` | none: the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7) | `src/ui/ask.ts` |
 | Search one call | `search` | `GET /calls/:id/search` | `akou_search` | none: find in the call is designed in docs/ux/WINDOW.md and not built |

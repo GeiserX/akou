@@ -404,22 +404,36 @@ export function followRoutes(r: Router<ApiApp>): void {
       const until = performance.now() + wait * 1000;
       // The cursor moves past every event read, kept or not (PG-S2).
       let cursor = c.query.int("after") as number;
-      let events: LogEvent[] = [];
-      for (;;) {
-        const waiter = wait > 0 ? eventWaiter(c.app, id, cursor, c.req.signal) : null;
-        try {
-          const read = await c.app.events(id, cursor);
-          cursor = read.at(-1)?.seq ?? cursor;
-          events = types ? read.filter((e) => types.has(e.type)) : read;
-          const left = until - performance.now();
-          if (events.length > 0 || !waiter || left <= 0 || c.req.signal.aborted) break;
-          // Something arrived that the filter left out: read it, then wait on.
-          if (read.length === 0) await waiter.wait(left);
-        } finally {
-          waiter?.stop();
-        }
+      let events: LogEvent[];
+      // An agent long-polling for `ask` is following this call's questions: the ask box sends
+      // them to it first while the poll is open and for a short grace after (listeners.ts).
+      const listening =
+        wait > 0 && types?.has("ask") && c.by.startsWith("agent:")
+          ? c.app.listeners?.open(id, c.by.slice("agent:".length))
+          : undefined;
+      try {
+        events = await readEvents();
+      } finally {
+        // A client that hung up mid-poll stopped its watch: it no longer listens.
+        listening?.(c.req.signal.aborted);
       }
       return json(200, { call: id, events, cursor });
+      async function readEvents(): Promise<LogEvent[]> {
+        for (;;) {
+          const waiter = wait > 0 ? eventWaiter(c.app, id, cursor, c.req.signal) : null;
+          try {
+            const read = await c.app.events(id, cursor);
+            cursor = read.at(-1)?.seq ?? cursor;
+            const kept = types ? read.filter((e) => types.has(e.type)) : read;
+            const left = until - performance.now();
+            if (kept.length > 0 || !waiter || left <= 0 || c.req.signal.aborted) return kept;
+            // Something arrived that the filter left out: read it, then wait on.
+            if (read.length === 0) await waiter.wait(left);
+          } finally {
+            waiter?.stop();
+          }
+        }
+      }
     },
   );
 

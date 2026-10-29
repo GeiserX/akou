@@ -117,6 +117,7 @@ const MAIN: Layout = [
       "provider.kind",
       ASSISTANT_USE,
       "memo.provider",
+      "ask.agentWaitSeconds",
       "agent.summary_every_minutes",
       ">assistant",
     ],
@@ -133,6 +134,8 @@ const PROVIDER_KEYS = [
   "provider.model",
   "provider.baseUrl",
   "provider.timeoutSeconds",
+  "provider.command",
+  "provider.commandLabel",
 ];
 
 /** The assistant's details that apply to each kind, first; the others follow under their own title. */
@@ -150,6 +153,7 @@ const FOR_KIND: Record<string, string[]> = {
     "provider.apiKey",
     "provider.timeoutSeconds",
   ],
+  command: ["provider.command", "provider.commandLabel", "provider.timeoutSeconds"],
   none: [],
 };
 
@@ -675,7 +679,9 @@ export class SettingsPage {
           void this.saveTyped();
           this.sub = name;
           this.draw();
-          this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+          // The page opens at its top: focusing the back button must not scroll it, which it
+          // does when the page is a few pixels taller than the window.
+          this.col.querySelector<HTMLElement>(".pg-back")?.focus({ preventScroll: true });
         },
       );
     }

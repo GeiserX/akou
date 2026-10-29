@@ -44,6 +44,7 @@ const TABLE: Readonly<Record<string, ((call?: string) => string[]) | string>> = 
   events: (x) => ["events", ...c(x)],
   context: (x) => ["context", "what was decided?", ...c(x)],
   ask: (x) => ["ask", "what was decided?", ...c(x)],
+  answer: (x) => ["answer", "q0001", "We ship on Friday.", ...c(x)],
   presets: "lists the ask presets",
   search: (x) => ["search", "deploy", ...c(x)],
   wait: (x) => ["wait", "--for", "final.done", "--timeout", "5s", ...c(x)],

@@ -121,8 +121,36 @@ async function apiChecks(
     const st = await ctx.client.request("GET", "/status", { launch: false, timeoutMs: 2000 });
     helper = st.status === 200 ? (st.body?.helper ?? null) : null;
     diarizeHelper = st.status === 200 ? (st.body?.diarizeHelper ?? null) : null;
+    const p = st.status === 200 ? st.body?.provider : null;
+    if (p) out.push(providerCheck(p));
   } catch {}
   return { checks: out, helper, diarizeHelper };
+}
+
+/**
+ * The provider line: what the running app answers questions with, and the account it runs on when
+ * the app's environment names one. An app started from an agent's shell inherits that shell's
+ * CLAUDE_CONFIG_DIR or CODEX_HOME, so its harness may run on another login than the agent's.
+ */
+export function providerCheck(p: {
+  state?: string;
+  id?: string;
+  harness?: string;
+  label?: string;
+  detail?: string;
+  reason?: string;
+  configDir?: string;
+}): Check {
+  const named = p.harness ?? p.label;
+  const what = named ? `${p.id} (${named})` : String(p.id);
+  const account = p.configDir ? `; it runs with ${p.configDir}` : "";
+  return p.state === "available"
+    ? { name: "provider", state: "ok", detail: `${what}: ${p.detail ?? "available"}${account}` }
+    : {
+        name: "provider",
+        state: p.id === "none" ? "info" : "warn",
+        detail: `${what}: ${p.reason ?? p.state}${account}`,
+      };
 }
 
 /**

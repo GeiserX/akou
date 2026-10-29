@@ -40,6 +40,7 @@ import {
 } from "./http.ts";
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
+import { answerRoutes } from "./routes/answers.ts";
 import { bazarrRoutes } from "./routes/bazarr.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { deviceRoutes } from "./routes/devices.ts";
@@ -147,6 +148,11 @@ export interface ApiApp {
   events(id: string, after: number): Promise<LogEvent[]>;
   /** Every event appended to a call from now on. Returns the unsubscribe function. */
   subscribe(id: string, fn: (e: LogEvent) => void): () => void;
+  /**
+   * Which agents are following each call's questions (`listeners.ts`): the events long poll
+   * updates it, the ask box reads it. Absent: no agent is ever listening.
+   */
+  readonly listeners?: import("../query/listeners.ts").Listeners;
   levels(id: string): Levels | null;
   config(): LoadedConfig;
   /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
@@ -310,6 +316,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   workspaceRoutes(r);
   followRoutes(r);
   queryRoutes(r);
+  answerRoutes(r);
   notesRoutes(r);
   vocabRoutes(r);
   fixRoutes(r);

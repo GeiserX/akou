@@ -1294,7 +1294,7 @@
         "tags": [
           "calls"
         ],
-        "description": "One call: its title, workspace, state, parts, speakers, health, the final pass and the log cursor.",
+        "description": "One call: its title, workspace, state, parts, speakers, health, the final pass, the log cursor, and `listening`: the agents following its questions, which a question typed in the ask box goes to first.",
         "parameters": [
           {
             "name": "id",
@@ -2833,7 +2833,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written.",
+        "description": "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written. A question the user typed in the ask box goes first to the agent following the call, when one is (`ask.agentWaitSeconds`); an agent's own question goes straight to the provider.",
         "parameters": [
           {
             "name": "id",
@@ -2953,6 +2953,100 @@
           },
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/asks/{ask}/answer": {
+      "post": {
+        "operationId": "calls.answer",
+        "tags": [
+          "calls"
+        ],
+        "description": "Answer a question the user typed in the ask box, as the agent following the call: the answer is written as an `answer` event with `by: agent:<client>` and shows in the ask box under the agent's name. Cite lines as `[HH:MM Name]` or `#l000031`; a citation that names no line of the call is dropped. 409 `already_answered` when you already answered this ask. `others` says what else answered it: akou's provider (`model`), another agent, or only the matching excerpts (`excerpts`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ask",
+            "in": "path",
+            "required": true,
+            "description": "The ask's id, `q0007`, from its `ask` event.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_ask.no_calls.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.already_answered.locked.log_closed"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -9212,6 +9306,32 @@
           }
         }
       },
+      "404.no_ask.no_calls.no_live_call.not_found": {
+        "description": "Not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "no_ask",
+                        "no_calls",
+                        "no_live_call",
+                        "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "404.no_audio.not_found": {
         "description": "Not found",
         "content": {
@@ -9299,6 +9419,31 @@
                     "error": {
                       "enum": [
                         "not_found"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.already_answered.locked.log_closed": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "already_answered",
+                        "locked",
+                        "log_closed"
                       ]
                     }
                   }
@@ -10881,6 +11026,10 @@
         "description": "A stable code: clients may keep it, so it is never renamed. Each operation lists the codes it answers under each status.",
         "oneOf": [
           {
+            "const": "already_answered",
+            "description": "This agent already answered that question in the ask box: that is done."
+          },
+          {
             "const": "already_final",
             "description": "The final pass already ran; send `force` to run it again."
           },
@@ -11119,6 +11268,10 @@
           {
             "const": "multipart_required",
             "description": "An upload needs `Content-Type: multipart/form-data`."
+          },
+          {
+            "const": "no_ask",
+            "description": "The call has no question with that ask id."
           },
           {
             "const": "no_audio",

@@ -360,6 +360,22 @@ describe("the provider against a fake harness", () => {
     expect(err.resetsAt).toBe(1790236800 * 1000);
   });
 
+  test("[judging] An app started from an agent's shell runs on that shell's account: the usage limit names it", async () => {
+    const run = (env: Record<string, string>) =>
+      runProvider(
+        provider("claude-usage-limit.synthetic.jsonl", { FAKE_EXIT: "1", ...env }),
+        { system: "S", prompt: "P", maxTokens: 10 },
+        () => {},
+      ).catch((e) => e);
+    const err = await run({ CLAUDE_CONFIG_DIR: "/tmp/other-login" });
+    expect(err.kind).toBe("exhausted");
+    expect(err.message).toEndWith("(it ran with CLAUDE_CONFIG_DIR /tmp/other-login)");
+    expect(err.resetsAt).toBe(1790236800 * 1000);
+    // Positive control: with no account folder set, nothing is added.
+    const plain = await run({ CLAUDE_CONFIG_DIR: "" });
+    expect(plain.message).not.toContain("it ran with");
+  });
+
   test("no answer within the deadline is `other`, and the harness is stopped", async () => {
     const t0 = performance.now();
     const err = await runProvider(

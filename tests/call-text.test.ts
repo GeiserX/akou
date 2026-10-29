@@ -273,6 +273,7 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_unmute: "the state",
   akou_restart: "the call id and part",
   akou_status: "state, health, models and provider",
+  akou_answer: "the ask id, the line ids it cites and who else answered",
   akou_name_speaker: "the id and the name the agent gave",
   akou_merge_speakers: "two speaker ids",
   akou_unmerge_speaker: "a speaker id",

@@ -179,3 +179,49 @@ describe("agent.summary_every_minutes: how often a following agent may sum the c
     expect((await akou(["config", "get", "agent.nope"])).code).toBe(EXIT.usage);
   });
 });
+
+describe("[decision] A question typed in the ask box never reaches the agent following the call: a watch started again never hands back one already answered", () => {
+  test("only the open question is printed from before the watch; a new one prints when it lands; with answer asked for too, both print", async () => {
+    const answer = (ask: string) =>
+      rig.app.write(id, {
+        type: "answer",
+        ask,
+        text: "Settled.",
+        cites: [],
+        model: "fake/1.0",
+        pack: { mode: "whole-call", tokens: 10 },
+      } as never);
+    await rig.app.write(id, {
+      type: "ask",
+      id: "w-old",
+      q: "answered before?",
+      by: "user",
+    } as never);
+    await answer("w-old");
+    await rig.app.write(id, { type: "ask", id: "w-open", q: "still open?", by: "user" } as never);
+    const asks = (out: readonly { line: string }[]) =>
+      out
+        .map((o) => JSON.parse(o.line))
+        .filter((e) => e.type === "ask")
+        .map((e) => e.id);
+
+    const m = run(["events", "-f", "--type", "ask"]);
+    await until(async () => asks(m.out).includes("w-open"), 5000, "the open question");
+    await Bun.sleep(300);
+    expect(asks(m.out)).toEqual(["w-open"]);
+    await rig.app.write(id, { type: "ask", id: "w-new", q: "and now?", by: "user" } as never);
+    await until(async () => asks(m.out).includes("w-new"), 5000, "the new question");
+    expect(asks(m.out)).toEqual(["w-open", "w-new"]);
+    // Only what was asked for is printed: the answers it read to tell are not.
+    expect(m.out.some((o) => JSON.parse(o.line).type === "answer")).toBe(false);
+    m.stop();
+    await m.done;
+
+    // Positive control: a reader that asks for the answers too gets every question.
+    const all = run(["events", "-f", "--type", "ask,answer"]);
+    await until(async () => asks(all.out).includes("w-new"), 5000, "every question");
+    expect(asks(all.out)).toContain("w-old");
+    all.stop();
+    await all.done;
+  });
+});

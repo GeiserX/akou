@@ -2248,6 +2248,22 @@ main {
   font-weight: 400;
   color: var(--faint);
 }
+/* "Questions go to claude-code, which is following this call." under the box. */
+.ask-route {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+/* A second answer to the same question, from another route, under its own label. */
+.a-card .more-answer {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+}
+.a-card .more-answer .ask-status {
+  display: block;
+  margin: 0 0 2px;
+}
 .answer {
   white-space: pre-wrap;
   font-size: 12.5px;
