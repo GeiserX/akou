@@ -311,6 +311,8 @@ export interface ShellApp {
   openSettingsPane(pane: SettingsPane): Promise<boolean>;
   /** Shows the window through the app, so the app knows it has one. */
   openWindow(call?: string): Promise<unknown>;
+  /** Tells the app the shell opened its window by itself (DK-M9), as `openWindow` would. */
+  adoptWindow?(w: WindowShell): void;
   /** Every start and share from any door, with who asked. Returns the unsubscribe function. */
   onAnnounce(fn: (a: Announcement) => void): () => void;
   /** Dictation (docs/ux/DICTATION.md DC-O4); absent where the app runs none (server mode). */
@@ -365,6 +367,7 @@ export function appForShell(app: AkouApp): ShellApp {
     quit: () => app.quit(),
     openSettingsPane: (pane) => app.openSettingsPane(pane),
     openWindow: (call) => app.openWindow(call),
+    adoptWindow: (w) => app.adoptWindow(w),
     onAnnounce: (fn) => app.onAnnounce(fn),
     dictation: {
       state: () => app.dictation()?.status().state ?? "off",
@@ -1098,8 +1101,12 @@ export class Shell implements WindowShell {
         origin !== "window" &&
         !this.quitting &&
         this.app.config().settings["app.showOnAgentStart"] !== false
-      )
+      ) {
+        // Not through `app.openWindow`, whose `show` takes the focus; a headless app (the login
+        // item) learns of the window here instead, for its status and its watchdog.
+        this.app.adoptWindow?.(this);
         this.show(a.call, { raise: true });
+      }
     } else this.notify({ type: "refused", code: a.code, origin });
   }
 

@@ -36,6 +36,7 @@ import {
 } from "../src/main/window/install-cli.ts";
 import { windowRpc } from "../src/main/window/rpc.ts";
 import {
+  appForShell,
   fitIndicator,
   hotkeyFor,
   INDICATOR_MAX_WIDTH,
@@ -1289,6 +1290,45 @@ describe("[DK-M9] a call an agent starts brings the window forward where the use
     // The window it raises was opened hidden and without activation.
     expect(src).toContain("...(hidden ? { hidden: true, activate: false } : {})");
   });
+
+  test(
+    "a headless app learns of the window an agent's start opened: status says open, the watchdog reads it open",
+    async () => {
+      // The login item's start: a shell with its tray, and no window registered with the app.
+      const rig = await appRig();
+      const f = fakeUi();
+      const shell = new Shell(appForShell(rig.app), new Bridge(rig.app), f.ui, {
+        platform: "darwin",
+        setLoginItem: async () => {},
+      });
+      await shell.start();
+      const status = async () => (await rig.api("GET", "/status")).body.app.window;
+      // What the watchdog publishes as "the window was open" (`windowOpen` in index.ts).
+      const watchdogRead = () => rig.app.window?.isOpen?.() ?? false;
+      expect(await status()).toBe("none (headless)");
+      expect(watchdogRead()).toBe(false);
+      const r = await rig.api(
+        "POST",
+        "/calls",
+        { workspace: "work" },
+        { "X-Akou-Client": "codex" },
+      );
+      expect(r.status).toBe(201);
+      await until(() => f.log.includes("raise"), 2000, "the raise");
+      // Raised without the focus, and registered with the app.
+      expect(f.log).not.toContain("show");
+      expect(rig.app.window).toBe(shell);
+      expect(await status()).toBe("open");
+      expect(watchdogRead()).toBe(true);
+      // Closed by the user: the watchdog reads it closed again.
+      f.closeWindow();
+      expect(watchdogRead()).toBe(false);
+      await rig.api("POST", `/calls/${r.body.call}/stop`, {});
+      await shell.close();
+      await rig.close();
+    },
+    LONG,
+  );
 
   test(
     "over the real app: an API start raises the window; the tray's start and an attach do not",
