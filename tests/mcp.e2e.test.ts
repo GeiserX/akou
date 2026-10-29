@@ -36,6 +36,7 @@ const DESIGN_TOOLS = [
   "akou_context",
   "akou_read",
   "akou_search",
+  "akou_answer",
   "akou_name_speaker",
   "akou_merge_speakers",
   "akou_unmerge_speaker",

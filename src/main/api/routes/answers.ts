@@ -20,7 +20,7 @@ export function answerRoutes(r: Router<ApiApp>): void {
     "POST",
     "/calls/:id/asks/:ask/answer",
     {
-      id: "calls.asks.answer",
+      id: "calls.answer",
       doc: "Answer a question the user typed in the ask box, as the agent following the call: the answer is written as an `answer` event with `by: agent:<client>` and shows in the ask box under the agent's name. Cite lines as `[HH:MM Name]` or `#l000031`; a citation that names no line of the call is dropped. 409 `already_answered` when you already answered this ask. `others` says what else answered it: akou's provider (`model`), another agent, or only the matching excerpts (`excerpts`).",
       access: "admin",
       modes: ["app"],

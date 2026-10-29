@@ -683,6 +683,8 @@ describe("settings over the API", () => {
         "network.enabled",
         "network.port",
         "provider.baseUrl",
+        // A program akou runs on this machine, as the harness path is.
+        "provider.command",
         "provider.harnessPath",
         "server.admin_password_hash",
         "server.bazarr",
