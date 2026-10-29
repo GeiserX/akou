@@ -61,7 +61,8 @@ The tables below are generated from the settings registry in [src/main/config/sc
 |---|---|---|
 | `app.headless` | `false` | Run with no window. Selected by the environment, never by command-line arguments. |
 | `app.hotkey` | `""` | Global shortcut that starts and stops a call, in accelerator form (`Control+Shift+F9`). Empty: `Option+Command+R` on macOS, `Control+Shift+F9` elsewhere (never `Control+Alt`, which is AltGr on many layouts). |
-| `app.floatingIndicator` | `true` | While a call records and the akou window is not in front, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share. |
+| `app.floatingIndicator` | `true` | While a call records and the akou window is closed or minimized, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share. |
+| `app.showOnAgentStart` | `true` | When an agent, the command line or the API starts a call, show the akou window in front, on the desktop you are on, without taking the keyboard from the app you are typing in. |
 | `app.openAtLogin` | `false` | Start akou, with no window, when you log in, so the hotkey and the tray are always there. |
 
 ### share

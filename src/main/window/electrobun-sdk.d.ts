@@ -102,6 +102,9 @@ declare module "electrobun/main" {
     hide(): void;
     focus(): void;
     close(): void;
+    /** Minimize state; the SDK sends no event when it changes. */
+    isMinimized(): boolean;
+    unminimize(): void;
     /** Fills the screen, and back: a title bar double-click (DK-M7). */
     maximize(): void;
     unmaximize(): void;

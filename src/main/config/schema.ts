@@ -185,7 +185,12 @@ export const SETTINGS = {
   "app.floatingIndicator": {
     type: "boolean",
     default: true,
-    doc: "While a call records and the akou window is not in front, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share.",
+    doc: "While a call records and the akou window is closed or minimized, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share.",
+  },
+  "app.showOnAgentStart": {
+    type: "boolean",
+    default: true,
+    doc: "When an agent, the command line or the API starts a call, show the akou window in front, on the desktop you are on, without taking the keyboard from the app you are typing in.",
   },
   "app.openAtLogin": {
     type: "boolean",

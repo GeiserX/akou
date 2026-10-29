@@ -23,6 +23,12 @@ describe("the Settings page's words", () => {
     expect(home.filter((k) => !placed.has(k))).toEqual([]);
   });
 
+  test("[DK-M9] the Calls section has the row that turns off the window an agent's start shows", () => {
+    expect(SETTINGS["app.showOnAgentStart"]).toMatchObject({ type: "boolean", default: true });
+    expect(placedKeys().has("app.showOnAgentStart")).toBe(true);
+    expect(WORDS["app.showOnAgentStart"]?.label).toBe("Show akou when an agent starts a call");
+  });
+
   test("every key the Dictation page and its server mode show has a label", () => {
     const shown = [...dictationKeys(), ...SERVER_GROUPS.flatMap((g) => g.keys)];
     expect(shown.length).toBeGreaterThan(40);

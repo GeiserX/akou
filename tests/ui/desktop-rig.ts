@@ -104,7 +104,12 @@ export interface DesktopRigOptions extends RigOptions {
 }
 
 export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig> {
-  const rig = (await appRig(o)) as DesktopRig;
+  // The rig starts its calls through the API, as an agent: off, so the main window stays closed
+  // and the indicator shows (DK-M9 and DK-F1 have their own shell tests).
+  const rig = (await appRig({
+    ...o,
+    settings: { "app.showOnAgentStart": false, ...o.settings },
+  })) as DesktopRig;
   const browser = await launch();
   const files = await views();
   const pages: Page[] = [];

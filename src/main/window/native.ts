@@ -47,7 +47,7 @@ function noActivate(hwnd: Pointer | null): void {
 
 export function electrobunUi(): NativeUi {
   return {
-    openWindow({ title, url, rpc, frame, titleBarStyle }) {
+    openWindow({ hidden, title, url, rpc, frame, titleBarStyle }) {
       const defined = BrowserView.defineRPC<AkouRpc>({
         maxRequestTime: MAX_REQUEST_MS,
         handlers: { requests: rpc.handlers, messages: {} },
@@ -58,12 +58,25 @@ export function electrobunUi(): NativeUi {
         rpc: defined,
         frame: frame ?? { width: 1280, height: 820 },
         titleBarStyle,
+        // Hidden until `raise` shows it (DK-M9): created shown, it would take the focus.
+        ...(hidden ? { hidden: true, activate: false } : {}),
       });
       const window: NativeWindow = {
         show: () => {
           win.show();
           win.focus();
         },
+        // DK-M9. `showInactive` is `orderFrontRegardless` on macOS: in front of the app in front,
+        // with no activation, so the keyboard stays where the user is typing. Joining every Space
+        // for that moment puts the window on the Space the user is on; leaving them again keeps it
+        // there, so the user is never moved to the Space it was on.
+        raise: () => {
+          if (win.isMinimized()) win.unminimize();
+          win.setVisibleOnAllWorkspaces(true);
+          win.showInactive();
+          win.setVisibleOnAllWorkspaces(false);
+        },
+        isMinimized: () => win.isMinimized(),
         close: () => win.close(),
         zoom: () => (win.isMaximized() ? win.unmaximize() : win.maximize()),
         size: () => {

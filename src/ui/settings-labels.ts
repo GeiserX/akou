@@ -44,7 +44,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "app.floatingIndicator": {
     label: "Floating bar while recording",
-    help: "Time, levels, Mute, Ask and Stop. It shows no transcript, so it can stay up during a screen share.",
+    help: "Shows while the akou window is closed or minimized. No transcript, so it can stay up while sharing.",
+  },
+  "app.showOnAgentStart": {
+    label: "Show akou when an agent starts a call",
+    help: "In front, on the desktop you are on, without taking the keyboard.",
   },
   "app.hotkey": { label: "Record shortcut" },
   "provider.kind": {
