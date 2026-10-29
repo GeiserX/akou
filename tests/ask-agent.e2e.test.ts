@@ -163,9 +163,30 @@ function fakeAgent(client: string, onAsk: (ask: { id: string; q: string }) => vo
         5000,
         `${client} to be listening`,
       ),
+    // A watch stopped between two polls keeps the grace, as it should (listeners.ts), and would
+    // leak into the next case: end it with a hang-up mid-poll, as Ctrl-C during a poll does.
     stop: async () => {
       ac.abort();
       await loop;
+      await until(
+        async () => {
+          const hang = new AbortController();
+          const poll = fetch(
+            `http://127.0.0.1:${rig.port}/v1/calls/${id}/events?types=ask&wait=5&after=${cursor}`,
+            {
+              headers: { authorization: `Bearer ${rig.token}`, "x-akou-client": client },
+              signal: hang.signal,
+            },
+          ).catch(() => {});
+          await Bun.sleep(100);
+          hang.abort();
+          await poll;
+          const who: string[] = (await rig.api("GET", `/calls/${id}`)).body.listening ?? [];
+          return !who.includes(client);
+        },
+        5000,
+        `${client} to stop listening`,
+      );
     },
   };
 }
