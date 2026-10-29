@@ -450,13 +450,13 @@ Output rules: the user's own lines are kept word for word and marked as theirs; 
 akou has no cloud and needs no API key. The default intelligence is the coding-agent subscription the user already pays for. It works in both directions, and both are fully supported:
 
 1. **From the harness.** Inside Claude Code or Codex, the user or the agent starts and stops recordings, asks about the live call, names speakers and adds notes, through the MCP server and the skill (section 6).
-2. **From the window.** The ask box and Enhance drive the locally installed harness as a provider. akou brokers the small context; the harness does the thinking.
+2. **From the window.** The ask box and Enhance drive the locally installed harness as a provider. akou brokers the small context; the harness does the thinking. When an agent is already following the call (section 5.5), a question typed in the ask box goes to that agent first, and the provider is the fallback.
 
 The `Provider` interface in `src/main/llm/provider.ts`:
 
 ```ts
 interface Provider {
-  readonly id: "harness" | "openai-compatible" | "anthropic" | "none";
+  readonly id: "harness" | "openai-compatible" | "anthropic" | "command" | "none";
   available(): Promise<{ ok: true; detail: string } | { ok: false; reason: string }>;
   complete(req: { system: string; prompt: string; maxTokens: number },
            onToken: (t: string) => void, signal: AbortSignal): Promise<{ text: string; model: string }>;
@@ -472,6 +472,8 @@ interface Provider {
 - **When it cannot run.** No harness found, a non-zero exit, a rate-limit or "usage limit" message, or no answer within 60 s: the ask box shows the retrieved excerpts (already visible after 300 ms) and a "Copy context for my agent" button, with one line naming the route that did not answer and why ("The coding agent akou runs did not answer. Claude Code reported its usage limit is reached until 18:00."). The button copies a hand-off, not the pack: the question word for word as the first line, then the call's id, the span of the call the question is about and the exact `akou context '…' -c ID` command and `akou_context` call that fetch the pack, then at most 8 matching lines as quoted call text for an agent that cannot reach akou. akou's notes to an agent (a stale memo to write) stay in the pack, so nothing in the hand-off reads as the user asking for them. One function builds it (`src/main/query/handoff.ts`) for the ask reply and for `POST /calls/{id}/context`. `akou status` shows `provider: unavailable (reason)`. Nothing is queued or retried silently.
 - **Provenance.** Every `answer`, `memo` and `enhanced` event carries `model: claude-code/<version>` or `codex/<version>` and `by`. Agent-authored notes and names carry `by: agent:<client>`.
 - **Terms of service.** A third-party app driving a user's own locally installed harness on their own machine, on their explicit request, is not obviously covered or forbidden by the consumer terms of either vendor. We state this in `docs/providers.md` as a risk to verify before release, not as settled. akou never automates login, never touches credentials, never runs the harness unattended by default, and always leaves the raw-API and local-model providers available under the same interface.
+
+A user's own command (`provider.kind` `command`): `provider.command` is an argv set in the config file only, never over the API, run with the system prompt and the pack on stdin and `{system}`, `{question}`, `{call}`, `{ask}`, `{task}` filled in its arguments (and `AKOU_QUESTION`, `AKOU_CALL_ID`, `AKOU_ASK_ID`, `AKOU_TASK` in its environment). Its stdout is the answer; a non-zero exit reads its stderr the way a harness failure is read. `provider.commandLabel` names it in the window. It lets a user send the box's questions to an agent session they already run, or to `claude -p` or `codex exec` with their own flags.
 
 Other providers: `openai-compatible` (Ollama, LM Studio, llama.cpp server, vLLM, OpenAI) and `anthropic` (the user's own key, with prompt caching). Keys go in the OS keychain: on macOS `provider.apiKey` is in the login Keychain and never in the config file (a key found in the file moves there at start); on Windows and Linux, until their stores are wired, and in server mode, it lives in the config file, which is the owner's alone. It is never shown back over the API or logged ([providers.md](providers.md#keys)). `none` shows excerpts only. Each workspace can use a different provider, because work and personal calls have different data rules.
 
@@ -560,6 +562,8 @@ In the window a double-click on a word of a committed line, live or final, opens
 3. `akou_search({query})` for exact hits with times.
 4. `akou_name_speaker` when the user names a voice; `akou_remember` for anything else the agent will need. After a compaction, one `akou_context` call brings back the roster, memo, earlier Q&A and its own notes from the log.
 
+5. Questions typed in the ask box: the agent watches `akou events -f --type ask --client NAME` (an open long poll whose `types` include `ask` counts as listening, and for 35 s after it ends; `listening` in `GET /calls/{id}` and `akou_status`). A user's question is sent there first: the window says so ("Sent to claude-code, waiting up to 30 s"), and waits `ask.agentWaitSeconds` (0 to 300, default 30; 0 never waits) for `akou_answer {call, ask, text}` (`akou answer ASK TEXT`, `POST /calls/{id}/asks/{ask}/answer`). That answer is an `answer` event with `by: agent:<client>` and `pack.mode` `agent`; its citations are matched to the call's lines and one naming no line is dropped. The box labels it "answered by <client> (the agent following the call)". With no agent listening, or none answering in time, the provider runs as before, and a failure line names both routes. An agent's answer that lands while the provider runs stops the run; one that lands after the provider answered is added under it. A question an agent asks itself never waits for an agent. A harness with no way to be woken reads `live.unanswered` in `akou_status`: the user's questions of the last 10 minutes that no agent answered.
+
 The agent never reads call folders from disk. There is no per-part transcript file to read by mistake.
 
 ## 6. Agent surfaces
@@ -580,6 +584,7 @@ The table below is the design sketch and may lag behind the code. For what the b
 | `akou tail [--call ID] [--since SEQ] [--last 5m] [-f] [--format json\|md\|txt]` | Committed lines with wall times |
 | `akou context "Q" [--call ID] [--budget N]` | Prints the pack |
 | `akou ask "Q" [--call ID]` | Answers with the configured provider |
+| `akou answer ASK "TEXT" [--call ID] [--client NAME]` | The agent following the call answers a question typed in the ask box (section 5.5); `-` reads the text from stdin |
 | `akou search "Q" [--call ID] [-k N]` | BM25 hits |
 | `akou name <spk> <Name>` · `akou name --merge <a> <b>` · `akou name --unmerge <spk>` | Speakers |
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
@@ -671,6 +676,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_read {call = "live", since?, lastSeconds?}` | New committed lines plus the provisional line and a cursor |
 | `akou_search {query, call = "live", k = 6}` | BM25 hits with wall-time citations |
 | `akou_ask {question, call = "live"}` | Answer with akou's configured provider. Listed only when one is configured, and hidden when the provider is `harness` and the MCP client is that same harness. Its description says: prefer `akou_context`; `akou_ask` spawns another agent run on your subscription |
+| `akou_answer {ask, text, call = "live", model?}` | Answer a question the user typed in the ask box, as the agent following the call (section 5.5). Returns the ask id, the line ids it cites and `others`: what else answered it. 409 `already_answered` when this agent already did |
 | `akou_name_speaker {speaker, name}` · `akou_merge_speakers {a, b}` · `akou_unmerge_speaker {speaker}` | Speakers |
 | `akou_add_note {text}` · `akou_get_notes` · `akou_edit_note {id, text, call = "live"}` · `akou_delete_note {id, call = "live"}` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
