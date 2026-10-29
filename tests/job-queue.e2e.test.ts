@@ -184,6 +184,8 @@ describe("SV-Q1, SV-Q2, SV-Q4: concurrency, priority and the queue's numbers", (
     expect(s.body.queue.jobs_last_hour).toBeGreaterThanOrEqual(2);
     expect(s.body.queue.audio_seconds_last_hour).toBeGreaterThanOrEqual(5);
     expect(s.body.queue.mean_job_seconds).toBeGreaterThanOrEqual(0);
+    // SV-Q5: the pace per second of audio, from those done jobs; null before one is done.
+    expect(typeof s.body.queue.seconds_per_audio_second).toBe("number");
     const h = await open(rig, "/healthz");
     expect(h.body.queue_depth).toBe(0);
     expect(h.body.queue).toEqual(s.body.queue);

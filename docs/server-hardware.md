@@ -90,10 +90,10 @@ curl -s http://127.0.0.1:8476/v1/server | jq .queue
 
 ```json
 { "concurrency": 4, "max": 1000, "max_per_key": 500, "depth": 212, "queued": 208, "running": 4,
-  "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "eta_seconds": 1246,
+  "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "seconds_per_audio_second": 0.67, "eta_seconds": 1246,
   "loaded": ["qwen3-asr-1.7b"], "stalled": 0 }
 ```
 
-`audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `eta_seconds` is the time left at the pace of the last 50 jobs, and `null` until one has ended since the server started.
+`audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `seconds_per_audio_second` is the running time per second of audio over the last 50 done jobs. `eta_seconds` is what the running jobs have left of their audio at that rate plus the queued jobs at the mean, and `null` until one has ended since the server started.
 
 `stalled` counts the running jobs that have run more than 300 s plus 5 times their audio's length, for example a model load starved of disk IO. While it is above 0, `/healthz` answers 503 with `ok: false`, the log has one `job.stalled` line per job naming its stage and how long it has run, and a server that sends jobs to this one stops sending it new ones. akou does not stop the job: look at what else is reading the disk.

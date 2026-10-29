@@ -489,7 +489,7 @@ export class Remotes {
   ): Promise<{
     status: string;
     error?: { code: string; message: string };
-    progress?: { total_s?: number | null };
+    progress?: { total_s?: number | null; done_s?: number | null };
   }> {
     const r = this.remote(url);
     const res = await this.request(r, `/jobs/${encodeURIComponent(id)}?wait=${waitS}`, {
