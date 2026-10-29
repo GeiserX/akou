@@ -27,11 +27,13 @@ import {
   type Provider,
   ProviderError,
   type ProviderErrorKind,
+  type ProviderId,
   runProvider,
   type Usage,
 } from "../llm/provider.ts";
 import { searchText } from "./classify.ts";
 import type { CallQuery, ContextPack } from "./context.ts";
+import { handoffFor } from "./handoff.ts";
 import { CALL_TEXT_START, estimateTokens, formatCitation, renderLine } from "./render.ts";
 
 export const ASK_MAX_TOKENS = 1024;
@@ -46,6 +48,14 @@ export const ASK_SYSTEM = [
   "Answer briefly and plainly.",
 ].join("\n");
 
+/** The route a question took, in plain words, for the one line that says it did not answer. */
+export const ROUTE: Record<ProviderId, string> = {
+  harness: "the coding agent akou runs",
+  "openai-compatible": "the OpenAI-compatible server",
+  anthropic: "the Anthropic API",
+  none: "akou's assistant",
+};
+
 export interface AskResult {
   /** The `ask` event's id, when the question was logged. */
   ask?: string;
@@ -58,11 +68,16 @@ export interface AskResult {
   cites: string[];
   /** Why no model answered. */
   reason?: string;
+  /** Which route did not answer (`ROUTE`), when none did. */
+  route?: string;
   errorKind?: ProviderErrorKind;
   resetsAt?: number;
   excerpts: ExcerptBlock[];
-  /** The pack, for "Copy context for my agent". */
-  context: string;
+  /**
+   * What "Copy context for my agent" hands over (`handoff.ts`): the question, a reference to the
+   * pack and a short excerpt. Absent on a naming reply.
+   */
+  handoff?: string;
   pack: { mode: string; tokens: number };
   state: string;
   cursor: number;
@@ -210,7 +225,6 @@ export function reasonText(err: ProviderError, tz: string): string {
 export async function ask(o: AskOptions): Promise<AskResult> {
   const pack = o.q.context(o.question, { now: o.now, surface: "app" });
   const base = {
-    context: pack.text,
     pack: { mode: pack.mode, tokens: pack.tokens },
     state: pack.state,
     cursor: pack.cursor,
@@ -229,6 +243,7 @@ export async function ask(o: AskOptions): Promise<AskResult> {
   }
   const excerpts = excerptsFor(o.q, o.question, pack);
   o.onExcerpts?.(excerpts);
+  const handoff = handoffFor(o.q, o.question, pack, excerpts);
   const asked = await o.write((view) => ({
     type: "ask",
     id: `q${String(view.lastSeq + 1).padStart(4, "0")}`,
@@ -246,6 +261,8 @@ export async function ask(o: AskOptions): Promise<AskResult> {
       text: excerptsText(reason, excerpts),
       cites: [],
       reason,
+      route: ROUTE[o.provider.id],
+      handoff,
       errorKind: err.kind,
       resetsAt: err.resetsAt,
       excerpts,
@@ -311,6 +328,7 @@ export async function ask(o: AskOptions): Promise<AskResult> {
       model: r.model,
       cites,
       excerpts,
+      handoff,
       sent: estimateTokens(req.prompt),
       resumed: req.session?.resume ?? false,
       ...(r.usage ? { usage: r.usage } : {}),

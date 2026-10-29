@@ -180,7 +180,7 @@ A few of the texts, as they should read:
 | Speech models missing (`start`) | `the speech models are not downloaded yet (2.6 GB)` | `akou models pull`, or `akou start --without-models` to record audio now and transcribe later |
 | Already recording | `a call is already recording: "Weekly sync" in work since 14:31 (ID)` | `akou start --attach` to follow it, `akou stop`, or `akou restart` for a new part |
 | Picked app not found (`start --call app:…`) | `the capture helper device not found before capturing (code 66): no running app matches us.zoom.xos. Start the app and let it play sound before recording it, or record the whole computer instead: call "system"` | `akou start --call system` |
-| No provider answered (`ask`) | `no model answered (usage limit reached); the excerpts above are what matched` | `akou context "Q"` prints what an agent answers from |
+| No provider answered (`ask`) | `the coding agent akou runs did not answer (usage limit reached)`, after the excerpts that matched | `akou context "Q" -c ID` prints what an agent answers from |
 | Unknown setting | `unknown setting "asr.segmentPuase"` | `akou config set asr.segmentPause …` (CLI-09) |
 | Token refused | `the API refused the token` | `akou token rotate` |
 

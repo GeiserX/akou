@@ -1287,6 +1287,8 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
             "Claude Code or Codex was not found. Install one, or choose another assistant in Settings.",
           );
           expect(missing).toContain("The excerpts below are what matched.");
+          // The route that did not answer is said, never a quiet switch to the excerpts.
+          expect(missing).toStartWith("The coding agent akou runs did not answer. ");
           expect(missing).not.toContain("provider.");
           provider.unavailable = { kind: "auth", reason: "provider.apiKey is not set" };
           const auth = await ask("the build, again?");

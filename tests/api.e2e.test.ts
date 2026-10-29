@@ -461,7 +461,15 @@ describe("following and asking about a live call", () => {
     expect(r.body.reason).toContain("provider.kind is none");
     expect(r.body.text).toStartWith("No model answered (");
     expect(r.body.text).toContain("hetzna");
-    expect(r.body.context).toMatch(/^LIVE/);
+    // The hand-off names the route that failed and starts with the question, never the pack.
+    expect(r.body.route).toBe("akou's assistant");
+    expect(r.body.handoff.split("\n")[0]).toBe("what about deploy?");
+    expect(r.body.handoff).toContain(`akou context "what about deploy?" -c ${r.body.call}`);
+    expect(r.body.handoff).not.toMatch(/^LIVE|Question analysis|akou_memo_put/m);
+    expect("context" in r.body).toBe(false);
+    // The window with no assistant copies the same hand-off from the context route.
+    const c = await rig.api("POST", "/calls/live/context", { question: "what about deploy?" });
+    expect(c.body.handoff.split("\n").slice(0, 4)).toEqual(r.body.handoff.split("\n").slice(0, 4));
     // The question is in the log; no answer is, because no model answered.
     const events = (await rig.api("GET", "/calls/live/events")).body.events;
     expect(

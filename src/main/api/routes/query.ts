@@ -2,12 +2,14 @@
  * Questions about a call (docs/DESIGN.md sections 5.4, 5.5 and 6.2):
  *
  * - `POST /calls/{id}/context {question, budget}`: the pack, with `cursor`, `state`, `memoStale`
- *   and `provisional`. No model is called; this is what an agent answers from.
+ *   and `provisional`. No model is called; this is what an agent answers from. `handoff` is the
+ *   same text `ask` hands to the user's own agent, for the window with no assistant.
  * - `GET /calls/{id}/search?q=&k=`: BM25 hits with wall-time citations.
  * - `POST /calls/{id}/ask {question, stream}`: the configured provider answers over the pack. The
  *   question and the answer are logged (`ask`, `answer`). When no provider can answer, the reply is
- *   still 200: the matching excerpts, labelled, with the reason, `answered: false`, and the pack
- *   for "Copy context for my agent", never nothing (TRAPS "Provider unavailable answered with
+ *   still 200: the matching excerpts, labelled, with the reason, the `route` that did not answer,
+ *   `answered: false`, and the `handoff` for "Copy context for my agent" (the question, then a
+ *   reference to the pack and a short excerpt, never the pasted pack), never nothing (TRAPS "Provider unavailable answered with
  *   nothing"). With `stream`, Server-Sent Events: `excerpts` at once, a `token` per piece of the
  *   answer, then `answer` with the same body as the plain reply. A client that goes away cancels
  *   the provider run.
@@ -19,8 +21,9 @@
 import type { EventDraft } from "../../../core/log/events.ts";
 import type { CallView } from "../../../core/log/fold.ts";
 import { ProviderError } from "../../llm/provider.ts";
-import { ASK_SYSTEM, type AskOptions, ask } from "../../query/ask.ts";
+import { ASK_SYSTEM, type AskOptions, ask, excerptsFor } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
+import { handoffFor } from "../../query/handoff.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -69,6 +72,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
         provisional: pack.provisional,
         analysis: pack.analysis.line,
         blocks: pack.blocks,
+        handoff: handoffFor(q, b.question, pack, excerptsFor(q, b.question, pack)),
         ...(review ? { unreviewed: review.unreviewed } : {}),
       });
     },
