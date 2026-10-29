@@ -190,7 +190,11 @@ describe("asking", () => {
         );
         expect(r.body.text).toStartWith("No model answered (Claude Code reported");
         expect(r.body.text).toContain("hetzna");
-        expect(r.body.context).toMatch(/^LIVE/);
+        // The route that failed is named; the hand-off starts with the question, not the pack.
+        expect(r.body.route).toBe("the coding agent akou runs");
+        expect(r.body.handoff.split("\n")[0]).toBe("deploy?");
+        expect(r.body.handoff).toContain(`akou context "deploy?" -c ${r.body.call}`);
+        expect(r.body.handoff).not.toMatch(/^LIVE|Question analysis/m);
         // No answer is logged for the question.
         const log = await events();
         expect(log.some((e) => e.type === "answer" && e.ask === r.body.ask)).toBe(false);

@@ -220,7 +220,10 @@ describe("[PG-F2] a dropped file reaches every door without a restart", () => {
       expect(r.json).toMatchObject({ answered: false, kind: "excerpts" });
       expect(r.json.text).toContain("friday");
       expect(r.json.text).not.toContain("monday");
-      expect(r.json.context).not.toContain("monday");
+      expect(r.json.handoff).toStartWith(
+        "What did we decide about the budget across all my calls?\n",
+      );
+      expect(r.json.handoff).not.toContain("monday");
       const asks = async (id: string) =>
         (
           (await rig.api("GET", `/calls/${id}/events`)).body.events as {
