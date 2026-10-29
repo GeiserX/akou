@@ -55,13 +55,12 @@ const LONG = 30_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /**
- * Why a tray item would show nothing, or null when its image would show (DK-T1). The macOS
- * recording image is the one that is not a template: it holds the red dot (DK-T2).
+ * Why a tray item would show nothing, or null when its image would show (DK-T1). Every macOS image
+ * is a template, the recording one too, so the menu bar inks it on any bar (DK-T2).
  */
 function trayImageFault(
   o: { title?: string; image?: string; template?: boolean },
   platform: string,
-  recording = false,
 ): string | null {
   if (!o.image) return "no image";
   if (!existsSync(o.image)) return "no file";
@@ -76,7 +75,7 @@ function trayImageFault(
   if (w !== h || w < 16) return `a ${w}x${h} image`;
   // Colour type 6: RGBA. A template image is its alpha channel.
   if (b[25] !== 6) return "no alpha channel";
-  if ((platform === "darwin" && !recording) !== (o.template === true)) {
+  if ((platform === "darwin") !== (o.template === true)) {
     return "the template flag is wrong";
   }
   return null;
@@ -110,6 +109,19 @@ function trayPixels(file: string): Uint8Array[] {
     }
     return px;
   });
+}
+
+/** How many pixels of an image are more opaque than not: the shape a template image draws. */
+function inked(px: Uint8Array): number {
+  let n = 0;
+  for (let i = 3; i < px.length; i += 4) if ((px[i] as number) > 128) n++;
+  return n;
+}
+
+/** The alpha of the pixel at (x, y) of a square RGBA image. */
+function alphaAt(px: Uint8Array, x: number, y: number): number {
+  const size = Math.sqrt(px.length / 4);
+  return px[(y * size + x) * 4 + 3] as number;
 }
 
 /** How many opaque pixels of an image are red: the recording dot. */
@@ -227,13 +239,34 @@ describe("the window's RPC handlers (main side)", () => {
 
 describe("the desktop shell over a fake NativeUi", () => {
   function fakeApp() {
-    const state = { live: false, login: false, quits: 0, starts: 0, windows: 0 };
+    const state = {
+      live: false,
+      paused: false,
+      login: false,
+      quits: 0,
+      starts: 0,
+      windows: 0,
+      /** How many times the shell read the status: one per refresh. */
+      reads: 0,
+    };
     let shell: Shell | null = null;
     const app: ShellApp = {
-      status: async () => ({
-        live: state.live ? { call: "c1", state: "recording" } : null,
-        share: { active: false },
-      }),
+      status: async () => {
+        state.reads++;
+        return {
+          live: state.live
+            ? {
+                call: "c1",
+                title: "Weekly sync",
+                workspace: "work",
+                state: state.paused ? "paused" : "recording",
+                startedAt: 1_000_000,
+                lost: [],
+              }
+            : null,
+          share: { active: false },
+        };
+      },
       start: async () => {
         state.starts++;
         state.live = true;
@@ -242,10 +275,13 @@ describe("the desktop shell over a fake NativeUi", () => {
       stopLive: async () => {
         state.live = false;
       },
-      config: () => ({ settings: { "app.hotkey": "", "app.openAtLogin": state.login } }),
-      saveSetting: async (_k, v) => {
-        state.login = v;
+      pauseLive: async () => {
+        state.paused = true;
       },
+      resumeLive: async () => {
+        state.paused = false;
+      },
+      config: () => ({ settings: { "app.hotkey": "", "app.openAtLogin": state.login } }),
       quit: async () => {
         state.quits++;
       },
@@ -353,30 +389,51 @@ describe("the desktop shell over a fake NativeUi", () => {
     }
   });
 
-  test("the tray menu and title follow the state; Open at login toggles the login item", async () => {
-    expect(trayMenu({ live: false, openAtLogin: false })[0]).toMatchObject({ action: "record" });
-    expect(trayMenu({ live: true, openAtLogin: true })[0]).toMatchObject({ action: "stop" });
-    expect(
-      trayMenu({ live: true, openAtLogin: true }).find(
-        (i) => i.type === "normal" && i.action === "login",
-      ),
-    ).toMatchObject({ checked: true });
+  test("the tray menu follows the state, and has no Open at login item", () => {
+    expect(trayMenu({ live: null })[0]).toMatchObject({ action: "record" });
+    const live = { call: "c1", title: "Sync", workspace: "work", state: "recording" } as never;
+    expect(trayMenu({ live }).find((i) => i.type === "normal" && i.action === "stop")).toBeTruthy();
+    for (const m of [trayMenu({ live: null }), trayMenu({ live })]) {
+      expect(m.some((i) => i.type === "normal" && i.action === "login")).toBe(false);
+    }
     expect(trayTitle({ live: null, share: { active: false } })).toBe("");
     expect(trayTitle({ live: { state: "recording" } as never, share: { active: false } })).toBe("");
     expect(trayTitle({ live: { state: "paused" } as never, share: { active: false } })).toBe("❚❚");
     expect(trayTitle({ live: null, share: { active: true } })).toBe("● shared");
+  });
+
+  test("[DK-L2] a changed app.openAtLogin applies the login item at the next refresh, once", async () => {
     const f = fakeUi();
     const a = fakeApp();
+    let lifecycle = () => {};
+    const bridge = {
+      ...bridgeStub,
+      watchLifecycle: (fn: () => void) => {
+        lifecycle = fn;
+        return () => {};
+      },
+    } as unknown as Bridge;
     const logins: boolean[] = [];
-    const shell = new Shell(a.app, bridgeStub, f.ui, {
+    const shell = new Shell(a.app, bridge, f.ui, {
       platform: "linux",
       setLoginItem: async (on) => logins.push(on),
     });
     await shell.start();
-    f.tray("login");
-    await until(() => logins.length === 2, 1000, "login toggle");
+    expect(logins).toEqual([false]);
+    // Settings saved it: the save asks for a refresh, which applies it.
+    a.state.login = true;
+    lifecycle();
+    await until(() => logins.length === 2, 1000, "the login item on");
+    // A refresh with the same setting applies nothing again.
+    const reads = a.state.reads;
+    lifecycle();
+    await until(() => a.state.reads > reads, 1000, "a refresh");
+    await Bun.sleep(20);
     expect(logins).toEqual([false, true]);
-    expect(a.state.login).toBe(true);
+    a.state.login = false;
+    lifecycle();
+    await until(() => logins.length === 3, 1000, "the login item off");
+    expect(logins).toEqual([false, true, false]);
     await shell.close();
   });
 
@@ -425,7 +482,7 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(trayImageFault({ ...trayImage("win32") }, "linux")).toBe("not a PNG");
   });
 
-  test("[DK-T2] A recording call: the tray is the mark with a red dot and no text", async () => {
+  test("[DK-T2] A recording call: a distinct mark, a template on macOS, the dot red elsewhere", async () => {
     for (const platform of ["darwin", "win32", "linux"]) {
       const f = fakeUi();
       const a = fakeApp();
@@ -446,17 +503,19 @@ describe("the desktop shell over a fake NativeUi", () => {
       await until(() => a.state.live, 1000, "tray record");
       lifecycle();
       await until(() => f.trayImages.length === 1, 1000, "the recording image");
-      const rec = f.trayImages[0] ?? { image: "", template: true };
+      const rec = f.trayImages[0] ?? { image: "", template: false };
       expect(rec).toEqual(trayImage(platform, true));
-      expect(trayImageFault(rec, platform, true)).toBeNull();
-      for (const px of trayPixels(rec.image)) expect(redPixels(px)).toBeGreaterThan(0);
-      expect(f.title()).toBe("");
+      expect(trayImageFault(rec, platform)).toBeNull();
+      for (const px of trayPixels(rec.image)) {
+        // A template has no colour to show: the macOS mark is its own shape (the next test).
+        if (platform === "darwin") expect(redPixels(px)).toBe(0);
+        else expect(redPixels(px)).toBeGreaterThan(0);
+      }
       // A refresh in the same state sets no image: on macOS each one is a new status item.
+      const reads = a.state.reads;
       lifecycle();
-      f.tray("login");
-      const checked = () =>
-        f.trayMenu().some((i) => (i as { action?: string; checked?: boolean }).checked === true);
-      await until(checked, 1000, "the login item checked");
+      await until(() => a.state.reads > reads, 1000, "a refresh");
+      await Bun.sleep(20);
       expect(f.trayImages).toHaveLength(1);
       f.tray("stop");
       await until(() => !a.state.live, 1000, "tray stop");
@@ -471,12 +530,36 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(trayRecording({ live: { state: "paused" } as never })).toBe(false);
     expect(trayRecording({ live: { state: "recording" } as never })).toBe(true);
     expect(trayRecording({ live: null })).toBe(false);
-    // Positive controls: the idle template on a recording macOS item, and the plain recording image
-    // flagged as a template, both fail.
-    expect(trayImageFault(trayImage("darwin"), "darwin", true)).toBe("the template flag is wrong");
-    expect(trayImageFault({ ...trayImage("darwin", true), template: true }, "darwin", true)).toBe(
+    // Positive control: the macOS recording image given as a plain image fails.
+    expect(trayImageFault({ ...trayImage("darwin", true), template: false }, "darwin")).toBe(
       "the template flag is wrong",
     );
+  });
+
+  test("[DK-T2] An invisible recording mark: on macOS it is a template whose shape differs from idle", () => {
+    const idle = trayImage("darwin");
+    const rec = trayImage("darwin", true);
+    // Both templates: the menu bar inks them for its own colour, translucent, dark, light or open.
+    expect(idle.template).toBe(true);
+    expect(rec.template).toBe(true);
+    const [i] = trayPixels(idle.image);
+    const [r] = trayPixels(rec.image);
+    if (!i || !r) throw new Error("no pixels");
+    // A filled disc with the mark cut out: much more ink than the idle mark's ring and stem.
+    expect(inked(r)).toBeGreaterThan(1.5 * inked(i));
+    // The dot (the centre) and the ring (8 units out) are cut out; the disc between ring and edge
+    // (13 units out) and the counter between dot and ring (5 units out) are ink. Idle is the reverse.
+    expect(alphaAt(r, 16, 16)).toBe(0);
+    expect(alphaAt(r, 16, 8)).toBe(0);
+    expect(alphaAt(r, 16, 3)).toBe(255);
+    expect(alphaAt(r, 11, 16)).toBe(255);
+    expect(alphaAt(i, 16, 16)).toBe(255);
+    expect(alphaAt(i, 16, 3)).toBe(0);
+    // The stem is cut out too, with ink beyond it.
+    expect(alphaAt(r, 24, 16)).toBe(0);
+    expect(alphaAt(r, 28, 16)).toBe(255);
+    // The disc sits inside the image: the corners are clear.
+    expect(alphaAt(r, 0, 0)).toBe(0);
   });
 
   test("[DK-T2] With no display the tray keeps its item: the mark changes once a display is back", async () => {
@@ -500,12 +583,11 @@ describe("the desktop shell over a fake NativeUi", () => {
     await shell.start();
     f.tray("record");
     await until(() => a.state.live, 1000, "tray record");
+    const reads = a.state.reads;
     lifecycle();
-    // The login item's check proves a refresh ran after the call started.
-    f.tray("login");
-    const checked = () =>
-      f.trayMenu().some((i) => (i as { action?: string; checked?: boolean }).checked === true);
-    await until(checked, 1000, "the login item checked");
+    // A status read proves a refresh ran after the call started.
+    await until(() => a.state.reads > reads, 1000, "a refresh");
+    await Bun.sleep(20);
     expect(f.trayImages).toEqual([]);
     expect(f.trays).toHaveLength(1);
     // A display again: the next refresh shows the recording mark.
@@ -519,7 +601,7 @@ describe("the desktop shell over a fake NativeUi", () => {
   test("the tray icons on disk are the ones scripts/tray-icons.ts draws", () => {
     const files = trayIconFiles();
     expect(Object.keys(files).sort()).toEqual([
-      "akou-recording-macos.png",
+      "akou-recording-template.png",
       "akou-recording.ico",
       "akou-recording.png",
       "akou-template.png",

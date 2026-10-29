@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Bridge } from "../src/main/window/bridge.ts";
+import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import { Shell, type ShellApp, trayMenu, trayTitle } from "../src/main/window/shell.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -28,16 +29,21 @@ const labels = (items: unknown[]) =>
 describe("DC-O4: the tray's dictation item and title", () => {
   test("the menu starts in idle, stops while listening, and has no item while off", () => {
     const find = (d?: string) =>
-      trayMenu({ live: false, openAtLogin: false, dictation: d }).filter(
+      trayMenu({ live: null, dictation: d }).filter(
         (i) => i.type === "normal" && i.action.startsWith("dictate"),
       );
     expect(find("idle")).toEqual([{ type: "normal", label: "Start dictation", action: "dictate" }]);
+    expect(
+      trayMenu({ live: null, dictation: "idle", dictationKey: "⌘ Right" }).find(
+        (i) => i.type === "normal" && i.action === "dictate",
+      ),
+    ).toMatchObject({ label: "Start dictation (⌘ Right)" });
     expect(find("listening")).toEqual([
       { type: "normal", label: "■ Stop dictation", action: "dictate-stop" },
     ]);
     expect(find("off")).toEqual([]);
     expect(find(undefined)).toEqual([]);
-    const busy = trayMenu({ live: false, openAtLogin: false, dictation: "transcribing" });
+    const busy = trayMenu({ live: null, dictation: "transcribing" });
     expect(
       busy.find((i) => i.type === "normal" && i.label.startsWith("Transcribing")),
     ).toMatchObject({ enabled: false });
@@ -58,7 +64,8 @@ describe("DC-O4: the tray's dictation item and title", () => {
       start: async () => ({ ok: true, call: "c1" }),
       stopLive: async () => {},
       config: () => ({ settings: { "app.hotkey": "", "app.openAtLogin": false } }),
-      saveSetting: async () => {},
+      pauseLive: async () => {},
+      resumeLive: async () => {},
       quit: async () => {},
       openSettingsPane: async () => false,
       openWindow: async () => {},
@@ -87,7 +94,10 @@ describe("DC-O4: the tray's dictation item and title", () => {
     cleanups.push(() => shell.close());
     await shell.start();
     expect(f.title()).toBe("");
-    expect(labels(f.trayMenu())).toContain("Start dictation");
+    // The tray menu takes no accelerator, so the key is in the label, named as the app names it.
+    expect(labels(f.trayMenu())).toContain(
+      `Start dictation (${hotkeyLabel("Control+Shift+Space", "linux")})`,
+    );
     for (const [state, title] of [
       ["listening", "● dictating"],
       ["transcribing", "… transcribing"],
@@ -127,7 +137,11 @@ describe("DC-O4: the tray over a whole app", () => {
     const r = await rig();
     const { shell, f } = await shellOn(r, { platform: "linux" });
     cleanups.push(() => shell.close());
-    await until(() => labels(f.trayMenu()).includes("Start dictation"), 5000, "the Start item");
+    await until(
+      () => labels(f.trayMenu()).some((l) => l?.startsWith("Start dictation")),
+      5000,
+      "the Start item",
+    );
     f.tray("dictate");
     await until(() => f.title() === "● dictating", 5000, "the tray to say dictating");
     expect(r.app.dictation()?.status().state).toBe("listening");

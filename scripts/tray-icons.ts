@@ -8,9 +8,12 @@
  *   recolours it for a dark or a light bar. 32 px, shown at 16 pt, so it is sharp on a Retina display.
  * - `akou.ico`: Windows idle, 16 and 32 px PNG frames in one ICO.
  * - `akou.png`: the Linux AppIndicator idle, 32 px.
- * - `akou-recording-macos.png`, `akou-recording.ico`, `akou-recording.png`: the same files while a
- *   call records, the dot in the brand red. A template image cannot hold a colour, so the macOS one
- *   is a plain image whose glyph is a grey that reads on a dark and a light bar alike.
+ * - `akou-recording-template.png`: macOS while a call records, a template too: a filled disc with
+ *   the mark cut out of it. A template cannot hold a colour, so the state is a change of shape, and
+ *   the menu bar draws it in its own ink on any bar, translucent or open. A plain image in a fixed
+ *   colour fades into some bar: a mid grey all but vanished on a dark translucent one.
+ * - `akou-recording.ico`, `akou-recording.png`: Windows and Linux while a call records, the dot in
+ *   the brand red.
  *
  * The glyph is akou's mark (`assets/brand/akou-mark-mono.svg`): a lowercase a whose counter holds a
  * dot, one shape for the idle state, drawn on the mark's 32-unit grid so every edge of the ring and
@@ -37,11 +40,8 @@ const BLACK: Rgb = [0, 0, 0];
 const BLUE: Rgb = [0x2f, 0x7c, 0xf6];
 /** The brand dot (`assets/brand/akou-mark.svg`). */
 const RED: Rgb = [0xff, 0x45, 0x3a];
-/**
- * The grey whose contrast with white equals its contrast with black (4.6 to 1 each): the macOS
- * recording glyph, which the menu bar does not recolour.
- */
-const GREY: Rgb = [0x75, 0x75, 0x75];
+/** The macOS recording disc, on the same centre as the ring: it holds the whole mark with room. */
+const DISC_R = 15;
 
 /** Which part of the mark a point (in units) is in: the ring and stem, the dot, or none. */
 function part(px: number, py: number): "glyph" | "dot" | null {
@@ -80,6 +80,29 @@ function draw(size: number, ink: Rgb, dot: Rgb = ink): Uint8Array {
           : (ink[c] as number);
       }
       px[i + 3] = Math.round((255 * hit) / (SS * SS));
+    }
+  }
+  return px;
+}
+
+/**
+ * The macOS recording mark at `size` pixels: a black disc with the mark (ring, stem and dot) cut
+ * out, so only the alpha differs from the idle mark's and the menu bar inks it.
+ */
+function drawCutout(size: number): Uint8Array {
+  const px = new Uint8Array(size * size * 4);
+  const unit = UNITS / size;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let hit = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          const ux = (x + (sx + 0.5) / SS) * unit;
+          const uy = (y + (sy + 0.5) / SS) * unit;
+          if (Math.hypot(ux - RING.cx, uy - RING.cy) <= DISC_R && part(ux, uy) === null) hit++;
+        }
+      }
+      px[(y * size + x) * 4 + 3] = Math.round((255 * hit) / (SS * SS));
     }
   }
   return px;
@@ -179,7 +202,7 @@ export function trayIconFiles(): Record<string, Uint8Array> {
     "akou-template.png": png(32, draw(32, BLACK)),
     "akou.ico": ico([16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE)) }))),
     "akou.png": png(32, draw(32, BLUE)),
-    "akou-recording-macos.png": png(32, draw(32, GREY, RED)),
+    "akou-recording-template.png": png(32, drawCutout(32)),
     "akou-recording.ico": ico(
       [16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE, RED)) })),
     ),

@@ -84,7 +84,7 @@ akou also runs as a self-hosted transcription server in Docker. See [Server mode
 
 ## Uninstalling
 
-1. If you turned on "Open at login", turn it off in akou's menu bar item first, or delete `~/Library/LaunchAgents/io.github.geiserx.akou.login.plist`.
+1. If you turned on "Open at login", turn it off in akou's Settings first, or delete `~/Library/LaunchAgents/io.github.geiserx.akou.login.plist`.
 2. Quit akou: `akou quit`, or "Quit akou" in the menu bar item.
 3. Delete `/Applications/akou.app` and the `akou` command, if you installed it: `/usr/local/bin/akou` from the menu (`sudo rm /usr/local/bin/akou` if the folder is root's), or `~/.local/bin/akou` from the release archive.
 4. Delete what akou keeps for itself:

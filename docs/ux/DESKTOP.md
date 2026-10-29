@@ -86,7 +86,11 @@ ElectroBun 2.0.1 decides most of what is cheap and what is hard. These facts com
 
 ## 4. Tray and menu bar
 
-Today the tray always has an image, drawn by `scripts/tray-icons.ts`: the idle mark per OS (a template PNG on macOS, an ICO on Windows, a PNG for the AppIndicator), and while a call records the same mark with its dot in the brand red and no text. A template image cannot hold a colour, so the macOS recording image is a plain one in a grey that reads on a dark and a light bar; ElectroBun's `setImage` drops the template flag and the size there, so on macOS the shell swaps the status item instead (`native.ts`). A text title shows only a paused call, a share and a dictation (`trayTitle` in `shell.ts`). The menu has Record or Stop, Show akou, Open at login and Quit. A tray or hotkey start that is refused says why in a notification.
+Today the tray always has an image, drawn by `scripts/tray-icons.ts`: the idle mark per OS (a template PNG on macOS, an ICO on Windows, a PNG for the AppIndicator). While a call records, macOS shows a second template, a filled disc with the mark cut out of it, and Windows and Linux show the mark with its dot in the brand red. The macOS one is a template so the menu bar inks it on any bar, translucent, dark, light or with the menu open; a plain image in a fixed colour faded into some of them (TRAPS "An invisible recording mark"). ElectroBun's `setImage` drops the template flag and the size there, so on macOS the shell swaps the status item instead (`native.ts`).
+
+The title (`trayTitle` in `shell.ts`) shows, in priority order, a dictation, a share, a paused call's `❚❚`, and on macOS a recording call's elapsed time as `h:mm` (`0:23`), counted from the call's first part in its log, so an app restarted mid-call shows the call's own time. Windows draws no title beside a tray icon and an AppIndicator label shows on some Linux panels only, so there the menu's header carries the time. The tray refreshes on every change of state and once a minute while a call is live, on the call's own minute; a refresh in the same state sets neither the title nor the menu again.
+
+The menu while a call is live: a disabled header with the title (cut at 40 characters), the workspace and the elapsed minutes (`Weekly sync · work · 23 min`); a disabled warning per capture side that records nothing (`⚠ System audio lost`, `⚠ Microphone lost`, from the newest part's health, as the window's dots read it); `❚❚ Pause` or `▶ Resume`; `■ Stop recording`; `Ask about this call…`, which opens the window on the call with the ask box focused; then dictation, Show akou and Quit akou. Idle: `● Record`, dictation, Show akou, Quit akou. The tray menu takes no accelerator, so Start dictation names its key in the label, as the application menu names it. Open at login is in Settings, which applies it at once (DK-L2). A tray or hotkey start that is refused says why in a notification.
 
 The design is a monochrome template icon per state, a text title only as an extra (the elapsed time while recording), and a menu that controls a running call without the window.
 
@@ -99,13 +103,13 @@ The menu while recording:
   Mute microphone            (the global mute key, if set)
   Pause
   ■ Stop recording           ⌥⌘R
+  Ask about this call…
   Copy last 5 minutes
 ──────────
   Stop sharing               (only while shared)
   Show akou
   Recent calls  ▸  (last five, opens the window on one)
 ──────────
-  Open at login  ✓
   Check for updates…
   Quit akou
 ```
@@ -115,9 +119,9 @@ While idle the first item is `● Record` with a submenu `Record in workspace �
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
 | DK-T1 | A template tray icon, shipped as image assets per OS (template PNG on macOS, ICO on Windows, PNG for AppIndicator), always set, including idle. One image is enough for this line; the existing text title keeps showing recording state | P0 | gap: no image in the repo, empty idle title; Apple HIG menu bar extras | A shell unit test asserts `createTray` receives an image, and a positive control with no image fails it. On the reference Mac, the idle item is visible in a dark and a light menu bar (screenshots recorded in the release checklist). On Ubuntu with the AppIndicator extension, the icon shows | has (unit test); the menu bar and Ubuntu checks are in the release checklist |
-| DK-T2 | One icon per state (dead, shared, recording, paused, final pass, update, idle) with `setImage`, plus a tooltip in words | P1 | intent: glanceable state; DESIGN 8.3 promises "a changed tray icon" while sharing | A table-driven test over `AppStatus` fixtures asserts the icon and tooltip for each state and the priority when several hold. A positive control feeds a dead-and-shared status and expects the dead icon | partial (idle and recording icons; paused and shared are a text title; with no display the mark waits for one, TRAPS "A new status item with no display") |
-| DK-T3 | Elapsed time in the title while recording, updated once a second on macOS; off with `app.trayTimer` set to false | P2 | Granola floating timer; tray apps | A fake-clock test advances 61 s and sees `1:01`; with the setting off, the title stays empty | missing |
-| DK-T4 | Menu items Mute, Pause, Copy last 5 minutes, Stop sharing, Recent calls, Record in workspace, Check for updates | P1 | gap vs hark controls; SYS-03; intent: every action through every door | Unit test of `trayMenu` per state lists the items. Clicking each through the fake calls the same app method the window calls (one parity test). Copy last 5 minutes on a fake call puts exactly the lines of the last 5 minutes, with times of day, on the fake clipboard | partial (Record, Stop, Show, Login, Quit) |
+| DK-T2 | One icon per state (dead, shared, recording, paused, final pass, update, idle) with `setImage`, plus a tooltip in words | P1 | intent: glanceable state; DESIGN 8.3 promises "a changed tray icon" while sharing | A table-driven test over `AppStatus` fixtures asserts the icon and tooltip for each state and the priority when several hold. A positive control feeds a dead-and-shared status and expects the dead icon | partial (idle and recording icons, the macOS recording one a template of its own shape, TRAPS "An invisible recording mark"; paused and shared are a text title; a dead side is a warning line in the menu; with no display the mark waits for one, TRAPS "A new status item with no display") |
+| DK-T3 | Elapsed time in the title while recording on macOS, as `h:mm` from the call's first part, moved once a minute on the call's own minute; the menu's header carries it on every OS | P2 | Granola floating timer; tray apps | Unit tests of `trayTitle` and `nextMinuteIn`; a shell test whose clock sits 80 ms before a minute sees the title move with no event, and nothing after the shell closes | has (`tests/tray.test.ts`) |
+| DK-T4 | Menu items Mute, Pause, Copy last 5 minutes, Stop sharing, Recent calls, Record in workspace, Check for updates | P1 | gap vs hark controls; SYS-03; intent: every action through every door | Unit test of `trayMenu` per state lists the items. Clicking each through the fake calls the same app method the window calls (one parity test). Copy last 5 minutes on a fake call puts exactly the lines of the last 5 minutes, with times of day, on the fake clipboard | partial (Record, Pause, Resume, Stop, Ask about this call, Show, Quit, and a header naming the call; Ask is checked on the real page in `tests/ui/desktop.test.ts`) |
 | DK-T5 | A tray start that fails says why: a notification with the reason, and the window shown on its models or permission card | P0 | gap: a failed tray or hotkey start only writes a log line | With models missing, the fake tray's Record produces one notification whose body names the window's download card, and the window opens on it | has (models card; a refused start for a permission names the privacy pane, since the window's permission banner shows only during a call) |
 | DK-T6 | Linux without a tray: the window, the hotkey and the CLI reach every tray action; [getting-started.md](../getting-started.md) names the GNOME AppIndicator extension | P1 (M4) | GNOME Shell shows no tray by default | The parity test from DK-T4 also runs with the tray disabled and finds each action in the window; the install doc line exists | missing |
 
@@ -220,12 +224,12 @@ Silence reminders (WINDOW W3.5), a maximum length and a low-disk stop are matrix
 
 ## 10. Start at login
 
-Built: `app.openAtLogin` writes a LaunchAgent, an XDG autostart entry or the `HKCU` Run key, with `AKOU_HEADLESS=1` in the environment. The tray toggles it and applies it at once. The other doors do not apply it yet, and first run does not offer it.
+Built: `app.openAtLogin` writes a LaunchAgent, an XDG autostart entry or the `HKCU` Run key, with `AKOU_HEADLESS=1` in the environment. Settings, `akou config set` and `PATCH /config` apply it at once: a save that changes it asks the desktop shell to refresh, and the shell applies a value that differs from the one it last applied. An edit of the config file by hand applies at the next start. First run does not offer it.
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
 | DK-L1 | Start at login, headless, with tray and hotkey ready; single instance brings the window forward | done | DESIGN 1.4 | Existing tests in `tests/` for `login-item.ts` and the single-instance path | has |
-| DK-L2 | Changing `app.openAtLogin` from Settings, `akou config set` or `PATCH /config` writes or removes the login item at once | P0 | gap: only the tray applies it | `PATCH /config {"app.openAtLogin": true}` against a scratch home creates the LaunchAgent file (macOS), the autostart file (Linux) or calls the fake `reg.exe` (Windows); `false` removes exactly that | partial (tray only) |
+| DK-L2 | Changing `app.openAtLogin` from Settings, `akou config set` or `PATCH /config` writes or removes the login item at once | P0 | gap: only the tray applied it | `PATCH /config {"app.openAtLogin": true}` against a scratch home creates the LaunchAgent file (macOS), the autostart file (Linux) or calls the fake `reg.exe` (Windows); `false` removes exactly that | has (`tests/tray.test.ts`: `PATCH /config` turns the shell's login item on and off, another key leaves it alone) |
 | DK-L3 | `app.headless` is file-only or environment-only, not a live checkbox in Settings | P1 | gap: saving it makes the next normal launch start with no window | `GET /config` marks `app.headless` as not API-writable, and `PATCH` refuses it with a message naming `AKOU_HEADLESS` | partial |
 
 Offering "Open akou at login" in onboarding is step 6 of DK-O2. The Flatpak Background portal is in the parking list.
@@ -344,7 +348,6 @@ Every key the ux docs name that the registry lacks, in one list, so the registry
 | `app.updateCheck` | on, off | off | now | Desktop | DK-U1 |
 | `app.floatingIndicator` | on, off | on | now | Desktop | DK-F1 |
 | `app.hideFromCapture` | on, off | on where measured to work | now | Desktop | DK-P3 |
-| `app.trayTimer` | on, off | on | now | Desktop | DK-T3 |
 | `app.hotkeyMute` | an accelerator or empty | empty | now | Shortcuts | DK-K6 |
 | `app.language` | `system`, `en`, `es` | `system` | now | Appearance | [WINDOW.md](WINDOW.md) section 16 |
 | `a11y.announceLines` | all, others, off | per WINDOW W15.4 | now | Appearance | W15.4 |

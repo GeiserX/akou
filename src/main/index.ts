@@ -53,6 +53,7 @@ import {
   readLock,
 } from "../core/log/writer.ts";
 import { Cues } from "../ui/dictation-cues.ts";
+import { lostChannels } from "../ui/model.ts";
 import { APP_IDENTITY } from "./api/access.ts";
 import {
   ensureToken,
@@ -2157,6 +2158,10 @@ export class AkouApp implements ApiApp {
     // Overflow on: a job waiting for a busy remote may run here now, not at the next job event.
     if (before["server.remotes_overflow"] !== after["server.remotes_overflow"])
       this.jobService?.reroute();
+    // The desktop shell applies the login item at its next refresh (DK-L2).
+    if (before["app.openAtLogin"] !== after["app.openAtLogin"]) {
+      for (const fn of this.statusWatchers) fn();
+    }
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
       this.warmDictation();
@@ -2522,6 +2527,11 @@ export class AkouApp implements ApiApp {
             muted: live.muted,
             parts: live.view.parts().length,
             health: live.view.health().map((h) => ({ ch: h.ch, state: h.state, detail: h.detail })),
+            // The sides recording nothing now, for the tray menu's warning.
+            lost: lostChannels(live.view),
+            // When the first part started, from the log, so the tray's elapsed time is the
+            // call's own after an app restart too.
+            startedAt: live.view.parts()[0]?.wallStart ?? null,
             lag: live.view.asrLag?.seconds ?? 0,
             // The live model, streaming engine and second pass this call runs; null before audio
             // reaches the recognizer.

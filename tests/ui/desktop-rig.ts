@@ -82,6 +82,8 @@ export interface DesktopRig extends AppRig {
   quitRequested(): boolean;
   /** How many times the shell asked the process to exit. */
   exits(): number;
+  /** Clicks a tray menu item by its action. */
+  tray(action: string): void;
 }
 
 export interface DesktopRigOptions extends RigOptions {
@@ -114,6 +116,7 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
   let sizing: Promise<unknown> = Promise.resolve();
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
   let exits = 0;
+  let trayAction: (action: string) => void = () => {};
 
   /** A page on a view, with `handlers` answering its requests; `send` pushes a message. */
   const open = (view: "main" | "indicator", handlers: object) => {
@@ -241,7 +244,9 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
       setMenu: () => {},
       setTitle: () => {},
       setImage: () => {},
-      onAction: () => {},
+      onAction: (fn) => {
+        trayAction = fn;
+      },
       remove: () => {},
     }),
     setApplicationMenu: () => {},
@@ -272,6 +277,7 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
   rig.indicatorFrame = () => indicatorFrame;
   rig.pages = pages;
   rig.exits = () => exits;
+  rig.tray = (action) => trayAction(action);
   rig.quitRequested = () => {
     let cancelled = false;
     beforeQuit({ cancel: () => (cancelled = true) });

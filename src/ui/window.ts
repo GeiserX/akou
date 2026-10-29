@@ -68,7 +68,7 @@ const rpc = Electroview.defineRPC<AkouRpc>({
       status: (s: AppStatus) => {
         for (const fn of statusWatchers) fn(s);
       },
-      showCall: (m: { call?: string }) => showCall(m.call),
+      showCall: (m: { call?: string; ask?: boolean }) => showCall(m.call, m.ask),
       showSettings: () => showSettings(),
       askQuit: ({ id, ...q }: QuitQuestion) =>
         void askQuit(q).then((go) => rpc.request.answerQuit({ id, go }).catch(() => {})),

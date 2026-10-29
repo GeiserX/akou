@@ -718,3 +718,27 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
     UI_TIMEOUT,
   );
 });
+
+describe("[DK-T4] the tray's Ask about this call", () => {
+  test(
+    "opens the window on the live call with the ask box focused",
+    async () => {
+      await withDesktop(async (rig) => {
+        const id = await rig.startCall({ title: "Weekly sync" });
+        await until(() => rig.app.manager.live()?.id === id, 10_000, "the live call");
+        expect(rig.main()).toBeNull();
+        rig.tray("ask");
+        await until(() => rig.main() !== null, 10_000, "the main window");
+        const main = rig.main() as Page;
+        await main.waitForFunction(
+          (call) =>
+            document.querySelector<HTMLElement>('#calls button[aria-current="true"]')?.dataset
+              .id === call && document.activeElement?.id === "ask-input",
+          id,
+          { timeout: 10_000 },
+        );
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
