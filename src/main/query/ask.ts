@@ -19,8 +19,8 @@
  */
 
 import { formatWall } from "../../core/log/clock.ts";
-import type { EventDraft, LogEvent } from "../../core/log/events.ts";
-import type { CallView, Line } from "../../core/log/fold.ts";
+import type { Answer, EventDraft, LogEvent } from "../../core/log/events.ts";
+import type { CallView } from "../../core/log/fold.ts";
 import { type ExcerptBlock, excerptsText } from "../llm/none.ts";
 import {
   type CompleteRequest,
@@ -31,6 +31,7 @@ import {
   runProvider,
   type Usage,
 } from "../llm/provider.ts";
+import { type AgentRoute, citesIn } from "./agent-answer.ts";
 import { searchText } from "./classify.ts";
 import type { CallQuery, ContextPack } from "./context.ts";
 import { handoffFor } from "./handoff.ts";
@@ -53,8 +54,20 @@ export const ROUTE: Record<ProviderId, string> = {
   harness: "the coding agent akou runs",
   "openai-compatible": "the OpenAI-compatible server",
   anthropic: "the Anthropic API",
+  command: "your provider command",
   none: "akou's assistant",
 };
+
+/** The route's words for this provider: a user's own command goes by its label. */
+function routeOf(p: Provider): string {
+  const label = p.id === "command" ? (p as { label?: () => string }).label?.() : undefined;
+  return label ?? ROUTE[p.id];
+}
+
+/** `30 s`, `1 s`, `500 ms`. */
+function seconds(ms: number): string {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} s` : `${ms} ms`;
+}
 
 export interface AskResult {
   /** The `ask` event's id, when the question was logged. */
@@ -70,6 +83,13 @@ export interface AskResult {
   reason?: string;
   /** Which route did not answer (`ROUTE`), when none did. */
   route?: string;
+  /** Who answered, when the agent following the call did: `agent:claude-code`. */
+  by?: string;
+  /**
+   * Why the agent following the call did not answer first ("claude-code did not answer within
+   * 30 s"), when the question waited for one: the window says it before the provider's own line.
+   */
+  agentReason?: string;
   errorKind?: ProviderErrorKind;
   resetsAt?: number;
   excerpts: ExcerptBlock[];
@@ -176,7 +196,21 @@ export interface AskOptions {
   onToken?: (t: string) => void;
   /** Kept sessions, when session reuse is on. */
   sessions?: SessionStore;
+  /**
+   * The agents following the call (`agent-answer.ts`). A user's question (`by: "user"`) waits
+   * for one of them first; an agent's own question never does.
+   */
+  agents?: AgentRoute;
+  /** Where the question went: the agent following the call, or akou's provider. */
+  onRouted?: (r: AskRouted) => void;
+  /** The reply was the excerpts: no model answered. */
+  onFallback?: (ask: string) => void;
 }
+
+/** Where a user's question went (the `routed` server-sent event). */
+export type AskRouted =
+  | { to: "agent"; clients: string[]; waitSeconds: number }
+  | { to: "provider"; why: string };
 
 /** The parts of the call that match the question: BM25 hits, else the newest lines of the pack. */
 export function excerptsFor(q: CallQuery, question: string, pack: ContextPack): ExcerptBlock[] {
@@ -198,21 +232,7 @@ export function excerptsFor(q: CallQuery, question: string, pack: ContextPack): 
  * lines of that minute and speaker. Only ids of this call are kept.
  */
 export function answerCites(text: string, pack: ContextPack, view: CallView): string[] {
-  const out = new Set<string>();
-  for (const m of text.matchAll(/#([lf]\d{6,})\b/g)) {
-    const id = m[1] as string;
-    if (view.resolve(id)) out.add(id);
-  }
-  const lines: Line[] = pack.lines;
-  for (const m of text.matchAll(/\[(\d{1,2}:\d{2})(?::\d{2})?\s+([^\]]+?)\]/g)) {
-    const hhmm = (m[1] as string).padStart(5, "0");
-    const who = (m[2] as string).trim().toLowerCase();
-    for (const l of lines) {
-      if (formatWall(l.w0, pack.tz, { seconds: false }) !== hhmm) continue;
-      if (l.speaker.toLowerCase() === who || l.speaker.toLowerCase().startsWith(who)) out.add(l.id);
-    }
-  }
-  return [...out];
+  return citesIn(text, pack.lines, pack.tz, view);
 }
 
 /** "Claude Code reported its usage limit is reached until 18:00". */
@@ -243,7 +263,6 @@ export async function ask(o: AskOptions): Promise<AskResult> {
   }
   const excerpts = excerptsFor(o.q, o.question, pack);
   o.onExcerpts?.(excerpts);
-  const handoff = handoffFor(o.q, o.question, pack, excerpts);
   const asked = await o.write((view) => ({
     type: "ask",
     id: `q${String(view.lastSeq + 1).padStart(4, "0")}`,
@@ -251,8 +270,82 @@ export async function ask(o: AskOptions): Promise<AskResult> {
     by: o.by,
   }));
   const askId = (asked as { id: string }).id;
+  const handoff = handoffFor(o.q, o.question, pack, excerpts, askId);
+  // The agents following the call: only a user's question goes to them, so an agent never waits
+  // on its own (TRAPS "An agent waits on its own question").
+  const agents = o.by === "user" && o.agents && o.agents.listening.length > 0 ? o.agents : null;
+  const watch = agents?.watch(askId);
+  try {
+    return await answerAsk(o, {
+      pack,
+      base,
+      excerpts,
+      handoff,
+      askId,
+      agents,
+      watch: watch ?? null,
+    });
+  } finally {
+    watch?.stop();
+  }
+}
+
+/** The second half of `ask`, once the question is logged: the agent first, then the provider. */
+async function answerAsk(
+  o: AskOptions,
+  x: {
+    pack: ContextPack;
+    base: Pick<AskResult, "pack" | "state" | "cursor">;
+    excerpts: ExcerptBlock[];
+    handoff: string;
+    askId: string;
+    agents: AgentRoute | null;
+    watch: { answer: Promise<Answer> } | null;
+  },
+): Promise<AskResult> {
+  const { pack, base, excerpts, handoff, askId, agents, watch } = x;
+  const fromAgent = (a: Answer): AskResult => ({
+    ...base,
+    ask: askId,
+    answered: true,
+    kind: "answer",
+    text: a.text,
+    model: a.model,
+    cites: a.cites,
+    ...(a.by ? { by: a.by } : {}),
+    excerpts,
+    handoff,
+  });
+  let agentReason: string | undefined;
+  if (agents && watch && agents.waitMs > 0) {
+    o.onRouted?.({
+      to: "agent",
+      clients: agents.listening,
+      waitSeconds: Math.round(agents.waitMs / 1000),
+    });
+    const got = await firstOf(watch.answer, agents.waitMs, o.signal);
+    if (got === "cancelled") throw new ProviderError("cancelled", "the question was cancelled");
+    if (got !== "timeout") return fromAgent(got);
+    agentReason = `${agents.listening.join(" and ")} did not answer within ${seconds(agents.waitMs)}`;
+  }
+  if (o.by === "user") {
+    o.onRouted?.({
+      to: "provider",
+      why:
+        agentReason ?? (agents ? "waiting for an agent is off" : "no agent is following this call"),
+    });
+  }
+  // An agent's answer that lands while the provider runs stops the run: it is already answered.
+  const stopForAgent = new AbortController();
+  let agentAnswer: Answer | null = null;
+  void watch?.answer.then((a) => {
+    agentAnswer = a;
+    stopForAgent.abort();
+  });
+  const signal = o.signal ? AbortSignal.any([o.signal, stopForAgent.signal]) : stopForAgent.signal;
   const fallback = (err: ProviderError): AskResult => {
     const reason = reasonText(err, o.q.tz);
+    o.onFallback?.(askId);
     return {
       ...base,
       ask: askId,
@@ -261,7 +354,8 @@ export async function ask(o: AskOptions): Promise<AskResult> {
       text: excerptsText(reason, excerpts),
       cites: [],
       reason,
-      route: ROUTE[o.provider.id],
+      route: routeOf(o.provider),
+      ...(agentReason ? { agentReason } : {}),
       handoff,
       errorKind: err.kind,
       resetsAt: err.resetsAt,
@@ -281,6 +375,7 @@ export async function ask(o: AskOptions): Promise<AskResult> {
     system: ASK_SYSTEM,
     prompt: follow ?? `${pack.text}\n\nQuestion: ${o.question}`,
     maxTokens: ASK_MAX_TOKENS,
+    meta: { task: "ask", question: o.question, call: key, ask: askId },
     ...(sessions
       ? {
           session:
@@ -294,7 +389,7 @@ export async function ask(o: AskOptions): Promise<AskResult> {
     let r: Awaited<ReturnType<typeof runProvider>>;
     try {
       r = await runProvider(o.provider, req, (t) => o.onToken?.(t), {
-        signal: o.signal,
+        signal,
         timeoutMs: o.timeoutMs,
       });
     } catch (err) {
@@ -335,9 +430,32 @@ export async function ask(o: AskOptions): Promise<AskResult> {
     };
   } catch (err) {
     const e = err instanceof ProviderError ? err : new ProviderError("other", String(err));
+    const agent = agentAnswer as Answer | null;
+    if (e.kind === "cancelled" && agent && !o.signal?.aborted) return fromAgent(agent);
     if (e.kind === "cancelled") throw e;
     return fallback(e);
   } finally {
     sessions?.release(key);
   }
+}
+
+/** The agent's answer, or "timeout" after `ms`, or "cancelled" when the asker goes away. */
+function firstOf(
+  answer: Promise<Answer>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<Answer | "timeout" | "cancelled"> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve("cancelled");
+    const done = (v: Answer | "timeout" | "cancelled") => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(v);
+    };
+    const onAbort = () => done("cancelled");
+    // clock: how long the ask box waits for the agent following the call.
+    const timer = setTimeout(() => done("timeout"), ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void answer.then(done);
+  });
 }

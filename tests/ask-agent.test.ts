@@ -14,6 +14,7 @@ import { validateSetting } from "../src/main/config/schema.ts";
 import { CommandProvider, commandLabel, fillArgs } from "../src/main/llm/command.ts";
 import { ProviderError, runProvider } from "../src/main/llm/provider.ts";
 import { citesIn, unansweredAsks } from "../src/main/query/agent-answer.ts";
+import { agentHandoff } from "../src/main/query/handoff.ts";
 import { LISTEN_GRACE_MS, Listeners } from "../src/main/query/listeners.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
@@ -300,5 +301,17 @@ describe("[decision] Waiting for an agent that has left: a hang-up", () => {
     expect(l.listening("c1")).toEqual(["b", "c"]);
     second(true);
     expect(l.listening("c1")).toEqual(["b"]);
+  });
+});
+
+describe("[decision] A question typed in the ask box never reaches the agent following the call: a pasted hand-off", () => {
+  test("a hand-off of a logged question says how to post the answer back to the box; the question stays first", () => {
+    const h = { question: "when do we ship?", call: "01CALL", tz: "UTC", excerpts: [] };
+    const with_ = agentHandoff({ ...h, ask: "q0291" });
+    expect(with_.split("\n")[0]).toBe("when do we ship?");
+    expect(with_).toContain("`akou answer q0291 '<your answer>' -c 01CALL`");
+    expect(with_).toContain('akou_answer tool with {"call":"01CALL","ask":"q0291"}');
+    // Positive control: with no ask id there is nothing to answer back to.
+    expect(agentHandoff(h)).not.toContain("akou answer");
   });
 });
