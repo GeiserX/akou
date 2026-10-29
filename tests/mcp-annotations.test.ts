@@ -56,6 +56,7 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_read: READ,
   akou_search: READ,
   akou_ask: PROVIDER,
+  akou_answer: WRITE,
   akou_name_speaker: IDEMPOTENT,
   akou_merge_speakers: WRITE,
   akou_unmerge_speaker: WRITE,
