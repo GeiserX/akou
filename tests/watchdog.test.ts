@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
 import { appBundle, relaunchCommand } from "../src/main/watchdog.ts";
-import { tempDir } from "./helpers.ts";
+import { LEFT_WRAPPER_SH, tempDir } from "./helpers.ts";
 
 const APP = join(import.meta.dir, "fixtures", "watchdog-app.ts");
 const LONG = 60_000;
@@ -447,7 +447,7 @@ function fakeBundle(dir: string) {
   const leftWrapper = () =>
     spawn(
       "/bin/sh",
-      ["-c", 'true & exec "$0" "$@"', launcher, FAKE_BUNDLE, "stray", "-a", bundle, "--pids", pids],
+      ["-c", LEFT_WRAPPER_SH, launcher, FAKE_BUNDLE, "stray", "-a", bundle, "--pids", pids],
       { stdio: "ignore", env },
     );
   /** The children of `pid` that exited unreaped, as `ps` lists them. */
@@ -508,6 +508,43 @@ async function waitFor(text: () => string, what: string | RegExp, ms: number): P
 describe.skipIf(process.platform === "win32")(
   "[DK-M8] [T3.6] the watchdog's reopen with a launcher left behind (no ps on Windows)",
   () => {
+    test("[DK-M8] the left wrapper has its exited child even when the shell is slow to exec", async () => {
+      const t = tempDir("akou-wd-");
+      const b = fakeBundle(t.dir);
+      // A shell held back before its `exec`, as a loaded runner holds it: the child is long gone.
+      const late = (script: string) =>
+        spawn(
+          "/bin/sh",
+          [
+            "-c",
+            script.replace(/& exec /, "& sleep 0.5; exec "),
+            b.launcher,
+            FAKE_BUNDLE,
+            "stray",
+            "-a",
+            b.bundle,
+            "--pids",
+            b.pids,
+          ],
+          { stdio: "ignore", env: b.env },
+        );
+      const fixed = late(LEFT_WRAPPER_SH);
+      // Positive control: the old script, whose child the shell reaps while it waits.
+      const old = late('true & exec "$0" "$@"');
+      try {
+        const pid = fixed.pid as number;
+        expect(await waitFor(() => String(b.unreaped(pid)), "1", 10_000)).toBe(true);
+        // Once the old shell has become the launcher, its child is not there.
+        const args = () =>
+          spawnSync("ps", ["-o", "args=", "-p", String(old.pid)], { encoding: "utf8" }).stdout;
+        expect(await waitFor(args, b.launcher, 10_000)).toBe(true);
+        expect(b.unreaped(old.pid as number)).toBe(0);
+      } finally {
+        b.cleanup(fixed.pid as number, old.pid as number);
+        t.cleanup();
+      }
+    });
+
     test(
       "a launcher with nothing below it is stopped, the app comes up, and app.log says both",
       async () => {
@@ -529,8 +566,8 @@ describe.skipIf(process.platform === "win32")(
         const kept = [other.pid, names.pid] as number[];
         let r: Awaited<ReturnType<typeof run>> | null = null;
         try {
-          // As the real wrapper, it has a child that exited and was never reaped. A fixed wait
-          // was 500 ms, and a loaded runner took longer to start the stray twice in two days.
+          // As the real wrapper, it has a child that exited and was never reaped, once the shell
+          // has become the launcher (LEFT_WRAPPER_SH).
           expect(await waitFor(() => String(b.unreaped(stray.pid as number)), "1", 10_000)).toBe(
             true,
           );

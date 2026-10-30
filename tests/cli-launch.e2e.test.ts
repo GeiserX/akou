@@ -13,7 +13,7 @@ import { APP_LOG } from "../src/main/app-log.ts";
 import { ApiClient, LAUNCH_LOG } from "../src/main/cli/client.ts";
 import { appRig, FAKE_HELPER, writeSettings } from "./api-helpers.ts";
 import { cliChild } from "./cli-helpers.ts";
-import { tempDir } from "./helpers.ts";
+import { LEFT_WRAPPER_SH, tempDir } from "./helpers.ts";
 
 const LONG = 60_000;
 
@@ -304,7 +304,7 @@ describe.skipIf(process.platform === "win32")(
         "/bin/sh",
         [
           "-c",
-          'true & exec "$0" "$@"',
+          LEFT_WRAPPER_SH,
           launcher,
           FAKE_BUNDLE,
           "stray",
