@@ -123,6 +123,6 @@ Exit criteria:
 - Per-app capture on Linux.
 - Meeting detection with a "Record this call?" prompt from OS signals (a process holding the microphone), never auto-recording unless opted in per app.
 - Moving recognition into the Rust crate if the Worker path proves fragile across ElectroBun releases.
-- Decode biasing for the streaming live engine once a sherpa-onnx release carries streaming hotwords (merged upstream after 1.13.8, the release akou pins): beam search with the decode list at score 1.5, the one setting measured to add names without over-firing ([research/asr-architecture.md section 3.1](research/asr-architecture.md#31-what-replaces-the-12-s-windows)).
+- Decode biasing for the streaming live engine, now that sherpa-onnx 2.0 accepts hotwords on streaming NeMo transducers (still to be measured on the live model): beam search with the decode list at score 1.5, the one setting measured to add names without over-firing ([research/asr-architecture.md section 3.1](research/asr-architecture.md#31-what-replaces-the-12-s-windows)).
 - Decode biasing for Whisper workspaces through whisper.cpp's initial prompt (measured as strong as Parakeet hotwords on short lists) only if a Whisper workspace needs layer 1 badly enough to justify a second speech engine.
 - Switching the `bpe.vocab` workaround to an upstream sherpa-onnx encoder that runs real BPE, or accepts token ids, when one exists.
