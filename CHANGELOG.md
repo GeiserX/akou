@@ -2,6 +2,14 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.1 — Parakeet hears quiet speech
+
+akou now runs on sherpa-onnx 2.0.1, the speech library under every model it uses. The live transcript, the voice detector, the speaker labels and diarization give the same output as before, byte for byte. The final pass with Parakeet hears quiet speech better: a clip played at -60 dB, which used to come back empty, is now transcribed in full. On normal speech, 1 word in 2451 came out different in our tests. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Transcription
+- **Quiet speech is no longer lost in the final pass** (#486). Parakeet in sherpa-onnx 2.0 handles very quiet audio the way NeMo, its original toolkit, does, so faint but real speech decodes instead of coming back empty.
+- **Faint noise still never reaches Parakeet** (#486). The same change makes Parakeet guess words from faint noise when nothing filters it first. akou always puts the voice detector in front, and a new test runs white and pink noise at -40 and -50 dBFS through every preset to check that no engine is ever asked to transcribe it.
+
 ## 1.7.0 — one akou window at a time during a call, and a call an agent starts shows akou where you are
 
 During a recording the floating bar showed even with the akou window open on screen, so two windows said the same thing. And when an agent started a call, nothing came to the front: you only knew it was recording if you looked at the menu bar. Now the floating bar shows only while the window is closed or minimized, and a call an agent starts brings the window forward on the desktop you are on, without taking the keyboard from the app you are typing in. Whether a real Mac brings the window to the current Space this way, minimized or not, is not checked yet: it is an item on the release checklist, and the tests cover only the calls akou makes, not what macOS does with them. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
