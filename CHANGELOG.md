@@ -2,6 +2,15 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.0 — one akou window at a time during a call, and a call an agent starts shows akou where you are
+
+During a recording the floating bar showed even with the akou window open on screen, so two windows said the same thing. And when an agent started a call, nothing came to the front: you only knew it was recording if you looked at the menu bar. Now the floating bar shows only while the window is closed or minimized, and a call an agent starts brings the window forward on the desktop you are on, without taking the keyboard from the app you are typing in. Whether a real Mac brings the window to the current Space this way, minimized or not, is not checked yet: it is an item on the release checklist, and the tests cover only the calls akou makes, not what macOS does with them. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Window
+- **One window at a time during a call** (#481). The floating bar shows only while the akou window is closed or minimized, whether or not the open window has the focus. Minimizing the window brings the bar back; restoring or reopening the window hides it again.
+- **A call an agent starts shows akou where you are** (#481). A start from `akou start`, the MCP `akou_start` tool or `POST /calls` opens the window on that call, above the app you are using, on the current desktop, without moving you to another one and without taking the keyboard. A start from the window, the menu bar's Record or the shortcut leaves the window as it is, and so does `akou start --attach`. Over a meeting app in full screen the window stays on its own desktop. On Windows the window manager may keep the app in front above akou, and on Linux a minimized window stays minimized.
+- New setting `app.showOnAgentStart`, on by default, in Settings > Calls (**Show akou when an agent starts a call**).
+
 ## 1.6.0 — the recording icon is visible on any menu bar, and the tray says what is recording
 
 On macOS the recording icon in the menu bar was a mid-grey mark with a red dot, and on a translucent dark bar the grey all but vanished, so you could not tell a call was recording. The tray menu did not help: it never said which call was recording or for how long, and it had no way to pause or to ask about the call. Now the recording icon has its own shape, the menu names the call and controls it, and the menu bar shows how long the call has run. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
