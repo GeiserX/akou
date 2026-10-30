@@ -8,10 +8,10 @@
  * The engines are fakes that invent on every unit, one per preset's shape: the model set's
  * recognizer (`fast`, and `auto` on a machine with Parakeet only), one engine (`best`, and `auto`
  * where Qwen is on disk), and a fusion list. The noise is generated here. The fake VAD is an energy
- * gate, so it judges quiet room noise only; noise at -30 dBFS goes through the real Silero VAD,
- * which runs where its model is on disk (`AKOU_MODELS_DIR`, else the app's models folder) and is
- * skipped elsewhere. Speech for the real VAD is the generated `fixtures/two-voices.wav`, read
- * from its file, never played.
+ * gate, so it judges quiet room noise only; noise at -30, -40 and -50 dBFS goes through the real
+ * Silero VAD, which runs where its model is on disk (`AKOU_MODELS_DIR`, else the app's models
+ * folder) and is skipped elsewhere. Speech for the real VAD is the generated
+ * `fixtures/two-voices.wav`, read from its file, never played.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -20,6 +20,7 @@ import { join } from "node:path";
 import type { FinalEngine, Hypothesis } from "../src/main/asr/engine.ts";
 import {
   cutLoop,
+  DEFAULT_FINAL,
   type FusionPass,
   JOB_TRIM_PAD_SECONDS,
   type JobLogLevel,
@@ -37,6 +38,7 @@ import {
   RECOGNIZER,
   WHISPER_LARGE_V3,
 } from "../src/main/asr/models.ts";
+import { peak } from "../src/main/asr/pad.ts";
 import { SherpaModels } from "../src/main/asr/sherpa.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { concat, FakeModels, RATE, silence, speak } from "./fixtures/asr-fake.ts";
@@ -251,6 +253,19 @@ describe.skipIf(!HAS_SILERO)(
     test("[T4.37] white and pink noise at -30 dBFS through every preset's pass: empty text, no model asked", async () => {
       for (const noise of [white(10, -30), pink(10, -30)]) {
         for (const shape of SHAPES) expectNoSpeech(await through(shape, noise, "silero"));
+      }
+    });
+
+    test("[T4.37] faint noise at -40 and -50 dBFS, above the peak gate: the VAD alone keeps it from every engine", async () => {
+      // Since sherpa-onnx 2.0 Parakeet's final pass decodes very quiet input (a gentler log floor
+      // in its features), and handed faint noise unguarded it writes whole sentences. These peaks
+      // clear the -50 dBFS gate, so only the VAD stands between the noise and the engines; fainter
+      // noise is stopped by the gate first.
+      for (const dbfs of [-40, -50]) {
+        for (const noise of [white(10, dbfs), pink(10, dbfs)]) {
+          expect(peak(noise)).toBeGreaterThan(10 ** (DEFAULT_FINAL.silenceDbfs / 20));
+          for (const shape of SHAPES) expectNoSpeech(await through(shape, noise, "silero"));
+        }
       }
     });
 
