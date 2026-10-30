@@ -1636,7 +1636,7 @@ jobs:
           path: ${{ env.AKOU_MODELS_DIR }}
           key: akou-models-fast-macos-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
       # The silence guards with the real Silero VAD (TRAPS [T4.37]): the
-      # check jobs have no model and skip these two tests, so here they must run, not skip.
+      # check jobs have no model and skip these three tests, so here they must run, not skip.
       - name: the silence guards on the real VAD
         run: |
           set -euo pipefail
