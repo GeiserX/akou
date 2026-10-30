@@ -32,6 +32,8 @@ import { writeCallWav } from "./fixtures/audio.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 export const LONG = 20_000;
+// DIAG (temporary, remove before merge)
+export const DIAG_MSGS: { type: string; ch?: string; at: number }[] = [];
 /** A `capturingDelayMs` no test outlives: a helper that is still opening whenever it is asked. */
 export const NEVER = 3_600_000;
 
@@ -470,6 +472,7 @@ export function rig(
     const s = inner(o, {
       ...handlers,
       message(m) {
+        DIAG_MSGS.push({ type: m.type, ch: (m as { ch?: string }).ch, at: performance.now() });
         if (m.type === "stopped") t.said ??= performance.now();
         handlers.message(m);
       },
@@ -717,16 +720,35 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const wav = join(dir, "call.wav");
         writeCallWav(wav, 4);
         const r = rig(h, () => ({ wav, callSilent: true }));
+        DIAG_MSGS.length = 0;
+        const turns: number[] = [];
+        const tick = setInterval(() => turns.push(performance.now()), 1);
         const t0 = performance.now();
         const a = await r.mgr.start({ workspace: "work" });
+        const tStart = performance.now();
         expect(a.ok).toBe(true);
         await until(
           () => r.packets.filter((x) => x.p.ch === "mic").length >= 50,
           3_000,
           "a second of mic",
         );
+        clearInterval(tick);
         const mic = r.packets.filter((x) => x.p.ch === "mic");
         const call = r.packets.filter((x) => x.p.ch === "call");
+        {
+          const rel = (x?: number) => (x === undefined ? "-" : Math.round(x - t0));
+          const m0 = mic[0]?.at;
+          const cap = DIAG_MSGS.find((x) => x.type === "capturing")?.at;
+          const fa = DIAG_MSGS.find((x) => x.type === "first_audio")?.at;
+          const hello = DIAG_MSGS.find((x) => x.type === "hello")?.at;
+          const p0 = r.packets[0]?.at;
+          const sameTick = r.packets.filter((x) => m0 !== undefined && x.at - m0 < 2).length;
+          const hold = m0 === undefined ? -1 : longestHold(turns, tStart, m0);
+          const holdStart = longestHold(turns, t0, tStart);
+          console.log(
+            `[T0.16 DIAG] os=${process.platform} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
+          );
+        }
         expect(mic[0]?.p.fileSeconds).toBe(0);
         expect((mic[0]?.at ?? Number.POSITIVE_INFINITY) - t0).toBeLessThan(
           1_000 + (a.ok ? a.startMs : 0),
