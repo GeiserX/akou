@@ -668,21 +668,6 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           s.scrollTo({ top: 0, behavior: "instant" });
         });
         await page.waitForSelector("#jump", { state: "visible" });
-        await page.evaluate(() => {
-          const w = window as unknown as { __log: unknown[] };
-          w.__log = [];
-          for (const type of ["pointermove", "pointerdown", "pointerup", "mousemove", "mousedown", "mouseup", "click"])
-            window.addEventListener(
-              type,
-              (e) => {
-                const m = e as MouseEvent;
-                const j = (document.getElementById("jump") as HTMLElement).getBoundingClientRect();
-                const at = document.elementFromPoint(m.clientX, m.clientY) as HTMLElement | null;
-                w.__log.push([type, Math.round(performance.now()), m.clientX, m.clientY, (m.target as HTMLElement).id || (m.target as HTMLElement).className, at?.id || at?.className || at?.tagName, Math.round(j.x), Math.round(j.y), Math.round(j.width), Math.round(j.height), e.isTrusted, document.body.className]);
-              },
-              true,
-            );
-        });
         const arriving = (async () => {
           for (let i = 201; i <= 215; i++) {
             await rig.write(id, seg(`l7${i}`, long, { w0: Date.now() + i }));
@@ -692,18 +677,79 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await page.click("#jump");
         await arriving;
         await page.waitForSelector('#lines .row[data-id="l7215"]');
-        try {
-          await until(atEdge, 3000, "pinned after Back to live while lines arrive");
-        } catch (e) {
-          const d = await page.evaluate(() => {
-            const s = document.getElementById("scroller") as HTMLElement;
-            const w = window as unknown as { __log: unknown[]; __pin: { pinned: boolean; seen: unknown } };
-            return { top: s.scrollTop, sh: s.scrollHeight, ch: s.clientHeight, pinned: w.__pin.pinned, seen: w.__pin.seen, scrolled: document.body.classList.contains("scrolled"), log: w.__log };
-          });
-          console.log("W41DIAG", JSON.stringify(d), JSON.stringify(await place()));
-          throw e;
-        }
+        await until(atEdge, 3000, "pinned after Back to live while lines arrive");
         expect((await place()).last).toBe("l7215");
+        expect(await page.locator("#jump").isVisible()).toBe(false);
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[DK-W1] A press on Back to live held while the page repaints still goes back to live",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir, 120)] }, async (rig) => {
+        const id = await rig.startCall();
+        const line = (i: number) =>
+          rig.write(
+            id,
+            seg(`l8${String(i).padStart(5, "0")}`, `line ${i} of the call`, { w0: Date.now() + i }),
+          );
+        for (let i = 1; i <= 40; i++) await line(i);
+        const page = await rig.open(id, {
+          before: (p) => p.setViewportSize({ width: 1024, height: 700 }),
+        });
+        await page.waitForSelector('#lines .row[data-id="l800040"]');
+        // Scroll up once the opening view stopped moving, or a late resize puts it back down.
+        const bottom = () =>
+          page.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            return `${s.scrollTop} ${s.scrollHeight} ${s.scrollHeight - s.scrollTop - s.clientHeight < 2}`;
+          });
+        await until(
+          async () => {
+            const a = await bottom();
+            await Bun.sleep(250);
+            return a === (await bottom()) && a.endsWith("true");
+          },
+          3000,
+          "the opening view at the bottom",
+        );
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.style.scrollBehavior = "auto";
+          s.scrollTop = 0;
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        const box = await page.locator("#jump").boundingBox();
+        if (!box) throw new Error("no box for #jump");
+        const words = () =>
+          page.evaluate(() => {
+            const w = window as unknown as { words?: Node | null };
+            const now = (document.getElementById("jump") as HTMLElement).firstChild;
+            const same = w.words === undefined || w.words === now;
+            w.words = now;
+            return same;
+          });
+        await words();
+        // A person's press lasts about a tenth of a second; held across a new line and the page's
+        // one-second clock, both of which repaint the header and its controls.
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await line(41);
+        await page.waitForSelector('#lines .row[data-id="l800041"]');
+        await Bun.sleep(1100);
+        // The rule itself, in every engine: a repaint that says the same keeps the same text node.
+        expect(await words()).toBe(true);
+        await page.mouse.up();
+        // What WebKit does when the rule breaks: the release on a new text node is no click.
+        await until(
+          () => page.evaluate(() => !document.body.classList.contains("scrolled")),
+          3000,
+          "back to live after the held press",
+        );
         expect(await page.locator("#jump").isVisible()).toBe(false);
       });
       t.cleanup();

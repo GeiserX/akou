@@ -24,6 +24,7 @@ import {
   closable,
   closeX,
   h,
+  label,
   openModal,
   quietScrollbar,
   replace,
@@ -794,8 +795,8 @@ class App {
     this.callPicker.follow(this.starting || mine || other);
     const body = document.body;
     body.classList.toggle("busy", mine || other);
-    byId("jump").textContent = jumpText(mine);
-    byId("stop-label").textContent = other && !mine ? "Stop the other call" : "Stop";
+    label(byId("jump"), jumpText(mine));
+    label(byId("stop-label"), other && !mine ? "Stop the other call" : "Stop");
     // Record waits for the speech models with its reason, so the page never sends a start that
     // the app refuses with 503 models_missing.
     const blocked = recordBlocked(this.status?.models);
@@ -817,14 +818,14 @@ class App {
     // Quiet icon buttons: the label is their name for a screen reader and their tooltip.
     const muteLabel = v?.muted ? "Unmute mic" : "Mute mic";
     const mute = byId<HTMLButtonElement>("mute");
-    byId("mute-label").textContent = muteLabel;
+    label(byId("mute-label"), muteLabel);
     mute.title = muteLabel;
     mute.classList.toggle("on", !!v?.muted);
     mute.setAttribute("aria-pressed", String(!!v?.muted));
     mute.disabled = !mine;
     const paused = v?.state === "paused";
     const pause = byId<HTMLButtonElement>("pause");
-    byId("pause-label").textContent = paused ? "Resume" : "Pause";
+    label(byId("pause-label"), paused ? "Resume" : "Pause");
     pause.title = paused ? "Resume" : "Pause";
     pause.classList.toggle("on", paused);
     pause.disabled = !mine;
@@ -848,7 +849,7 @@ class App {
     const act = byId<HTMLButtonElement>("banner-action");
     act.hidden = !b?.action;
     act.dataset.action = b?.action ?? "";
-    act.textContent = b?.action === "open-settings" ? "Open System Settings" : "↻ Restart";
+    label(act, b?.action === "open-settings" ? "Open System Settings" : "↻ Restart");
   }
 
   private drawFinal(v: CallView | null): void {
