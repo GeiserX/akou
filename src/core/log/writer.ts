@@ -395,7 +395,12 @@ export class LogWriter {
       w.stats.syncs++;
       return { writer: w, event };
     } catch (err) {
-      w.close();
+      // A failed fsync is not tried again on the event loop by `close`, and a failed close never
+      // hides why the start failed.
+      w.dirty = false;
+      try {
+        w.close();
+      } catch {}
       throw err;
     }
   }
