@@ -1,7 +1,8 @@
 name: diag-start
 # Temporary (issue #491): which part of a call start's folder stage is slow on a fresh Windows runner.
 on:
-  pull_request:
+  push:
+    branches: [fix/start-blocks-loop]
 permissions:
   contents: read
 jobs:
