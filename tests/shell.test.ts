@@ -47,6 +47,7 @@ import {
 import { appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
+import { fakeMachoDylib, machoLinkedLibs } from "./macho-helpers.ts";
 import { fakeUi } from "./shell-helpers.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -873,12 +874,30 @@ describe("the ElectroBun build", () => {
         `${nm}/sherpa-onnx-darwin-arm64/${lib}`,
       );
     }
-    // The two names are the ones the addon links, when the package is here to ask.
+    // The two names are the ones the addon links, read from its load commands. The install puts the
+    // package on every darwin-arm64 machine, so there a missing file fails instead of skipping.
     const node = join(ROOT, "node_modules", "sherpa-onnx-darwin-arm64", "sherpa-onnx.node");
-    if (process.platform === "darwin" && existsSync(node)) {
-      const linked = spawnSync("otool", ["-L", node]).stdout.toString();
+    if (`${process.platform}-${process.arch}` === "darwin-arm64") expect(existsSync(node)).toBe(true);
+    if (existsSync(node)) {
+      const linked = machoLinkedLibs(readFileSync(node));
       for (const lib of SHERPA_LIBS.darwin ?? []) expect(linked).toContain(`@rpath/${lib}`);
     }
+  });
+
+  test("[spike] Native libraries missing from the bundle: the linked names come from the file's load commands, with no otool to outlive the test", () => {
+    const libs = (SHERPA_LIBS.darwin ?? []).map((lib) => `@rpath/${lib}`);
+    const full = fakeMachoDylib("@rpath/sherpa-onnx.node", [...libs, "/usr/lib/libSystem.B.dylib"]);
+    // The file's own id is not a library it links.
+    expect(machoLinkedLibs(full)).toEqual([...libs, "/usr/lib/libSystem.B.dylib"]);
+    // Positive control: an addon that dropped one of its libraries is caught.
+    const short = machoLinkedLibs(fakeMachoDylib("@rpath/sherpa-onnx.node", [libs[0] as string]));
+    expect(short).not.toContain(libs[1]);
+    // A file that is not a Mach-O throws, so it can never read as "links nothing" (the empty
+    // output a killed otool gave).
+    expect(() => machoLinkedLibs(new TextEncoder().encode("#!/bin/sh\necho this is a shell script, not an addon\n"))).toThrow(
+      /not a thin Mach-O/,
+    );
+    expect(() => machoLinkedLibs(full.subarray(0, 40))).toThrow(/load command/);
   });
 
   test("[spike] Native libraries missing from the bundle: transcribe-cpp, koffi and both platform packages are in build.copy beside the main process", () => {
