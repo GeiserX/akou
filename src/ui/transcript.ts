@@ -98,7 +98,9 @@ export function fillRow(
       : `${l.speaker}: rename, merge or unmerge`,
   );
   const text = body.querySelector(".text") as HTMLElement;
-  text.textContent = l.text;
+  // Only a text that changed is set: setting the same one replaces its node, and a word the user
+  // is selecting (a double-click, a drag) goes with it (TRAPS "A redraw that drops the selection").
+  if (text.textContent !== l.text) text.textContent = l.text;
   if (l.heard !== undefined) {
     text.title = `heard: "${l.heard}"`;
     text.classList.add("corrected");

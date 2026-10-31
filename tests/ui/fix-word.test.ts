@@ -406,6 +406,106 @@ describe("a word a fix learned", () => {
     UI_TIMEOUT,
   );
 
+  /**
+   * Counts the stream's `read` messages as they reach the page: the app's rendering of the lines
+   * its vocabulary corrects, sent on the stream's own tick, so it lands whenever it lands.
+   */
+  async function countReads(page: Page) {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __reads: number };
+      w.__reads = 0;
+      const real = window.fetch.bind(window);
+      const follow = async (...args: Parameters<typeof fetch>) => {
+        const r = await real(...args);
+        const url = String(args[0] instanceof Request ? args[0].url : args[0]);
+        if (!/\/calls\/[^/]+\/stream/.test(url) || !r.body) return r;
+        const text = new TextDecoder();
+        const body = r.body.pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, ctl) {
+              ctl.enqueue(chunk);
+              w.__reads += text.decode(chunk, { stream: true }).split("event: read\n").length - 1;
+            },
+          }),
+        );
+        return new Response(body, { status: r.status, headers: r.headers });
+      };
+      window.fetch = Object.assign(follow, { preconnect: window.fetch.preconnect });
+    });
+  }
+  const reads = (page: Page) =>
+    page.evaluate(() => (window as unknown as { __reads: number }).__reads);
+
+  /**
+   * Double-clicks a word with the second press held until `during` is done, then lets go: what a
+   * person does while the stream redraws the line under the pointer.
+   */
+  async function slowDoubleClick(page: Page, line: string, word: string, during: () => unknown) {
+    const w = await wordAt(page, line, word);
+    await page.mouse.move(w.x, w.y);
+    await page.mouse.down({ clickCount: 1 });
+    await page.mouse.up({ clickCount: 1 });
+    await page.mouse.down({ clickCount: 2 });
+    await during();
+    await page.mouse.up({ clickCount: 2 });
+  }
+
+  test(
+    "[W4.9] a line the stream redraws mid double-click keeps the word, and the fix still opens",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, saved).id) }, async (rig) => {
+        const page = await rig.open(id, { before: countReads });
+        await page.waitForSelector(row("l000003"));
+        const opened = await reads(page);
+        await learnVercel(page);
+        // The fix's own `read` came; the next one comes from a word added while the press is held.
+        await until(async () => (await reads(page)) > opened, 5000, "the fix's read");
+        const before = await reads(page);
+        const node = await page.evaluateHandle(
+          (sel) => (document.querySelector(`${sel} .text`) as HTMLElement).firstChild,
+          row("l000002"),
+        );
+        await slowDoubleClick(page, "l000002", "Vercel", async () => {
+          const r = await rig.api("POST", "/vocab", { term: "Kubernetes", workspace: "work" });
+          expect(r.status).toBe(201);
+          await until(async () => (await reads(page)) > before, 5000, "a read during the press");
+        });
+        // Redrawn with the same text: the very text node the press selected in is still there.
+        expect(
+          await page.evaluate(
+            ([sel, n]) => (document.querySelector(`${sel} .text`) as HTMLElement).firstChild === n,
+            [row("l000002"), node] as const,
+          ),
+        ).toBe(true);
+        await page.waitForSelector("#popover .fix-learned");
+        expect(await selection(page)).toBe("Vercel");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W4.9] positive control: a text node replaced mid double-click, as the redraw did, opens nothing",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, saved).id) }, async (rig) => {
+        const page = await rig.open(id);
+        await page.waitForSelector(row("l000003"));
+        await learnVercel(page);
+        await slowDoubleClick(page, "l000002", "Vercel", () =>
+          page.evaluate((sel) => {
+            const el = document.querySelector(`${sel} .text`) as HTMLElement;
+            el.textContent = String(el.textContent);
+          }, row("l000002")),
+        );
+        await page.waitForTimeout(300);
+        expect(await popoverOpen(page)).toBe(false);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
   test(
     "Forget says so when the vocabulary file could not be changed",
     async () => {
