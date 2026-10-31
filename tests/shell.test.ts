@@ -877,7 +877,8 @@ describe("the ElectroBun build", () => {
     // The two names are the ones the addon links, read from its load commands. The install puts the
     // package on every darwin-arm64 machine, so there a missing file fails instead of skipping.
     const node = join(ROOT, "node_modules", "sherpa-onnx-darwin-arm64", "sherpa-onnx.node");
-    if (`${process.platform}-${process.arch}` === "darwin-arm64") expect(existsSync(node)).toBe(true);
+    if (`${process.platform}-${process.arch}` === "darwin-arm64")
+      expect(existsSync(node)).toBe(true);
     if (existsSync(node)) {
       const linked = machoLinkedLibs(readFileSync(node));
       for (const lib of SHERPA_LIBS.darwin ?? []) expect(linked).toContain(`@rpath/${lib}`);
@@ -894,9 +895,11 @@ describe("the ElectroBun build", () => {
     expect(short).not.toContain(libs[1]);
     // A file that is not a Mach-O throws, so it can never read as "links nothing" (the empty
     // output a killed otool gave).
-    expect(() => machoLinkedLibs(new TextEncoder().encode("#!/bin/sh\necho this is a shell script, not an addon\n"))).toThrow(
-      /not a thin Mach-O/,
-    );
+    expect(() =>
+      machoLinkedLibs(
+        new TextEncoder().encode("#!/bin/sh\necho this is a shell script, not an addon\n"),
+      ),
+    ).toThrow(/not a thin Mach-O/);
     expect(() => machoLinkedLibs(full.subarray(0, 40))).toThrow(/load command/);
   });
 

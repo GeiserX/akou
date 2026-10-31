@@ -32,7 +32,8 @@ export function machoLinkedLibs(file: Uint8Array): string[] {
     if (at + 8 > file.byteLength) throw new Error(`load command ${i} runs past the file`);
     const cmd = view.getUint32(at, true);
     const size = view.getUint32(at + 4, true);
-    if (size < 8 || at + size > file.byteLength) throw new Error(`load command ${i}: bad size ${size}`);
+    if (size < 8 || at + size > file.byteLength)
+      throw new Error(`load command ${i}: bad size ${size}`);
     if (LOAD_DYLIB_CMDS.has(cmd)) {
       const start = at + view.getUint32(at + 8, true);
       let end = start;
