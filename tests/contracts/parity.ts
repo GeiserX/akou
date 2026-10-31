@@ -360,7 +360,10 @@ export const PARITY: readonly Row[] = [
     cli: { none: "missing: CLI-26 adds calls delete and calls restore" },
     api: ["DELETE /calls/:id", "POST /calls/:id/restore"],
     mcp: { none: "missing: PG-M4 names move, delete and restore (CLI.md doors table)" },
-    window: { none: "missing: W13.3 adds Delete and the Trash" },
+    window: [
+      app('"DELETE", `/calls/#{encodeURIComponent(id)}`'),
+      app('"POST", `/calls/#{encodeURIComponent(id)}/restore`'),
+    ],
     note: "Moving a call to another workspace is `PATCH /calls/:id {workspace}`, the rename row's route.",
   },
   {
