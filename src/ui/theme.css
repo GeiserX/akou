@@ -2070,6 +2070,12 @@ main {
 .row:focus-within .tools {
   clip-path: none;
 }
+/* A drag across lines never highlights the buttons; the copy leaves them out too (onCopy). */
+.row .tools,
+.row .tools * {
+  -webkit-user-select: none;
+  user-select: none;
+}
 .row .tools button {
   font-size: 11px;
   padding: 2px 8px;
