@@ -320,8 +320,9 @@ jobs:
       # [DC-N5 smoke] A cold stream can take more than a second to deliver its first sample here,
       # and a session that has no sample yet ends with nothing said when `stop` comes, by design
       # (DC-N4's readiness gate). So `stop` waits for `session.started`, up to 10 s. The control:
-      # the simulate build's mic 1.5 s slow to deliver; a stop right after the tap must start no
-      # session, and the same tap with the wait must start one.
+      # the simulate build's mic 1.5 s slow to deliver; a stop after the key-up but before the
+      # first sample must start no session, and the same tap with the wait must start one. The same
+      # early stop with no mic delay must start one, so the early stop really comes after the key-up.
       - name: the real key tap swallows the dictation key and passes the rest (macOS)
         if: runner.os == 'macOS'
         working-directory: native/akou-capture
@@ -370,18 +371,25 @@ jobs:
           python3 -c "import wave; w = wave.open('quiet.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(128000)); w.close()"
           printf '100 down RightCommand\n150 up RightCommand\n' > tap.txt
           slow_mic() {
+            delay=${2:-1500}
             rm -f sim.in && mkfifo sim.in
             "target/release/akou-capture" dictate --hotkey RightCommand --warm off --from-wav quiet.wav \
-              --keys tap.txt --speed 1 --mic-open-delay 1500 < sim.in > /dev/null 2> "sim-$1.err" &
+              --keys tap.txt --speed 1 --mic-open-delay "$delay" < sim.in > /dev/null 2> "sim-$1.err" &
             sim=$!
             exec 6> sim.in
             # The tap must have opened the stream, or the stop below tests nothing.
             seen '"type":"mic","open":true' "sim-$1.err" || { cat "sim-$1.err"; echo "the simulated tap never opened the mic"; exit 1; }
-            if [ "$1" = wait ]; then started "sim-$1.err" || true; fi
+            # `now` stops after the key-up at 150 ms (the session starts on key-up, so an earlier
+            # stop tests nothing) and well before the first sample at about 1.6 s.
+            if [ "$1" = wait ]; then started "sim-$1.err" || true; else sleep 0.3; fi
             echo '{"type":"stop"}' >&6
             exec 6>&-
             wait "$sim"
           }
+          # With no slow mic, the same early stop must start a session, or the stop beat the key-up
+          # and the check after it proves nothing.
+          slow_mic now 0
+          grep -q '"type":"session.started"' sim-now.err || { cat sim-now.err; echo "the early stop came before the tap's key-up"; exit 1; }
           slow_mic now
           if grep -q '"type":"session.started"' sim-now.err; then cat sim-now.err; echo "a stop before the first sample started a session; the wait below proves nothing"; exit 1; fi
           slow_mic wait
