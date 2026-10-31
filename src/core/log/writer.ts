@@ -18,8 +18,10 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  fsync,
   fsyncSync,
   linkSync,
+  open,
   openSync,
   readFileSync,
   renameSync,
@@ -30,6 +32,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { link, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type EventDraft, LIFECYCLE_TYPES, type LogEvent, validateDraft } from "./events.ts";
 import { parseLog, type TornTail } from "./reader.ts";
@@ -162,6 +165,21 @@ function tryCreateLock(lockPath: string, pid: number, id: string): boolean {
   }
 }
 
+/** `tryCreateLock` off the event loop. */
+async function tryCreateLockAsync(lockPath: string, pid: number, id: string): Promise<boolean> {
+  const tmp = `${lockPath}.${pid}.${Math.random().toString(36).slice(2)}`;
+  await writeFile(tmp, `${pid} ${id}\n`);
+  try {
+    await link(tmp, lockPath);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    await unlink(tmp);
+  }
+}
+
 export interface LockOptions {
   /** This process's id (`INSTANCE_ID`). */
   id?: string;
@@ -284,7 +302,7 @@ export class LogWriter {
   /** Counters for tests and diagnostics. */
   readonly stats = { writes: 0, syncs: 0 };
 
-  private constructor(dir: string, opts: WriterOptions) {
+  private constructor(dir: string, opts: WriterOptions, fresh?: number) {
     this.path = join(dir, EVENTS_FILE);
     this.lockPath = join(dir, LOCK_FILE);
     this.now = opts.now ?? Date.now;
@@ -293,6 +311,14 @@ export class LogWriter {
     this.pid = opts.pid ?? process.pid;
 
     this.lockId = opts.lockId ?? INSTANCE_ID;
+    if (fresh !== undefined) {
+      // `create` took the lock and made the empty log.
+      this.stopHeartbeat = lockHeartbeat(this.lockPath, this.pid, this.lockId);
+      this.seq = 0;
+      this.fd = fresh;
+      this.report = { truncated: null, invalidLines: 0, seqErrors: [], staleLockPid: null };
+      return;
+    }
     const staleLockPid = acquireLock(this.lockPath, this.pid, opts.isAlive ?? processAlive, {
       id: this.lockId,
       serverMode: opts.serverMode,
@@ -330,6 +356,55 @@ export class LogWriter {
     return new LogWriter(dir, opts);
   }
 
+  /**
+   * A new log in a call folder that was just created, with its first event, `call.created`, written
+   * and synced. The same lock, file and sync as `open` and `append`, but every disk wait runs off
+   * the event loop: on a busy disk the lock, the open and above all the fsync of `call.created`
+   * each took up to a second, and the app answered nothing meanwhile (docs/TRAPS.md #491). The
+   * folder is new, so a lock or a log already there means another writer: refused.
+   */
+  static async create(
+    dir: string,
+    created: Extract<EventDraft, { type: "call.created" }>,
+    opts: WriterOptions = {},
+  ): Promise<{ writer: LogWriter; event: LogEvent }> {
+    const lockPath = join(dir, LOCK_FILE);
+    const pid = opts.pid ?? process.pid;
+    const id = opts.lockId ?? INSTANCE_ID;
+    if (!(await tryCreateLockAsync(lockPath, pid, id))) {
+      throw new LockError(lockPath, readLockPid(lockPath) ?? -1);
+    }
+    let fd: number;
+    try {
+      // A plain fd, as `openSync` gives: the writer closes it itself.
+      fd = await new Promise<number>((resolve, reject) =>
+        open(join(dir, EVENTS_FILE), "ax", (err, n) => (err ? reject(err) : resolve(n))),
+      );
+    } catch (err) {
+      const held = readLock(lockPath);
+      if (held?.pid === pid && held.id === id) unlinkSync(lockPath);
+      throw err;
+    }
+    const w = new LogWriter(dir, opts, fd);
+    try {
+      const event = w.write(created);
+      await new Promise<void>((resolve, reject) =>
+        fsync(fd, (err) => (err ? reject(err) : resolve())),
+      );
+      w.dirty = false;
+      w.stats.syncs++;
+      return { writer: w, event };
+    } catch (err) {
+      // A failed fsync is not tried again on the event loop by `close`, and a failed close never
+      // hides why the start failed.
+      w.dirty = false;
+      try {
+        w.close();
+      } catch {}
+      throw err;
+    }
+  }
+
   /** The highest `seq` in the log. 0 for an empty log. */
   get lastSeq(): number {
     return this.seq;
@@ -340,6 +415,20 @@ export class LogWriter {
    * log must be `call.created`, and only the first.
    */
   append(draft: EventDraft): LogEvent {
+    const event = this.write(draft);
+    if (LIFECYCLE_TYPES.has(event.type)) {
+      this.sync();
+    } else if (this.timer === null) {
+      this.timer = this.timers.set(() => {
+        this.timer = null;
+        this.sync();
+      }, this.syncIntervalMs);
+    }
+    return event;
+  }
+
+  /** `append` without its sync. */
+  private write(draft: EventDraft): LogEvent {
     if (this.closed) throw new LogWriteError("log writer is closed");
     const v = validateDraft(draft);
     if (!v.ok) throw new LogWriteError(`refused event: ${v.error}`);
@@ -362,14 +451,6 @@ export class LogWriter {
     this.seq = event.seq;
     this.stats.writes++;
     this.dirty = true;
-    if (LIFECYCLE_TYPES.has(event.type)) {
-      this.sync();
-    } else if (this.timer === null) {
-      this.timer = this.timers.set(() => {
-        this.timer = null;
-        this.sync();
-      }, this.syncIntervalMs);
-    }
     return event;
   }
 

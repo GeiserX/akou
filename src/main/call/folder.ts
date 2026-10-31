@@ -8,6 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { formatLocalDate, formatWall } from "../../core/log/clock.ts";
 
@@ -81,6 +82,35 @@ export function createCallFolder(
     }
     mkdirSync(join(dir, "audio"));
     mkdirSync(join(dir, "logs"));
+    return dir;
+  }
+  throw new Error(`could not create a unique folder for ${base}`);
+}
+
+/**
+ * `createCallFolder` off the event loop, for a call's start: on a slow disk a `mkdir` waits up to
+ * half a second (docs/TRAPS.md #491), and the app must keep answering meanwhile.
+ */
+export async function createCallFolderAsync(
+  root: string,
+  workspace: string,
+  startWall: number,
+  tz: string,
+  title: string,
+): Promise<string> {
+  const parent = join(root, workspace);
+  await mkdir(parent, { recursive: true });
+  const base = folderName(startWall, tz, title);
+  for (let n = 1; n < 1000; n++) {
+    const dir = join(parent, n === 1 ? base : `${base}-${n}`);
+    try {
+      await mkdir(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw err;
+    }
+    await mkdir(join(dir, "audio"));
+    await mkdir(join(dir, "logs"));
     return dir;
   }
   throw new Error(`could not create a unique folder for ${base}`);
