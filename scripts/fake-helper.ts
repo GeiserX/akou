@@ -15,6 +15,8 @@
  *   --exit-before-capturing N  exit with code N before `capturing` (77 = permission)
  *   --call-silent              the call side is silent from the start: zero-filled call packets,
  *                              output device not running
+ *   --mic-held-until S         mic packets are held until S seconds, then all sent at once: a mic
+ *                              that waits (the positive control of T0.16's time check)
  *   --call-omit                call packets are never sent at all (a helper without an aligner)
  *   --call-dead-at S           the call tap stops delivering at S seconds while output keeps
  *                              running (zero-filled packets); the dead-call monitor rebuilds it
@@ -361,6 +363,8 @@ async function runAkou(): Promise<void> {
 
   const callSilent = flag("--call-silent");
   const callOmit = flag("--call-omit");
+  const micHeldUntil = num("--mic-held-until");
+  const heldMic: Packet[] = [];
   const deadAt = num("--call-dead-at");
   const zerosAt = num("--call-zeros-at");
   const crashAt = num("--crash-at");
@@ -403,13 +407,15 @@ async function runAkou(): Promise<void> {
     const captureNs = anchor + BigInt(Math.round(t * 1e9)) + hostOffset;
     const packets: Packet[] = [];
     if (micMode !== "none") {
-      packets.push({
+      const p: Packet = {
         ch: "mic",
         zeroFilled: false,
         captureNs,
         fileSeconds: t,
         samples: slice(src.mic, frame, frames),
-      });
+      };
+      if (micHeldUntil !== undefined && t < micHeldUntil) heldMic.push(p);
+      else packets.push(...heldMic.splice(0), p);
     }
     const dead = deadAt !== undefined && t >= deadAt && !callHealed;
     const zeros = zerosAt !== undefined && t >= zerosAt && !callHealed;

@@ -40,8 +40,9 @@ jobs:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
           AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
         run: |
-          for i in 1 2; do
+          for i in 1 2 3; do
             bun test --reporter=junit --reporter-outfile=.junit-$i.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts tests/asr-opus-final.e2e.test.ts tests/dictation-audio-opus.e2e.test.ts > diag-$i.log 2>&1 || true
+            grep -h "T0.16" diag-$i.log | grep -c "(pass)" | sed "s/^/T0.16 passes: /"
             echo "round $i: $(grep -c '(fail)' diag-$i.log) fail lines"
-            grep -E "DIAG|\(fail\)|Expected:|Received:" diag-$i.log || true
+            grep -E "\(fail\)|Expected:|Received:" diag-$i.log || true
           done

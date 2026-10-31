@@ -32,8 +32,6 @@ import { writeCallWav } from "./fixtures/audio.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 export const LONG = 20_000;
-// DIAG (temporary, remove before merge)
-export const DIAG_MSGS: { type: string; ch?: string; at: number }[] = [];
 /** A `capturingDelayMs` no test outlives: a helper that is still opening whenever it is asked. */
 export const NEVER = 3_600_000;
 
@@ -277,6 +275,8 @@ export interface Faults {
   capturingDelayMs?: number;
   exitBeforeCapturing?: number;
   callSilent?: boolean;
+  /** The fake helper holds the mic's packets until this time, then sends them all: the mic waits. */
+  micHeldUntil?: number;
   callOmit?: boolean;
   /** The call side stops delivering buffers at this time, output still running. */
   callDeadAt?: number;
@@ -313,6 +313,7 @@ export const fakeHelper: HelperUnderTest = {
     if (f.exitBeforeCapturing !== undefined)
       a.push("--exit-before-capturing", String(f.exitBeforeCapturing));
     if (f.callSilent) a.push("--call-silent");
+    if (f.micHeldUntil !== undefined) a.push("--mic-held-until", String(f.micHeldUntil));
     if (f.callOmit) a.push("--call-omit");
     if (f.callDeadAt !== undefined) a.push("--call-dead-at", String(f.callDeadAt));
     if (f.callZerosAt !== undefined) a.push("--call-zeros-at", String(f.callZerosAt));
@@ -379,6 +380,8 @@ export interface Rig {
   mgr: CallManager;
   events: LogEvent[];
   packets: { part: number; p: Packet; at: number }[];
+  /** When each session said `capturing` (`performance.now()`), in the same order as `sessions`. */
+  capturing: number[];
   pids: number[];
   /** Every helper session the engine started, in order. */
   sessions: CaptureSession[];
@@ -395,6 +398,8 @@ export interface RigOptions {
   drop?: (ms: number, before: Step | undefined) => boolean;
   /** Runs on every new session, after the rig has wrapped it, before the app sees it. */
   session?: (s: CaptureSession) => void;
+  /** Runs when a start has made its call's folder and log, before it spawns (`onOpen`). */
+  open?: () => void;
 }
 
 /**
@@ -443,6 +448,29 @@ export function longestHold(turns: readonly number[], from: number, to: number):
   return Math.max(most, to - last);
 }
 
+/**
+ * [T0.16]'s rule on time: the mic's first packet reaches the app within the first second after
+ * the helper said `capturing`, the moment its timeline starts. It counts from `capturing`, not
+ * from the start request: the call's folder, lock and `call.created` are written before the
+ * spawn, then the spawn and the helper's open. A Windows runner whose disk stalled spent 1.5 s on
+ * those, 1 s of it before the start's own clock (`startMs`) began, which says nothing about the
+ * mic. Measured from `capturing`, the first mic packet came 25 to 115 ms later, the most on that
+ * stalled runner.
+ */
+export function firstMicLateBroken(
+  capturingAt: number | undefined,
+  packets: Rig["packets"],
+  budget = 1_000,
+): string[] {
+  if (capturingAt === undefined) return ["the helper never said capturing"];
+  const mic = packets.find((x) => x.p.ch === "mic");
+  if (!mic) return ["no mic packet arrived"];
+  const late = mic.at - capturingAt;
+  return late < budget
+    ? []
+    : [`the first mic packet came ${Math.round(late)} ms after capturing (budget ${budget} ms)`];
+}
+
 /** A call manager whose engine spawns `h` (or `command`, for a helper that is not one of them). */
 export function rig(
   h: HelperUnderTest,
@@ -454,6 +482,7 @@ export function rig(
   const { dir: root, cleanup } = tempDir();
   const events: LogEvent[] = [];
   const packets: Rig["packets"] = [];
+  const capturing: number[] = [];
   const pids: number[] = [];
   const sessions: CaptureSession[] = [];
   const stops: StopTimes[] = [];
@@ -472,7 +501,7 @@ export function rig(
     const s = inner(o, {
       ...handlers,
       message(m) {
-        DIAG_MSGS.push({ type: m.type, ch: (m as { ch?: string }).ch, at: performance.now() });
+        if (m.type === "capturing") capturing.push(performance.now());
         if (m.type === "stopped") t.said ??= performance.now();
         handlers.message(m);
       },
@@ -509,6 +538,7 @@ export function rig(
     ingest: { queueSeconds: 10 },
     onEvent: (_, e) => events.push(e),
     onPacket: (_, part, p) => packets.push({ part, p, at: performance.now() }),
+    onOpen: () => opts.open?.(),
   });
   cleanups.push(async () => {
     await mgr.quit();
@@ -524,7 +554,7 @@ export function rig(
     steps.push({ step: "started", ok: res.ok, status: res.ok ? 201 : res.status });
     return res;
   };
-  return { root, mgr, events, packets, pids, sessions, stops, steps, start };
+  return { root, mgr, events, packets, capturing, pids, sessions, stops, steps, start };
 }
 
 const has = (events: LogEvent[], f: (e: LogEvent) => boolean) => () => events.some(f);
@@ -720,13 +750,7 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const wav = join(dir, "call.wav");
         writeCallWav(wav, 4);
         const r = rig(h, () => ({ wav, callSilent: true }));
-        DIAG_MSGS.length = 0;
-        const turns: number[] = [];
-        const tick = setInterval(() => turns.push(performance.now()), 1);
-        const cpu0 = process.cpuUsage();
-        const t0 = performance.now();
         const a = await r.mgr.start({ workspace: "work" });
-        const tStart = performance.now();
         expect(a.ok).toBe(true);
         await until(
           () => r.packets.filter((x) => x.p.ch === "mic").length >= 50,
@@ -735,46 +759,8 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         );
         const mic = r.packets.filter((x) => x.p.ch === "mic");
         const call = r.packets.filter((x) => x.p.ch === "call");
-        {
-          const rel = (x?: number) => (x === undefined ? "-" : Math.round(x - t0));
-          const m0 = mic[0]?.at;
-          const cap = DIAG_MSGS.find((x) => x.type === "capturing")?.at;
-          const fa = DIAG_MSGS.find((x) => x.type === "first_audio")?.at;
-          const hello = DIAG_MSGS.find((x) => x.type === "hello")?.at;
-          const p0 = r.packets[0]?.at;
-          const sameTick = r.packets.filter((x) => m0 !== undefined && x.at - m0 < 2).length;
-          const hold = m0 === undefined ? -1 : longestHold(turns, tStart, m0);
-          const holdStart = longestHold(turns, t0, tStart);
-          const tEnd = performance.now();
-          const holdAll = longestHold(turns, t0, tEnd);
-          let gap = 0;
-          let gapAt = 0;
-          for (let i = 1; i < r.packets.length; i++) {
-            const d = (r.packets[i]?.at ?? 0) - (r.packets[i - 1]?.at ?? 0);
-            if (d > gap) {
-              gap = d;
-              gapAt = (r.packets[i - 1]?.at ?? 0) - t0;
-            }
-          }
-          let tg = 0;
-          let tgAt = 0;
-          for (let i = 1; i < turns.length; i++) {
-            const d = (turns[i] ?? 0) - (turns[i - 1] ?? 0);
-            if (d > tg) {
-              tg = d;
-              tgAt = (turns[i - 1] ?? 0) - t0;
-            }
-          }
-          const cpu = process.cpuUsage(cpu0);
-          clearInterval(tick);
-          console.log(
-            `[T0.16 DIAG] os=${process.platform} abs=${Math.round(t0)} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} loopHoldAll=${Math.round(holdAll)} turnGap=${Math.round(tg)}@${Math.round(tgAt)} packetGap=${Math.round(gap)}@${Math.round(gapAt)} cpuUserMs=${Math.round(cpu.user / 1000)} cpuSysMs=${Math.round(cpu.system / 1000)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
-          );
-        }
         expect(mic[0]?.p.fileSeconds).toBe(0);
-        expect((mic[0]?.at ?? Number.POSITIVE_INFINITY) - t0).toBeLessThan(
-          1_000 + (a.ok ? a.startMs : 0),
-        );
+        expect(firstMicLateBroken(r.capturing[0], r.packets)).toEqual([]);
         expect(mic.some((x) => x.p.samples.some((v) => v !== 0))).toBe(true);
         expect(call.length).toBeGreaterThan(0);
         expect(call.every((x) => x.p.zeroFilled && x.p.samples.every((v) => v === 0))).toBe(true);
