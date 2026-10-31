@@ -13,12 +13,14 @@ import {
   ChildCaptureSession,
   DRAIN_GRACE_MS,
 } from "../src/main/capture/helper.ts";
+import { until } from "./capture-helpers.ts";
 import {
   answeredOnCapturingBroken,
   captureTrapScenarios,
   describeSteps,
   dropDeadlineAfter,
   fakeHelper,
+  firstMicLateBroken,
   holdBound,
   killedAtBudgetBroken,
   LONG,
@@ -121,6 +123,52 @@ describe("[T1.26] the start budget check reads steps, not the clock", () => {
       await r.start({ workspace: "work" });
       await r.sessions[0]?.exited;
       expect(pastBudgetBroken(r.steps, 400)).toEqual(["no 400 ms start budget armed at the spawn"]);
+    },
+    LONG,
+  );
+});
+
+describe("[T0.16] the first mic check counts from capturing, and can fail", () => {
+  const firstMic = async (opts: { micHeldUntil?: number; stallMs?: number }) => {
+    const r = rig(
+      fakeHelper,
+      () => ({ callSilent: true, micHeldUntil: opts.micHeldUntil }),
+      {},
+      undefined,
+      {
+        open: () => {
+          if (opts.stallMs) Bun.sleepSync(opts.stallMs);
+        },
+      },
+    );
+    const t0 = performance.now();
+    const a = await r.mgr.start({ workspace: "work" });
+    if (!a.ok) throw new Error(a.error);
+    await until(() => r.packets.some((x) => x.p.ch === "mic"), 5_000, "the first mic packet");
+    const mic = r.packets.find((x) => x.p.ch === "mic");
+    return { r, a, t0, mic };
+  };
+
+  test(
+    "a runner that stalls 1.5 s writing the call's folder changes nothing: the check counts from capturing",
+    async () => {
+      // Where a Windows runner lost 1 s, before the start's own clock began: the old bound,
+      // `startMs` plus a second from the request, failed here with the mic on time.
+      const { r, a, t0, mic } = await firstMic({ stallMs: 1_500 });
+      expect(a.ok && (mic?.at ?? 0) - t0 >= 1_000 + a.startMs).toBe(true);
+      expect(firstMicLateBroken(r.capturing[0], r.packets)).toEqual([]);
+    },
+    LONG,
+  );
+
+  test(
+    "positive control: a mic held 1.5 s after capturing fails it, though its first packet is still at 0",
+    async () => {
+      const { r, mic } = await firstMic({ micHeldUntil: 1.5 });
+      expect(mic?.p.fileSeconds).toBe(0);
+      expect(firstMicLateBroken(r.capturing[0], r.packets)).toEqual([
+        expect.stringContaining("the first mic packet came"),
+      ]);
     },
     LONG,
   );
