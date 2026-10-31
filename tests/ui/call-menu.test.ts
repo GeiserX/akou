@@ -133,7 +133,7 @@ describe("[W13.3] a call row has akou's own menu, never the webview's", () => {
   );
 
   test(
-    "the rows and headers select no text, the search field and the transcript do",
+    "the rows and headers select no text, the sidebar's text fields and the transcript do",
     async () => {
       await withRig({ seed: seedThree }, async (rig) => {
         const page = await rig.open(A);
@@ -158,6 +158,18 @@ describe("[W13.3] a call row has akou's own menu, never the webview's", () => {
         expect(s.head).toBe("none");
         expect(s.search).not.toBe("none");
         expect(s.line).not.toBe("none");
+        // The sidebar's New workspace name field is text too.
+        await page.click("#workspace-new");
+        await page.waitForSelector("#sidebar .ws-name-input");
+        expect(
+          await page.evaluate(() => {
+            const cs = getComputedStyle(
+              document.querySelector("#sidebar .ws-name-input") as Element,
+            );
+            return cs.userSelect || cs.getPropertyValue("-webkit-user-select");
+          }),
+        ).not.toBe("none");
+        await page.keyboard.press("Escape");
         // Positive control: with the rule taken off a row, the same probe reads it as selectable.
         // (The page's CSP refuses a style tag; a style set from script is allowed.)
         await page.evaluate(() => {

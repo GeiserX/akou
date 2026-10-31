@@ -1683,6 +1683,11 @@ body.inset #ask-row {
   -webkit-user-select: none;
   user-select: none;
 }
+#sidebar input,
+#sidebar textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
 #sidebar .ico {
   width: 16px;
   height: 16px;
@@ -1777,8 +1782,6 @@ body.inset #ask-row {
   height: 14px;
 }
 #calls-search {
-  -webkit-user-select: text;
-  user-select: text;
   flex: 1;
   min-width: 0;
   height: 100%;

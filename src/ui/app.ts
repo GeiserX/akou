@@ -1157,7 +1157,8 @@ class App {
       this.trashed.delete(id);
       toast(message(r?.body, "the call was not moved to the Trash"));
       await this.loadCalls();
-      if (wasOpen) this.openCall(id, true);
+      // Only if the window is still where the trash moved it: a call picked since stays.
+      if (wasOpen && this.callId === next) this.openCall(id, true);
       return;
     }
     toast(`“${call.title || "Untitled call"}” moved to the Trash.`, "info", {
