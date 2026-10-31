@@ -2121,6 +2121,7 @@ main {
   flex: none;
   min-height: 56px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
@@ -2260,9 +2261,15 @@ main {
   font-weight: 400;
   color: var(--faint);
 }
-/* "Questions go to claude-code, which is following this call." under the box. */
+/* "Questions go to claude-code, which is following this call." under the box, on one line: the
+   row wraps, so the line takes a row of its own instead of a narrow column beside the box. */
 .ask-route {
-  margin: 2px 0 0;
+  flex: 1 0 100%;
+  min-width: 0;
+  margin: 4px 0 0 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 11.5px;
   color: var(--faint);
 }
