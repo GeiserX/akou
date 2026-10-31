@@ -68,9 +68,8 @@ function fullPage(seq: number, flags: number, granule: bigint, packets: Uint8Arr
 
 /**
  * A playable Ogg Opus file of `seconds` of stereo silence, as a call's part is on disk. Each
- * 20 ms packet is its table-of-contents byte alone, a frame with no data, which a decoder plays
- * as silence. A browser takes it as the `audio/ogg` the audio route says it serves. No pre-skip by
- * default, so the length a browser reads is `seconds` exactly.
+ * 20 ms packet is the silence frame libopus writes, which every engine akou ships on decodes.
+ * A browser takes it as the `audio/ogg` the audio route says it serves. No pre-skip by default, so the length a browser reads is `seconds` exactly.
  */
 export function silentOpus(seconds: number, preSkip = 0): Uint8Array {
   const head = new Uint8Array(19);
@@ -83,8 +82,13 @@ export function silentOpus(seconds: number, preSkip = 0): Uint8Array {
   const tags = new Uint8Array(16);
   tags.set(new TextEncoder().encode("OpusTags"), 0);
   const pages = [fullPage(0, 2, 0n, [head]), fullPage(1, 0, 0n, [tags])];
-  // CELT-only, fullband, 20 ms, stereo, one frame.
-  const frame = Uint8Array.of((31 << 3) | 0x04);
+  // One 20 ms frame of silence, the three bytes libopus itself writes for digital silence in CELT
+  // mode: TOC config 31 (CELT-only, fullband, 20 ms), one frame, then the CELT silence flag. A
+  // TOC byte alone is a zero-length frame, which the Opus spec reads as a lost packet: Chromium
+  // and Linux WebKit play it as silence, but macOS WebKit's decoder fails the whole file
+  // (MEDIA_ERR_DECODE, duration 0), so a player test waited on audio that never started
+  // (docs/TRAPS.md WK-2).
+  const frame = Uint8Array.of(31 << 3, 0xff, 0xfe);
   const total = Math.round(seconds * 50);
   for (let done = 0, seq = 2; done < total; seq++) {
     const n = Math.min(255, total - done);

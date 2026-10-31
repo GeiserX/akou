@@ -1,0 +1,37 @@
+# Temporary: the player tests in macOS WebKit on a fresh GitHub runner, main's code against this
+# branch's. Deleted before the pull request is final.
+name: tmp-wkplayer
+on:
+  push:
+    branches: [fix/wkplayer-flake]
+permissions:
+  contents: read
+jobs:
+  player:
+    strategy:
+      fail-fast: false
+      matrix:
+        code: [main, branch]
+    name: player in macOS WebKit (${{ matrix.code }})
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      AKOU_UI_BROWSER: webkit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - if: matrix.code == 'main'
+        run: git checkout origin/main -- src tests
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright-core install webkit
+      - run: sw_vers
+      - continue-on-error: true
+        run: bun test --path-ignore-patterns='nothing/**' --timeout 60000 --rerun-each 3 -t 'the player bar|playback and Fix this line' ./tests/ui/transcript-audio.test.ts ./tests/ui/window.test.ts 2>&1 | tee run.log
+      - if: always()
+        run: |
+          grep -E '^ *[0-9]+ (pass|fail)' run.log || true
+          grep '^(fail)' run.log | sed 's/ \[[0-9.]*ms\]//' | sort | uniq -c || true
