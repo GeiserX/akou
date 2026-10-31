@@ -746,7 +746,7 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
           const hold = m0 === undefined ? -1 : longestHold(turns, tStart, m0);
           const holdStart = longestHold(turns, t0, tStart);
           console.log(
-            `[T0.16 DIAG] os=${process.platform} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
+            `[T0.16 DIAG] os=${process.platform} abs=${Math.round(t0)} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
           );
         }
         expect(mic[0]?.p.fileSeconds).toBe(0);
