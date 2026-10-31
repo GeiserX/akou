@@ -508,42 +508,51 @@ async function waitFor(text: () => string, what: string | RegExp, ms: number): P
 describe.skipIf(process.platform === "win32")(
   "[DK-M8] [T3.6] the watchdog's reopen with a launcher left behind (no ps on Windows)",
   () => {
-    test("[DK-M8] the left wrapper has its exited child even when the shell is slow to exec", async () => {
-      const t = tempDir("akou-wd-");
-      const b = fakeBundle(t.dir);
-      // A shell held back before its `exec`, as a loaded runner holds it: the child is long gone.
-      const late = (script: string) =>
-        spawn(
-          "/bin/sh",
-          [
-            "-c",
-            script.replace(/& exec /, "& sleep 0.5; exec "),
-            b.launcher,
-            FAKE_BUNDLE,
-            "stray",
-            "-a",
-            b.bundle,
-            "--pids",
-            b.pids,
-          ],
-          { stdio: "ignore", env: b.env },
-        );
-      const fixed = late(LEFT_WRAPPER_SH);
-      // Positive control: the old script, whose child the shell reaps while it waits.
-      const old = late('true & exec "$0" "$@"');
-      try {
-        const pid = fixed.pid as number;
-        expect(await waitFor(() => String(b.unreaped(pid)), "1", 10_000)).toBe(true);
-        // Once the old shell has become the launcher, its child is not there.
-        const args = () =>
-          spawnSync("ps", ["-o", "args=", "-p", String(old.pid)], { encoding: "utf8" }).stdout;
-        expect(await waitFor(args, b.launcher, 10_000)).toBe(true);
-        expect(b.unreaped(old.pid as number)).toBe(0);
-      } finally {
-        b.cleanup(fixed.pid as number, old.pid as number);
-        t.cleanup();
-      }
-    });
+    test(
+      "[DK-M8] the left wrapper has its exited child even when the shell is slow to exec",
+      async () => {
+        const t = tempDir("akou-wd-");
+        const b = fakeBundle(t.dir);
+        // A shell held back before its `exec`, as a loaded runner holds it: the child is long gone.
+        const late = (script: string) =>
+          spawn(
+            "/bin/sh",
+            [
+              "-c",
+              script.replace(/& exec /, "& sleep 0.5; exec "),
+              b.launcher,
+              FAKE_BUNDLE,
+              "stray",
+              "-a",
+              b.bundle,
+              "--pids",
+              b.pids,
+            ],
+            { stdio: "ignore", env: b.env },
+          );
+        const fixed = late(LEFT_WRAPPER_SH);
+        // Positive control: the old script, whose child the shell reaps while it waits.
+        const old = late('true & exec "$0" "$@"');
+        try {
+          const pid = fixed.pid as number;
+          expect(await waitFor(() => String(b.unreaped(pid)), "1", 10_000)).toBe(true);
+          // Once the old shell has become the launcher, its child is not there. The shell's own
+          // line holds the launcher's path too, as `$0`, so only its start tells them apart.
+          const execed = () =>
+            String(
+              spawnSync("ps", ["-o", "args=", "-p", String(old.pid)], { encoding: "utf8" })
+                .stdout.trim()
+                .startsWith(`${b.launcher} `),
+            );
+          expect(await waitFor(execed, "true", 10_000)).toBe(true);
+          expect(b.unreaped(old.pid as number)).toBe(0);
+        } finally {
+          b.cleanup(fixed.pid as number, old.pid as number);
+          t.cleanup();
+        }
+      },
+      LONG,
+    );
 
     test(
       "a launcher with nothing below it is stopped, the app comes up, and app.log says both",

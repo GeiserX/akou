@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
@@ -318,6 +318,20 @@ describe.skipIf(process.platform === "win32")(
       return { bundle, pid: proc.pid as number };
     }
 
+    /**
+     * Waits until the stray has its exited child, which ends only once the shell has become the
+     * launcher: before that, the app's one look at its start finds no launcher left behind.
+     */
+    async function settled(pid: number) {
+      const until = performance.now() + 10_000;
+      const has = () =>
+        spawnSync("ps", ["-A", "-o", "ppid=,args="], { encoding: "utf8" })
+          .stdout.split("\n")
+          .some((l) => l.trim().startsWith(`${pid} `) && l.includes("<defunct>"));
+      while (!has() && performance.now() < until) await Bun.sleep(50);
+      expect(has()).toBe(true);
+    }
+
     test(
       "the app stops it when it starts, says so in app.log, and leaves another bundle's alone",
       async () => {
@@ -325,6 +339,8 @@ describe.skipIf(process.platform === "win32")(
         const mine = strayOf(t.dir, "akou.app");
         // Not this bundle's, though its path starts the same.
         const other = strayOf(t.dir, "akou.app2");
+        await settled(mine.pid);
+        await settled(other.pid);
         const rig = await appRig({ supervise: true, bundle: mine.bundle });
         try {
           const until = performance.now() + 8000;
@@ -350,6 +366,7 @@ describe.skipIf(process.platform === "win32")(
       async () => {
         const t = tempDir();
         const mine = strayOf(t.dir, "akou.app");
+        await settled(mine.pid);
         const rig = await appRig({ supervise: true, bundle: null });
         try {
           await Bun.sleep(2500);
