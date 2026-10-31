@@ -669,7 +669,19 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         });
         await page.waitForSelector("#jump", { state: "visible" });
         await page.evaluate(() => {
-          (window as unknown as { __log: unknown[] }).__log = [];
+          const w = window as unknown as { __log: unknown[] };
+          w.__log = [];
+          for (const type of ["pointermove", "pointerdown", "pointerup", "mousemove", "mousedown", "mouseup", "click"])
+            window.addEventListener(
+              type,
+              (e) => {
+                const m = e as MouseEvent;
+                const j = (document.getElementById("jump") as HTMLElement).getBoundingClientRect();
+                const at = document.elementFromPoint(m.clientX, m.clientY) as HTMLElement | null;
+                w.__log.push([type, Math.round(performance.now()), m.clientX, m.clientY, (m.target as HTMLElement).id || (m.target as HTMLElement).className, at?.id || at?.className || at?.tagName, Math.round(j.x), Math.round(j.y), Math.round(j.width), Math.round(j.height), e.isTrusted, document.body.className]);
+              },
+              true,
+            );
         });
         const arriving = (async () => {
           for (let i = 201; i <= 215; i++) {
