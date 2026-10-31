@@ -852,18 +852,6 @@ jobs:
             END { printf "<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n<testsuite name=\"cargo test\">\n%s</testsuite>\n</testsuites>\n", n, f, s, cases }
           ' .cargo-test.log > .junit-helper.xml
           bun scripts/ci/test-floor.ts helper .junit-helper.xml
-      # DIAG (temporary, remove before merge): T0.16 timing on every OS.
-      - name: DIAG T0.16 repeat
-        continue-on-error: true
-        env:
-          AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
-          AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
-        run: |
-          for i in $(seq 1 12); do
-            bun test tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts tests/asr-opus-final.e2e.test.ts tests/dictation-audio-opus.e2e.test.ts > diag-$i.log 2>&1 || true
-            echo "round $i: $(grep -c '(fail)' diag-$i.log) fail lines; order: $(grep -oE 'group\]tests.[a-z-]+' diag-$i.log | tr '\n' ' ')"
-            grep -E "DIAG|\(fail\)" diag-$i.log || true
-          done
       # The capture traps, the app's dictation service over `dictate` (DC-T1), DC-N4's words
       # from the WAV to the transcript, and a recorded call's final pass from its Opus part
       # (SV-P10), against the simulate build.

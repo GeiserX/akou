@@ -723,6 +723,7 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         DIAG_MSGS.length = 0;
         const turns: number[] = [];
         const tick = setInterval(() => turns.push(performance.now()), 1);
+        const cpu0 = process.cpuUsage();
         const t0 = performance.now();
         const a = await r.mgr.start({ workspace: "work" });
         const tStart = performance.now();
@@ -732,7 +733,6 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
           3_000,
           "a second of mic",
         );
-        clearInterval(tick);
         const mic = r.packets.filter((x) => x.p.ch === "mic");
         const call = r.packets.filter((x) => x.p.ch === "call");
         {
@@ -745,8 +745,30 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
           const sameTick = r.packets.filter((x) => m0 !== undefined && x.at - m0 < 2).length;
           const hold = m0 === undefined ? -1 : longestHold(turns, tStart, m0);
           const holdStart = longestHold(turns, t0, tStart);
+          const tEnd = performance.now();
+          const holdAll = longestHold(turns, t0, tEnd);
+          let gap = 0;
+          let gapAt = 0;
+          for (let i = 1; i < r.packets.length; i++) {
+            const d = (r.packets[i]?.at ?? 0) - (r.packets[i - 1]?.at ?? 0);
+            if (d > gap) {
+              gap = d;
+              gapAt = (r.packets[i - 1]?.at ?? 0) - t0;
+            }
+          }
+          let tg = 0;
+          let tgAt = 0;
+          for (let i = 1; i < turns.length; i++) {
+            const d = (turns[i] ?? 0) - (turns[i - 1] ?? 0);
+            if (d > tg) {
+              tg = d;
+              tgAt = (turns[i - 1] ?? 0) - t0;
+            }
+          }
+          const cpu = process.cpuUsage(cpu0);
+          clearInterval(tick);
           console.log(
-            `[T0.16 DIAG] os=${process.platform} abs=${Math.round(t0)} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
+            `[T0.16 DIAG] os=${process.platform} abs=${Math.round(t0)} startMs=${a.ok ? a.startMs : "-"} hello=${rel(hello)} capturing=${rel(cap)} startResolved=${rel(tStart)} firstAudioMsg=${rel(fa)} firstPacket=${rel(p0)} firstMic=${rel(m0)} packetsInFirstBatch=${sameTick} loopHoldStartToMic=${Math.round(hold)} loopHoldDuringStart=${Math.round(holdStart)} loopHoldAll=${Math.round(holdAll)} turnGap=${Math.round(tg)}@${Math.round(tgAt)} packetGap=${Math.round(gap)}@${Math.round(gapAt)} cpuUserMs=${Math.round(cpu.user / 1000)} cpuSysMs=${Math.round(cpu.system / 1000)} mic50=${rel(mic[49]?.at)} msgs=${DIAG_MSGS.map((x) => `${x.type}${x.ch ? `:${x.ch}` : ""}@${rel(x.at)}`).join(",")}`,
           );
         }
         expect(mic[0]?.p.fileSeconds).toBe(0);
