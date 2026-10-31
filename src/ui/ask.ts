@@ -194,6 +194,8 @@ export class AskPane {
         : "";
     if (this.route.textContent === text) return;
     this.route.textContent = text;
+    // The line is cut to one line in a narrow pane; the whole sentence stays in its tooltip.
+    this.route.title = text;
     this.route.toggleAttribute("hidden", text === "");
   }
 

@@ -1651,6 +1651,15 @@ describe("[decision] A question typed in the ask box never reaches the agent fol
             5000,
             "the muted line on the live call",
           );
+          // The line sits under the box, as wide as it and one line high, never in a column beside it.
+          const form = await page.locator("#ask-form").boundingBox();
+          const route = await page.locator(".ask-route").boundingBox();
+          expect(form && route).toBeTruthy();
+          if (form && route) {
+            expect(route.y).toBeGreaterThanOrEqual(form.y + form.height - 1);
+            expect(route.width).toBeGreaterThanOrEqual(form.width - 4);
+            expect(route.height).toBeLessThan(24);
+          }
           expect(await page.getAttribute("#ask-input", "placeholder")).toBe("Ask about this call");
           // And back: the saved call searches again.
           await page.click(`#calls button[data-id="${saved}"]`);
