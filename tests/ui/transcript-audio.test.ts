@@ -1126,3 +1126,68 @@ describe("the player bar (W5.3 to W5.6)", () => {
     UI_TIMEOUT,
   );
 });
+
+describe("[W4.4] copying a selection of transcript lines gives each line's time and text, never its buttons", () => {
+  test(
+    "a drag over two lines copies two lines of time and text; a word inside one line copies just that word",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+          await page.evaluate(() => navigator.clipboard.writeText("before"));
+          // From the start of line 2's time to the end of line 3, buttons included.
+          const selected = await page.evaluate(() => {
+            const a = document.querySelector('#lines .row[data-id="l000002"]') as HTMLElement;
+            const b = document.querySelector('#lines .row[data-id="l000003"]') as HTMLElement;
+            const r = document.createRange();
+            r.setStartBefore(a);
+            r.setEndAfter(b);
+            const s = document.getSelection() as Selection;
+            s.removeAllRanges();
+            s.addRange(r);
+            return {
+              raw: s.toString(),
+              want: [a, b]
+                .map(
+                  (row) =>
+                    `${row.children[0]?.textContent} ${row.querySelector(".text")?.textContent}`,
+                )
+                .join("\n"),
+            };
+          });
+          // Positive control: the browser's own text of that selection is not the clean copy (it
+          // breaks each row into time, speaker chip and text lines).
+          expect(selected.raw).not.toBe(selected.want);
+          await page.keyboard.press("ControlOrMeta+c");
+          await until(async () => (await clipboard()) !== "before", 5000, "the copy");
+          const copied = await clipboard();
+          expect(copied).toBe(selected.want);
+          expect(copied).not.toContain("Fix");
+          expect(copied).not.toContain("▶");
+
+          // Part of one line's text: the browser copies the words selected, nothing added.
+          await page.evaluate(() => navigator.clipboard.writeText("before"));
+          await page.evaluate(() => {
+            const t = document.querySelector('#lines .row[data-id="l000003"] .text') as HTMLElement;
+            const node = t.firstChild as Text;
+            const r = document.createRange();
+            r.setStart(node, 0);
+            r.setEnd(node, 6);
+            const s = document.getSelection() as Selection;
+            s.removeAllRanges();
+            s.addRange(r);
+          });
+          await page.keyboard.press("ControlOrMeta+c");
+          await until(async () => (await clipboard()) !== "before", 5000, "the word copied");
+          expect(await clipboard()).toBe("deploy");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});

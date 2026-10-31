@@ -238,6 +238,7 @@ export class TranscriptPane {
   constructor(private readonly d: TranscriptDeps) {
     this.list.addEventListener("click", (e) => this.onClick(e));
     this.list.addEventListener("dblclick", () => this.onDoubleClick());
+    document.addEventListener("copy", (e) => this.onCopy(e));
     new FontKeys();
     const s = this.scroller;
     s.addEventListener("wheel", () => this.byHand(), { passive: true });
@@ -384,6 +385,39 @@ export class TranscriptPane {
         ),
       );
     }
+  }
+
+  /**
+   * A selection over transcript lines copies one line per row, its wall time and its text, never
+   * the row's buttons (▶, Fix) or its layout. A selection inside one line's text copies just that.
+   */
+  private onCopy(e: ClipboardEvent): void {
+    const sel = document.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !e.clipboardData) return;
+    const range = sel.getRangeAt(0);
+    // A row counts when the selection holds some of its text: Chromium also reports a row whose
+    // edge the selection only touches.
+    const rows = [...this.list.querySelectorAll<HTMLElement>(".row")].filter((r) => {
+      if (!range.intersectsNode(r)) return false;
+      const part = document.createRange();
+      part.selectNodeContents(r);
+      if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0)
+        part.setStart(range.startContainer, range.startOffset);
+      if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0)
+        part.setEnd(range.endContainer, range.endOffset);
+      return part.toString().trim() !== "";
+    });
+    if (rows.length === 0) return;
+    const only = rows.length === 1 ? rows[0]?.querySelector(".text") : null;
+    if (only?.contains(range.startContainer) && only.contains(range.endContainer)) return;
+    const lines: string[] = [];
+    for (const r of rows) {
+      const l = this.shown(r.dataset.id ?? "");
+      if (l) lines.push(`${l.time} ${l.text}`);
+    }
+    if (lines.length === 0) return;
+    e.clipboardData.setData("text/plain", lines.join("\n"));
+    e.preventDefault();
   }
 
   /** The app's rendering of this revision, when it has one; else the page's own. */
