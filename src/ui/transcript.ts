@@ -129,8 +129,10 @@ export class ScrollPin {
     private readonly scroller: HTMLElement,
     jump: HTMLElement,
   ) {
+    (window as unknown as { __pin: ScrollPin }).__pin = this;
     scroller.addEventListener("scroll", () => {
       const s = this.scroller;
+      (window as unknown as { __log?: unknown[] }).__log?.push(["scroll", Math.round(performance.now()), s.scrollTop, s.scrollHeight, s.clientHeight, this.pinned, this.seen.content, this.seen.visible]);
       // The area or its lines changed size since the view was last at the bottom, and this scroll
       // event (often follow()'s own, dispatched a frame late) reads the layout's distance, not the
       // reader's: a pinned view goes back down instead of letting go.
@@ -158,6 +160,7 @@ export class ScrollPin {
    * scroll's first steps read as a reader scrolling up and unpin the view before it lands.
    */
   follow(): void {
+    (window as unknown as { __log?: unknown[] }).__log?.push(["follow", Math.round(performance.now()), this.scroller.scrollTop, this.scroller.scrollHeight, this.pinned]);
     if (!this.pinned) return;
     this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: "instant" });
     this.remember();
@@ -165,6 +168,7 @@ export class ScrollPin {
 
   /** At once too, for the same reason as follow(): lines may be arriving while it scrolls. */
   backToLive(): void {
+    (window as unknown as { __log?: unknown[] }).__log?.push(["back", Math.round(performance.now())]);
     this.pinned = true;
     this.follow();
     document.body.classList.remove("scrolled");

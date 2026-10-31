@@ -668,6 +668,9 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           s.scrollTo({ top: 0, behavior: "instant" });
         });
         await page.waitForSelector("#jump", { state: "visible" });
+        await page.evaluate(() => {
+          (window as unknown as { __log: unknown[] }).__log = [];
+        });
         const arriving = (async () => {
           for (let i = 201; i <= 215; i++) {
             await rig.write(id, seg(`l7${i}`, long, { w0: Date.now() + i }));
@@ -677,7 +680,17 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await page.click("#jump");
         await arriving;
         await page.waitForSelector('#lines .row[data-id="l7215"]');
-        await until(atEdge, 3000, "pinned after Back to live while lines arrive");
+        try {
+          await until(atEdge, 3000, "pinned after Back to live while lines arrive");
+        } catch (e) {
+          const d = await page.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            const w = window as unknown as { __log: unknown[]; __pin: { pinned: boolean; seen: unknown } };
+            return { top: s.scrollTop, sh: s.scrollHeight, ch: s.clientHeight, pinned: w.__pin.pinned, seen: w.__pin.seen, scrolled: document.body.classList.contains("scrolled"), log: w.__log };
+          });
+          console.log("W41DIAG", JSON.stringify(d), JSON.stringify(await place()));
+          throw e;
+        }
         expect((await place()).last).toBe("l7215");
         expect(await page.locator("#jump").isVisible()).toBe(false);
       });
