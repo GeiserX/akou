@@ -28,6 +28,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { LEFT_WRAPPER_SH } from "../helpers.ts";
 
 const role = process.argv[2] as string;
 const arg = (flag: string) => {
@@ -54,7 +55,7 @@ if (role === "open") {
   if (process.argv.includes("--nothing")) {
     // Starts nothing.
   } else if (!process.argv.includes("--installed")) {
-    spawn("/bin/sh", ["-c", 'true & exec "$0" "$@"', launcher, self, "wrapper", ...pass], {
+    spawn("/bin/sh", ["-c", LEFT_WRAPPER_SH, launcher, self, "wrapper", ...pass], {
       detached: true,
       stdio: "ignore",
       env: process.env,

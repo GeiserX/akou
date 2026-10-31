@@ -86,6 +86,14 @@ export class LogBuilder {
   }
 }
 
+/**
+ * A `/bin/sh -c` script that becomes `"$0" "$@"` with one child that exited and that it never
+ * reaps, as the real wrapper is left with the `open` it ran. The child ends only once the shell has
+ * become the program: one that ended before the `exec` was reaped by the shell itself, so about one
+ * start in a hundred, and four under load, had no such child at all (`true & exec`).
+ */
+export const LEFT_WRAPPER_SH = `(while ps -o args= -p $$ | grep -q '^/bin/sh '; do sleep 0.02; done) & exec "$0" "$@"`;
+
 export function tempDir(prefix = "akou-test-"): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
