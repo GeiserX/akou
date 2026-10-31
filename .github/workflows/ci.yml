@@ -317,6 +317,11 @@ jobs:
       # Control+Shift+Space, the dictation key here, then A, and a second tap at the tail of the
       # session records what got past the helper: Space must not, A and the modifiers must. The
       # same posts with no helper running must show Space, or the check proves nothing.
+      # [DC-N5 smoke] A cold stream can take more than a second to deliver its first sample here,
+      # and a session that has no sample yet ends with nothing said when `stop` comes, by design
+      # (DC-N4's readiness gate). So `stop` waits for `session.started`, up to 10 s. The control:
+      # the simulate build's mic 1.5 s slow to deliver; a stop right after the tap must start no
+      # session, and the same tap with the wait must start one.
       - name: the real key tap swallows the dictation key and passes the rest (macOS)
         if: runner.os == 'macOS'
         working-directory: native/akou-capture
@@ -360,6 +365,25 @@ jobs:
           print(seen.joined(separator: " "))
           EOF
           swiftc -O -o post-keys post-keys.swift
+          started() { for _ in $(seq 1 100); do grep -q '"type":"session.started"' "$1" && return 0; sleep 0.1; done; return 1; }
+          python3 -c "import wave; w = wave.open('quiet.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(128000)); w.close()"
+          printf '100 down RightCommand\n150 up RightCommand\n' > tap.txt
+          slow_mic() {
+            rm -f sim.in && mkfifo sim.in
+            "target/release/akou-capture" dictate --hotkey RightCommand --warm off --from-wav quiet.wav \
+              --keys tap.txt --speed 1 --mic-open-delay 1500 < sim.in > /dev/null 2> "sim-$1.err" &
+            sim=$!
+            exec 6> sim.in
+            sleep 0.4
+            if [ "$1" = wait ]; then started "sim-$1.err" || true; fi
+            echo '{"type":"stop"}' >&6
+            exec 6>&-
+            wait "$sim"
+          }
+          slow_mic now
+          if grep -q '"type":"session.started"' sim-now.err; then cat sim-now.err; echo "a stop before the first sample started a session; the wait below proves nothing"; exit 1; fi
+          slow_mic wait
+          grep -q '"type":"session.started"' sim-wait.err || { cat sim-wait.err; echo "the wait did not outlast a slow first sample"; exit 1; }
           ./post-keys | tee control.txt
           grep -qw 'down:49' control.txt || { echo "with no helper Space must get through"; exit 1; }
           mkfifo helper.in
@@ -371,6 +395,7 @@ jobs:
           grep -q '"accessibility":"granted"' helper.err
           if grep -q no-tap helper.err; then echo "the helper made no tap"; exit 1; fi
           ./post-keys | tee tapped.txt
+          started helper.err || echo "no session.started within 10 s of the posts"
           echo '{"type":"stop"}' >&3
           exec 3>&-
           wait "$helper"
