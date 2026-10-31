@@ -10,7 +10,7 @@ import { PartClock } from "../src/core/log/clock.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { LOCK_FILE } from "../src/core/log/writer.ts";
 import { folderName, slugify, ulid } from "../src/main/call/folder.ts";
-import { CallManager } from "../src/main/call/manager.ts";
+import { CallManager, type CallManagerOptions } from "../src/main/call/manager.ts";
 import { opusDurationSeconds } from "../src/main/call/recovery.ts";
 import {
   assertTransition,
@@ -21,7 +21,15 @@ import {
   TransitionError,
 } from "../src/main/call/state.ts";
 import { EXIT } from "../src/main/capture/protocol.ts";
-import { flush, logOf, ManualClock, ofType, ScriptedEngine, types } from "./capture-helpers.ts";
+import {
+  flush,
+  logOf,
+  ManualClock,
+  ofType,
+  ScriptedEngine,
+  types,
+  until,
+} from "./capture-helpers.ts";
 import { CLOCK_SHIFTED, jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
 
 /** A per-app scope, as `--call` and `POST /calls {call}` take it. */
@@ -32,7 +40,7 @@ afterEach(() => {
   for (const c of cleanups.splice(0)) c();
 });
 
-function setup(budgets: Partial<CallBudgets> = {}) {
+function setup(budgets: Partial<CallBudgets> = {}, more: Partial<CallManagerOptions> = {}) {
   const { dir: root, cleanup } = tempDir();
   cleanups.push(cleanup);
   const clock = new ManualClock();
@@ -46,8 +54,17 @@ function setup(budgets: Partial<CallBudgets> = {}) {
     user: "Ana",
     budgets: { stallMs: 1e12, ...budgets },
     onEvent: (_, e) => events.push(e),
+    ...more,
   });
   return { root, clock, engine, mgr, events };
+}
+
+/**
+ * Waits until the helper of the `n`th start is spawned. A start's folder stage waits on the real
+ * disk (docs/TRAPS.md #491), so a test that moves the manual clock waits for the spawn first.
+ */
+async function spawned(s: ReturnType<typeof setup>, n = 1): Promise<void> {
+  await until(() => s.engine.sessions.length >= n, 5_000, `helper ${n} spawned`);
 }
 
 /** Starts a call whose helper captures at once. */
@@ -108,6 +125,7 @@ describe("start", () => {
   test("201 only after capturing; part.started carries the helper's clock as its anchor", async () => {
     const s = setup();
     const p = s.mgr.start({ workspace: "work", title: "Sync" });
+    await spawned(s);
     await flush();
     expect(s.mgr.live()?.status).toBe("starting");
     let settled = false;
@@ -129,6 +147,7 @@ describe("start", () => {
   test("[T1.26] stop 200 ms after start with a slow (cold) helper cancels the part, never fails it", async () => {
     const s = setup();
     const p = s.mgr.start({ workspace: "work" });
+    await spawned(s);
     await s.clock.advance(200);
     const stop = s.mgr.stop("live");
     const r = await p;
@@ -147,6 +166,7 @@ describe("start", () => {
   test("[T1.26] capturing past the start budget fails cleanly with 503 capture_failed {stage: open}", async () => {
     const s = setup();
     const p = s.mgr.start({ workspace: "work" });
+    await spawned(s);
     await s.clock.advance(10_000);
     const r = await p;
     expect(r).toMatchObject({ ok: false, status: 503, code: "capture_failed", stage: "open" });
@@ -161,6 +181,7 @@ describe("start", () => {
     const s = setup();
     s.engine.spawnMs = 20_000; // a spawn that takes 20 s on its own
     const p = s.mgr.start({ workspace: "work" });
+    await spawned(s);
     await s.clock.advance(9_000);
     s.engine.last.capturing();
     expect((await p).ok).toBe(true);
@@ -169,16 +190,19 @@ describe("start", () => {
   test("[T3.6] the cold budget is 10 s, then warm starts get 3 s", async () => {
     const s = setup();
     let p = s.mgr.start({ workspace: "work" });
+    await spawned(s);
     await s.clock.advance(9_900);
     s.engine.last.capturing();
     expect((await p).ok).toBe(true);
     await s.mgr.stop("live");
     // Warm: 3.5 s is past the budget.
     p = s.mgr.start({ workspace: "work" });
+    await spawned(s, 2);
     await s.clock.advance(3_000);
     expect(await p).toMatchObject({ ok: false, stage: "open" });
     // Positive control: 2.5 s is inside it.
     p = s.mgr.start({ workspace: "work" });
+    await spawned(s, 3);
     await s.clock.advance(2_500);
     s.engine.last.capturing();
     expect((await p).ok).toBe(true);
@@ -259,6 +283,7 @@ describe("start", () => {
   test("an attach to a call still starting answers once its capture opened, never while starting (OW-2)", async () => {
     const s = setup();
     const first = s.mgr.start({ workspace: "work", title: "Sync" });
+    await spawned(s);
     await flush();
     expect(s.mgr.live()?.status).toBe("starting");
     let answered = false;
@@ -284,6 +309,7 @@ describe("start", () => {
   test("an attach to a start that fails answers with that failure, not a dead call id (OW-2)", async () => {
     const s = setup();
     const first = s.mgr.start({ workspace: "work", title: "Sync" });
+    await spawned(s);
     await flush();
     const attach = s.mgr.start({ workspace: "work", attach: true });
     await flush();
@@ -306,6 +332,186 @@ describe("start", () => {
       call: b.call,
       already_recording: { id: b.call, title: "Now", workspace: "work", state: "recording" },
     });
+  });
+});
+
+describe("[#491] a start's folder stage waits on the disk without holding the app", () => {
+  /** A disk that takes `ms` for the folder stage, as a busy Windows disk took up to 1.8 s. */
+  const slowDisk = (ms: number) => () => Bun.sleep(ms);
+
+  /**
+   * What breaks the one-live-call rule after starts that came together: more than one call answered,
+   * a refusal that does not name the one call, more than one folder or helper.
+   */
+  function oneCallBroken(
+    answers: Awaited<ReturnType<CallManager["start"]>>[],
+    root: string,
+    helpers: number,
+  ): string[] {
+    const broken: string[] = [];
+    const ok = answers.filter((a) => a.ok);
+    if (ok.length !== 1) broken.push(`${ok.length} starts answered with a call`);
+    const call = ok[0]?.ok ? ok[0].call : null;
+    for (const a of answers) {
+      if (a.ok) continue;
+      if (a.code !== "already_recording" || a.call !== call) {
+        broken.push(`a refusal ${a.code} naming ${String(a.call)}, not the call`);
+      }
+    }
+    const folders = existsSync(join(root, "work")) ? readdirSync(join(root, "work")).length : 0;
+    if (folders !== 1) broken.push(`${folders} call folders`);
+    if (helpers !== 1) broken.push(`${helpers} helpers`);
+    return broken;
+  }
+
+  /** Runs a start while a 10 ms timer ticks; the longest the timer waited, in ms. */
+  async function longestWait(start: () => Promise<unknown>): Promise<number> {
+    let last = performance.now();
+    let longest = 0;
+    // clock: the real event loop is what is measured.
+    const tick = setInterval(() => {
+      const t = performance.now();
+      longest = Math.max(longest, t - last);
+      last = t;
+    }, 10);
+    await Bun.sleep(30);
+    await start();
+    await Bun.sleep(30);
+    clearInterval(tick);
+    return longest;
+  }
+
+  test("[#491] two starts while the folder stage waits: one call, one folder, one helper, one 409", async () => {
+    const s = setup({}, { folderStall: slowDisk(300) });
+    s.engine.onStart = (x) => x.capturing();
+    const answers = await Promise.all([
+      s.mgr.start({ workspace: "work", title: "A" }),
+      s.mgr.start({ workspace: "work", title: "B" }),
+    ]);
+    expect(oneCallBroken(answers, s.root, s.engine.sessions.length)).toEqual([]);
+    expect(answers[1]).toMatchObject({
+      status: 409,
+      already_recording: { title: "A", workspace: "work" },
+    });
+  });
+
+  test("[#491] an attach while the folder stage waits answers with that call", async () => {
+    const s = setup({}, { folderStall: slowDisk(300) });
+    s.engine.onStart = (x) => x.capturing();
+    const [a, b] = await Promise.all([
+      s.mgr.start({ workspace: "work", title: "A" }),
+      s.mgr.start({ workspace: "other", attach: true }),
+    ]);
+    if (!a.ok || !b.ok) throw new Error("a start failed");
+    expect(b).toMatchObject({ call: a.call, folder: a.folder, attached: { id: a.call } });
+    expect(s.engine.sessions.length).toBe(1);
+  });
+
+  test("[#491] a stop and a quit sent during the folder stage find the call it makes", async () => {
+    const s = setup({}, { folderStall: slowDisk(200) });
+    const p = s.mgr.start({ workspace: "work", title: "A" });
+    // Once the start is in its stage: a stop sent before it got there finds nothing, as before.
+    await flush(1);
+    const stop = s.mgr.stop("live");
+    await spawned(s);
+    await s.clock.advance(10_000);
+    expect(await p).toMatchObject({ ok: false, code: "cancelled" });
+    expect((await stop).ok).toBe(true);
+    const q = s.mgr.start({ workspace: "work", title: "B" });
+    await flush(1);
+    const quit = s.mgr.quit();
+    await spawned(s, 2);
+    await s.clock.advance(10_000);
+    expect(await q).toMatchObject({ ok: false, code: "cancelled" });
+    await quit;
+    expect(s.mgr.live()).toBeNull();
+  });
+
+  test("[#491] a restart of an older call during another start's folder stage is 409, as a start is", async () => {
+    let stall = 0;
+    const s = setup({}, { folderStall: () => Bun.sleep(stall) });
+    const old = await started(s, "Old");
+    await s.mgr.stop("live");
+    stall = 300;
+    s.engine.onStart = (x) => x.capturing();
+    const now = s.mgr.start({ workspace: "work", title: "Now" });
+    await flush(1);
+    const r = await s.mgr.restart(old.call);
+    const b = await now;
+    if (!b.ok) throw new Error(b.error);
+    expect(r).toMatchObject({ ok: false, status: 409, code: "already_recording", call: b.call });
+    expect(s.engine.sessions.length).toBe(2);
+  });
+
+  test("positive control: two starts on two managers of one folder break the rule, and the check says so", async () => {
+    const a = setup({}, { folderStall: slowDisk(100) });
+    a.engine.onStart = (x) => x.capturing();
+    const b = new CallManager({ root: a.root, engine: a.engine, clock: a.clock, tz: TZ });
+    const answers = await Promise.all([
+      a.mgr.start({ workspace: "work", title: "A" }),
+      b.start({ workspace: "work", title: "B" }),
+    ]);
+    expect(oneCallBroken(answers, a.root, a.engine.sessions.length)).toEqual([
+      "2 starts answered with a call",
+      "2 call folders",
+      "2 helpers",
+    ]);
+  });
+
+  test("[#491] a failed folder stage leaves nothing live: the next start is not refused", async () => {
+    let fail = true;
+    const s = setup(
+      {},
+      {
+        folderStall: async () => {
+          await Bun.sleep(100);
+          if (fail) throw new Error("EIO: the disk went away");
+        },
+      },
+    );
+    s.engine.onStart = (x) => x.capturing();
+    const [a, b] = await Promise.all([
+      s.mgr.start({ workspace: "work" }),
+      s.mgr.start({ workspace: "work" }),
+    ]);
+    // The second waited for the first's stage, then made its own, which failed the same way.
+    expect(a).toMatchObject({ ok: false, status: 503, stage: "folder" });
+    expect(b).toMatchObject({ ok: false, status: 503, stage: "folder" });
+    expect(s.mgr.live()).toBeNull();
+    fail = false;
+    expect((await s.mgr.start({ workspace: "work" })).ok).toBe(true);
+  });
+
+  test("[#491] the event loop keeps turning while the folder stage waits 1 s on the disk", async () => {
+    const s = setup({}, { folderStall: slowDisk(1_000) });
+    s.engine.onStart = (x) => x.capturing();
+    const longest = await longestWait(() => s.mgr.start({ workspace: "work" }));
+    expect(longest).toBeLessThan(500);
+  });
+
+  test("[#491] the real folder, lock and call.created are written with the loop turning in between", async () => {
+    const s = setup();
+    s.engine.onStart = (x) => x.capturing();
+    await s.mgr.init();
+    // The first turn of the loop after the request: under the old synchronous stage it came only
+    // once call.created was on disk.
+    const firstTurn = new Promise<boolean>((resolve) =>
+      setImmediate(() => {
+        const work = join(s.root, "work");
+        const dirs = existsSync(work) ? readdirSync(work) : [];
+        resolve(dirs.some((d) => existsSync(join(work, d, "events.jsonl"))));
+      }),
+    );
+    const r = await s.mgr.start({ workspace: "work" });
+    expect(r.ok).toBe(true);
+    expect(await firstTurn).toBe(false);
+  });
+
+  test("positive control: a folder stage that holds the loop 1 s fails the loop check", async () => {
+    const s = setup({}, { folderStall: () => Bun.sleepSync(1_000) });
+    s.engine.onStart = (x) => x.capturing();
+    const longest = await longestWait(() => s.mgr.start({ workspace: "work" }));
+    expect(longest).toBeGreaterThanOrEqual(900);
   });
 });
 

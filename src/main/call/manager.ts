@@ -38,7 +38,7 @@ import { type CaptureEngine, type Clock, realClock } from "../capture/engine.ts"
 import type { IngestOptions, PartIngest } from "../capture/ingest.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { CallController, type CaptureChoice, type StartOk } from "./call.ts";
-import { checkWorkspace, createCallFolder, ulid } from "./folder.ts";
+import { checkWorkspace, createCallFolderAsync, ulid } from "./folder.ts";
 import {
   type CallSummary,
   CHANGES,
@@ -73,6 +73,8 @@ export interface CallManagerOptions {
    * app sets the view's read-time vocabulary here.
    */
   onOpen?(c: CallController): void;
+  /** Tests: awaited inside a start's folder stage, where a slow disk makes it wait. */
+  folderStall?(): Promise<void> | void;
 }
 
 export interface StartRequest {
@@ -144,6 +146,12 @@ export class CallManager {
   private readonly index = new Map<string, CallSummary>();
   /** The start or reopen of a call still `starting`, so an attach waits for it to open. */
   private readonly opening = new Map<string, Promise<Outcome>>();
+  /**
+   * A start's folder stage while it waits on the disk. Every check of the live call waits for it
+   * first (`folderSettled`), so the call it is making counts as live, as it did when the stage held
+   * the event loop (docs/TRAPS.md #491).
+   */
+  private folderStage: Promise<void> | null = null;
   private warm = false;
   private initP: Promise<RecoveryAction[]> | null = null;
   /** Folders recovery could not read. They are skipped, never fatal. */
@@ -228,6 +236,11 @@ export class CallManager {
         ? Math.max(e.t, prev?.updatedAt ?? 0)
         : (prev?.updatedAt ?? c.view.call?.t ?? e.t),
     });
+  }
+
+  /** Waits until no start is in its folder stage. */
+  private async folderSettled(): Promise<void> {
+    while (this.folderStage) await this.folderStage;
   }
 
   /** The live call: starting, recording or paused. */
@@ -357,7 +370,10 @@ export class CallManager {
    */
   async start(req: StartRequest = {}): Promise<Outcome<StartAnswer>> {
     await this.init();
-    // Everything from here to the spawn is synchronous, so two starts cannot both pass the check.
+    // Inline, not `folderSettled()`: from the last look at the stage to its reservation below
+    // nothing awaits, so two starts cannot both pass the check. A later start waits for the stage,
+    // then finds this call live.
+    while (this.folderStage) await this.folderStage;
     const live = this.live();
     if (live) {
       if (req.attach) return this.attachTo(live);
@@ -378,61 +394,73 @@ export class CallManager {
       call: req.call ?? this.o.capture?.call ?? "system",
       excludeResponsible: this.o.capture?.excludeResponsible,
     };
-    let dir: string;
-    let c: CallController;
-    try {
-      // Stage "folder": the folder, the lock and call.created. Nothing is spawned yet.
-      dir = createCallFolder(this.o.root, workspace, now, tz, title);
-      c = CallController.create(
-        dir,
-        {
-          type: "call.created",
-          id,
-          schema: 1,
-          workspace,
-          title,
-          tz,
-          user: this.o.user ?? "",
-          akou: this.o.akouVersion ?? "0.0.0",
-          ...(req.template ? { template: req.template } : {}),
-          ...(req.final ? { final: req.final } : {}),
-        },
-        this.deps(workspace),
-        capture,
-      );
-    } catch (err) {
-      return fail(
-        503,
-        "capture_failed",
-        `cannot create the call folder: ${(err as Error).message}`,
-        {
-          stage: "folder",
-        },
-      );
-    }
-    const asked = legacyLive(req.live, req.review);
-    c.liveAsked = asked.live;
-    c.reviewAsked =
-      asked.review === undefined && req.reviewEvery === undefined
-        ? undefined
-        : {
-            ...(asked.review === undefined ? {} : { model: asked.review }),
-            ...(req.reviewEvery === undefined ? {} : { everySeconds: req.reviewEvery }),
-          };
-    this.controllers.set(id, c);
-    this.o.onOpen?.(c);
-    this.onEvent(id, workspace, c.view.call as LogEvent);
-    (req.vocab ?? []).forEach((v, i) => {
-      c.record({
-        type: "vocab.add",
-        id: `v${String(i + 1).padStart(4, "0")}`,
-        rev: 1,
-        term: v.term,
-        heard: [...(v.heard ?? [])],
-        by: req.by ?? "user",
-      });
+    let release = () => {};
+    this.folderStage = new Promise<void>((r) => {
+      release = r;
     });
-    return this.track(id, c.begin());
+    try {
+      let c: CallController;
+      try {
+        // Stage "folder": the folder, the lock and call.created, off the event loop. Nothing is
+        // spawned yet.
+        await this.o.folderStall?.();
+        const dir = await createCallFolderAsync(this.o.root, workspace, now, tz, title);
+        c = await CallController.create(
+          dir,
+          {
+            type: "call.created",
+            id,
+            schema: 1,
+            workspace,
+            title,
+            tz,
+            user: this.o.user ?? "",
+            akou: this.o.akouVersion ?? "0.0.0",
+            ...(req.template ? { template: req.template } : {}),
+            ...(req.final ? { final: req.final } : {}),
+          },
+          this.deps(workspace),
+          capture,
+        );
+      } catch (err) {
+        return fail(
+          503,
+          "capture_failed",
+          `cannot create the call folder: ${(err as Error).message}`,
+          {
+            stage: "folder",
+          },
+        );
+      }
+      const asked = legacyLive(req.live, req.review);
+      c.liveAsked = asked.live;
+      c.reviewAsked =
+        asked.review === undefined && req.reviewEvery === undefined
+          ? undefined
+          : {
+              ...(asked.review === undefined ? {} : { model: asked.review }),
+              ...(req.reviewEvery === undefined ? {} : { everySeconds: req.reviewEvery }),
+            };
+      this.controllers.set(id, c);
+      this.o.onOpen?.(c);
+      this.onEvent(id, workspace, c.view.call as LogEvent);
+      (req.vocab ?? []).forEach((v, i) => {
+        c.record({
+          type: "vocab.add",
+          id: `v${String(i + 1).padStart(4, "0")}`,
+          rev: 1,
+          term: v.term,
+          heard: [...(v.heard ?? [])],
+          by: req.by ?? "user",
+        });
+      });
+      // `begin` makes the call `starting` before its first await, so it is live once the stage
+      // ends.
+      return this.track(id, c.begin());
+    } finally {
+      this.folderStage = null;
+      release();
+    }
   }
 
   /**
@@ -441,6 +469,7 @@ export class CallManager {
    */
   async attachLive(): Promise<Outcome<StartAnswer> | null> {
     await this.init();
+    await this.folderSettled();
     const live = this.live();
     return live ? this.attachTo(live) : null;
   }
@@ -480,6 +509,7 @@ export class CallManager {
   // Controls
 
   private async control(ref: CallRef, name: (typeof LIVE_CONTROLS)[number]): Promise<Outcome> {
+    await this.folderSettled();
     const r = this.resolve(ref, { control: true });
     if (!r.ok) return r;
     const c = this.controllers.get(r.id);
@@ -524,6 +554,7 @@ export class CallManager {
     opts: { force?: boolean } = {},
   ): Promise<Outcome<{ part: number }>> {
     await this.init();
+    await this.folderSettled();
     const r = this.resolve(ref);
     if (!r.ok) return r;
     let c = this.controllers.get(r.id);
@@ -605,6 +636,7 @@ export class CallManager {
     now: number,
   ): Promise<Outcome<{ dir: string; from: string }>> {
     await this.init();
+    await this.folderSettled();
     const s = this.index.get(id);
     if (!s) return fail(404, "not_found", `no call ${id}`);
     const c = this.controllers.get(id);
@@ -706,6 +738,7 @@ export class CallManager {
 
   /** The quit path: stop the live call within the stop budget, then settle everything. */
   async quit(): Promise<void> {
+    await this.folderSettled();
     const c = this.live();
     if (c) await c.stop();
     await Promise.all([...this.controllers.values()].map((x) => x.idle()));

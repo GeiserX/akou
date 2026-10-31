@@ -368,6 +368,38 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
   });
 });
 
+describe("[#491] LogWriter.create: a new log off the event loop", () => {
+  const first = created as Extract<EventDraft, { type: "call.created" }>;
+
+  test("[#491] writes call.created as seq 1, synced, under the lock, and the writer goes on as open's", async () => {
+    const dir = callDir();
+    const { writer: w, event } = await LogWriter.create(dir, first, { now: () => T0 });
+    cleanups.unshift(() => w.close());
+    expect(event).toMatchObject({ seq: 1, t: T0, type: "call.created" });
+    expect(w.stats).toEqual({ writes: 1, syncs: 1 });
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8")).toBe(`${process.pid} ${INSTANCE_ID}\n`);
+    expect(() => LogWriter.open(dir)).toThrow(LockError);
+    w.append(partDraft(1));
+    w.close();
+    const r = await readLog(join(dir, EVENTS_FILE));
+    expect(r.events.map((e) => e.seq)).toEqual([1, 2]);
+    expect(readdirSync(dir).sort()).toEqual([EVENTS_FILE]);
+  });
+
+  test("[#491] refuses a folder that already has a log, and leaves no lock behind", async () => {
+    const dir = callDir();
+    writeFileSync(join(dir, EVENTS_FILE), "");
+    await expect(LogWriter.create(dir, first)).rejects.toThrow();
+    expect(readdirSync(dir)).toEqual([EVENTS_FILE]);
+  });
+
+  test("[#491] refuses a folder whose lock another writer holds", async () => {
+    const dir = callDir();
+    open(dir);
+    await expect(LogWriter.create(dir, first)).rejects.toThrow(LockError);
+  });
+});
+
 describe("reader (DESIGN 4.2, 4.5)", () => {
   const b = new LogBuilder();
   b.created();
