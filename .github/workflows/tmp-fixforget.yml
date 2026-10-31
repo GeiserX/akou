@@ -1,0 +1,38 @@
+# Temporary: measures the fix-word flake before and after on fresh runners. Deleted before merge.
+name: tmp-fixforget
+on:
+  push:
+    branches: [fix/fixforget-flake]
+permissions:
+  contents: read
+jobs:
+  loop:
+    strategy:
+      fail-fast: false
+      matrix:
+        side: [before, after]
+        shard: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      AKOU_UI_BROWSER: webkit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - if: matrix.side == 'before'
+        run: git checkout 81ee47ada9e649922657fac7b1867fde50070a4c -- src/ui/transcript.ts tests/ui/fix-word.test.ts
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: printf 'Acquire::http::Timeout "10";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99akou-ci-retries
+      - run: bunx playwright-core install --with-deps webkit
+      - name: repeat
+        shell: bash
+        run: |
+          set +e
+          bun test --path-ignore-patterns='nothing/**' --timeout 60000 --rerun-each 150 -t 'a word a fix learned' ./tests/ui/fix-word.test.ts > out.txt 2>&1
+          grep -v 'page console' out.txt | grep -E '^\(fail\)|^ *[0-9]+ (pass|fail)$' | sort | uniq -c
+          echo "RESULT side=${{ matrix.side }} pass=$(grep -c '^(pass)' out.txt) fail=$(grep -c '^(fail)' out.txt)"
+          exit 0
