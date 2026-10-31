@@ -183,16 +183,20 @@ export class CallController {
     }
   }
 
-  /** A new call in a folder that was just created: writes `call.created`. */
-  static create(
+  /**
+   * A new call in a folder that was just created: writes `call.created`, off the event loop
+   * (`LogWriter.create`).
+   */
+  static async create(
     dir: string,
     created: Extract<EventDraft, { type: "call.created" }>,
     deps: ControllerDeps,
     capture: CaptureChoice,
-  ): CallController {
-    const writer = LogWriter.open(dir, deps.writer);
+  ): Promise<CallController> {
+    const { writer, event } = await LogWriter.create(dir, created, deps.writer);
     const c = new CallController(created.id, dir, deps, capture, [], writer);
-    c.append(created);
+    c.view.apply(event);
+    c.deps.onEvent?.(c.id, event);
     return c;
   }
 

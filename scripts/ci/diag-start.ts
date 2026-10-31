@@ -1,70 +1,57 @@
-// Temporary (issue #491): times each step of a call start's folder stage on this machine's disk.
-import { fsyncSync, linkSync, mkdirSync, mkdtempSync, openSync, unlinkSync, writeFileSync, writeSync, closeSync, existsSync } from "node:fs";
+// Temporary (issue #491): the event loop's longest wait during a call's folder stage, the old
+// synchronous one against the new one, on this machine's disk.
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { LogWriter } from "../../src/core/log/writer.ts";
-import { createCallFolder, folderName, ulid } from "../../src/main/call/folder.ts";
+import { createCallFolder, createCallFolderAsync, ulid } from "../../src/main/call/folder.ts";
 
-const base = process.argv[2] ?? process.env.TEMP ?? "/tmp";
+const base = process.argv[2] ?? "/tmp";
 const label = process.argv[3] ?? base;
+const n = Number(process.argv[4] ?? 50);
 const root = mkdtempSync(join(base, "akou-diag-"));
-const ms = (t: number) => Math.round((performance.now() - t) * 100) / 100;
-
-let t = performance.now();
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-const intl = ms(t);
-t = performance.now();
-folderName(Date.now(), tz, "Call");
-const fname = ms(t);
-console.log(`[${label}] first Intl ${intl} ms, first folderName ${fname} ms`);
+const created = (id: string) =>
+  ({ type: "call.created", id, schema: 1, workspace: "w", title: "Call", tz, user: "", akou: "0" }) as const;
 
-const n = Number(process.argv[4] ?? 6);
-const all: Record<string, number[]> = {};
-for (let i = 1; i <= n; i++) {
-  const row: Record<string, number> = {};
-  const step = (name: string, fn: () => void) => {
-    const s = performance.now();
-    fn();
-    row[name] = ms(s);
-  };
-  const ws = join(root, `ws${i}`);
-  const dir = join(ws, folderName(Date.now(), tz, `call ${i}`));
-  step("mkdirParent", () => mkdirSync(ws, { recursive: true }));
-  step("mkdirCall", () => mkdirSync(dir));
-  step("mkdirAudio", () => mkdirSync(join(dir, "audio")));
-  step("mkdirLogs", () => mkdirSync(join(dir, "logs")));
-  const lock = join(dir, ".akou.lock");
-  const tmp = `${lock}.tmp`;
-  step("lockWrite", () => writeFileSync(tmp, `${process.pid} x\n`));
-  step("lockLink", () => linkSync(tmp, lock));
-  step("lockUnlinkTmp", () => unlinkSync(tmp));
-  const log = join(dir, "events.jsonl");
-  step("exists", () => void existsSync(log));
-  let fd = -1;
-  step("open", () => {
-    fd = openSync(log, "a");
+async function measure(stage: () => Promise<void> | void): Promise<{ stage: number; wait: number }> {
+  let last = performance.now();
+  let wait = 0;
+  const tick = setInterval(() => {
+    const t = performance.now();
+    wait = Math.max(wait, t - last);
+    last = t;
+  }, 5);
+  await Bun.sleep(12);
+  const t0 = performance.now();
+  await stage();
+  const took = performance.now() - t0;
+  await Bun.sleep(12);
+  clearInterval(tick);
+  return { stage: took, wait };
+}
+
+const rows: Record<string, { stage: number[]; wait: number[] }> = { old: { stage: [], wait: [] }, new: { stage: [], wait: [] } };
+for (let i = 0; i < n; i++) {
+  const o = await measure(() => {
+    const dir = createCallFolder(root, "old", Date.now(), tz, `c${i}`);
+    const w = LogWriter.open(dir);
+    w.append(created(ulid(Date.now())));
+    w.close();
   });
-  step("write", () => void writeSync(fd, new TextEncoder().encode(`{"seq":1}\n`)));
-  step("fsync", () => fsyncSync(fd));
-  step("close", () => closeSync(fd));
-  const total = Object.values(row).reduce((a, b) => a + b, 0);
-  // The real path, in a second workspace: createCallFolder then the writer's open and first append.
-  const s = performance.now();
-  const d2 = createCallFolder(root, `real${i}`, Date.now(), tz, "Call");
-  const r1 = ms(s);
-  const s2 = performance.now();
-  const w = LogWriter.open(d2);
-  const r2 = ms(s2);
-  const s3 = performance.now();
-  w.append({ type: "call.created", id: ulid(Date.now()), schema: 1, workspace: "x", title: "Call", tz, user: "", akou: "0.0.0" } as never);
-  const r3 = ms(s3);
-  w.close();
-  row.realFolder = r1;
-  row.realOpen = r2;
-  row.realCreated = r3;
-  for (const [k, v] of Object.entries(row)) (all[k] ??= []).push(v);
-  if (n <= 6) console.log(
-    `[${label}] #${i} ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(" ")} sum=${Math.round(total)} | real: folder=${r1} open=${r2} created=${r3}`,
+  rows.old.stage.push(o.stage);
+  rows.old.wait.push(o.wait);
+  const m = await measure(async () => {
+    const dir = await createCallFolderAsync(root, "new", Date.now(), tz, `c${i}`);
+    const { writer } = await LogWriter.create(dir, created(ulid(Date.now())));
+    writer.close();
+  });
+  rows.new.stage.push(m.stage);
+  rows.new.wait.push(m.wait);
+}
+const q = (a: number[], f: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * f))] ?? 0;
+const r = (x: number) => Math.round(x);
+for (const [k, v] of Object.entries(rows)) {
+  console.log(
+    `[${label}] ${k} n=${n} stage p50=${r(q(v.stage, 0.5))} max=${r(Math.max(...v.stage))} | loop wait p50=${r(q(v.wait, 0.5))} p95=${r(q(v.wait, 0.95))} max=${r(Math.max(...v.wait))}`,
   );
 }
-const q = (a: number[], f: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * f))];
-console.log(`[${label}] n=${n} ` + Object.entries(all).map(([k, a]) => `${k} p50=${q(a, 0.5)} p99=${q(a, 0.99)} max=${Math.max(...a)}`).join(" | "));

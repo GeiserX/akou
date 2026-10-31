@@ -22,10 +22,8 @@ jobs:
       - shell: bash
         run: |
           C="$USERPROFILE/AppData/Local/Temp"
-          bun scripts/ci/diag-start.ts "$C" C-idle 100
-          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-idle 100
-          for i in 1 2 3; do bun scripts/ci/diag-load.ts "$C" 40 & done
+          bun scripts/ci/diag-start.ts "$C" C-idle 50
+          for i in 1 2 3; do bun scripts/ci/diag-load.ts "$C" 60 & done
           sleep 2
-          bun scripts/ci/diag-start.ts "$C" C-load 100
-          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-whileCload 100
+          bun scripts/ci/diag-start.ts "$C" C-load 50
           wait
