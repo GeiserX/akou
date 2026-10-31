@@ -1676,6 +1676,18 @@ body.inset #ask-row {
   font-size: 13px;
   line-height: 1.45;
 }
+/* Rows are controls: a right-click or a double-click selects no text (the search field does).
+   On every element, since WebKit does not carry the value down to the children. */
+#sidebar,
+#sidebar * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+#sidebar input,
+#sidebar textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
 #sidebar .ico {
   width: 16px;
   height: 16px;
@@ -2838,8 +2850,9 @@ dialog {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
-/* The line menu (W4.4). */
-#line-menu {
+/* The line menu (W4.4) and the sidebar's call menu (W13.2, W13.3). */
+#line-menu,
+#calls-menu {
   position: fixed;
   z-index: 20;
   display: grid;
@@ -2851,7 +2864,9 @@ dialog {
   font-size: 13px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
-#line-menu [role="menuitem"] {
+#line-menu [role="menuitem"],
+#calls-menu [role="menuitem"] {
+  display: grid;
   text-align: left;
   border: none;
   background: none;
@@ -2859,8 +2874,26 @@ dialog {
   border-radius: 4px;
 }
 #line-menu [role="menuitem"]:focus,
-#line-menu [role="menuitem"]:hover {
+#line-menu [role="menuitem"]:hover,
+#calls-menu [role="menuitem"]:focus,
+#calls-menu [role="menuitem"]:hover {
   background: var(--line2);
+}
+#calls-menu [role="menuitem"].danger {
+  color: var(--rec);
+}
+#calls-menu [role="menuitem"][aria-disabled="true"] {
+  color: var(--faint);
+  cursor: default;
+}
+#calls-menu [role="menuitem"] .why {
+  font-size: 11.5px;
+  color: var(--faint);
+}
+#calls-menu [role="separator"] {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
 }
 
 /* Server mode's pages (docs/ux/SERVER.md section 12.4): the call window is not on the page. */

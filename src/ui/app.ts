@@ -241,6 +241,12 @@ class App {
   private folded = new Set<string>();
   /** What the calls list was last drawn from, so an unchanged list is not redrawn. */
   private drawnCalls = "";
+  /** Calls moved to the Trash from this window: a list that left them out never shows them again. */
+  private readonly trashed = new Set<string>();
+  /** Rename… on a sidebar row: the call's title opens for editing once that call is on screen. */
+  private renameOnOpen: string | null = null;
+  /** The sidebar's call menu (W13.2, W13.3), the line menu's code on the call rows. */
+  private readonly callMenu: LineMenu;
   /** The title is being edited: the header leaves it alone until the edit closes. */
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
@@ -260,6 +266,12 @@ class App {
       fixWord: (id, anchor, sel, near) => this.fixWord(id, anchor, sel, near),
     });
     new LineMenu(byId("lines"), byId("scroller"), () => this.lineActions());
+    this.callMenu = new LineMenu(
+      byId("calls"),
+      byId("calls").closest<HTMLElement>(".calls-sub") as HTMLElement,
+      (id) => this.callActions(id),
+      { menu: "calls-menu", row: "li[data-id]", from: "button[data-id]" },
+    );
     // The main panes' scrollbars show only while in use (theme.css `.scrolls`).
     for (const el of document.querySelectorAll<HTMLElement>(".scrolls")) quietScrollbar(el);
     this.player = new Player({
@@ -549,6 +561,11 @@ class App {
     this.workspace.follow(this.callId, call?.workspace);
     this.welcome();
     this.callHead(v, now, st.meta);
+    if (this.renameOnOpen !== null && this.renameOnOpen !== this.callId) this.renameOnOpen = null;
+    if (this.renameOnOpen !== null && v?.call) {
+      this.renameOnOpen = null;
+      this.editTitle();
+    }
     this.pills(v);
     this.controls(v);
     this.drawBanner(v, now);
@@ -893,14 +910,19 @@ class App {
       this.t.request<{ calls?: CallSummary[] }>("GET", "/calls?limit=200"),
       this.t.request<{ calls?: CallSummary[] }>("GET", "/calls?limit=50&failed=true"),
     ]);
-    this.calls = [...(ok.body.calls ?? []), ...(failed.body.calls ?? [])].sort(
-      (a, b) => b.createdAt - a.createdAt,
-    );
+    this.calls = [...(ok.body.calls ?? []), ...(failed.body.calls ?? [])]
+      .filter((c) => !this.trashed.has(c.id))
+      .sort((a, b) => b.createdAt - a.createdAt);
     this.drawCalls();
     await this.workspace.load();
   }
 
   private wireSidebar(): void {
+    // The sidebar is controls, not text: a right-click opens a row's menu or nothing, never the
+    // webview's own Look Up and Inspect. Text fields keep theirs, to paste and correct.
+    byId("sidebar").addEventListener("contextmenu", (e) => {
+      if (!(e.target as HTMLElement).closest("input, textarea")) e.preventDefault();
+    });
     const search = byId<HTMLInputElement>("calls-search");
     search.addEventListener("input", () => this.drawCalls());
     search.addEventListener("keydown", (e) => {
@@ -1037,6 +1059,143 @@ class App {
       head,
       body,
     );
+  }
+
+  /**
+   * A call row's menu (W13.2, W13.3): Rename opens the call's own title field (W3.16), Move lists
+   * the other workspaces, Move to Trash takes it out of the list with Undo. A recording call can be
+   * renamed only; its other items stay in the menu, greyed, with the reason.
+   */
+  private callActions(id: string): LineAction[] {
+    const call = this.calls.find((c) => c.id === id);
+    const live = id === (this.status?.live?.call ?? null);
+    const others = this.workspace.names().filter((w) => w !== call?.workspace);
+    return [
+      {
+        id: "call.rename",
+        label: "Rename…",
+        run: () => {
+          this.renameOnOpen = id;
+          this.openCall(id, true);
+          this.paint();
+        },
+      },
+      {
+        id: "call.move",
+        label: "Move to workspace…",
+        disabled: live
+          ? "Stop the recording to move it."
+          : others.length === 0
+            ? "There is no other workspace yet."
+            : undefined,
+        run: () =>
+          this.callMenu.reopen(
+            id,
+            others.map((w) => ({
+              id: "call.move-to",
+              label: w,
+              run: () => void this.moveCall(id, w),
+            })),
+          ),
+      },
+      {
+        id: "call.trash",
+        label: "Move to Trash",
+        separated: true,
+        danger: true,
+        disabled: live ? "Stop the recording to move it to the Trash." : undefined,
+        run: () => void this.trashCall(id),
+      },
+    ];
+  }
+
+  private async moveCall(id: string, workspace: string): Promise<void> {
+    const r = await this.t
+      .request("PATCH", `/calls/${encodeURIComponent(id)}`, { workspace })
+      .catch(() => null);
+    if (!r || r.status >= 400) {
+      toast(message(r?.body, "the call was not moved"));
+      return;
+    }
+    this.calls = this.calls.map((c) => (c.id === id ? { ...c, workspace } : c));
+    this.drawCalls();
+    toast(`Moved to ${workspace}.`, "info");
+    void this.loadCalls();
+  }
+
+  /**
+   * Move to Trash: the row goes at once, and the window moves to the call beside it, or to no call,
+   * if it was the one on screen. Undo, for as long as its toast shows, restores it; a refusal puts
+   * the row back. The trash itself keeps it for 30 days (`DELETE /calls/{id}`).
+   */
+  private async trashCall(id: string): Promise<void> {
+    const call = this.calls.find((c) => c.id === id);
+    if (!call) return;
+    const rows = [...byId("calls").querySelectorAll<HTMLElement>("li[data-id]")].map(
+      (li) => li.dataset.id as string,
+    );
+    const at = rows.indexOf(id);
+    const next = rows[at + 1] ?? rows[at - 1] ?? null;
+    const wasOpen = id === this.callId;
+    const hadFocus = byId("calls").contains(document.activeElement);
+    this.trashed.add(id);
+    this.calls = this.calls.filter((c) => c.id !== id);
+    if (wasOpen) {
+      if (next) this.openCall(next, true);
+      else this.closeCall();
+    }
+    this.drawCalls();
+    if (hadFocus && next) {
+      byId("calls")
+        .querySelector<HTMLElement>(`button[data-id="${CSS.escape(next)}"]`)
+        ?.focus();
+    }
+    const r = await this.t
+      .request<{ error?: string }>("DELETE", `/calls/${encodeURIComponent(id)}`)
+      .catch(() => null);
+    if (!r || r.status >= 400) {
+      this.trashed.delete(id);
+      toast(message(r?.body, "the call was not moved to the Trash"));
+      await this.loadCalls();
+      // Only if the window is still where the trash moved it: a call picked since stays.
+      if (wasOpen && this.callId === next) this.openCall(id, true);
+      return;
+    }
+    toast(`“${call.title || "Untitled call"}” moved to the Trash.`, "info", {
+      label: "Undo",
+      run: () => void this.restoreCall(id, wasOpen),
+    });
+  }
+
+  private async restoreCall(id: string, reopen: boolean): Promise<void> {
+    const r = await this.t
+      .request("POST", `/calls/${encodeURIComponent(id)}/restore`, {})
+      .catch(() => null);
+    if (!r || r.status >= 400) {
+      toast(message(r?.body, "the call could not be restored"));
+      return;
+    }
+    this.trashed.delete(id);
+    await this.loadCalls();
+    if (reopen) this.openCall(id, true);
+  }
+
+  /** No call on screen: the empty window, which the status push no longer fills with the last call. */
+  private closeCall(): void {
+    document.getElementById("title-input")?.blur();
+    this.closeTitle?.();
+    this.follower?.stop();
+    this.follower = null;
+    this.callId = null;
+    this.chosen = true;
+    this.transcript.reset();
+    this.notepad.reset();
+    this.askPane.reset();
+    this.player.stop();
+    this.meters(null);
+    this.drawPeople(null);
+    if (this.t.kind === "browser") history.replaceState(null, "", location.pathname);
+    this.paint();
   }
 
   // ---------------------------------------------------------------------------

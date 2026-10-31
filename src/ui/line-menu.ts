@@ -7,6 +7,9 @@
  * `Enter` or `Space` runs one, `Esc` or `Tab` closes it, and focus goes back to where it was.
  * It stays beside its line: a scroll of the transcript (new lines, the reader) moves it with the
  * line, and it closes once the line leaves the view, the window loses focus or is resized.
+ *
+ * The sidebar's call rows open the same menu on their own element (W13.2, W13.3): `o` names the
+ * menu, what a row is and the control focus goes back to.
  */
 
 import { byId, h, replace } from "./dom.ts";
@@ -14,23 +17,43 @@ import { byId, h, replace } from "./dom.ts";
 export interface LineAction {
   id: string;
   label: string;
+  /** Shown but not runnable, with this reason under its label. */
+  disabled?: string;
+  /** A line above it sets it apart; `danger` marks what removes something. */
+  separated?: boolean;
+  danger?: boolean;
   /** Runs on a line; `anchor` is where a follow-up popover should open. */
   run(lineId: string, anchor: HTMLElement): void;
 }
 
+export interface MenuPlace {
+  /** The menu's element id. */
+  menu: string;
+  /** What a row is, carrying its id in `data-id`. */
+  row: string;
+  /** The control in a row focus goes back to when the menu was not opened from inside it. */
+  from: string;
+}
+
+const LINES: MenuPlace = { menu: "line-menu", row: ".row", from: ".play" };
+
 export class LineMenu {
-  private readonly menu = byId("line-menu");
+  private readonly menu: HTMLElement;
   private from: HTMLElement | null = null;
   /** The line the open menu acts on, and the menu's distance below the line's top. */
   private at: { row: HTMLElement; dy: number } | null = null;
+  /** Where the pointer last opened the menu, for `reopen`. */
+  private lastAt: { x: number; y: number } | null = null;
 
   constructor(
-    list: HTMLElement,
+    private readonly list: HTMLElement,
     private readonly scroller: HTMLElement,
-    private readonly actions: () => readonly LineAction[],
+    private readonly actions: (id: string) => readonly LineAction[],
+    private readonly o: MenuPlace = LINES,
   ) {
+    this.menu = byId(o.menu);
     list.addEventListener("contextmenu", (e) => {
-      const row = (e.target as HTMLElement).closest<HTMLElement>(".row");
+      const row = (e.target as HTMLElement).closest<HTMLElement>(o.row);
       if (!row?.dataset.id) return;
       e.preventDefault();
       // A contextmenu from the keyboard has no pointer position: open at the focused control.
@@ -40,7 +63,7 @@ export class LineMenu {
     document.addEventListener("keydown", (e) => {
       const key = (e.key === "F10" && e.shiftKey) || e.key === "ContextMenu";
       if (!key || e.metaKey || e.ctrlKey || e.altKey) return;
-      const row = (e.target as HTMLElement | null)?.closest<HTMLElement>(".row");
+      const row = (e.target as HTMLElement | null)?.closest<HTMLElement>(o.row);
       if (!row?.dataset.id || !list.contains(row)) return;
       e.preventDefault();
       this.open(row, null);
@@ -71,32 +94,58 @@ export class LineMenu {
     this.menu.style.top = `${r.top + at.dy}px`;
   }
 
-  private open(row: HTMLElement, at: { x: number; y: number } | null): void {
+  /**
+   * Opens the menu again on a row, where it was last opened, with other items: a step like "Move
+   * to workspace…" lists its choices in the same place.
+   */
+  reopen(id: string, actions: readonly LineAction[]): void {
+    // The list may have been drawn again meanwhile: the row is found again by its id.
+    const row = [...this.list.querySelectorAll<HTMLElement>(this.o.row)].find(
+      (r) => r.dataset.id === id,
+    );
+    if (row) this.open(row, this.lastAt, actions);
+  }
+
+  private open(
+    row: HTMLElement,
+    at: { x: number; y: number } | null,
+    actions?: readonly LineAction[],
+  ): void {
     const id = row.dataset.id as string;
     const active = document.activeElement as HTMLElement | null;
-    // Focus goes back to the control the reader was on, or the line's own Play button.
-    this.from = active && row.contains(active) ? active : row.querySelector<HTMLElement>(".play");
+    // Focus goes back to the control the reader was on, or the row's own control.
+    this.from =
+      active && row.contains(active) ? active : row.querySelector<HTMLElement>(this.o.from);
+    this.lastAt = at;
     replace(
       this.menu,
-      ...this.actions().map((a) =>
+      ...(actions ?? this.actions(id)).flatMap((a) => [
+        a.separated ? h("div", { role: "separator" }) : null,
         h(
           "button",
           {
             type: "button",
             role: "menuitem",
             tabIndex: -1,
-            attrs: { "data-action": a.id },
+            class: a.danger ? "danger" : undefined,
+            attrs: {
+              "data-action": a.id,
+              ...(a.disabled ? { "aria-disabled": "true" } : {}),
+            },
             on: {
               click: () => {
+                // A disabled item stays focusable, so its reason can be read, and does nothing.
+                if (a.disabled) return;
                 const anchor = this.from ?? row;
                 this.close(true);
                 a.run(id, anchor);
               },
             },
           },
-          a.label,
+          h("span", { class: "label" }, a.label),
+          a.disabled ? h("span", { class: "why" }, a.disabled) : null,
         ),
-      ),
+      ]),
     );
     this.menu.hidden = false;
     const r = (this.from ?? row).getBoundingClientRect();
