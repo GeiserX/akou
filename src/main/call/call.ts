@@ -185,7 +185,7 @@ export class CallController {
 
   /**
    * A new call in a folder that was just created: writes `call.created`, off the event loop
-   * (`LogWriter.create`).
+   * (`LogWriter.create`). Its `onEvent` is the manager's to send, once the call is known.
    */
   static async create(
     dir: string,
@@ -196,7 +196,6 @@ export class CallController {
     const { writer, event } = await LogWriter.create(dir, created, deps.writer);
     const c = new CallController(created.id, dir, deps, capture, [], writer);
     c.view.apply(event);
-    c.deps.onEvent?.(c.id, event);
     return c;
   }
 

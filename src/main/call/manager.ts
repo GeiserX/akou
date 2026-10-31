@@ -238,7 +238,10 @@ export class CallManager {
     });
   }
 
-  /** Waits until no start is in its folder stage. */
+  /**
+   * Waits until no start is in its folder stage. Callers await it only while one is, so a control
+   * with no start under way still acts before it returns its promise, as it always did.
+   */
   private async folderSettled(): Promise<void> {
     while (this.folderStage) await this.folderStage;
   }
@@ -443,7 +446,11 @@ export class CallManager {
             };
       this.controllers.set(id, c);
       this.o.onOpen?.(c);
-      this.onEvent(id, workspace, c.view.call as LogEvent);
+      // `call.created`, sent now that the call is known, in the same run as `begin` makes it
+      // `starting`: the live recognizer starts loading on a microtask after it (#378).
+      const created = c.view.call as LogEvent;
+      this.onEvent(id, workspace, created);
+      this.o.onEvent?.(id, created);
       (req.vocab ?? []).forEach((v, i) => {
         c.record({
           type: "vocab.add",
@@ -469,7 +476,7 @@ export class CallManager {
    */
   async attachLive(): Promise<Outcome<StartAnswer> | null> {
     await this.init();
-    await this.folderSettled();
+    if (this.folderStage) await this.folderSettled();
     const live = this.live();
     return live ? this.attachTo(live) : null;
   }
@@ -509,7 +516,7 @@ export class CallManager {
   // Controls
 
   private async control(ref: CallRef, name: (typeof LIVE_CONTROLS)[number]): Promise<Outcome> {
-    await this.folderSettled();
+    if (this.folderStage) await this.folderSettled();
     const r = this.resolve(ref, { control: true });
     if (!r.ok) return r;
     const c = this.controllers.get(r.id);
@@ -554,7 +561,7 @@ export class CallManager {
     opts: { force?: boolean } = {},
   ): Promise<Outcome<{ part: number }>> {
     await this.init();
-    await this.folderSettled();
+    if (this.folderStage) await this.folderSettled();
     const r = this.resolve(ref);
     if (!r.ok) return r;
     let c = this.controllers.get(r.id);
@@ -636,7 +643,7 @@ export class CallManager {
     now: number,
   ): Promise<Outcome<{ dir: string; from: string }>> {
     await this.init();
-    await this.folderSettled();
+    if (this.folderStage) await this.folderSettled();
     const s = this.index.get(id);
     if (!s) return fail(404, "not_found", `no call ${id}`);
     const c = this.controllers.get(id);
@@ -738,7 +745,7 @@ export class CallManager {
 
   /** The quit path: stop the live call within the stop budget, then settle everything. */
   async quit(): Promise<void> {
-    await this.folderSettled();
+    if (this.folderStage) await this.folderSettled();
     const c = this.live();
     if (c) await c.stop();
     await Promise.all([...this.controllers.values()].map((x) => x.idle()));
