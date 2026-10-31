@@ -634,7 +634,7 @@ class App {
    */
   private callHead(v: CallView | null, now: number, note: string): void {
     const call = v?.call;
-    if (!this.renaming) byId("title-text").textContent = call ? call.title || "Untitled call" : "";
+    if (!this.renaming) label(byId("title-text"), call ? call.title || "Untitled call" : "");
     const meta = byId("meta");
     if (!v || !call) {
       meta.textContent = "";
@@ -763,7 +763,7 @@ class App {
     const review = byId("pill-review");
     const proposed = v?.proposals("proposed").length ?? 0;
     review.hidden = proposed === 0;
-    review.textContent = `${proposed} ${proposed === 1 ? "word" : "words"} to review`;
+    label(review, `${proposed} ${proposed === 1 ? "word" : "words"} to review`);
     const langs = v ? languages(v) : [];
     const lang = byId("pill-lang");
     lang.hidden = langs.length === 0;
@@ -805,7 +805,7 @@ class App {
     record.title = blocked ?? "";
     // The global hotkey, which records and stops from any app, where a shell registers one.
     const key = byId("record-key");
-    key.textContent = recordKey(this.status?.app);
+    label(key, recordKey(this.status?.app));
     key.hidden = key.textContent === "";
     // How long the call on screen has recorded, beside its Stop.
     const elapsed = byId("elapsed");

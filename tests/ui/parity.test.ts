@@ -687,7 +687,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "[DK-W1] A press on Back to live held while the page repaints still goes back to live",
+    "[DK-W1] A press on Back to live or the title held while the page repaints still clicks",
     async () => {
       const t = tempDir("akou-wav-");
       await withRig({ helperArgs: ["--wav", silentWav(t.dir, 120)] }, async (rig) => {
@@ -725,14 +725,27 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await page.waitForSelector("#jump", { state: "visible" });
         const box = await page.locator("#jump").boundingBox();
         if (!box) throw new Error("no box for #jump");
+        // Every control paint() relabels: its text node must survive a repaint that says the same.
+        // Record's key label is left out: this rig registers no global hotkey, so it stays empty.
+        const controls = [
+          "jump",
+          "title-text",
+          "pill-review",
+          "stop-label",
+          "mute-label",
+          "pause-label",
+          "banner-action",
+        ];
         const words = () =>
-          page.evaluate(() => {
-            const w = window as unknown as { words?: Node | null };
-            const now = (document.getElementById("jump") as HTMLElement).firstChild;
-            const same = w.words === undefined || w.words === now;
+          page.evaluate((ids) => {
+            const w = window as unknown as { words?: Record<string, Node | null> };
+            const now = Object.fromEntries(
+              ids.map((i) => [i, (document.getElementById(i) as HTMLElement).firstChild]),
+            );
+            const changed = w.words ? ids.filter((i) => w.words?.[i] !== now[i]) : [];
             w.words = now;
-            return same;
-          });
+            return changed;
+          }, controls);
         await words();
         // A person's press lasts about a tenth of a second; held across a new line and the page's
         // one-second clock, both of which repaint the header and its controls.
@@ -742,7 +755,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await page.waitForSelector('#lines .row[data-id="l800041"]');
         await Bun.sleep(1100);
         // The rule itself, in every engine: a repaint that says the same keeps the same text node.
-        expect(await words()).toBe(true);
+        expect(await words()).toEqual([]);
         await page.mouse.up();
         // What WebKit does when the rule breaks: the release on a new text node is no click.
         await until(
@@ -751,6 +764,22 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           "back to live after the held press",
         );
         expect(await page.locator("#jump").isVisible()).toBe(false);
+        // The same held press on the title, which opens the rename box on a click.
+        const title = await page.locator("#title-text").boundingBox();
+        if (!title) throw new Error("no box for #title-text");
+        await words();
+        await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
+        await page.mouse.down();
+        await line(42);
+        await page.waitForSelector('#lines .row[data-id="l800042"]');
+        await Bun.sleep(1100);
+        expect(await words()).toEqual([]);
+        await page.mouse.up();
+        await until(
+          async () => (await page.locator("#title-input").count()) === 1,
+          3000,
+          "the rename input after the held press on the title",
+        );
       });
       t.cleanup();
     },
