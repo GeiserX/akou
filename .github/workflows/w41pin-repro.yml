@@ -5,15 +5,13 @@ on:
 permissions:
   contents: read
 jobs:
-  repro:
+  clickexp:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4]
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      AKOU_UI_BROWSER: webkit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -22,9 +20,4 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: printf 'Acquire::http::Timeout "10";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99akou-ci-retries
       - run: bunx playwright-core install --with-deps webkit
-      - run: |
-          set +e
-          DEBUG=pw:api bun test --path-ignore-patterns='nothing/**' --timeout 60000 ./tests/ui/parity.test.ts -t "The live transcript sits at the bottom" --rerun-each 60 > out.log 2>&1
-          echo "exit $?"
-          grep -B40 -E "W41DIAG" out.log | cut -c1-20000
-          echo "pass $(grep -c '^(pass)' out.log) fail $(grep -c '^(fail)' out.log)"
+      - run: N=250 bun w41pin-clickexp.ts
