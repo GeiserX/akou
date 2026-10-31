@@ -17,7 +17,9 @@ folderName(Date.now(), tz, "Call");
 const fname = ms(t);
 console.log(`[${label}] first Intl ${intl} ms, first folderName ${fname} ms`);
 
-for (let i = 1; i <= 6; i++) {
+const n = Number(process.argv[4] ?? 6);
+const all: Record<string, number[]> = {};
+for (let i = 1; i <= n; i++) {
   const row: Record<string, number> = {};
   const step = (name: string, fn: () => void) => {
     const s = performance.now();
@@ -56,7 +58,13 @@ for (let i = 1; i <= 6; i++) {
   w.append({ type: "call.created", id: ulid(Date.now()), schema: 1, workspace: "x", title: "Call", tz, user: "", akou: "0.0.0" } as never);
   const r3 = ms(s3);
   w.close();
-  console.log(
+  row.realFolder = r1;
+  row.realOpen = r2;
+  row.realCreated = r3;
+  for (const [k, v] of Object.entries(row)) (all[k] ??= []).push(v);
+  if (n <= 6) console.log(
     `[${label}] #${i} ${Object.entries(row).map(([k, v]) => `${k}=${v}`).join(" ")} sum=${Math.round(total)} | real: folder=${r1} open=${r2} created=${r3}`,
   );
 }
+const q = (a: number[], f: number) => [...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * f))];
+console.log(`[${label}] n=${n} ` + Object.entries(all).map(([k, a]) => `${k} p50=${q(a, 0.5)} p99=${q(a, 0.99)} max=${Math.max(...a)}`).join(" | "));

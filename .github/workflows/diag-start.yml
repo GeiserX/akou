@@ -21,7 +21,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - shell: bash
         run: |
-          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-first
-          bun scripts/ci/diag-start.ts "$USERPROFILE/AppData/Local/Temp" C-first
-          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-again
-          bun scripts/ci/diag-start.ts "$USERPROFILE/AppData/Local/Temp" C-again
+          C="$USERPROFILE/AppData/Local/Temp"
+          bun scripts/ci/diag-start.ts "$C" C-idle 100
+          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-idle 100
+          for i in 1 2 3; do bun scripts/ci/diag-load.ts "$C" 40 & done
+          sleep 2
+          bun scripts/ci/diag-start.ts "$C" C-load 100
+          bun scripts/ci/diag-start.ts "$RUNNER_TEMP" D-whileCload 100
+          wait
