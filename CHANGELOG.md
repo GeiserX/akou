@@ -2,6 +2,21 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.2 — clicks in the window land every time, and a call in the sidebar has its own menu
+
+In the akou window on a Mac, about 1 click in 10 on Back to live, Stop, Mute, Pause, the call's title or the words-to-review pill did nothing. The window rewrote those labels every second, and WebKit, the engine the window runs in, drops a click when the page replaces the text under the pointer during the press. The player bar also showed the wrong length for a saved call. And a right-click on a call in the sidebar opened the browser's own menu, while nothing in the window could delete a call. All of that is fixed, and starting a call no longer freezes the app on a slow disk. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Window
+- **Clicks on controls that update are no longer lost** (#500). Back to live, Stop, Mute, Pause, the call title, the words-to-review pill, the Record key and the banner's button now change their text only when the words change, so a press held across the once-a-second refresh still clicks.
+- **The player bar shows the call's real length on a Mac** (#499). WebKit guessed the length from the Opus file and got it wrong, 3.18 s for a 2.75 s clip, so the end time, the scrubber and the note marks were off. The bar now takes the length from the call's log.
+- **A double-click on a word during a call opens Fix** (#498). Lines that redraw while a call records keep their text, so a double-click, a selection or a copy is no longer lost to the redraw.
+- **Copying transcript lines gives clean text** (#495). A selection of lines copies as one "time text" line per row, without the Play and Fix buttons or the speaker chips.
+- **Calls in the sidebar have a menu** (#493). Right-click a call, or press Shift+F10 or the Menu key, for Rename…, Move to workspace… and Move to Trash, which you can undo for 10 s. The call that is recording cannot be moved or trashed. The sidebar no longer shows the browser's menu or lets you select its text; the search field keeps both.
+- The "Questions go to <agent>…" line under the ask box stays on one line (#494).
+
+### Calls
+- **Starting a call no longer freezes the app on a slow disk** (#492). Creating the call's folder and log ran on the app's main loop and could hold it for up to 2.5 s. It now runs off that loop, so the window and the API keep answering while the call starts.
+
 ## 1.7.1 — Parakeet hears quiet speech
 
 akou now runs on sherpa-onnx 2.0.1, the speech library under every model it uses. The live transcript, the voice detector, the speaker labels and diarization give the same output as before, byte for byte. The final pass with Parakeet hears quiet speech better: a clip played at -60 dB, which used to come back empty, is now transcribed in full. On normal speech, 1 word in 2451 came out different in our tests. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
