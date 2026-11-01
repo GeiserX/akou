@@ -683,6 +683,32 @@ describe("the player bar (W5.3 to W5.6)", () => {
   );
 
   test(
+    "[WK-1] the end time and the scrubber take the part's length from the log, not the length the engine reads from the file",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          // The log says 12 s were written; the file says 16. macOS WebKit guesses a length like
+          // that from any Ogg Opus file, so only the log's length is the same on every engine.
+          await audio(rig, id, 16);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await pauseNow(page);
+          await until(
+            async () => (await page.getAttribute("#scrub", "max")) === "12",
+            5000,
+            "the scrubber spanning the logged part",
+          );
+          expect(await text(page, "#pos-end")).toBe(formatWall(T0 + 12_000, TZ));
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[akou-dzm.10] the bar as b2 draws it: a round icon Play, one 'pos / end' readout in wall time, a speed pill, and a mark on the scrubber for each note taken in the part",
     async () => {
       let id = "";
@@ -942,7 +968,7 @@ describe("the player bar (W5.3 to W5.6)", () => {
   );
 
   test(
-    "[W5.6] PageUp with focus on a line's Play, and a drag of an overlay scrollbar, stop auto-scroll too",
+    "[W5.6, WK-3] PageUp with focus on a line's Play, and a drag of an overlay scrollbar, stop auto-scroll too",
     async () => {
       const N = 40;
       let id = "";
@@ -959,8 +985,11 @@ describe("the player bar (W5.3 to W5.6)", () => {
             await until(async () => (await player(page)).at > from + s, 8000, `${s} s played`);
           };
 
-          // Clicking a line's Play leaves focus on that button: the most common state.
+          // Clicking a line's Play leaves focus on that button in Chromium and Linux WebKit: the
+          // most common state. macOS WebKit never focuses a button on a click (WK-3), so the
+          // focus is put there by hand: on every engine the keys below start from that button.
           await playRow(page, "l000030");
+          await page.focus('#lines .row[data-id="l000030"] .play');
           await playFor(1);
           expect(await following()).toBe(true);
           expect(

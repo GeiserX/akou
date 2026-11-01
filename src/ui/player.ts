@@ -151,12 +151,17 @@ export class Player {
     localStorage.setItem(RATE_KEY, String(r));
   }
 
-  /** The part's length: the element's once it knows it, else what the log says was written. */
+  /**
+   * The part's length: what the log says was written, else the element's once it knows it. The
+   * log comes first because macOS WebKit (WKWebView, the app's own webview) guesses an Ogg Opus
+   * file's length instead of reading its last granule: 3.18 s for a 2.75 s part, 12.5 s for 12 s,
+   * so the end time, the scrubber and the note marks were wrong there (docs/TRAPS.md WK-1).
+   */
   private duration(): number {
-    const d = this.el.duration;
-    if (Number.isFinite(d)) return d;
     const part = this.part === null ? undefined : this.d.view()?.part(this.part);
-    return part?.ended?.fileSeconds ?? Number.NaN;
+    const written = part?.ended?.fileSeconds;
+    if (written !== undefined && written > 0) return written;
+    return this.el.duration;
   }
 
   /**
