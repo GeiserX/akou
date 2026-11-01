@@ -687,6 +687,106 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "[DK-W1] A press on Back to live or the title held while the page repaints still clicks",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir, 120)] }, async (rig) => {
+        const id = await rig.startCall();
+        const line = (i: number) =>
+          rig.write(
+            id,
+            seg(`l8${String(i).padStart(5, "0")}`, `line ${i} of the call`, { w0: Date.now() + i }),
+          );
+        for (let i = 1; i <= 40; i++) await line(i);
+        const page = await rig.open(id, {
+          before: (p) => p.setViewportSize({ width: 1024, height: 700 }),
+        });
+        await page.waitForSelector('#lines .row[data-id="l800040"]');
+        // Scroll up once the opening view stopped moving, or a late resize puts it back down.
+        const bottom = () =>
+          page.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            return `${s.scrollTop} ${s.scrollHeight} ${s.scrollHeight - s.scrollTop - s.clientHeight < 2}`;
+          });
+        await until(
+          async () => {
+            const a = await bottom();
+            await Bun.sleep(250);
+            return a === (await bottom()) && a.endsWith("true");
+          },
+          3000,
+          "the opening view at the bottom",
+        );
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.style.scrollBehavior = "auto";
+          s.scrollTop = 0;
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        const box = await page.locator("#jump").boundingBox();
+        if (!box) throw new Error("no box for #jump");
+        // Every control paint() relabels: its text node must survive a repaint that says the same.
+        // Record's key label is left out: this rig registers no global hotkey, so it stays empty.
+        const controls = [
+          "jump",
+          "title-text",
+          "pill-review",
+          "stop-label",
+          "mute-label",
+          "pause-label",
+          "banner-action",
+        ];
+        const words = () =>
+          page.evaluate((ids) => {
+            const w = window as unknown as { words?: Record<string, Node | null> };
+            const now = Object.fromEntries(
+              ids.map((i) => [i, (document.getElementById(i) as HTMLElement).firstChild]),
+            );
+            const changed = w.words ? ids.filter((i) => w.words?.[i] !== now[i]) : [];
+            w.words = now;
+            return changed;
+          }, controls);
+        await words();
+        // A person's press lasts about a tenth of a second; held across a new line and the page's
+        // one-second clock, both of which repaint the header and its controls.
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await line(41);
+        await page.waitForSelector('#lines .row[data-id="l800041"]');
+        await Bun.sleep(1100);
+        // The rule itself, in every engine: a repaint that says the same keeps the same text node.
+        expect(await words()).toEqual([]);
+        await page.mouse.up();
+        // What WebKit does when the rule breaks: the release on a new text node is no click.
+        await until(
+          () => page.evaluate(() => !document.body.classList.contains("scrolled")),
+          3000,
+          "back to live after the held press",
+        );
+        expect(await page.locator("#jump").isVisible()).toBe(false);
+        // The same held press on the title, which opens the rename box on a click.
+        const title = await page.locator("#title-text").boundingBox();
+        if (!title) throw new Error("no box for #title-text");
+        await words();
+        await page.mouse.move(title.x + title.width / 2, title.y + title.height / 2);
+        await page.mouse.down();
+        await line(42);
+        await page.waitForSelector('#lines .row[data-id="l800042"]');
+        await Bun.sleep(1100);
+        expect(await words()).toEqual([]);
+        await page.mouse.up();
+        await until(
+          async () => (await page.locator("#title-input").count()) === 1,
+          3000,
+          "the rename input after the held press on the title",
+        );
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[W4.1] A saved call opens at its end, its last line at the bottom edge over the player bar and under the final note, and Back to the end once scrolled up",
     async () => {
       const id = "01J8Z6Q4M2VX0K7B3D4E5FRUNN";

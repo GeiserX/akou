@@ -58,6 +58,15 @@ export function text(s: string): Text {
   return document.createTextNode(s);
 }
 
+/**
+ * Sets a control's text only when it changed (TRAPS.md DK-W1). Writing `textContent`, even the same
+ * words, replaces the text node, and WebKit drops the click of a press that landed on the old node:
+ * a repaint between press and release (a new line every second or so) lost "Back to live".
+ */
+export function label(el: HTMLElement, s: string): void {
+  if (el.textContent !== s) el.textContent = s;
+}
+
 /** Replaces an element's children. */
 export function replace(el: Element, ...children: Child[]): void {
   el.replaceChildren();

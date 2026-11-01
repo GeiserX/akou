@@ -10,7 +10,7 @@
  * (`Last-Event-ID`); the listener then sends only what changed since. Everything is drawn as text.
  */
 
-import { h, replace } from "./dom.ts";
+import { h, label, replace } from "./dom.ts";
 import { HueBook } from "./model.ts";
 import { FontKeys, fillRow, intoTheCall, jumpText, rowElement, ScrollPin } from "./transcript.ts";
 
@@ -106,7 +106,7 @@ function state(s: { state: string; live: boolean; start?: number | null }): void
   document.body.classList.toggle("recording", s.live);
   document.body.classList.toggle("saved", !s.live);
   $("state").textContent = s.live ? "live" : s.state === "ended" ? "ended" : s.state;
-  $("jump").textContent = jumpText(s.live);
+  label($("jump"), jumpText(s.live));
 }
 
 const es = new EventSource("stream");
