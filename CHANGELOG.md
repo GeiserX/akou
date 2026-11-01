@@ -2,6 +2,10 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.3 — a new terms reading, and nothing else
+
+This release changes nothing in the app, the command line or the server. It exists to record a new reading of the Anthropic and OpenAI terms, which a stable release needs ([docs/providers.md](docs/providers.md#the-reading-of-2026-11-01)). Nothing in those terms changed since the reading of 30 October, so the Claude Code and Codex harnesses keep working as before. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
 ## 1.7.2 — clicks in the window land every time, and a call in the sidebar has its own menu
 
 In the akou window on a Mac, about 1 click in 10 on Back to live, Stop, Mute, Pause, the call's title or the words-to-review pill did nothing. The window rewrote those labels every second, and WebKit, the engine the window runs in, drops a click when the page replaces the text under the pointer during the press. The player bar also showed the wrong length for a saved call. And a right-click on a call in the sidebar opened the browser's own menu, while nothing in the window could delete a call. All of that is fixed, and starting a call no longer freezes the app on a slow disk. The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
