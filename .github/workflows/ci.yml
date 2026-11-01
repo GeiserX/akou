@@ -140,7 +140,10 @@ jobs:
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake
   # provider, once in Chromium's headless shell and once in Playwright's WebKit, the closest
   # stand-in for the WKWebView and WebKitGTK the app ships (docs/TESTING.md TS-14), each engine
-  # with its own floor. Nothing plays audio or opens a window.
+  # with its own floor. Nothing plays audio or opens a window. A third leg runs the player bar's
+  # tests in Playwright's WebKit on macOS, whose media stack is the WKWebView one: it alone saw the
+  # part length macOS WebKit guesses (docs/TRAPS.md WK-1). One file, a few minutes on a runner
+  # that costs nothing on this public repo.
   ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -149,13 +152,21 @@ jobs:
       matrix:
         include:
           - browser: chromium
+            os: ubuntu-latest
             install: --only-shell chromium
             floor: ui
           - browser: webkit
+            os: ubuntu-latest
             install: webkit
             floor: ui-webkit
-    name: ui (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+          - browser: webkit
+            os: macos-latest
+            leg: webkit, macOS
+            install: webkit
+            floor: ui-player
+            tests: ./tests/ui/transcript-audio.test.ts
+    name: ui (${{ matrix.leg || matrix.browser }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
     env:
       AKOU_UI_BROWSER: ${{ matrix.browser }}
@@ -170,19 +181,23 @@ jobs:
       # On 2026-10-26 those stalls (40 to 111 s each, on files of 25 kB) kept WebKit's 140 MB of
       # libraries from arriving inside the job's 20 minutes, four runs in a row. Give up after 10 s
       # and retry instead.
-      - run: printf 'Acquire::http::Timeout "10";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99akou-ci-retries
-      # The browser build pinned by playwright-core, with its system libraries.
-      - run: bunx playwright-core install --with-deps ${{ matrix.install }}
+      - if: runner.os == 'Linux'
+        run: printf 'Acquire::http::Timeout "10";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99akou-ci-retries
+      # The browser build pinned by playwright-core, with its system libraries on Linux.
+      - run: bunx playwright-core install ${{ runner.os == 'Linux' && '--with-deps' || '' }} ${{ matrix.install }}
       # Every parity screen in both themes, for review (TS-15c), from the Chromium leg: saved, never
       # compared. A repeat dispatch saves none.
-      - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
+      - if: ${{ !matrix.tests }}
+        run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
         env:
           AKOU_UI_SHOTS: ${{ env.TEST_REPEAT == '1' && matrix.browser == 'chromium' && 'ui-shots' || '' }}
+      - if: ${{ matrix.tests }}
+        run: bun test --path-ignore-patterns='nothing/**' --timeout 60000 --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml ${{ matrix.tests }}
       - run: bun scripts/ci/test-floor.ts ${{ matrix.floor }} .junit-ui.xml
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: junit-ui-${{ matrix.browser }}
+          name: junit-ui-${{ matrix.browser }}${{ runner.os == 'macOS' && '-macos' || '' }}
           # The JUnit files are dotfiles, which upload-artifact leaves out unless told.
           include-hidden-files: true
           path: .junit-ui.xml

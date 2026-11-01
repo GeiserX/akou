@@ -2485,7 +2485,7 @@ describe("playback and Fix this line", () => {
   );
 
   test(
-    "[W5.2] Space pauses a playing line and resumes it from the same position; the Play button does the same; Space in a text field types",
+    "[W5.2, WK-3] Space pauses a playing line and resumes it from the same position; the Play button does the same; Space in a text field types",
     async () => {
       let id = "";
       await withRig(
@@ -2503,13 +2503,15 @@ describe("playback and Fix this line", () => {
           expect(await page.locator("#play").isDisabled()).toBe(true);
           await page.hover('#lines .row[data-id="l000003"]');
           await page.click('#lines .row[data-id="l000003"] .play');
-          await until(async () => (await player()).at > 0.3, 8000, "the line playing");
+          // Past the first second: in its first few hundred ms macOS WebKit reports a position
+          // ahead of what it has played, and a pause there drops back to it, as far as 0 (WK-3).
+          await until(async () => (await player()).at > 1, 8000, "the line playing");
           expect(await page.getAttribute("#play", "aria-label")).toBe("Pause");
           // Space, with focus still on the row's Play button, pauses: it does not restart the line.
           await page.keyboard.press("Space");
           const paused = await player();
           expect(paused.paused).toBe(true);
-          expect(paused.at).toBeGreaterThan(0.3);
+          expect(paused.at).toBeGreaterThan(1);
           expect(await page.getAttribute("#play", "aria-label")).toBe("Play");
           await page.waitForTimeout(400);
           expect((await player()).at).toBe(paused.at);
