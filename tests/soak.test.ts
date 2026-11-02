@@ -21,6 +21,7 @@ function clean(): SoakResult {
       { at: 3600, heapMb: 31, rssMb: 190 },
     ],
     maxLateMs: 120,
+    worstLate: { at: 1800, cpuMs: 30 },
     events: { "call.created": 1, "part.started": 1, "part.ended": 1, "call.ended": 1 },
     log: { bytes: 40_000, torn: false, invalid: 0, seqErrors: 0 },
   };
@@ -128,5 +129,30 @@ describe("a short soak through the call manager and the fake helper", () => {
     expect(r.events["part.started"]).toBe(1);
     expect(r.events["call.ended"]).toBe(1);
     expect(judge(r).filter((v) => !v.ok)).toEqual([]);
+  }, 30_000);
+
+  // The nightly of 2026-11-02 read one tick 3017 ms late and nothing else: no time, no cause. The
+  // soak now says when, and whether this process was running meanwhile.
+  test("[T3.8] the worst tick says whether this process held the loop or was not running", async () => {
+    const held = (ms: number, how: "busy" | "asleep") =>
+      setTimeout(() => {
+        const end = performance.now() + ms;
+        if (how === "asleep") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+        else while (performance.now() < end);
+      }, 1000);
+    held(600, "busy");
+    const busy = await soak({ speed: 20, seconds: 2 });
+    held(600, "asleep");
+    const asleep = await soak({ speed: 20, seconds: 2 });
+    for (const r of [busy, asleep]) {
+      expect(r.maxLateMs).toBeGreaterThan(500);
+      expect(r.worstLate?.at).toBeGreaterThan(0.9);
+      expect(r.worstLate?.at).toBeLessThan(1.9);
+    }
+    // Relative, so a loaded machine that pre-empts the busy loop for a while still passes.
+    const busyCpu = busy.worstLate?.cpuMs ?? 0;
+    const asleepCpu = asleep.worstLate?.cpuMs ?? 0;
+    expect(busyCpu).toBeGreaterThan(asleepCpu + 250);
+    expect(busyCpu).toBeGreaterThan(300);
   }, 30_000);
 });

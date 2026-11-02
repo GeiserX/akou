@@ -75,6 +75,15 @@ export interface SoakResult {
   opusSeconds: number | null;
   samples: SoakSample[];
   maxLateMs: number;
+  /**
+   * The worst tick (the one that set `maxLateMs`), so a red `loop.max_late_ms` says when and why:
+   * `at` in wall seconds since the start, `cpuMs` the CPU time this process used while that tick was
+   * late. A hint, not proof: `process.cpuUsage()` counts every thread, so a blocking call on the
+   * loop's thread can coincide with CPU spent on another. Near the lateness, the app's own code most
+   * likely held the loop; near zero, the process was not running at all (a paused or starved
+   * runner) or sat in one blocking call.
+   */
+  worstLate: { at: number; cpuMs: number } | null;
   events: Record<string, number>;
   log: { bytes: number; torn: boolean; invalid: number; seqErrors: number };
 }
@@ -206,14 +215,21 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
     onPacket: (_, __, p) => audio.add(p),
   });
   let maxLateMs = 0;
-  let expected = performance.now() + 100;
+  let worstLate: SoakResult["worstLate"] = null;
+  const t0 = performance.now();
+  let expected = t0 + 100;
+  let cpu = process.cpuUsage();
   const ticker = setInterval(() => {
     const now = performance.now();
-    maxLateMs = Math.max(maxLateMs, now - expected);
+    const used = process.cpuUsage(cpu);
+    cpu = process.cpuUsage();
+    if (now - expected > maxLateMs) {
+      maxLateMs = now - expected;
+      worstLate = { at: (now - t0) / 1000, cpuMs: (used.user + used.system) / 1000 };
+    }
     expected = now + 100;
   }, 100);
   const samples: SoakSample[] = [];
-  const t0 = performance.now();
   const sample = () => {
     Bun.gc(true);
     const m = process.memoryUsage();
@@ -261,6 +277,7 @@ export async function soak(o: SoakOptions): Promise<SoakResult> {
       opusSeconds,
       samples,
       maxLateMs,
+      worstLate,
       events,
       log: {
         bytes: statSync(join(folder, EVENTS_FILE)).size,
@@ -300,6 +317,12 @@ export function report(r: SoakResult, verdicts: readonly Verdict[], helper: stri
       (v) => `| ${v.ok ? "ok" : "**FAIL**"} | \`${v.key}\` | ${v.value} | ${v.bound} |`,
     ),
     "",
+    ...(r.worstLate
+      ? [
+          `The worst tick ran ${r.maxLateMs.toFixed(0)} ms late at ${r.worstLate.at.toFixed(0)} s, with ${r.worstLate.cpuMs.toFixed(0)} ms of this process's CPU in that ${(r.maxLateMs + 100).toFixed(0)} ms.`,
+          "",
+        ]
+      : []),
   ].join("\n");
 }
 
