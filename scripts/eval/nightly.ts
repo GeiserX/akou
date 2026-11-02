@@ -884,13 +884,14 @@ async function dictationStage(
     .map((u) => readWav(new Uint8Array(readFileSync(u.wav))))
     .map((x) => atPeak(x, DICTATION_PEAK))
     .filter((x): x is Float32Array => x !== null);
-  // Each length takes its utterances from the clips in order, so the three sets differ.
+  // Each length takes its utterances from the clips in order, after the ones the last length took,
+  // so the three sets differ.
   const byLength = new Map<number, Float32Array[]>();
   let from = 0;
   for (const s of DICTATION_LENGTHS) {
-    const need = Math.ceil((s * DICTATIONS_PER_LENGTH) / 5) + 2;
-    byLength.set(s, utterances(clips.slice(from, from + need), s, DICTATIONS_PER_LENGTH));
-    from += need;
+    const u = utterances(clips.slice(from), s, DICTATIONS_PER_LENGTH);
+    byLength.set(s, u.utterances);
+    from += u.used;
   }
   type Make = () => ReturnType<typeof liveDictate>;
   // The streaming model goes with Qwen, outside the nightly's cached recognizer folder.
