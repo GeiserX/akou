@@ -5,7 +5,8 @@
  *   bun scripts/tray-icons.ts
  *
  * - `akou-template.png`: macOS idle, a template image. Only its alpha counts: the menu bar
- *   recolours it for a dark or a light bar. 32 px, shown at 16 pt, so it is sharp on a Retina display.
+ *   recolours it for a dark or a light bar. 32 px marked 144 dpi, so it loads at 16 pt and is sharp
+ *   on a Retina display.
  * - `akou.ico`: Windows idle, 16 and 32 px PNG frames in one ICO.
  * - `akou.png`: the Linux AppIndicator idle, 32 px.
  * - `akou-recording-template.png`: macOS while a call records, a template too: a filled disc with
@@ -157,8 +158,11 @@ function zlibStored(data: Uint8Array): Buffer {
   return Buffer.concat(parts);
 }
 
-/** An 8-bit RGBA PNG, every row unfiltered. */
-export function png(size: number, rgba: Uint8Array): Buffer {
+/**
+ * An 8-bit RGBA PNG, every row unfiltered. `dpi` adds a `pHYs` chunk, so macOS loads a 32 px file
+ * at 144 dpi as a 16 pt image.
+ */
+export function png(size: number, rgba: Uint8Array, dpi?: number): Buffer {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
@@ -171,10 +175,28 @@ export function png(size: number, rgba: Uint8Array): Buffer {
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr),
+    ...(dpi ? [chunk("pHYs", physChunk(dpi))] : []),
     chunk("IDAT", zlibStored(rows)),
     chunk("IEND", new Uint8Array(0)),
   ]);
 }
+
+/** A `pHYs` body: pixels per metre on both axes, unit metre. */
+function physChunk(dpi: number): Uint8Array {
+  const b = Buffer.alloc(9);
+  const ppm = Math.round(dpi / 0.0254);
+  b.writeUInt32BE(ppm, 0);
+  b.writeUInt32BE(ppm, 4);
+  b[8] = 1;
+  return b;
+}
+
+/**
+ * The macOS templates are 32 px marked 144 dpi, so they load at 16 pt. The SDK puts the file's
+ * image on the status item first and shrinks it to 16 pt after; the item keeps the width of the
+ * image it was given, so a 72 dpi file (32 pt) left the idle item 48 pt wide instead of 32.
+ */
+const RETINA_DPI = 144;
 
 /** An ICO whose frames are PNGs (Windows Vista and later read them). */
 export function ico(frames: { size: number; png: Buffer }[]): Buffer {
@@ -199,10 +221,10 @@ export function ico(frames: { size: number; png: Buffer }[]): Buffer {
 /** Every tray file, by name. */
 export function trayIconFiles(): Record<string, Uint8Array> {
   return {
-    "akou-template.png": png(32, draw(32, BLACK)),
+    "akou-template.png": png(32, draw(32, BLACK), RETINA_DPI),
     "akou.ico": ico([16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE)) }))),
     "akou.png": png(32, draw(32, BLUE)),
-    "akou-recording-template.png": png(32, drawCutout(32)),
+    "akou-recording-template.png": png(32, drawCutout(32), RETINA_DPI),
     "akou-recording.ico": ico(
       [16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE, RED)) })),
     ),

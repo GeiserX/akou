@@ -24,16 +24,21 @@ const GATE = join(import.meta.dir, "..", "docs", "gates", "dictation-latency.jso
 const ramp = (from: number, n: number) => Float32Array.from({ length: n }, (_, i) => from + i);
 
 describe("DC-T3: the utterances and the table", () => {
-  test("utterances are the clips joined end to end and cut to the length, never padded", () => {
-    const clips = [ramp(0, 5), ramp(100, 3), ramp(200, 9)];
+  test("[#505] each utterance starts where a clip starts, runs on into the next, and is never padded", () => {
+    // A cut that starts inside a word is not a dictation: Parakeet decodes one to nothing in about
+    // a third of 3 s windows, and the remote stage failed a night on such a cut. The second
+    // utterance runs on from a 3-sample clip into the next; the rest of that clip is dropped.
+    const clips = [ramp(0, 5), ramp(100, 3), ramp(200, 9), ramp(300, 4)];
     // 4 samples at 16 kHz is 0.25 ms; three of them.
     const got = utterances(clips, 4 / 16_000, 3);
-    expect(got.map((u) => [...u])).toEqual([
+    expect(got.utterances.map((u) => [...u])).toEqual([
       [0, 1, 2, 3],
-      [4, 100, 101, 102],
-      [200, 201, 202, 203],
+      [100, 101, 102, 200],
+      [300, 301, 302, 303],
     ]);
-    expect(() => utterances(clips, 4 / 16_000, 5)).toThrow("the clips hold 4 utterances");
+    expect(got.used).toBe(4);
+    expect(utterances(clips, 4 / 16_000, 2).used).toBe(3);
+    expect(() => utterances(clips, 4 / 16_000, 4)).toThrow("the clips hold 3 utterances");
   });
 
   test("a quiet clip is brought to the peak, as a microphone's gain would; a silent one is dropped", () => {
