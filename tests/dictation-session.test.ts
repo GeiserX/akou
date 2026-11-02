@@ -596,6 +596,33 @@ describe("the helper's stdout and stderr are two pipes", () => {
     expect(sent.find((c) => c.type === "insert")).toMatchObject({ method: "clipboard" });
     expect(log.events().map((e) => e.type)).not.toContain("dictation.text");
   });
+
+  test("[T4.39] the helper's mic.failed reaches the pill's hook and the log, and writes no dictation", () => {
+    const t = tempDir("akou-dict-micfail-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const seen: string[] = [];
+    const s = new DictationSession({
+      log,
+      engine: () => null,
+      send: () => {},
+      bindings: () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold" }),
+      now: () => Date.now(),
+      onMicFailed: () => seen.push("pill"),
+      onLog: (level, msg) => seen.push(`${level} ${msg}`),
+    });
+    s.onMessage({ type: "mic.failed" });
+    expect(seen).toEqual([
+      "warn dictation: the microphone did not open for the dictation key",
+      "pill",
+    ]);
+    expect(log.items()).toEqual([]);
+    // Positive control: a plain warn from the helper is only logged, never the pill's.
+    seen.length = 0;
+    s.onMessage({ type: "warn", code: "mic-open", msg: "the microphone did not open in time" });
+    expect(seen).toEqual(["warn dictation helper: mic-open: the microphone did not open in time"]);
+  });
 });
 
 describe("the master switch", () => {

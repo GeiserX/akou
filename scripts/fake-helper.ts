@@ -110,6 +110,8 @@
  *
  *   --slow-mic MS           the mic opens MS after the key-down: `session.started` waits for it
  *                           (the readiness gate, DC-N4)
+ *   --mic-never-opens       the mic never opens: a session says `mic.failed` and never starts,
+ *                           as the real helper does for a press its mic did not open for (T4.39)
  *   --focus-change          the target lost focus before the insert: `insert.failed` (DC-N9).
  *                           A `focus {target}` (the draft box's Enter) brings the target back:
  *                           from then until the next session, inserts land there
@@ -596,6 +598,10 @@ async function runDictate(): Promise<void> {
       else if (o.type === "latched") {
         if (open) say({ type: "latched", id: open.id });
       } else if (o.type === "start") {
+        if (flag("--mic-never-opens")) {
+          say({ type: "mic.failed" });
+          continue;
+        }
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
         captured.set(open.id, targetAt(o.at));

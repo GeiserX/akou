@@ -23,6 +23,7 @@ import {
   ERROR_MS,
   LOADING_NOTE,
   levelDb,
+  MIC_FAILED,
   NOTICE_MS,
   PILL_MAX_HEIGHT,
   type PillDictation,
@@ -1337,6 +1338,43 @@ describe("DC-O1: the pill's window", () => {
   });
 });
 
+describe("T4.39: a microphone that did not open, on the pill", () => {
+  test("[T4.39] a press the microphone did not open for says so, and the next session's island replaces it", () => {
+    const f = pill();
+    f.tell({ kind: "press", on: true, frame: null });
+    f.tell({ kind: "mic-failed" });
+    expect(f.states().at(-1)).toEqual({ state: "error", message: MIC_FAILED, actions: [] });
+    expect(f.visible.at(-1)).toBe(true);
+    // The session going idle (its press vanished) leaves the message up for its time.
+    f.to("idle");
+    expect(f.states().at(-1)).toMatchObject({ state: "error", message: MIC_FAILED });
+    expect(f.t.pending()).toEqual([ERROR_MS]);
+    // The microphone opened late, or the next press worked: the session's island takes over.
+    f.to("listening");
+    expect(f.states().at(-1)).toMatchObject({ state: "listening" });
+    expect(f.t.pending()).toEqual([]);
+  });
+
+  test("[T4.39] the message goes after ERROR_MS", () => {
+    const f = pill();
+    f.tell({ kind: "mic-failed" });
+    f.t.run(ERROR_MS);
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("[T4.39] positive control: without the helper's line a press says nothing, and a session keeps its island", () => {
+    const f = pill();
+    f.tell({ kind: "press", on: true, frame: null });
+    f.t.run(PRESS_MS);
+    expect(f.states().map((s) => s.state)).toEqual(["pressed", "hidden"]);
+    // A late line while a session listens is not the session's: its island stays.
+    f.to("listening");
+    f.tell({ kind: "mic-failed" });
+    expect(f.states().at(-1)).toMatchObject({ state: "listening" });
+  });
+});
+
 describe("DC-O1: the pill over a whole app", () => {
   async function rig(
     o: Pick<RigOptions, "models" | "jobs"> & {
@@ -1428,6 +1466,22 @@ describe("DC-O1: the pill over a whole app", () => {
     await dictate(plain);
     expect(plain.moves).toEqual([]);
     expect(plain.rec.states()[0]).toEqual({ state: "pressed" });
+  }, 20_000);
+
+  test("[T4.39] a dictation whose microphone never opens says so on the pill, through the whole app", async () => {
+    const p = await pillOver(await rig({ helperArgs: ["--mic-never-opens"] }));
+    p.f.tray("dictate");
+    await until(
+      () => p.rec.states().some((s) => s.state === "error"),
+      5000,
+      "the pill to say the microphone did not open",
+    );
+    expect(p.rec.states().at(-1)).toEqual({ state: "error", message: MIC_FAILED, actions: [] });
+    expect(p.rec.states().some((s) => s.state === "listening")).toBe(false);
+    // Positive control: the same press with a microphone that opens listens and says nothing.
+    const ok = await pillOver(await rig());
+    await dictate(ok);
+    expect(ok.rec.states().some((s) => s.state === "error")).toBe(false);
   }, 20_000);
 
   // A whole app and a dictation in real time, about 2.2 s; its waits allow 10 s too.

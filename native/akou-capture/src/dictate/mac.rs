@@ -34,7 +34,8 @@
 //!   the worker waits (turning the run loop) until the target is frontmost, at most `FOCUS_MS`,
 //!   so the insert that follows compares against the window that now has the keyboard.
 //! - **The microphone** is `macos::mic::MicWorker`, the same cpal stream `run` records with, opened
-//!   and closed as `live` asks, on the device `inputs::choose` picks from Core Audio's inputs and
+//!   and closed as `live` asks (its open is waited for without a budget, so a USB mic waking from
+//!   idle is kept, T4.39), on the device `inputs::choose` picks from Core Audio's inputs and
 //!   their transport (`kAudioDeviceTransportTypeBuiltIn`, `...Bluetooth`, `...BluetoothLE`,
 //!   DC-N5). A Bluetooth device is never kept warm. A closed lid is IOKit's `AppleClamshellState`
 //!   on `IOPMrootDomain`, which a desktop Mac does not have (read as open).
@@ -45,7 +46,7 @@
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::Duration;
 
 use objc2::msg_send;
@@ -82,14 +83,14 @@ use super::tap::{Gate, TapEvent};
 use crate::clock;
 use crate::macos::mic::MicWorker;
 use crate::macos::props;
-use crate::source::Event;
+use crate::protocol::MicInfo;
+use crate::source::{Event, OpenError};
 
 pub const BACKEND: &str = "cgeventtap";
 /// The user-data mark on every event the helper posts, so its own tap lets them pass.
 pub const AKOU_EVENT: i64 = 0x616B_6F75;
 /// The longest any accessibility read may take (DC-L2).
 const AX_TIMEOUT_S: f32 = 0.2;
-const MIC_OPEN: Duration = Duration::from_secs(3);
 const MIC_CLOSE: Duration = Duration::from_millis(1500);
 /// The longest `focus` waits for the target to come to the front.
 const FOCUS_MS: u64 = 500;
@@ -721,6 +722,8 @@ impl Prefs for CfPrefs {
 #[derive(Default)]
 pub struct MacMic {
     worker: Option<MicWorker>,
+    /// The open under way: its outcome comes here, however late (T4.39).
+    opening: Option<Receiver<Result<MicInfo, OpenError>>>,
 }
 
 impl Device for MacMic {
@@ -746,12 +749,15 @@ impl Device for MacMic {
         lid_closed()
     }
 
+    /// Starts the open and returns: a mic slow to open (a USB device waking from idle) is waited
+    /// for by `opened`, never given up after a budget (T4.39).
     fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<(), String> {
         self.close();
         let w = MicWorker::spawn(device.to_string(), events);
-        match w.open(MIC_OPEN) {
-            Ok(_) => {
+        match w.begin_open() {
+            Ok(rx) => {
                 self.worker = Some(w);
+                self.opening = Some(rx);
                 Ok(())
             }
             Err(e) => {
@@ -761,9 +767,31 @@ impl Device for MacMic {
         }
     }
 
+    fn opened(&mut self) -> Option<Result<(), String>> {
+        let r = match self.opening.as_ref()?.try_recv() {
+            Ok(r) => r.map(|_| ()),
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                Err(OpenError::unavailable("the microphone worker is gone"))
+            }
+        };
+        self.opening = None;
+        if r.is_err() {
+            self.close();
+        }
+        Some(r.map_err(|e| format!("{}: {}", e.code, e.msg)))
+    }
+
+    /// An open still under way is given up without waiting: the worker drops the stream it opens
+    /// and ends.
     fn close(&mut self) {
+        let budget = if self.opening.take().is_some() {
+            Duration::ZERO
+        } else {
+            MIC_CLOSE
+        };
         if let Some(w) = self.worker.take() {
-            w.close(MIC_CLOSE);
+            w.close(budget);
         }
     }
 }

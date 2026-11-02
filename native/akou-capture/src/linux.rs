@@ -24,7 +24,7 @@ use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -469,13 +469,18 @@ impl Handle {
     }
 
     fn open(&self, ch: Ch, budget: Duration) -> Result<Info, OpenError> {
+        self.begin_open(ch)?.recv_timeout(budget).map_err(|_| {
+            OpenError::unavailable(format!("the {} did not open in time", ch_label(ch)))
+        })?
+    }
+
+    /// Starts an open without waiting: the outcome comes on the receiver, however late (T4.39).
+    fn begin_open(&self, ch: Ch) -> Result<Receiver<Result<Info, OpenError>>, OpenError> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(Msg::Open(ch, reply))
             .map_err(|_| OpenError::unavailable("the sound server worker is gone"))?;
-        rx.recv_timeout(budget).map_err(|_| {
-            OpenError::unavailable(format!("the {} did not open in time", ch_label(ch)))
-        })?
+        Ok(rx)
     }
 
     /// The server's view now, or the last one when the server does not answer in time.
@@ -769,10 +774,15 @@ impl Frontend for LinuxFrontend {
 /// The microphone alone, for `akou-capture dictate` (DC-N4): the same worker and record stream
 /// `run` uses, opened on the source `dictate` chose and closed when its warm hold ends. Nothing is
 /// held back at the start: dictate's readiness gate waits for the first sample itself.
-pub struct DictateMic(Handle);
+pub struct DictateMic {
+    handle: Handle,
+    /// The open under way: its outcome comes here, however late (T4.39).
+    opening: Option<Receiver<Result<Info, OpenError>>>,
+}
 
 impl DictateMic {
-    /// Opens `device` (a source name, or `default`).
+    /// Starts opening `device` (a source name, or `default`) without waiting; `opened` gives the
+    /// outcome.
     pub fn open(device: &str, events: SyncSender<Event>) -> Result<DictateMic, OpenError> {
         let cfg = DeviceConfig {
             mic: device.to_string(),
@@ -786,8 +796,11 @@ impl DictateMic {
             Arc::new(AtomicU64::new(0)),
             Arc::new(AtomicBool::new(true)),
         );
-        match h.open(Ch::Mic, REBUILD_BUDGET) {
-            Ok(_) => Ok(DictateMic(h)),
+        match h.begin_open(Ch::Mic) {
+            Ok(rx) => Ok(DictateMic {
+                handle: h,
+                opening: Some(rx),
+            }),
             Err(e) => {
                 h.close(CLOSE_BUDGET);
                 Err(e)
@@ -795,8 +808,28 @@ impl DictateMic {
         }
     }
 
+    /// `None` while the open is under way, then its outcome, once.
+    pub fn opened(&mut self) -> Option<Result<(), OpenError>> {
+        let r = match self.opening.as_ref()?.try_recv() {
+            Ok(r) => r.map(|_| ()),
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                Err(OpenError::unavailable("the sound server worker is gone"))
+            }
+        };
+        self.opening = None;
+        Some(r)
+    }
+
+    /// Stops the stream; an open still under way is given up without waiting, and the worker
+    /// drops what it opens and ends.
     pub fn close(self) {
-        self.0.close(CLOSE_BUDGET);
+        let budget = if self.opening.is_some() {
+            Duration::ZERO
+        } else {
+            CLOSE_BUDGET
+        };
+        self.handle.close(budget);
     }
 }
 

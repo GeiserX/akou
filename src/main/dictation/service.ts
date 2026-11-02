@@ -320,6 +320,8 @@ export type DictationFollow =
   | { kind: "chip"; chip: Chip }
   /** The helper lost a grant it started with (DC-N1): on macOS the key tap is dead. */
   | { kind: "grant-lost"; name: string }
+  /** A dictation got no audio: the microphone did not open in time, or at all (T4.39). */
+  | { kind: "mic-failed" }
   /** macOS Secure Input turned on or off: a keyed chord cannot reach the helper while it is on. */
   | { kind: "secure-input"; on: boolean; keyWorks?: boolean }
   /**
@@ -929,6 +931,7 @@ export class DictationService {
       onReady: () => this.readied(session),
       onSecureInput: (on, keyWorks) => this.tell({ kind: "secure-input", on, keyWorks }),
       onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
+      onMicFailed: () => this.tell({ kind: "mic-failed" }),
       onHotkey: (name, target) => this.lastHotkey(session, name, target),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
       ...(this.o.pauseMedia ? { pauseMedia: this.o.pauseMedia } : {}),

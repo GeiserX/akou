@@ -87,6 +87,11 @@ pub struct Dictate {
     /// once both are true, so the app always knows the id it names.
     live_said: bool,
     live_latched: bool,
+    /// The live session was told its microphone did not open (`mic.failed`, T4.39).
+    live_mic_told: bool,
+    /// The device stream the mic wants is not open: still opening, or it failed (T4.39). Only a
+    /// device backend sets it; a file mic is never down.
+    mic_down: bool,
     /// The last ended session, whose text the app inserts next.
     last: Option<(String, Captured)>,
     /// The Accessibility grant as `ready` reported it, until `grant.lost`.
@@ -125,6 +130,8 @@ impl Dictate {
             next_draft: false,
             live_said: false,
             live_latched: false,
+            live_mic_told: false,
+            mic_down: false,
             last: None,
             accessibility: "not-needed".into(),
             secure_on: false,
@@ -221,6 +228,26 @@ impl Dictate {
     /// Whether the device stream should be open.
     pub fn mic_open(&self) -> bool {
         self.mic.is_open()
+    }
+
+    /// A session is waiting for its first sample (the readiness gate).
+    pub fn mic_waiting(&self) -> bool {
+        self.mic.waiting()
+    }
+
+    /// The device stream is down (opening, or failed) or up, as the device follower sees it: a
+    /// session that ends while it is down is told its microphone did not open (T4.39).
+    pub fn set_mic_down(&mut self, down: bool) {
+        self.mic_down = down;
+    }
+
+    /// Tells the session waiting for its first sample that the microphone did not open, once per
+    /// session (T4.39). It still starts if the device opens later.
+    pub fn mic_failed(&mut self, out: &mut dyn Out) {
+        if self.live.is_some() && !self.live_mic_told {
+            self.live_mic_told = true;
+            out.line(p::mic_failed());
+        }
     }
 
     /// A paste is waiting for its receipt, so time must keep passing.
@@ -643,6 +670,7 @@ impl Dictate {
                     self.live = Some((id, cap));
                     self.live_said = false;
                     self.live_latched = false;
+                    self.live_mic_told = false;
                     self.mic.start(at, &mut ev);
                     self.media_pause();
                 }
@@ -713,6 +741,10 @@ impl Dictate {
                 }
                 MicEvent::Vanished => {
                     self.media_resume();
+                    // It ended before the device opened: the press did nothing, and says why.
+                    if self.mic_down {
+                        self.mic_failed(out);
+                    }
                     self.live = None;
                     self.act(0, out, |a, _| a.settled());
                 }
