@@ -17,7 +17,7 @@ import config, {
 } from "../electrobun.config.ts";
 import { ICONSET, ICONSET_FILES } from "../scripts/app-icon.ts";
 import { MIN_MACOS, WRAPPER_AUTOCLOSE } from "../scripts/build-app.ts";
-import { trayIconFiles } from "../scripts/tray-icons.ts";
+import { png, trayIconFiles } from "../scripts/tray-icons.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
@@ -561,6 +561,28 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(alphaAt(r, 28, 16)).toBe(255);
     // The disc sits inside the image: the corners are clear.
     expect(alphaAt(r, 0, 0)).toBe(0);
+  });
+
+  test("[DK-T1] A wide tray item: each macOS template loads at 16 pt, so the item is no wider than it", () => {
+    // The SDK gives the status item the file's image and shrinks it to 16 pt after; the item keeps
+    // the first width. A file only loads at 16 pt when its pHYs says 144 dpi.
+    const points = (p: Buffer): number => {
+      const px = p.readUInt32BE(16);
+      for (let at = 8; at < p.length; ) {
+        const len = p.readUInt32BE(at);
+        if (p.toString("ascii", at + 4, at + 8) === "pHYs" && p[at + 16] === 1) {
+          return (px * 72) / (p.readUInt32BE(at + 8) * 0.0254);
+        }
+        at += 12 + len;
+      }
+      return px; // no pHYs: 72 dpi, one point per pixel
+    };
+    for (const recording of [false, true]) {
+      const file = readFileSync(trayImage("darwin", recording).image);
+      expect(Math.round(points(file))).toBe(16);
+    }
+    // The positive control: the same mark with no pHYs, as shipped until 1.7.4, loads at 32 pt.
+    expect(points(png(32, new Uint8Array(32 * 32 * 4)))).toBe(32);
   });
 
   test("[DK-T2] With no display the tray keeps its item: the mark changes once a display is back", async () => {
