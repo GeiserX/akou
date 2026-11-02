@@ -63,7 +63,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **What you see.** In a recording of an hour or more made with a USB microphone or a USB audio interface, your side and the other side are out of step near the end: people seem to talk over each other where they did not, or a pause between them is longer than it was.
 
-**Why.** A USB microphone has its own clock, and the system audio follows the Mac's. akou corrects the difference between the two as it records. We measured that with both sides on the Mac's clock, where they stayed within 0.03 ms of each other over an hour. We have not measured it with two separate device clocks, so this is a known limitation and not a guarantee ([the gate's record](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
+**Why.** A USB microphone has its own clock, and the system audio follows the Mac's. akou corrects the difference between the two as it records. We measured that with both sides on the Mac's clock, where they stayed within 0.03 ms of each other over an hour. We have not measured it with two separate device clocks, so this is a known limitation and not a guarantee ([the gate's record](https://github.com/GeiserX/akou/blob/main/docs/gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
 
 **Fix.** There is none to apply yourself. Please [report it](#reporting-a-bug) with the microphone's make and model, the macOS version and the length of the recording.
 
@@ -71,7 +71,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **What you see.** In the middle of a recording, about 1 to 1.5 s of the other side's audio is silent, and the words said then are not in the transcript. Your own side is whole.
 
-**Why.** macOS sometimes stops delivering system audio to akou while the call is still playing. akou notices after 1 s, reopens the system audio and carries on. What was said in that second is not recorded. This is a known limitation: akou shortens the loss, it cannot prevent it ([the gate's record](gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
+**Why.** macOS sometimes stops delivering system audio to akou while the call is still playing. akou notices after 1 s, reopens the system audio and carries on. What was said in that second is not recorded. This is a known limitation: akou shortens the loss, it cannot prevent it ([the gate's record](https://github.com/GeiserX/akou/blob/main/docs/gates/M0-results.md#g4-the-criterion-as-of-2026-10-10)).
 
 **Fix.** None needed for the rest of the call. If it happens often, or the silence is much longer than a second, please [report it](#reporting-a-bug) with the macOS version and the output device.
 
