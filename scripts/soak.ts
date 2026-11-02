@@ -76,10 +76,12 @@ export interface SoakResult {
   samples: SoakSample[];
   maxLateMs: number;
   /**
-   * The latest tick, so a red `loop.max_late_ms` says when and why: `at` in wall seconds since the
-   * start, `cpuMs` the CPU time this process used while that tick was late. Near the lateness, the
-   * app's own code held the loop; near zero, the process was not running at all (a paused or
-   * starved runner) or sat in one blocking call.
+   * The worst tick (the one that set `maxLateMs`), so a red `loop.max_late_ms` says when and why:
+   * `at` in wall seconds since the start, `cpuMs` the CPU time this process used while that tick was
+   * late. A hint, not proof: `process.cpuUsage()` counts every thread, so a blocking call on the
+   * loop's thread can coincide with CPU spent on another. Near the lateness, the app's own code most
+   * likely held the loop; near zero, the process was not running at all (a paused or starved
+   * runner) or sat in one blocking call.
    */
   worstLate: { at: number; cpuMs: number } | null;
   events: Record<string, number>;
@@ -317,7 +319,7 @@ export function report(r: SoakResult, verdicts: readonly Verdict[], helper: stri
     "",
     ...(r.worstLate
       ? [
-          `The latest tick ran ${r.maxLateMs.toFixed(0)} ms late at ${r.worstLate.at.toFixed(0)} s, with ${r.worstLate.cpuMs.toFixed(0)} ms of this process's CPU in that ${(r.maxLateMs + 100).toFixed(0)} ms.`,
+          `The worst tick ran ${r.maxLateMs.toFixed(0)} ms late at ${r.worstLate.at.toFixed(0)} s, with ${r.worstLate.cpuMs.toFixed(0)} ms of this process's CPU in that ${(r.maxLateMs + 100).toFixed(0)} ms.`,
           "",
         ]
       : []),

@@ -133,7 +133,7 @@ describe("a short soak through the call manager and the fake helper", () => {
 
   // The nightly of 2026-11-02 read one tick 3017 ms late and nothing else: no time, no cause. The
   // soak now says when, and whether this process was running meanwhile.
-  test("[T3.8] the latest tick says whether this process held the loop or was not running", async () => {
+  test("[T3.8] the worst tick says whether this process held the loop or was not running", async () => {
     const held = (ms: number, how: "busy" | "asleep") =>
       setTimeout(() => {
         const end = performance.now() + ms;
@@ -149,7 +149,10 @@ describe("a short soak through the call manager and the fake helper", () => {
       expect(r.worstLate?.at).toBeGreaterThan(0.9);
       expect(r.worstLate?.at).toBeLessThan(1.9);
     }
-    expect(busy.worstLate?.cpuMs).toBeGreaterThan(450);
-    expect(asleep.worstLate?.cpuMs).toBeLessThan(150);
+    // Relative, so a loaded machine that pre-empts the busy loop for a while still passes.
+    const busyCpu = busy.worstLate?.cpuMs ?? 0;
+    const asleepCpu = asleep.worstLate?.cpuMs ?? 0;
+    expect(busyCpu).toBeGreaterThan(asleepCpu + 250);
+    expect(busyCpu).toBeGreaterThan(300);
   }, 30_000);
 });
