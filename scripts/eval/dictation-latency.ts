@@ -54,32 +54,32 @@ export interface LatencyTable {
 }
 
 /**
- * `count` utterances of exactly `seconds` each, made by joining the clips end to end in order and
- * cutting: the speech of a dictation, never padded with silence. Throws when the clips are too short.
+ * `count` utterances of exactly `seconds` each, never padded with silence. Each starts where a clip
+ * starts, as a dictation starts where its speaker does, and runs on into the next clips when one is
+ * shorter; the rest of the clip it ends in is dropped. A cut that starts inside a word is not a
+ * dictation: Parakeet decodes such a cut to nothing in about a third of 3 s windows ([#505] in
+ * docs/TRAPS.md), and an empty answer says nothing about the time. `used` is how many clips they
+ * took, so the next set starts after them. Throws when the clips are too few.
  */
 export function utterances(
   clips: readonly Float32Array[],
   seconds: number,
   count: number,
-): Float32Array[] {
+): { utterances: Float32Array[]; used: number } {
   const n = Math.round(seconds * DICTATION_RATE);
   const out: Float32Array[] = [];
   let cur = new Float32Array(n);
   let at = 0;
-  for (const c of clips) {
-    let from = 0;
-    while (from < c.length && out.length < count) {
-      const take = Math.min(n - at, c.length - from);
-      cur.set(c.subarray(from, from + take), at);
-      at += take;
-      from += take;
-      if (at === n) {
-        out.push(cur);
-        cur = new Float32Array(n);
-        at = 0;
-      }
+  for (const [i, c] of clips.entries()) {
+    const take = Math.min(n - at, c.length);
+    cur.set(c.subarray(0, take), at);
+    at += take;
+    if (at === n) {
+      out.push(cur);
+      if (out.length === count) return { utterances: out, used: i + 1 };
+      cur = new Float32Array(n);
+      at = 0;
     }
-    if (out.length === count) return out;
   }
   throw new Error(`the clips hold ${out.length} utterances of ${seconds} s, not ${count}`);
 }
