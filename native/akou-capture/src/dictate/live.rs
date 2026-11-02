@@ -19,10 +19,14 @@
 //! - **A device that is slow to open** (a USB mic waking from idle, T4.39) is waited for: `open`
 //!   only starts the open and the worker asks `opened` each step, so the key tap and the receipts
 //!   go on meanwhile, and the stream is used the moment it arrives, for as long as the session
-//!   still wants it. Nothing is opened twice: a second open starts only after the first answered.
-//!   A press that has waited `MIC_WAIT_MS` for a device not open yet, or whose open failed, is told
-//!   so (`mic.failed`, the pill's "The microphone didn't open"); so is a session that ends before
-//!   the device opened.
+//!   still wants it. The worker runs one open at a time: a new one starts only once the last one
+//!   answered, failed, or was given up. It gives one up when the mic is no longer wanted, when the
+//!   stream is rebuilt or the Mac woke, when the stream posts `Lost` before the answer (a failed
+//!   open), and when a new press finds it already `MIC_WAIT_MS` old (it may be stuck, not slow).
+//!   A given-up open is not waited for: its backend thread finishes it, drops the stream it gets,
+//!   and ends; one stuck in the OS stays behind. A press that has waited `MIC_WAIT_MS` for a device
+//!   not open yet, or whose open failed, is told so (`mic.failed`, the pill's "The microphone
+//!   didn't open"); so is a session that ends before the device opened.
 //! - **A device that will not open** is said once (`warn mic-open`) and tried again after
 //!   `RETRY_MS`; a session waiting for its first sample never starts (`mic::MicEvent::Vanished`).
 //!   The grant is re-checked, as for any session that fails to start.
@@ -281,6 +285,15 @@ impl Mic<'_> {
             d.set_mic_down(false);
             return;
         }
+        // A new press does not wait on an open that has already run `MIC_WAIT_MS`: it may be
+        // stuck rather than slow, so it is given up and a fresh one started (T4.39).
+        if let Some((since, _)) = &self.pending
+            && self.waited.is_none()
+            && d.mic_waiting()
+            && t >= *since + MIC_WAIT_MS * MS
+        {
+            self.reopen();
+        }
         if self.pending.is_some() {
             self.settle(d, t, out);
         } else if !self.open && t >= self.retry_at {
@@ -391,6 +404,16 @@ impl Mic<'_> {
         self.retry_at = 0;
     }
 
+    /// The stream died before its open answered: a failed open of that device, whatever the
+    /// answer says later (T4.39). The next open skips it, as for a stream that dies (DC-N5).
+    fn lost_opening(&mut self, d: &mut Dictate, t: u64, e: &str, out: &mut dyn Out) {
+        if let Some((_, c)) = &self.pending {
+            self.avoid.push(c.id.clone());
+        }
+        self.close();
+        self.failed(d, t, e, out);
+    }
+
     /// The stream died: the next open skips this device (DC-N5).
     fn died(&mut self) {
         if self.open
@@ -494,15 +517,20 @@ pub fn serve_with(
                 d.command(Command::Stop, t, out);
                 break;
             }
-            Ok(Msg::Mic(stream, _)) if stream != mic.stream || !mic.open => {}
-            Ok(Msg::Mic(_, Event::Chunk(c))) => {
+            Ok(Msg::Mic(stream, _))
+                if stream != mic.stream || !(mic.open || mic.pending.is_some()) => {}
+            Ok(Msg::Mic(_, Event::Chunk(c))) if mic.open => {
                 if let Some((at, samples)) = mic.feed.push(&c) {
                     d.audio(at, &samples, out);
                 }
             }
             Ok(Msg::Mic(_, Event::Lost { detail, .. })) => {
                 out.line(p::warn("mic-lost", &detail));
-                mic.died();
+                if mic.pending.is_some() {
+                    mic.lost_opening(d, t, &detail, out);
+                } else {
+                    mic.died();
+                }
             }
             Ok(Msg::Mic(_, Event::Warn { code, msg })) => out.line(p::warn(code, &msg)),
             Ok(Msg::Say(l)) => out.line(l),
@@ -1171,14 +1199,29 @@ mod tests {
         );
     }
 
-    /// T4.39's device: its open answers when the test says, and it delivers 10 ms a step only
-    /// once it answered yes. Every open and close is logged.
+    /// T4.39's device: its open answers when the test says (or at once, from the `quick_from`th
+    /// open on), and it delivers 10 ms a step only once it answered yes. With `lost`, its first
+    /// open posts `Event::Lost` before it answers. Every open and close is logged, with the step.
     #[derive(Default)]
     struct Late {
         log: Rc<RefCell<Vec<String>>>,
+        steps: Rc<RefCell<Vec<u64>>>,
+        at: Rc<std::cell::Cell<u64>>,
         answer: Rc<RefCell<Option<Result<(), String>>>>,
         events: Rc<RefCell<Option<SyncSender<Event>>>>,
         up: Rc<std::cell::Cell<bool>>,
+        /// Messages sent and not yet read by the worker, so the test's wait knows to block.
+        flying: Rc<std::cell::Cell<i64>>,
+        quick_from: Option<usize>,
+        lost: bool,
+        /// The open under way posted `Lost`: its stream never delivers.
+        dead: bool,
+    }
+    impl Late {
+        fn note(&mut self, what: String) {
+            self.log.borrow_mut().push(what);
+            self.steps.borrow_mut().push(self.at.get());
+        }
     }
     impl Device for Late {
         fn inputs(&mut self) -> Vec<Input> {
@@ -1188,33 +1231,84 @@ mod tests {
             false
         }
         fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<(), String> {
-            self.log.borrow_mut().push(format!("open {device}"));
+            self.note(format!("open {device}"));
+            let opens = self
+                .log
+                .borrow()
+                .iter()
+                .filter(|x| x.starts_with("open"))
+                .count();
+            if self.lost && opens == 1 {
+                events
+                    .try_send(Event::Lost {
+                        ch: Ch::Mic,
+                        detail: "the device went away while opening".into(),
+                    })
+                    .unwrap();
+                self.flying.set(self.flying.get() + 1);
+                self.dead = true;
+            }
+            if self.quick_from.is_some_and(|n| opens >= n) {
+                *self.answer.borrow_mut() = Some(Ok(()));
+            }
             *self.events.borrow_mut() = Some(events);
             Ok(())
         }
         fn opened(&mut self) -> Option<Result<(), String>> {
             let r = self.answer.borrow_mut().take();
-            if r == Some(Ok(())) {
+            if r == Some(Ok(())) && !self.dead {
                 self.up.set(true);
             }
             r
         }
         fn close(&mut self) {
-            self.log.borrow_mut().push("close".into());
+            self.note("close".into());
             *self.events.borrow_mut() = None;
+            *self.answer.borrow_mut() = None;
             self.up.set(false);
+            self.dead = false;
         }
     }
 
-    /// The dictation key held from step 2 to `release`; the device's open answers yes at step
-    /// `answer` (never when `None`); stdin closes 100 steps after the release. Returns the lines,
-    /// the packets, the device's log and the step the worker reached.
-    fn late_hold(
+    /// How a T4.39 run goes: the dictation key held over each `(down, up)` step pair, the
+    /// device's open answering yes at step `answer` (never when `None`); with `early` the device
+    /// also sends its first buffer the step before, so the worker reads it before the answer.
+    struct Hold {
         answer: Option<u64>,
-        release: u64,
-    ) -> (Vec<String>, Vec<crate::protocol::Packet>, Vec<String>, u64) {
+        presses: Vec<(u64, u64)>,
+        warm: Warm,
+        early: bool,
+        lost: bool,
+        quick_from: Option<usize>,
+    }
+
+    impl Hold {
+        fn new(answer: Option<u64>, release: u64) -> Hold {
+            Hold {
+                answer,
+                presses: vec![(2, release)],
+                warm: Warm::Off,
+                early: false,
+                lost: false,
+                quick_from: None,
+            }
+        }
+    }
+
+    /// What a T4.39 run gave: the lines, the packets, the device's log with the step of each
+    /// entry, and the step the worker reached.
+    struct Run {
+        lines: Vec<String>,
+        packets: Vec<crate::protocol::Packet>,
+        log: Vec<String>,
+        steps: Vec<u64>,
+        at: u64,
+    }
+
+    /// Runs `h`; stdin closes 100 steps after the last release.
+    fn late_run(h: Hold) -> Run {
         let w = World::new();
-        let mut d = dictate(&w, Warm::Off);
+        let mut d = dictate(&w, h.warm);
         let tape = Tape {
             lines: Rc::default(),
             packets: Rc::default(),
@@ -1223,14 +1317,21 @@ mod tests {
         let mut out = tape;
         d.begin("test", true, ("granted", "granted"), &mut out);
         let gate = d.gate();
-        let mut dev = Late::default();
-        let (log, ans, events, up) = (
+        let mut dev = Late {
+            quick_from: h.quick_from,
+            lost: h.lost,
+            ..Late::default()
+        };
+        let (log, steps, clock, ans, events, up) = (
             dev.log.clone(),
+            dev.steps.clone(),
+            dev.at.clone(),
             dev.answer.clone(),
             dev.events.clone(),
             dev.up.clone(),
         );
-        let flying = Rc::new(std::cell::Cell::new(0i64));
+        let end = h.presses.iter().map(|p| p.1).max().unwrap() + 100;
+        let flying = dev.flying.clone();
         let sent = flying.clone();
         let (tx, rx) = mpsc::channel();
         let step = Rc::new(RefCell::new(0u64));
@@ -1238,8 +1339,19 @@ mod tests {
         let mut now = || {
             let mut s = step.borrow_mut();
             *s += 1;
+            clock.set(*s);
             let t = *s * 10 * MS;
-            if Some(*s) == answer {
+            // The first buffer of a stream whose answer comes next step: the worker reads the
+            // buffer first, as with a real backend whose callback beats its open reply.
+            if h.early
+                && Some(*s + 1) == h.answer
+                && let Some(e) = events.borrow().as_ref()
+                && e.try_send(Event::Chunk(chunk(t - 10 * MS, 16_000, 160)))
+                    .is_ok()
+            {
+                sent.set(sent.get() + 1);
+            }
+            if Some(*s) == h.answer {
                 *ans.borrow_mut() = Some(Ok(()));
             }
             if up.get()
@@ -1249,14 +1361,16 @@ mod tests {
             {
                 sent.set(sent.get() + 1);
             }
-            if *s == 2 || *s == release {
-                gate.event(TapEvent::Key {
-                    down: *s == 2,
-                    name: "RightCommand",
-                    t_ns: t,
-                });
+            for &(down, release) in &h.presses {
+                if *s == down || *s == release {
+                    gate.event(TapEvent::Key {
+                        down: *s == down,
+                        name: "RightCommand",
+                        t_ns: t,
+                    });
+                }
             }
-            if *s == release + 100 {
+            if *s == end {
                 let _ = tx.send(Msg::Line(None));
             }
             Now {
@@ -1282,8 +1396,24 @@ mod tests {
         let (packets, _) = crate::protocol::decode_packets(&bytes.borrow()).unwrap();
         let lines = got.borrow().clone();
         let log = log.borrow().clone();
+        let steps = steps.borrow().clone();
         let at = *reached.borrow();
-        (lines, packets, log, at)
+        Run {
+            lines,
+            packets,
+            log,
+            steps,
+            at,
+        }
+    }
+
+    /// The key held from step 2 to `release`, the device answering yes at step `answer`.
+    fn late_hold(
+        answer: Option<u64>,
+        release: u64,
+    ) -> (Vec<String>, Vec<crate::protocol::Packet>, Vec<String>, u64) {
+        let r = late_run(Hold::new(answer, release));
+        (r.lines, r.packets, r.log, r.at)
     }
 
     fn told(lines: &[String]) -> usize {
@@ -1354,8 +1484,14 @@ mod tests {
     /// reaches the worker, which gives the open up at once and runs to the end of stdin.
     #[test]
     fn t4_39_a_microphone_that_never_opens_tells_the_press_once() {
-        let (l, packets, log, at) = late_hold(None, 402);
+        let r = late_run(Hold::new(None, 402));
+        let (l, packets, log, at) = (r.lines, r.packets, r.log, r.at);
         assert_eq!(log, ["open default", "close"], "{l:?}");
+        assert!(
+            r.steps[1] <= 403,
+            "the open is given up at the key-up (402), not at the end: step {}",
+            r.steps[1]
+        );
         assert_eq!(told(&l), 1, "{l:?}");
         assert!(started(&l).is_empty(), "{l:?}");
         assert!(packets.is_empty());
@@ -1368,11 +1504,17 @@ mod tests {
     /// at 2 s) is told so at the key-up; the late answer opens nothing for a session gone.
     #[test]
     fn t4_39_a_session_that_ends_before_the_mic_opens_is_told() {
-        let (l, packets, log, _) = late_hold(Some(202), 102);
+        let r = late_run(Hold::new(Some(202), 102));
+        let (l, packets, log) = (r.lines, r.packets, r.log);
         assert_eq!(told(&l), 1, "{l:?}");
         assert!(started(&l).is_empty(), "{l:?}");
         assert!(packets.is_empty());
         assert_eq!(log, ["open default", "close"], "{l:?}");
+        assert!(
+            r.steps[1] <= 103,
+            "the open is given up at the key-up (102), before its answer (202): step {}",
+            r.steps[1]
+        );
         let up = l
             .iter()
             .position(|x| x.contains(r#""type":"mic.failed""#))
@@ -1381,5 +1523,69 @@ mod tests {
             !l[..up].iter().any(|x| x.contains("still waiting")),
             "told at the key-up, before the 3 s mark: {l:?}"
         );
+    }
+
+    /// T4.39: the stream's first buffer reaching the worker before the open's answer is read
+    /// (a real backend's callback can beat its reply) is used: the outcome is taken first.
+    #[test]
+    fn t4_39_a_buffer_ahead_of_the_open_answer_is_kept() {
+        let r = late_run(Hold {
+            early: true,
+            ..Hold::new(Some(402), 602)
+        });
+        let first = r.packets.first().expect("audio").capture_ns;
+        assert_eq!(
+            first / MS,
+            4_000,
+            "the buffer that came before the answer is the first audio: {:?}",
+            r.lines
+        );
+    }
+
+    /// T4.39: a stream that posts `Lost` while it is still opening is a failed open, even when
+    /// its answer then says yes: the press is told, and a fresh open is tried, which records.
+    #[test]
+    fn t4_39_a_stream_lost_while_opening_is_a_failed_open() {
+        let r = late_run(Hold {
+            lost: true,
+            quick_from: Some(2),
+            ..Hold::new(Some(10), 300)
+        });
+        let l = &r.lines;
+        assert!(l.iter().any(|x| x.contains("mic-lost")), "{l:?}");
+        assert_eq!(
+            &r.log[..3],
+            ["open default", "close", "open default"],
+            "the dead stream is closed and a new one opened: {l:?}"
+        );
+        assert_eq!(told(l), 1, "{l:?}");
+        assert_eq!(started(l).len(), 1, "the fresh open records: {l:?}");
+    }
+
+    /// T4.39: an open that never answers is not waited on by the next press. With the warm hold
+    /// keeping the mic wanted between presses, a press 24 s later gives up the stuck open and
+    /// starts a fresh one, which records; only the first press is told.
+    #[test]
+    fn t4_39_a_stuck_open_is_given_up_by_the_next_press() {
+        let r = late_run(Hold {
+            presses: vec![(2, 402), (2_402, 2_602)],
+            warm: Warm::Auto,
+            quick_from: Some(2),
+            ..Hold::new(None, 0)
+        });
+        let l = &r.lines;
+        assert_eq!(
+            r.log.iter().filter(|x| x.starts_with("open")).count(),
+            2,
+            "the second press opens again: {:?} {l:?}",
+            r.log
+        );
+        assert!(
+            r.steps[1] >= 2_402,
+            "the first open is kept while its own press lasts: {:?}",
+            r.steps
+        );
+        assert_eq!(started(l).len(), 1, "the second press records: {l:?}");
+        assert_eq!(told(l), 1, "{l:?}");
     }
 }
