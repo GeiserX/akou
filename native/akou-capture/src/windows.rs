@@ -936,10 +936,13 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
 /// The microphone alone, for `akou-capture dictate` (DC-N4): the same worker and stream `run`
 /// records with, opened on the device `dictate` chose and closed when its warm hold ends.
 pub struct DictateMic {
-    worker: Worker<(MicInfo, Option<DeviceId>)>,
+    worker: Worker<MicOpened>,
     /// The open under way: its outcome comes here, however late (T4.39).
-    opening: Option<Receiver<Result<(MicInfo, Option<DeviceId>), OpenError>>>,
+    opening: Option<Receiver<Result<MicOpened, OpenError>>>,
 }
+
+/// What the microphone worker's open gives back.
+type MicOpened = (MicInfo, Option<DeviceId>);
 
 impl DictateMic {
     /// Starts opening `device` (an endpoint id, or `default` for the communications default)
