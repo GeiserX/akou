@@ -127,6 +127,11 @@ export type HelperToApp =
   | { type: "secure_input"; on: boolean; key_works?: boolean }
   /** The warm stream opened or closed (DC-N4). */
   | { type: "mic"; open: boolean }
+  /**
+   * A session waited for a microphone that did not open (still opening after 3 s, or failed), or
+   * ended before it opened (T4.39): the pill says so. The session still starts if it opens later.
+   */
+  | { type: "mic.failed" }
   | { type: "warn"; code: string; msg: string }
   | { type: "stopped"; reason: string };
 
@@ -309,6 +314,8 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
         : "secure_input";
     case "mic":
       return isBool(o.open) ? null : "mic";
+    case "mic.failed":
+      return null;
     case "warn":
       return isStr(o.code) && isStr(o.msg) ? null : "warn";
     case "stopped":

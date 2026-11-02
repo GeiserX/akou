@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender, SyncSender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -95,12 +95,19 @@ impl MicWorker {
 
     /// Opens (or re-opens) the microphone, waiting at most `budget`.
     pub fn open(&self, budget: Duration) -> Result<MicInfo, OpenError> {
+        self.begin_open()?
+            .recv_timeout(budget)
+            .map_err(|_| OpenError::unavailable("the microphone did not open in time"))?
+    }
+
+    /// Starts opening the microphone without waiting: the outcome comes on the receiver, however
+    /// late (T4.39).
+    pub fn begin_open(&self) -> Result<Receiver<Result<MicInfo, OpenError>>, OpenError> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(Msg::Open(reply))
             .map_err(|_| OpenError::unavailable("the microphone worker is gone"))?;
-        rx.recv_timeout(budget)
-            .map_err(|_| OpenError::unavailable("the microphone did not open in time"))?
+        Ok(rx)
     }
 
     /// Stops the stream within `budget`; a stuck worker is left behind.

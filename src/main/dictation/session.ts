@@ -331,6 +331,11 @@ export interface SessionOptions extends TextRules {
    */
   onSecureInput?(on: boolean, keyWorks?: boolean): void;
   /**
+   * A dictation got no audio because the microphone did not open in time, or at all (T4.39): the
+   * pill says so. If the microphone opens later the session starts as usual.
+   */
+  onMicFailed?(): void;
+  /**
    * The dictation key went down (`on`), with the frame of the window that has the keyboard where
    * the helper can read it, or the press was dropped before it became a session (DC-O1): the
    * pill's dot, on the target's display.
@@ -828,6 +833,10 @@ export class DictationSession {
       }
       case "warn":
         this.o.onLog?.("warn", `dictation helper: ${m.code}: ${m.msg}`);
+        return;
+      case "mic.failed":
+        this.o.onLog?.("warn", "dictation: the microphone did not open for the dictation key");
+        this.o.onMicFailed?.();
         return;
       case "level":
         this.o.onLevel?.(m.rms);

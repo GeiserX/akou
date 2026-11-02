@@ -404,6 +404,14 @@ impl Device for LinuxMic {
         Ok(())
     }
 
+    fn opened(&mut self) -> Option<Result<(), String>> {
+        let r = self.mic.as_mut()?.opened()?;
+        if r.is_err() {
+            self.close();
+        }
+        Some(r.map_err(|e| format!("{}: {}", e.code, e.msg)))
+    }
+
     fn close(&mut self) {
         if let Some(m) = self.mic.take() {
             m.close();

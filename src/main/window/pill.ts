@@ -28,6 +28,9 @@
  * - `inserted` or `copied` for `DONE_MS` after the helper's receipt, with the engine's notice
  *   (`best failed, used fast`) or, after a clipboard-only insert, the paste hint, and the language
  *   the engine heard or was told when the user speaks two or more (akou-5v8), read-only.
+ * - `error` "The microphone didn't open" for `ERROR_MS` when a dictation got no audio because the
+ *   microphone did not open in time or at all (T4.39), until the session's island replaces it if
+ *   the microphone opens late.
  * - `error` with the log's message for `ERROR_MS`, or `NOTICE_MS` when it has buttons, so they can be
  *   reached (DC-O1, DC-R3): Retry where the dictation's audio is kept (`Retry locally` after a
  *   remote failure), which decodes it again and opens the draft box on the new reading; Copy and
@@ -192,6 +195,12 @@ export const PRESS_MS = 3000;
 export const DONE_MS = 1500;
 /** How long an error with no button stays; one with buttons stays `NOTICE_MS`. */
 export const ERROR_MS = 5000;
+/**
+ * The island's error when a dictation got no audio because the microphone did not open in time,
+ * or at all (T4.39). The next session's island replaces it.
+ */
+export const MIC_FAILED = "The microphone didn't open";
+
 /** The line under `transcribing` while the engine was loading its model at the release. */
 export const LOADING_NOTE = "loading model";
 /** The flash under `transcribing` when the dictation key is pressed then (DC-A4). */
@@ -550,6 +559,14 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       }
       if (m.kind === "press") {
         pressed(m.on, m.frame);
+        return;
+      }
+      if (m.kind === "mic-failed") {
+        // A session's island is the session's; a microphone that opens late starts one, which
+        // takes this down (T4.39).
+        if (shown.state === "listening" || shown.state === "transcribing") return;
+        put({ state: "error", message: MIC_FAILED, actions: [] });
+        hideAfter(ERROR_MS);
         return;
       }
       if (m.kind === "busy") {

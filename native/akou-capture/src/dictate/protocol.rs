@@ -241,6 +241,12 @@ pub fn rebind_failed(hotkey: &str, reason: &str) -> String {
     )
 }
 
+/// A session waited for a microphone that did not open, or ended before it did (T4.39): the
+/// pill says so. The session still starts if the device opens later.
+pub fn mic_failed() -> String {
+    line("mic.failed", vec![])
+}
+
 pub fn grant_lost(name: &str) -> String {
     line("grant.lost", vec![("name", Json::str(name))])
 }
@@ -982,6 +988,7 @@ mod tests {
             ),
             edit_unreadable("1", "not-read"),
             grant_lost("accessibility"),
+            mic_failed(),
             secure_input(true, false),
             rebound("RightShift"),
             rebind_failed("LeftOption+RightOption", "x"),

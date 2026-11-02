@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -375,12 +375,18 @@ impl<T: Send + 'static> Worker<T> {
     }
 
     fn open(&self, budget: Duration, what: &str) -> Result<T, OpenError> {
+        self.begin_open(what)?
+            .recv_timeout(budget)
+            .map_err(|_| OpenError::unavailable(format!("the {what} did not open in time")))?
+    }
+
+    /// Starts an open without waiting: the outcome comes on the receiver, however late (T4.39).
+    fn begin_open(&self, what: &str) -> Result<Receiver<Result<T, OpenError>>, OpenError> {
         let (reply, rx) = mpsc::channel();
         self.tx
             .send(Msg::Open(reply))
             .map_err(|_| OpenError::unavailable(format!("the {what} worker is gone")))?;
-        rx.recv_timeout(budget)
-            .map_err(|_| OpenError::unavailable(format!("the {what} did not open in time")))?
+        Ok(rx)
     }
 
     /// Stops the stream within `budget`; a stuck worker is left behind.
@@ -929,28 +935,56 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
 
 /// The microphone alone, for `akou-capture dictate` (DC-N4): the same worker and stream `run`
 /// records with, opened on the device `dictate` chose and closed when its warm hold ends.
-pub struct DictateMic(Worker<(MicInfo, Option<DeviceId>)>);
+pub struct DictateMic {
+    worker: Worker<(MicInfo, Option<DeviceId>)>,
+    /// The open under way: its outcome comes here, however late (T4.39).
+    opening: Option<Receiver<Result<(MicInfo, Option<DeviceId>), OpenError>>>,
+}
 
 impl DictateMic {
-    /// Opens `device` (an endpoint id, or `default` for the communications default).
+    /// Starts opening `device` (an endpoint id, or `default` for the communications default)
+    /// without waiting; `opened` gives the outcome.
     pub fn open(device: &str, events: SyncSender<Event>) -> Result<DictateMic, OpenError> {
         let requested = device.to_string();
-        let m = Worker::spawn(
+        let worker = Worker::spawn(
             Ch::Mic,
             events,
             Arc::new(AtomicU64::new(0)),
             Box::new(move |events| open_mic(&requested, events)),
         );
-        match m.open(REBUILD_BUDGET, "microphone") {
-            Ok(_) => Ok(DictateMic(m)),
+        match worker.begin_open("microphone") {
+            Ok(rx) => Ok(DictateMic {
+                worker,
+                opening: Some(rx),
+            }),
             Err(e) => {
-                m.close(CLOSE_BUDGET);
+                worker.close(CLOSE_BUDGET);
                 Err(e)
             }
         }
     }
 
+    /// `None` while the open is under way, then its outcome, once.
+    pub fn opened(&mut self) -> Option<Result<(), OpenError>> {
+        let r = match self.opening.as_ref()?.try_recv() {
+            Ok(r) => r.map(|_| ()),
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                Err(OpenError::unavailable("the microphone worker is gone"))
+            }
+        };
+        self.opening = None;
+        Some(r)
+    }
+
+    /// Stops the stream; an open still under way is given up without waiting, and its worker
+    /// drops the stream it opens and ends.
     pub fn close(self) {
-        self.0.close(CLOSE_BUDGET);
+        let budget = if self.opening.is_some() {
+            Duration::ZERO
+        } else {
+            CLOSE_BUDGET
+        };
+        self.worker.close(budget);
     }
 }

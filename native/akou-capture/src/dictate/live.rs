@@ -16,10 +16,16 @@
 //!   re-signed build, or revoked), which kills the tap without a word. Sleep shows as the
 //!   continuous clock running ahead of the awake clock; after a sleep the worker re-checks the
 //!   grant (`grant.lost`) and reopens an open stream.
+//! - **A device that is slow to open** (a USB mic waking from idle, T4.39) is waited for: `open`
+//!   only starts the open and the worker asks `opened` each step, so the key tap and the receipts
+//!   go on meanwhile, and the stream is used the moment it arrives, for as long as the session
+//!   still wants it. Nothing is opened twice: a second open starts only after the first answered.
+//!   A press that has waited `MIC_WAIT_MS` for a device not open yet, or whose open failed, is told
+//!   so (`mic.failed`, the pill's "The microphone didn't open"); so is a session that ends before
+//!   the device opened.
 //! - **A device that will not open** is said once (`warn mic-open`) and tried again after
-//!   `RETRY_MS`; a session waiting for its first sample never starts, and ends with nothing
-//!   reported when its key goes up (`mic::MicEvent::Vanished`). The grant is re-checked, as for
-//!   any session that fails to start.
+//!   `RETRY_MS`; a session waiting for its first sample never starts (`mic::MicEvent::Vanished`).
+//!   The grant is re-checked, as for any session that fails to start.
 //! - **Which device** is `inputs::choose` over the backend's list at each open (DC-N5): pinned,
 //!   or the built-in mic over a Bluetooth default, or the default. A stream that dies is reopened
 //!   at once on the next device, the dead one skipped until the stream next closes, so a session
@@ -47,6 +53,8 @@ pub const REANCHOR_MS: u64 = 20;
 pub const SLEPT_MS: u64 = 1_000;
 /// A device that failed to open is tried again after this.
 pub const RETRY_MS: u64 = 2_000;
+/// A press that has waited this long for a device still opening is told (T4.39); the open goes on.
+pub const MIC_WAIT_MS: u64 = 3_000;
 const RATE: u32 = 16_000;
 
 /// The microphone, per OS.
@@ -56,8 +64,13 @@ pub trait Device {
     fn inputs(&mut self) -> Vec<Input>;
     /// A laptop's lid is closed, where the OS reports it: its built-in mic hears nothing.
     fn lid_closed(&mut self) -> bool;
-    /// Starts delivering `Event::Chunk` on `events` from the device with this id (or `default`).
+    /// Starts opening the device with this id (or `default`), which delivers `Event::Chunk` on
+    /// `events` once it is open. Returns at once: a device slow to open must not hold the worker
+    /// (T4.39). An error here is one known without waiting; `opened` gives the outcome.
     fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<(), String>;
+    /// How the last `open` went: `None` while it is still under way, then its outcome.
+    fn opened(&mut self) -> Option<Result<(), String>>;
+    /// Stops the stream, or gives up an open still under way without waiting for it.
     fn close(&mut self);
 }
 
@@ -211,6 +224,12 @@ struct Mic<'a> {
     /// Devices whose stream died, skipped until the stream next closes.
     avoid: Vec<String>,
     open: bool,
+    /// An open under way since this time, with the device it is for; nothing else opens meanwhile.
+    pending: Option<(u64, Choice)>,
+    /// The pending open was said slow (`warn mic-open`), so its late success is said too.
+    slow: bool,
+    /// Since when a press has waited for a device not open (T4.39).
+    waited: Option<u64>,
     feed: Feed,
     retry_at: u64,
     failing: bool,
@@ -218,9 +237,10 @@ struct Mic<'a> {
 
 impl Mic<'_> {
     fn close(&mut self) {
-        if self.open {
+        if self.open || self.pending.is_some() {
             self.dev.close();
             self.open = false;
+            self.pending = None;
         }
     }
 
@@ -257,11 +277,20 @@ impl Mic<'_> {
             self.close();
             self.retry_at = 0;
             self.avoid.clear();
+            self.waited = None;
+            d.set_mic_down(false);
             return;
         }
-        if self.open || t < self.retry_at {
-            return;
+        if self.pending.is_some() {
+            self.settle(d, t, out);
+        } else if !self.open && t >= self.retry_at {
+            self.start(d, t, out);
         }
+        self.tell(d, t, out);
+    }
+
+    /// Starts an open on the device chosen now; `settle` takes its outcome.
+    fn start(&mut self, d: &mut Dictate, t: u64, out: &mut dyn Out) {
         self.stream += 1;
         let (stream, tx) = (self.stream, self.tx.clone());
         let (events, rx) = mpsc::sync_channel::<Event>(256);
@@ -277,23 +306,83 @@ impl Mic<'_> {
             .and_then(|c| self.dev.open(&c.id, events).map(|()| c))
         {
             Ok(choice) => {
+                self.pending = Some((t, choice));
+                self.slow = false;
+                d.set_mic_down(true);
+                self.settle(d, t, out);
+            }
+            Err(e) => self.failed(d, t, &e, out),
+        }
+    }
+
+    /// The pending open's outcome, if it has one: the stream is used from now on, or the open
+    /// failed. While it has none, a wait past `MIC_WAIT_MS` is said once.
+    fn settle(&mut self, d: &mut Dictate, t: u64, out: &mut dyn Out) {
+        let Some((since, _)) = &self.pending else {
+            return;
+        };
+        let since = *since;
+        match self.dev.opened() {
+            None => {
+                if !self.slow && t >= since + MIC_WAIT_MS * MS {
+                    self.slow = true;
+                    out.line(p::warn(
+                        "mic-open",
+                        &format!(
+                            "the microphone did not open in {} s; still waiting",
+                            MIC_WAIT_MS / 1_000
+                        ),
+                    ));
+                }
+            }
+            Some(Ok(())) => {
+                let (_, choice) = self.pending.take().expect("pending");
+                if self.slow {
+                    out.line(p::warn(
+                        "mic-late",
+                        &format!("the microphone opened after {} ms", (t - since) / MS),
+                    ));
+                }
                 self.open = true;
                 self.failing = false;
                 self.feed = Feed::default();
                 self.current = Some(choice.clone());
+                d.set_mic_down(false);
                 d.set_mic(choice, t, out);
                 if !d.mic_open() {
                     self.close();
                 }
             }
-            Err(e) => {
-                self.retry_at = t + RETRY_MS * MS;
-                if !self.failing {
-                    self.failing = true;
-                    out.line(p::warn("mic-open", &e));
-                    d.recheck_grant(out);
-                }
+            Some(Err(e)) => {
+                self.pending = None;
+                // The backend gave up the stream it was opening; nothing is left to close.
+                self.failed(d, t, &e, out);
             }
+        }
+    }
+
+    fn failed(&mut self, d: &mut Dictate, t: u64, e: &str, out: &mut dyn Out) {
+        self.retry_at = t + RETRY_MS * MS;
+        d.set_mic_down(true);
+        if !self.failing {
+            self.failing = true;
+            out.line(p::warn("mic-open", e));
+            d.recheck_grant(out);
+        }
+    }
+
+    /// A press waiting for its first sample is told when the device failed to open, or has been
+    /// opening for `MIC_WAIT_MS` (T4.39): the session still starts if the device opens later.
+    fn tell(&mut self, d: &mut Dictate, t: u64, out: &mut dyn Out) {
+        if self.open || !d.mic_waiting() {
+            self.waited = None;
+            return;
+        }
+        let since = *self.waited.get_or_insert(t);
+        let slow = self.pending.is_some() && t >= since + MIC_WAIT_MS * MS;
+        let failed = self.pending.is_none() && self.failing;
+        if slow || failed {
+            d.mic_failed(out);
         }
     }
 
@@ -355,6 +444,9 @@ pub fn serve_with(
         current: None,
         avoid: Vec::new(),
         open: false,
+        pending: None,
+        slow: false,
+        waited: None,
         feed: Feed::default(),
         retry_at: 0,
         failing: false,
@@ -366,6 +458,13 @@ pub fn serve_with(
         let msg = wait(&rx, Duration::from_millis(STEP_MS));
         let n = now();
         let t = n.awake_ns;
+        // A buffer of the stream still opening: its outcome first, so the buffer is used.
+        if let Ok(Msg::Mic(stream, _)) = &msg
+            && *stream == mic.stream
+            && mic.pending.is_some()
+        {
+            mic.settle(d, t, out);
+        }
         if sleep.woke(n) {
             d.recheck_grant(out);
             mic.avoid.clear();
@@ -564,6 +663,9 @@ mod tests {
             *self.events.borrow_mut() = Some(events);
             Ok(())
         }
+        fn opened(&mut self) -> Option<Result<(), String>> {
+            Some(Ok(()))
+        }
         fn close(&mut self) {
             self.opens.borrow_mut().push("close".into());
         }
@@ -756,6 +858,13 @@ mod tests {
             "{l:?}"
         );
         assert!(!l.iter().any(|x| x.contains("session.")), "{l:?}");
+        assert_eq!(
+            l.iter()
+                .filter(|x| x.contains(r#""type":"mic.failed""#))
+                .count(),
+            1,
+            "the press is told once that the microphone did not open (T4.39): {l:?}"
+        );
         let tries = opens.borrow().len();
         assert!((2..=3).contains(&tries), "tried {tries} times in 3 s");
     }
@@ -865,6 +974,9 @@ mod tests {
             self.opens.borrow_mut().push(device.to_string());
             *self.live.borrow_mut() = Some((device.to_string(), events));
             Ok(())
+        }
+        fn opened(&mut self) -> Option<Result<(), String>> {
+            Some(Ok(()))
         }
         fn close(&mut self) {
             *self.live.borrow_mut() = None;
@@ -1056,6 +1168,218 @@ mod tests {
             last >= RELEASE_STEP * 10 * MS,
             "audio up to the release, got {} ms",
             last / MS
+        );
+    }
+
+    /// T4.39's device: its open answers when the test says, and it delivers 10 ms a step only
+    /// once it answered yes. Every open and close is logged.
+    #[derive(Default)]
+    struct Late {
+        log: Rc<RefCell<Vec<String>>>,
+        answer: Rc<RefCell<Option<Result<(), String>>>>,
+        events: Rc<RefCell<Option<SyncSender<Event>>>>,
+        up: Rc<std::cell::Cell<bool>>,
+    }
+    impl Device for Late {
+        fn inputs(&mut self) -> Vec<Input> {
+            Vec::new()
+        }
+        fn lid_closed(&mut self) -> bool {
+            false
+        }
+        fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<(), String> {
+            self.log.borrow_mut().push(format!("open {device}"));
+            *self.events.borrow_mut() = Some(events);
+            Ok(())
+        }
+        fn opened(&mut self) -> Option<Result<(), String>> {
+            let r = self.answer.borrow_mut().take();
+            if r == Some(Ok(())) {
+                self.up.set(true);
+            }
+            r
+        }
+        fn close(&mut self) {
+            self.log.borrow_mut().push("close".into());
+            *self.events.borrow_mut() = None;
+            self.up.set(false);
+        }
+    }
+
+    /// The dictation key held from step 2 to `release`; the device's open answers yes at step
+    /// `answer` (never when `None`); stdin closes 100 steps after the release. Returns the lines,
+    /// the packets, the device's log and the step the worker reached.
+    fn late_hold(
+        answer: Option<u64>,
+        release: u64,
+    ) -> (Vec<String>, Vec<crate::protocol::Packet>, Vec<String>, u64) {
+        let w = World::new();
+        let mut d = dictate(&w, Warm::Off);
+        let tape = Tape {
+            lines: Rc::default(),
+            packets: Rc::default(),
+        };
+        let (got, bytes) = (tape.lines.clone(), tape.packets.clone());
+        let mut out = tape;
+        d.begin("test", true, ("granted", "granted"), &mut out);
+        let gate = d.gate();
+        let mut dev = Late::default();
+        let (log, ans, events, up) = (
+            dev.log.clone(),
+            dev.answer.clone(),
+            dev.events.clone(),
+            dev.up.clone(),
+        );
+        let flying = Rc::new(std::cell::Cell::new(0i64));
+        let sent = flying.clone();
+        let (tx, rx) = mpsc::channel();
+        let step = Rc::new(RefCell::new(0u64));
+        let reached = step.clone();
+        let mut now = || {
+            let mut s = step.borrow_mut();
+            *s += 1;
+            let t = *s * 10 * MS;
+            if Some(*s) == answer {
+                *ans.borrow_mut() = Some(Ok(()));
+            }
+            if up.get()
+                && let Some(e) = events.borrow().as_ref()
+                && e.try_send(Event::Chunk(chunk(t - 10 * MS, 16_000, 160)))
+                    .is_ok()
+            {
+                sent.set(sent.get() + 1);
+            }
+            if *s == 2 || *s == release {
+                gate.event(TapEvent::Key {
+                    down: *s == 2,
+                    name: "RightCommand",
+                    t_ns: t,
+                });
+            }
+            if *s == release + 100 {
+                let _ = tx.send(Msg::Line(None));
+            }
+            Now {
+                awake_ns: t,
+                cont_ns: t,
+            }
+        };
+        // Nothing but the device sends a message here, so a step with none in flight is short.
+        let mut wait = |rx: &Receiver<Msg>, _: Duration| {
+            let long = flying.get() > 0;
+            let m = rx.recv_timeout(if long {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_micros(200)
+            });
+            if let Ok(Msg::Mic(..)) = m {
+                flying.set(flying.get() - 1);
+            }
+            m
+        };
+        let fwd = tx.clone();
+        serve_with(&mut d, &mut dev, fwd, rx, &mut now, &mut wait, &mut out);
+        let (packets, _) = crate::protocol::decode_packets(&bytes.borrow()).unwrap();
+        let lines = got.borrow().clone();
+        let log = log.borrow().clone();
+        let at = *reached.borrow();
+        (lines, packets, log, at)
+    }
+
+    fn told(lines: &[String]) -> usize {
+        lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"mic.failed""#))
+            .count()
+    }
+
+    /// T4.39: a microphone that opens 4 s after the key-down, past the old 3 s budget, is kept:
+    /// it is opened once, never given up and opened again, and the held session records from the
+    /// moment it arrives to the release. The press is told at 3 s, and the session starts anyway.
+    #[test]
+    fn t4_39_a_microphone_that_opens_late_is_kept_and_records() {
+        let (l, packets, log, _) = late_hold(Some(402), 602);
+        assert_eq!(
+            log,
+            ["open default", "close"],
+            "one open, no second stream: {l:?}"
+        );
+        let s = started(&l);
+        assert_eq!(s.len(), 1, "the late stream starts the session: {l:?}");
+        let ended: Vec<&String> = l.iter().filter(|x| x.contains("session.ended")).collect();
+        assert_eq!(ended.len(), 1, "{l:?}");
+        assert_eq!(told(&l), 1, "{l:?}");
+        assert!(l.iter().any(|x| x.contains("mic-late")), "{l:?}");
+        let first = packets.first().expect("audio").capture_ns;
+        assert!(
+            first >= 4_000 * MS,
+            "nothing before the open: first at {} ms",
+            first / MS
+        );
+        let ns_per_frame = 1_000_000_000 / 16_000;
+        let last = packets
+            .last()
+            .map(|p| p.capture_ns + p.samples.len() as u64 * ns_per_frame)
+            .unwrap();
+        assert!(
+            last >= 6_000 * MS,
+            "audio up to the release, got {} ms",
+            last / MS
+        );
+    }
+
+    /// T4.39's control for unchanged behaviour: a device that answers at once starts the session
+    /// at the press with its pre-roll, and nobody is told anything.
+    #[test]
+    fn t4_39_a_microphone_that_opens_at_once_is_unchanged() {
+        let (l, packets, log, _) = late_hold(Some(1), 102);
+        assert_eq!(log, ["open default", "close"], "{l:?}");
+        assert_eq!(started(&l).len(), 1, "{l:?}");
+        assert_eq!(told(&l), 0, "{l:?}");
+        assert!(
+            !l.iter()
+                .any(|x| x.contains("mic-open") || x.contains("mic-late")),
+            "{l:?}"
+        );
+        let first = packets.first().expect("audio").capture_ns;
+        assert!(
+            first <= 30 * MS,
+            "audio from the press, first at {} ms",
+            first / MS
+        );
+    }
+
+    /// T4.39: a microphone that never opens while the key is held 4 s: the open is not abandoned
+    /// and retried (one open), the press is told once, no session starts, the key-up still
+    /// reaches the worker, which gives the open up at once and runs to the end of stdin.
+    #[test]
+    fn t4_39_a_microphone_that_never_opens_tells_the_press_once() {
+        let (l, packets, log, at) = late_hold(None, 402);
+        assert_eq!(log, ["open default", "close"], "{l:?}");
+        assert_eq!(told(&l), 1, "{l:?}");
+        assert!(started(&l).is_empty(), "{l:?}");
+        assert!(packets.is_empty());
+        assert!(l.iter().any(|x| x.contains("still waiting")), "{l:?}");
+        assert!(at >= 502, "the worker ran on to step {at}");
+        assert!(l.last().unwrap().contains("stopped"), "{l:?}");
+    }
+
+    /// T4.39: a session that ends before its microphone opened (held 1 s, the device answering
+    /// at 2 s) is told so at the key-up; the late answer opens nothing for a session gone.
+    #[test]
+    fn t4_39_a_session_that_ends_before_the_mic_opens_is_told() {
+        let (l, packets, log, _) = late_hold(Some(202), 102);
+        assert_eq!(told(&l), 1, "{l:?}");
+        assert!(started(&l).is_empty(), "{l:?}");
+        assert!(packets.is_empty());
+        assert_eq!(log, ["open default", "close"], "{l:?}");
+        let up = l
+            .iter()
+            .position(|x| x.contains(r#""type":"mic.failed""#))
+            .unwrap();
+        assert!(
+            !l[..up].iter().any(|x| x.contains("still waiting")),
+            "told at the key-up, before the 3 s mark: {l:?}"
         );
     }
 }

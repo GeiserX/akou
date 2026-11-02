@@ -124,6 +124,11 @@ impl Mic {
         self.open
     }
 
+    /// A session is waiting for its first sample.
+    pub fn waiting(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| !s.started)
+    }
+
     fn keeps_warm(&self) -> bool {
         !self.bluetooth
     }
