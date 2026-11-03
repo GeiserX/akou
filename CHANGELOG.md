@@ -2,6 +2,17 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.5 — the menu bar item on a Mac is no wider than its neighbours
+
+On a Mac, akou's item in the menu bar was 48 pt wide, with blank space beside the mark, while the items around it are 24 to 40 pt. It is now 32 pt, and the mark stays sharp on a Retina display. Windows and Linux are unchanged. This release also records a new reading of the Anthropic and OpenAI terms, in which nothing changed ([docs/providers.md](docs/providers.md#the-reading-of-2026-11-02)). The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Tray and menu bar
+- **The macOS menu bar item is 32 pt wide, not 48 pt** (#508). The tray library sizes the item for the icon as the file loads, then shrinks the icon to 16 pt, and the item keeps the first width. Our 32 px icon file gave no resolution, so it loaded at 32 pt. Both macOS icons now say 144 dpi, so they load at 16 pt from the start.
+
+### Behind the scenes
+- The nightly's remote-dictation stage now starts each test dictation where a speech clip starts, not inside a word; remote dictation did not regress with sherpa-onnx 2.0.1 (#507).
+- The soak now says when its worst tick was late and how much CPU akou used then (#506).
+
 ## 1.7.4 — a microphone that is slow to wake no longer swallows a dictation
 
 On a Mac, a USB microphone waking from idle can take more than 3 seconds to open. akou gave up on it after 3 seconds and threw the stream away just before it arrived. The dictation key then seemed to do nothing, and nothing said why: the reason went only to `app.log`. Now akou keeps waiting for as long as the key is held or the dictation is latched on, and dictates from the moment the microphone opens. When it never opens, the dictation bar says "The microphone didn't open". A microphone that opens straight away works as before. Windows and Linux had the same 3-second limit in dictation and get the same fix. Recording a call is unchanged: it already waited longer and said when a device failed ([TRAPS](docs/TRAPS.md) T4.39). The 8-hour soak did not run for this release: it runs the call-recording helper from a file and opens no device, and this release changes only how dictation opens a device.
