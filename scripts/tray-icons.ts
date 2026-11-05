@@ -19,7 +19,8 @@
  * The glyph is akou's mark (`assets/brand/akou-mark-mono.svg`): a lowercase a whose counter holds a
  * dot, one shape for the idle state, drawn on the mark's 32-unit grid so every edge of the ring and
  * the stem lands on a whole pixel at 16 px. The idle dot is the glyph's own colour, never red, so
- * the idle icon never reads as recording. Windows and Linux get a mid blue that reads on a dark and a
+ * the idle icon never reads as recording. The macOS idle template draws the same mark larger and a
+ * stroke heavier (`MENU_BAR_MARK`), so it fills the menu bar as its neighbours do. Windows and Linux get a mid blue that reads on a dark and a
  * light panel; neither recolours a tray image. The files are committed; a test checks they equal
  * what this script draws, so the two never drift.
  */
@@ -27,11 +28,34 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** The mark on a 32-unit square: a ring and the stem of the a, both 4 units wide, and the dot. */
-const RING = { cx: 16, cy: 16, r: 8 } as const;
-const STEM = { x: 24, top: 8, bottom: 24 } as const;
-const STROKE = 4;
-const DOT_R = 2.5;
+/** A drawing of the mark on a 32-unit square: a ring, the stem of the a, the dot, one stroke. */
+interface Mark {
+  ring: { cx: number; cy: number; r: number };
+  stem: { x: number; top: number; bottom: number };
+  stroke: number;
+  dotR: number;
+}
+
+/** The mark as the brand draws it: 4 units wide, every edge on a whole pixel at 16 px. */
+const MARK: Mark = {
+  ring: { cx: 16, cy: 16, r: 8 },
+  stem: { x: 24, top: 8, bottom: 24 },
+  stroke: 4,
+  dotR: 2.5,
+};
+
+/**
+ * The mark for the macOS menu bar idle template. The brand mark fills 20 of its 32 units, so at
+ * 16 pt the glyph was 10 pt tall beside neighbours of about 14 pt. This one fills 28 units (14 pt)
+ * with a 5-unit stroke, and every straight edge still lands on a whole pixel at 32 px: the ring
+ * spans 2 to 30 (its counter 7 to 25) and the stem 25 to 30, so nothing blurs on a Retina display.
+ */
+const MENU_BAR_MARK: Mark = {
+  ring: { cx: 16, cy: 16, r: 11.5 },
+  stem: { x: 27.5, top: 4.5, bottom: 27.5 },
+  stroke: 5,
+  dotR: 3.5,
+};
 const UNITS = 32;
 /** Samples per pixel side for the antialiased edge. */
 const SS = 4;
@@ -45,21 +69,21 @@ const RED: Rgb = [0xff, 0x45, 0x3a];
 const DISC_R = 15;
 
 /** Which part of the mark a point (in units) is in: the ring and stem, the dot, or none. */
-function part(px: number, py: number): "glyph" | "dot" | null {
-  const h = STROKE / 2;
-  const d = Math.hypot(px - RING.cx, py - RING.cy);
-  if (d <= DOT_R) return "dot";
-  if (Math.abs(d - RING.r) <= h) return "glyph";
+function part(m: Mark, px: number, py: number): "glyph" | "dot" | null {
+  const h = m.stroke / 2;
+  const d = Math.hypot(px - m.ring.cx, py - m.ring.cy);
+  if (d <= m.dotR) return "dot";
+  if (Math.abs(d - m.ring.r) <= h) return "glyph";
   // The stem, with round ends.
-  const cy = Math.min(Math.max(py, STEM.top), STEM.bottom);
-  return (px - STEM.x) ** 2 + (py - cy) ** 2 <= h * h ? "glyph" : null;
+  const cy = Math.min(Math.max(py, m.stem.top), m.stem.bottom);
+  return (px - m.stem.x) ** 2 + (py - cy) ** 2 <= h * h ? "glyph" : null;
 }
 
 /**
  * The mark at `size` pixels, RGBA, straight alpha: the ring and stem in `ink`, the dot in `dot`.
  * The dot sits apart from the ring, so a pixel's colour is the mean of the parts it covers.
  */
-function draw(size: number, ink: Rgb, dot: Rgb = ink): Uint8Array {
+function draw(size: number, ink: Rgb, dot: Rgb = ink, m: Mark = MARK): Uint8Array {
   const px = new Uint8Array(size * size * 4);
   const unit = UNITS / size;
   for (let y = 0; y < size; y++) {
@@ -68,7 +92,7 @@ function draw(size: number, ink: Rgb, dot: Rgb = ink): Uint8Array {
       let inDot = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
-          const p = part((x + (sx + 0.5) / SS) * unit, (y + (sy + 0.5) / SS) * unit);
+          const p = part(m, (x + (sx + 0.5) / SS) * unit, (y + (sy + 0.5) / SS) * unit);
           if (p === "glyph") glyph++;
           else if (p === "dot") inDot++;
         }
@@ -100,7 +124,11 @@ function drawCutout(size: number): Uint8Array {
         for (let sx = 0; sx < SS; sx++) {
           const ux = (x + (sx + 0.5) / SS) * unit;
           const uy = (y + (sy + 0.5) / SS) * unit;
-          if (Math.hypot(ux - RING.cx, uy - RING.cy) <= DISC_R && part(ux, uy) === null) hit++;
+          if (
+            Math.hypot(ux - MARK.ring.cx, uy - MARK.ring.cy) <= DISC_R &&
+            part(MARK, ux, uy) === null
+          )
+            hit++;
         }
       }
       px[(y * size + x) * 4 + 3] = Math.round((255 * hit) / (SS * SS));
@@ -221,7 +249,7 @@ export function ico(frames: { size: number; png: Buffer }[]): Buffer {
 /** Every tray file, by name. */
 export function trayIconFiles(): Record<string, Uint8Array> {
   return {
-    "akou-template.png": png(32, draw(32, BLACK), RETINA_DPI),
+    "akou-template.png": png(32, draw(32, BLACK, BLACK, MENU_BAR_MARK), RETINA_DPI),
     "akou.ico": ico([16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE)) }))),
     "akou.png": png(32, draw(32, BLUE)),
     "akou-recording-template.png": png(32, drawCutout(32), RETINA_DPI),

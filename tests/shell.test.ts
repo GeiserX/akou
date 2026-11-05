@@ -546,8 +546,8 @@ describe("the desktop shell over a fake NativeUi", () => {
     const [i] = trayPixels(idle.image);
     const [r] = trayPixels(rec.image);
     if (!i || !r) throw new Error("no pixels");
-    // A filled disc with the mark cut out: much more ink than the idle mark's ring and stem.
-    expect(inked(r)).toBeGreaterThan(1.5 * inked(i));
+    // A filled disc with the mark cut out: more ink than the idle mark's ring and stem.
+    expect(inked(r)).toBeGreaterThan(inked(i));
     // The dot (the centre) and the ring (8 units out) are cut out; the disc between ring and edge
     // (13 units out) and the counter between dot and ring (5 units out) are ink. Idle is the reverse.
     expect(alphaAt(r, 16, 16)).toBe(0);
@@ -555,7 +555,7 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(alphaAt(r, 16, 3)).toBe(255);
     expect(alphaAt(r, 11, 16)).toBe(255);
     expect(alphaAt(i, 16, 16)).toBe(255);
-    expect(alphaAt(i, 16, 3)).toBe(0);
+    expect(alphaAt(i, 16, 0)).toBe(0);
     // The stem is cut out too, with ink beyond it.
     expect(alphaAt(r, 24, 16)).toBe(0);
     expect(alphaAt(r, 28, 16)).toBe(255);
@@ -583,6 +583,37 @@ describe("the desktop shell over a fake NativeUi", () => {
     }
     // The positive control: the same mark with no pHYs, as shipped until 1.7.4, loads at 32 pt.
     expect(points(png(32, new Uint8Array(32 * 32 * 4)))).toBe(32);
+  });
+
+  test("[DK-T1] A small mark: the macOS idle glyph is 14 pt tall, like its neighbours, with sharp edges", () => {
+    // The inked extent of an image, in pixels, along x and along y.
+    const extent = (px: Uint8Array): [number, number] => {
+      const size = Math.sqrt(px.length / 4);
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (alphaAt(px, x, y) > 128) {
+            xs.push(x);
+            ys.push(y);
+          }
+        }
+      }
+      return [Math.max(...xs) - Math.min(...xs) + 1, Math.max(...ys) - Math.min(...ys) + 1];
+    };
+    const [idle] = trayPixels(trayImage("darwin").image);
+    if (!idle) throw new Error("no pixels");
+    // 28 of 32 px at 144 dpi: 14 pt, where the brand mark filled 10.
+    expect(extent(idle)).toEqual([28, 28]);
+    // The stem's straight edges land on whole pixels: full ink beside clear, no grey column.
+    expect(alphaAt(idle, 25, 16)).toBe(255);
+    expect(alphaAt(idle, 24, 16)).toBe(0);
+    expect(alphaAt(idle, 29, 16)).toBe(255);
+    expect(alphaAt(idle, 30, 16)).toBe(0);
+    // The positive control: the brand mark, still the Linux icon, fills 20 px of its 32.
+    const [brand] = trayPixels(trayImage("linux").image);
+    if (!brand) throw new Error("no pixels");
+    expect(extent(brand)).toEqual([20, 20]);
   });
 
   test("[DK-T2] With no display the tray keeps its item: the mark changes once a display is back", async () => {
