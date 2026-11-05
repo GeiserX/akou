@@ -2,6 +2,13 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); the 0.x releases were prereleases, and from 1.0.0 on a release is a full release unless its version has a prerelease part, such as 1.1.0-rc.1.
 
+## 1.7.6 — the mark in the Mac menu bar is as large as its neighbours
+
+On a Mac, the akou mark in the menu bar was 10 pt tall, while the icons around it are about 14 pt. It is now 14 pt, with a slightly heavier stroke, and every straight edge still lands on a whole pixel, so it stays sharp on a Retina display. The item is still 32 pt wide. Windows, Linux and the recording icon are unchanged. This release also records a new reading of the Anthropic and OpenAI terms ([docs/providers.md](docs/providers.md#the-reading-of-2026-11-05)). The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
+
+### Tray and menu bar
+- **The macOS menu bar mark is 14 pt tall, not 10 pt** (#511). The idle icon drew the brand mark, which fills 20 of its 32 units. The menu bar icon now draws the same mark on its own grid, 28 of 32 px, with the ring and the stem on whole pixels.
+
 ## 1.7.5 — the menu bar item on a Mac is no wider than its neighbours
 
 On a Mac, akou's item in the menu bar was 48 pt wide, with blank space beside the mark, while the items around it are 24 to 40 pt. It is now 32 pt, and the mark stays sharp on a Retina display. Windows and Linux are unchanged. This release also records a new reading of the Anthropic and OpenAI terms, in which nothing changed ([docs/providers.md](docs/providers.md#the-reading-of-2026-11-02)). The 8-hour soak did not run for this release: it exercises the call-recording helper, and nothing in this release touches it.
