@@ -1,5 +1,5 @@
-# Dependency updates (docs/CI-CD.md CI-13): once a week per ecosystem, minor and patch updates in
-# one pull request, each major in a pull request of its own. Every ignore says why on the line
+# Dependency updates (docs/CI-CD.md CI-13): once a week per ecosystem (the docs pin once a month),
+# minor and patch updates in one pull request, each major in a pull request of its own. Every ignore says why on the line
 # above it; tests/dependabot.test.ts fails on an ignore without a reason.
 #
 # Merge these with an explicit subject and body (`gh pr merge --squash --subject ... --body ...`):
@@ -46,3 +46,12 @@ updates:
     groups:
       actions-minor-and-patch:
         update-types: [minor, patch]
+
+  # The docs site's one pin (zensical). Monthly, not weekly: Zensical releases every week or two,
+  # and the strict build and site check in the Docs workflow prove each bump.
+  - package-ecosystem: "pip"
+    directory: "/docs"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "build(docs)"
