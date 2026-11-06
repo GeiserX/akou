@@ -21,5 +21,5 @@ artifacts/
 # Beads: bead text lives in the Dolt tracker only, never in git
 .beads/*.jsonl
 
-# mkdocs build output
+# docs build output (zensical)
 /site/

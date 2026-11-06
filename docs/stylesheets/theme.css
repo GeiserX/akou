@@ -45,10 +45,16 @@
  * scroll. Styling both would change every page title too.
  */
 .md-header__topic:first-child .md-ellipsis {
-  color: #f2f3f5;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: lowercase;
+}
+
+/* That colour only on the dark scheme: Zensical's modern header takes the page
+   background, so on the light scheme it is white and a light name would vanish.
+   There the name keeps the default text colour. */
+[data-md-color-scheme="slate"] .md-header__topic:first-child .md-ellipsis {
+  color: #f2f3f5;
 }
 
 /* Keep the mark and the name close, so they read as one unit. */
@@ -183,4 +189,11 @@
   .md-typeset .ak-gallery {
     grid-template-columns: 1fr;
   }
+}
+
+/* The logo is the #f2f3f5 mark alone, which vanishes on the light scheme's
+   white header. There it sits on the app icon's plate, as in the Dock. */
+[data-md-color-scheme="default"] .md-header__button.md-logo img {
+  background: linear-gradient(#212327, #0e1014);
+  border-radius: 22%;
 }
