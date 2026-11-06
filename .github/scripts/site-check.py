@@ -126,7 +126,9 @@ class Page(HTMLParser):
         if tag == "link" and "canonical" in a.get("rel", "").split():
             self.canonical = a.get("href")
         classes = a.get("class", "").split()
-        if tag == "a" and ("md-nav__link" in classes or "md-tabs__link" in classes) and "href" in a:
+        # The toc's #heading entries carry md-nav__link too: they point at the page itself,
+        # so only links with a path count toward reachability.
+        if tag == "a" and ("md-nav__link" in classes or "md-tabs__link" in classes) and urlparse(a.get("href", "")).path:
             self.nav.append(a["href"])
 
     handle_startendtag = handle_starttag
@@ -198,7 +200,7 @@ def main(site_dir: str, config_path: str) -> int:
     # The offline plugin turns directory URLs off (zensical/config.py, _apply_offline_plugin).
     directory_urls = cfg.get("use_directory_urls", True) is not False and not plugin_on(plugins, "offline")
 
-    site_url = cfg.get("site_url") or Page(index.read_text(errors="replace")).canonical or ""
+    site_url = cfg.get("site_url") or Page(index.read_text(encoding="utf-8", errors="replace")).canonical or ""
     origin = urlparse(site_url)
     prefix = origin.path or ""
     if not site_url:
@@ -212,7 +214,7 @@ def main(site_dir: str, config_path: str) -> int:
     def parse(path: Path) -> Page:
         """Each file is parsed once: fragment checks read target pages again."""
         if path not in parsed:
-            parsed[path] = Page(path.read_text(errors="replace"))
+            parsed[path] = Page(path.read_text(encoding="utf-8", errors="replace"))
         return parsed[path]
 
     def resolve(page: Path, url: str):
@@ -245,7 +247,7 @@ def main(site_dir: str, config_path: str) -> int:
     pages: list[Path] = []
     copy_on = "content.action.copy" in ((cfg.get("theme") or {}).get("features") or [])
     for page in sorted(site.rglob("*.html")):
-        text = page.read_text(errors="replace")
+        text = page.read_text(encoding="utf-8", errors="replace")
         rel = page.relative_to(site)
         stub = STUB in text  # a redirect stub: its links are checked, it is not a page
         is_page = not stub and (rel.name == "index.html" if directory_urls else rel.as_posix() != "404.html")
@@ -274,7 +276,9 @@ def main(site_dir: str, config_path: str) -> int:
                 if not in_head and unquote(urlparse(url).path).endswith(".md"):
                     errors.add(f"{rel}: {url} links a Markdown source, not a page URL (raw HTML link?)")
                 frag = unquote(urlparse(url).fragment)
-                if tag == "a" and frag and t.suffix == ".html" and frag not in parse(t).ids:
+                # #top and text fragments (#:~:text=) are valid in a browser with no matching id.
+                special = frag.lower() == "top" or frag.startswith(":~:")
+                if tag == "a" and frag and not special and t.suffix == ".html" and frag not in parse(t).ids:
                     errors.add(f"{rel}: {url} -> no id {frag!r} on {t.relative_to(site)}")
         for url in doc.copies:
             t = resolve(page, url)
@@ -302,7 +306,7 @@ def main(site_dir: str, config_path: str) -> int:
         variant = theme.get("variant", "classic")
         if variant not in ("modern", "classic"):
             errors.add(f"zensical.toml: theme.variant {variant!r} is not modern or classic (Zensical falls back to classic silently)")
-        elif variant == "modern" and "assets/stylesheets/modern/" not in index.read_text(errors="replace"):
+        elif variant == "modern" and "assets/stylesheets/modern/" not in index.read_text(encoding="utf-8", errors="replace"):
             errors.add("index.html does not load the modern stylesheet although theme.variant is modern")
         redirects = plugin_opts(plugins, "redirects") if plugin_on(plugins, "redirects") else {}
         for src in redirects.get("redirect_maps") or {}:
@@ -314,7 +318,7 @@ def main(site_dir: str, config_path: str) -> int:
                 stub = site / (s + ".html")
             else:
                 stub = site / s / "index.html"
-            if not stub.is_file() or STUB not in stub.read_text(errors="replace"):
+            if not stub.is_file() or STUB not in stub.read_text(encoding="utf-8", errors="replace"):
                 errors.add(f"redirect_maps {src!r}: no redirect stub at {stub.relative_to(site)}")
         if plugin_on(plugins, "llmstxt") and not (site / "llms.txt").is_file():
             errors.add("llmstxt plugin is configured but site/llms.txt was not written")
