@@ -5,7 +5,7 @@
  * driven with the helper's lines directly; nothing types, pastes or opens a window.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import type { AppToHelper } from "../src/main/dictation/protocol.ts";
@@ -166,6 +166,51 @@ describe("T4.40: the helper exits while a dictation decodes", () => {
     });
     cleanups.push(() => again.close());
     expect(again.log.items().map((i) => i.id)).toEqual(["d0"]);
+  });
+});
+
+describe("T4.40: the start-up reconcile on a full disk", () => {
+  function unsettled(): string {
+    const t = tempDir("akou-dict-settle-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(join(t.dir, "dictation"));
+    log.append({ type: "dictation.started", id: "d1", target: TARGET, engine: "fast", by: "user" });
+    log.append({ type: "dictation.ended", id: "d1", reason: "release", seconds: 1 });
+    log.close();
+    return t.dir;
+  }
+
+  function diskFull() {
+    const real = DictationLog.prototype.append;
+    const spy = spyOn(DictationLog.prototype, "append").mockImplementation(function (
+      this: DictationLog,
+      draft,
+    ) {
+      if (draft.type === "dictation.failed") throw new Error("ENOSPC: no space left on device");
+      return real.call(this, draft);
+    });
+    cleanups.push(() => spy.mockRestore());
+  }
+
+  test("[T4.40] a failed write leaves the dictation for the next start, and the service still starts", async () => {
+    const dir = unsettled();
+    diskFull();
+    const logged: string[] = [];
+    const svc = new DictationService({
+      configDir: dir,
+      engine: () => null,
+      now: () => 1,
+      onLog: (level, msg) => logged.push(`${level} ${msg}`),
+    });
+    cleanups.push(() => svc.close());
+    expect(svc.log.item("d1")?.state).toBe("transcribing");
+    expect(logged).toContain("error dictation log: ENOSPC: no space left on device");
+  });
+
+  test("[T4.40] positive control: with room on the disk the same dictation fails at start", async () => {
+    const svc = new DictationService({ configDir: unsettled(), engine: () => null, now: () => 1 });
+    cleanups.push(() => svc.close());
+    expect(svc.log.item("d1")?.state).toBe("failed");
   });
 });
 

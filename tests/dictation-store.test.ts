@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { DictationItem } from "../src/core/dictation/events.ts";
 import {
   DictationLog,
@@ -232,6 +232,50 @@ describe("a write the disk cuts short", () => {
     expect(() => writeAll(0, "y".repeat(10_000), d.write)).toThrow(
       "short write: 5000 of 10000 bytes",
     );
+  });
+
+  /** The log's real file behind a disk with `room` bytes left, `step` bytes a call at most. */
+  function fullDisk(room: number, step: number, claimWhole = false) {
+    let used = 0;
+    return (fd: number, b: Uint8Array) => {
+      const n = Math.max(0, Math.min(b.length, step, room - used));
+      used += n;
+      if (n > 0) writeSync(fd, b.subarray(0, n));
+      // claimWhole: a caller that ignores the count, as one bare writeSync did.
+      return claimWhole ? b.length : n;
+    };
+  }
+
+  test("[T4.43] a deletion on a full disk throws, keeps the whole history and leaves no .tmp", () => {
+    const d = dir();
+    const log = new DictationLog(d);
+    for (const id of ["da", "db", "dc"]) dictate(log, id, `words of ${id}`);
+    const before = readFileSync(log.path, "utf8");
+    // Room for the tombstone, not for the rewritten history.
+    log.write = fullDisk(300, 64);
+    expect(() => log.forget(["da"])).toThrow("short write");
+    const after = readFileSync(log.path, "utf8");
+    expect(after.startsWith(before)).toBe(true);
+    expect(after.slice(before.length)).toMatch(/^\{[^\n]*"dictation\.deleted"[^\n]*\}\n$/);
+    expect(existsSync(`${log.path}.tmp`)).toBe(false);
+    log.close();
+    expect(
+      new DictationLog(d)
+        .items()
+        .map((i) => i.id)
+        .sort(),
+    ).toEqual(["db", "dc"]);
+  });
+
+  test("[T4.43] positive control: a write whose short count is ignored renames a cut history over the log", () => {
+    const d = dir();
+    const log = new DictationLog(d);
+    for (const id of ["da", "db", "dc"]) dictate(log, id, `words of ${id}`);
+    const before = readFileSync(log.path, "utf8");
+    log.write = fullDisk(300, 1_000_000, true);
+    log.forget(["da"]);
+    expect(readFileSync(log.path, "utf8").length).toBeLessThan(before.length);
+    log.close();
   });
 
   test("[T4.43] positive control: one write call keeps only what the disk took, and says nothing", () => {

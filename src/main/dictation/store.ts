@@ -114,6 +114,9 @@ export class DictationLog {
   /** Called with every event appended. */
   onAppend: ((e: DictationEvent) => void) | null = null;
 
+  /** One write(2) call: it may write less than asked (T4.43). Tests replace it with a full disk. */
+  write: (fd: number, b: Uint8Array) => number = (f, b) => writeSync(f, b);
+
   private load(): LogOpenReport {
     const report = { truncated: 0, invalidLines: 0 };
     if (!existsSync(this.path)) return report;
@@ -164,7 +167,7 @@ export class DictationLog {
     if (this.fd === null) throw new Error("the dictation log is closed");
     if (this.deleted.has(draft.id)) return null;
     const e = { v: 1, seq: this.seq + 1, t: this.now(), ...draft } as DictationEvent;
-    writeAll(this.fd, `${JSON.stringify(e)}\n`);
+    writeAll(this.fd, `${JSON.stringify(e)}\n`, this.write);
     fsyncSync(this.fd);
     this.seq = e.seq;
     this.all.push(e);
@@ -196,7 +199,7 @@ export class DictationLog {
     const tmp = `${this.path}.tmp`;
     const fd = openSync(tmp, "w", 0o600);
     try {
-      writeAll(fd, keep.map((e) => `${JSON.stringify(e)}\n`).join(""));
+      writeAll(fd, keep.map((e) => `${JSON.stringify(e)}\n`).join(""), this.write);
       fsyncSync(fd);
     } catch (err) {
       // A short history must never be renamed over the whole one (T4.43).
