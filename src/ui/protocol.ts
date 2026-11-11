@@ -113,8 +113,14 @@ export interface Transport {
   ask(call: string, question: string, sink: AskSink): { cancel(): void };
   /** A part's audio, for playing a line. */
   audio(call: string, part: number): Promise<Blob>;
-  /** The app's status now, and again after every call starts, ends, pauses or is shared. */
-  watchStatus(fn: (status: AppStatus) => void): { close(): void };
+  /**
+   * The app's status now, and again after every call starts, ends, pauses or is shared.
+   * `connection`, where the surface can tell, says when the stream opens and when it is lost.
+   */
+  watchStatus(
+    fn: (status: AppStatus) => void,
+    connection?: (state: "open" | "lost") => void,
+  ): { close(): void };
   /** Opens the system's privacy pane for a grant; false when this surface cannot. */
   openSettingsPane(pane: SettingsPane): Promise<boolean>;
   /**

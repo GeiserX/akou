@@ -36,6 +36,7 @@ import { liveChip } from "./live-options.ts";
 import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
+  type Banner,
   banner,
   type CallSummary,
   callHeadMeta,
@@ -210,6 +211,8 @@ class App {
   private follower: Follower | null = null;
   private hues = new HueBook();
   private disconnectedSince: number | null = null;
+  /** When the app's status stream was lost, by the page's clock; apart, so a call switch keeps it. */
+  private statusLostSince: number | null = null;
   private levelAt: number | null = null;
   /** When the follow of the call on screen first opened, so a call joined late is not "dead". */
   private followedAt: number | null = null;
@@ -382,7 +385,15 @@ class App {
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
-    this.t.watchStatus((s) => this.onStatus(s));
+    this.t.watchStatus(
+      (s) => this.onStatus(s),
+      (state) => {
+        // clock: when the page lost the app's status stream, by its own clock.
+        if (state === "lost") this.statusLostSince ??= Date.now();
+        else this.statusLostSince = null;
+        this.paint();
+      },
+    );
     // clock: the page repaints its ages and timers once a second.
     setInterval(() => this.paint(), 1000);
     this.paint();
@@ -540,7 +551,9 @@ class App {
       view: v,
       status: s,
       // A reconnect that takes more than 3 s is worth saying; a quick one is not.
-      disconnected: this.disconnectedSince !== null && now - this.disconnectedSince > 3000,
+      disconnected:
+        (this.disconnectedSince !== null && now - this.disconnectedSince > 3000) ||
+        (this.statusLostSince !== null && now - this.statusLostSince > 3000),
       now,
       lastLineAt: this.lastLineAt,
       levelAt: this.levelAt,
@@ -834,14 +847,18 @@ class App {
   }
 
   private drawBanner(v: CallView | null, now: number): void {
-    const b = banner({
-      view: v,
-      now,
-      lastLineAt: this.lastLineAt,
-      callHeardAt: this.callHeardAt,
-      levelAt: this.levelAt,
-      platform: this.platform,
-    });
+    // A page that lost the app for 10 s says so in words, with or without a call open (WINDOW 17).
+    const gone = this.statusLostSince !== null && now - this.statusLostSince > 10_000;
+    const b: Banner | null = gone
+      ? { kind: "lag", text: "akou is not running. Open it with `akou open`." }
+      : banner({
+          view: v,
+          now,
+          lastLineAt: this.lastLineAt,
+          callHeardAt: this.callHeardAt,
+          levelAt: this.levelAt,
+          platform: this.platform,
+        });
     const el = byId("banner");
     el.className = b ? b.kind : "";
     el.hidden = !b;

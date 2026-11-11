@@ -640,6 +640,43 @@ describe("[W3.1] the controls when akou does not answer", () => {
   );
 });
 
+describe("[W17.1] a page that lost the app", () => {
+  test(
+    "with no call open, the word turns to reconnecting and after 10 s the page says akou is not running; both go when it answers",
+    async () => {
+      await withRig({}, async (rig) => {
+        let down = true;
+        const page = await rig.open(undefined, {
+          before: (p) =>
+            p.route("**/app/stream", (r) => (down ? void r.abort() : void r.continue())),
+        });
+        await until(
+          async () => (await text(page, "#state")) === "reconnecting",
+          8000,
+          "reconnecting",
+        );
+        await until(
+          async () =>
+            (await page.isVisible("#banner")) &&
+            (await text(page, "#banner-text")) ===
+              "akou is not running. Open it with `akou open`.",
+          15_000,
+          "the not-running line",
+        );
+        // Positive control: once akou answers, the same checks see the page come back.
+        down = false;
+        await until(
+          async () => (await text(page, "#state")) !== "reconnecting",
+          10_000,
+          "back",
+        );
+        await until(async () => !(await page.isVisible("#banner")), 5000, "banner gone");
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the notepad (DESIGN 5.1)", () => {
   test(
     "a typed line is a note by the user, timed at its first keystroke; agent lines look different",
