@@ -684,6 +684,8 @@ describe("settings over the API", () => {
         "api.bind",
         "asr.diarizeHelper",
         "asr.llamaServer",
+        // SEC-2: akou runs the llama-server and CrispASR builds kept in it.
+        "asr.modelsDir",
         "capture.helper",
         "dictation.remote.url",
         "hooks",
