@@ -613,7 +613,8 @@ describe("[W3.1] the controls when akou does not answer", () => {
         await page.route("**/api/v1/calls", drop);
         await page.click("#record");
         await until(
-          async () => (await text(page, "#toast")) === "The call did not start: akou did not answer.",
+          async () =>
+            (await text(page, "#toast")) === "The call did not start: akou did not answer.",
           5000,
           "the start's toast",
         );
@@ -658,18 +659,13 @@ describe("[W17.1] a page that lost the app", () => {
         await until(
           async () =>
             (await page.isVisible("#banner")) &&
-            (await text(page, "#banner-text")) ===
-              "akou is not running. Open it with `akou open`.",
+            (await text(page, "#banner-text")) === "akou is not running. Open it with `akou open`.",
           15_000,
           "the not-running line",
         );
         // Positive control: once akou answers, the same checks see the page come back.
         down = false;
-        await until(
-          async () => (await text(page, "#state")) !== "reconnecting",
-          10_000,
-          "back",
-        );
+        await until(async () => (await text(page, "#state")) !== "reconnecting", 10_000, "back");
         await until(async () => !(await page.isVisible("#banner")), 5000, "banner gone");
       });
     },

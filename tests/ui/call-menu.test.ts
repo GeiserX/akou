@@ -293,7 +293,9 @@ describe("[W13.3] Move to Trash, with Undo", () => {
         // B's Undo is still offered beside the newer message, and only once.
         const held = page.locator("#toast-held .toast-action");
         expect(await held.count()).toBe(1);
-        expect(await page.textContent("#toast-held")).toContain("“Beta planning” moved to the Trash.");
+        expect(await page.textContent("#toast-held")).toContain(
+          "“Beta planning” moved to the Trash.",
+        );
         await held.click();
         await page.waitForSelector(row(B));
         expect(await listed(rig)).toContain(B);
