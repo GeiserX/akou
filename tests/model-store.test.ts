@@ -470,6 +470,40 @@ describe("[SV-M3] a failed download is retried, then fails for good", () => {
     }
   });
 
+  test("[SV-M3] a download that gives up keeps its reason on the model's row until the next pull; a Cancel leaves none", async () => {
+    const r = rig();
+    const held = { defaults: new Set<string>(), inUse: new Set<string>() };
+    const row = () => r.store.list(held, () => null).find((m) => m.id === B);
+    reg.failNext("b.onnx", Number.POSITIVE_INFINITY);
+    const ends: { ok: boolean }[] = [];
+    r.store.onEnd((e) => ends.push(e));
+    try {
+      // Positive control: a model never fetched carries no reason.
+      expect(row()).not.toHaveProperty("error");
+      r.store.pull(B);
+      await until(async () => ends.length === 1, 5000, "download failed");
+      expect(row()?.state).toBe("missing");
+      expect(row()?.error).toContain("HTTP 500");
+      // A new pull clears it while it runs, and a success leaves none.
+      const release = reg.hold("b.onnx", 1024);
+      reg.failNext("b.onnx", 0);
+      r.store.pull(B);
+      expect(row()?.state).toBe("downloading");
+      expect(row()).not.toHaveProperty("error");
+      // A Cancel is on purpose: no failure to show.
+      expect(r.store.cancel(B, "admin")).toBe(true);
+      release();
+      expect(row()?.state).toBe("missing");
+      expect(row()).not.toHaveProperty("error");
+      r.store.pull(B);
+      await until(async () => r.store.state(B) === "ready", 5000, "the last pull");
+      expect(row()).not.toHaveProperty("error");
+    } finally {
+      reg.failNext("b.onnx", 0);
+      r.cleanup();
+    }
+  });
+
   test("a registry failing twice then serving: the download succeeds on the third try", async () => {
     const r = rig();
     const before = reg.hits.get("b.onnx") ?? 0;

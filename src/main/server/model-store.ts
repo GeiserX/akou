@@ -567,6 +567,11 @@ export interface ModelView {
   /** Where its files are downloaded from: host and repository, for example `huggingface.co/org/repo`. */
   from: string[];
   state: "ready" | "downloading" | "missing";
+  /**
+   * Why its last download gave up, for a missing model; absent otherwise. Cleared when a new
+   * download starts. Kept in memory only, so a restart forgets it.
+   */
+  error?: string;
   bytes: number;
   size: number;
   last_used_at: string | null;
@@ -615,6 +620,8 @@ export class ModelStore {
   /** The import running, if any: a second one waits for it, so one copy owns each model. */
   private importing: Promise<unknown> = Promise.resolve();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
+  /** Why each model's last download gave up, by id; a Cancel is no failure and leaves none. */
+  private readonly failures = new Map<string, string>();
   private closed = false;
 
   constructor(private readonly o: ModelStoreOptions) {
@@ -798,6 +805,7 @@ export class ModelStore {
         abort: new AbortController(),
       };
       this.downloads.set(id, d);
+      this.failures.delete(id);
       this.o.log("info", `model.download ${id} started`);
       void this.attempt(d);
     }
@@ -830,6 +838,7 @@ export class ModelStore {
         return;
       }
       this.downloads.delete(id);
+      this.failures.set(id, cause);
       this.o.log("warn", `model.download ${id} failed after ${d.tries} tries: ${cause}`);
       this.announce({ model: id, ok: false, error: cause });
       return;
@@ -1043,6 +1052,7 @@ export class ModelStore {
     return this.o.catalog().map((m) => {
       const state = this.state(m.id);
       const last = state === "ready" ? ledger[m.id] : undefined;
+      const error = state === "missing" ? this.failures.get(m.id) : undefined;
       const kept = held.defaults.has(m.id) || held.inUse.has(m.id);
       const c = m as Partial<CatalogEntry>;
       const scores = scoresOf(m);
@@ -1059,6 +1069,7 @@ export class ModelStore {
         after_call: c.serves ? c.serves.includes("final") : true,
         from: [...new Set(m.files.map((f) => publishedAt(f.url)))],
         state,
+        ...(error === undefined ? {} : { error }),
         ...this.size(m.id),
         last_used_at: iso(last),
         evicts_at: last === undefined || kept || days === 0 ? null : iso(last + days * DAY_MS),
