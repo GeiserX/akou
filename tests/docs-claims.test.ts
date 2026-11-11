@@ -42,3 +42,27 @@ describe("[T1.39] Docs drift from code: the first download", () => {
     expect(loneDownloadSize("about 3.0 to 3.7 GB, by what the Mac runs")).toEqual([]);
   });
 });
+
+/**
+ * Whether the `auto` row of the dictation engine table names `dictation.final`. The app passes
+ * `dictation.final` (default `live`) with every press, so `auto` follows it
+ * (src/main/dictation/engines.ts), and never picks Qwen by the machine alone.
+ */
+export function autoRowFollowsFinal(md: string): boolean {
+  const row = md.split("\n").find((l) => l.startsWith("| `auto` |"));
+  return row !== undefined && row.includes("`dictation.final`") && row.includes("`live`");
+}
+
+describe("[T1.39] Docs drift from code: the dictation engine", () => {
+  test("the dictation page says `auto` follows `dictation.final`, live by default", () => {
+    expect(autoRowFollowsFinal(read("docs/dictation.md"))).toBe(true);
+  });
+
+  test("positive control: the old machine-based `auto` row is caught", () => {
+    expect(
+      autoRowFollowsFinal(
+        "| `auto` | `best` where Qwen runs on a GPU and is downloaded, `fast` elsewhere. The default |",
+      ),
+    ).toBe(false);
+  });
+});

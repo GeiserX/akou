@@ -33,7 +33,7 @@ When an app cannot take the text, or when you ask for it (Shift+Enter, a second 
 |---|---|
 | `fast` | Parakeet: about 0.1 s for 5 s of speech |
 | `best` | Qwen3-ASR 1.7B, kept warm while dictation is on. Falls back to `fast` when it fails or is too slow, and says so |
-| `auto` | `best` where Qwen runs on a GPU and is downloaded, `fast` elsewhere. The default |
+| `auto` | The default. Follows `dictation.final`, the text a dictation inserts: `live` (its default) inserts the words the streaming model showed as you spoke, the fastest and less accurate than Parakeet, with Parakeet in its place while no streaming model is downloaded; `parakeet` runs `fast`; `qwen` runs `best` |
 | `remote` | Another akou you run, with one of its `jobs` keys, so this Mac needs no model of its own |
 
 Qwen3-ASR is about 2.5 GB, already on disk where calls use it for the transcript after the call; the setup's Speech models step lists it when you pick Dictation or Both. **Languages** lists the languages you speak; with more than one, `auto` chooses among them as you speak, and a language chip on the island switches it with a click.
