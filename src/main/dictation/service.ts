@@ -427,6 +427,16 @@ export class DictationService {
     if (r.truncated > 0)
       o.onLog?.("warn", `dictation log: a torn last line was cut (${r.truncated} bytes)`);
     if (r.invalidLines > 0) o.onLog?.("warn", `dictation log: ${r.invalidLines} bad lines skipped`);
+    // A dictation left mid-decode or mid-insert by a quit or a crash never settles by itself: it
+    // fails now, before any session runs, so retention and the audio sweep can let it go (T4.40).
+    for (const it of this.log.items()) {
+      if (!FINAL.has(it.state))
+        this.log.append({
+          type: "dictation.failed",
+          id: it.id,
+          error: "akou stopped before this dictation finished",
+        });
+    }
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());

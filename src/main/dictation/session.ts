@@ -581,6 +581,8 @@ export class DictationSession {
   private latest: Listening | null = null;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
+  /** The helper exited: a decode that ends now has no one to insert its text. */
+  private gone = false;
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
   /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
@@ -1164,6 +1166,7 @@ export class DictationSession {
 
   /** The helper exited: a session in progress is lost with it, and says so. */
   helperGone(): void {
+    this.gone = true;
     const c = this.cur;
     this.cur = null;
     this.latest = null;
@@ -1384,6 +1387,12 @@ export class DictationSession {
           ? { type: "dictation.drafted", id, reason: "rule" }
           : { type: "dictation.failed", id, error: "the draft box needs the desktop window" },
       );
+      return;
+    }
+    // The helper exited during the decode: an insert sent now goes nowhere and no receipt comes,
+    // so the dictation fails here, its text kept for Copy and Open draft (T4.40).
+    if (this.gone) {
+      this.notInserted(c, { type: "dictation.failed", id, error: "the dictation helper stopped" });
       return;
     }
     // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
