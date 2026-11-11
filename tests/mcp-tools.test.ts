@@ -299,12 +299,8 @@ describe("the list of calls says what `failed` returns", () => {
     const c = await mcpClient(api);
     try {
       const tools = (await c.client.listTools()).tools;
-      const failed = (
-        tools.find((t) => t.name === "akou_list_calls")?.inputSchema.properties as Record<
-          string,
-          { description?: string }
-        >
-      ).failed?.description;
+      const props = tools.find((t) => t.name === "akou_list_calls")?.inputSchema.properties ?? {};
+      const failed = (props as Record<string, { description?: string }>).failed?.description;
       // The API lists only the failed starts with `failed` (GET /calls, call/manager.ts).
       expect(failed).toStartWith("Only the calls whose start failed");
       expect(failed).not.toContain("Also");

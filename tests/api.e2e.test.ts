@@ -665,7 +665,10 @@ describe("the vocabulary files", () => {
     });
     expect([some.body.approved, some.body.unmatched]).toEqual([["Kasmweb"], ["Kasmwbe"]]);
     // The control: a word already confirmed there is found, so nothing is unmatched.
-    const again = await rig.api("POST", "/vocab/approve", { terms: ["Kasmweb"], workspace: "voca1" });
+    const again = await rig.api("POST", "/vocab/approve", {
+      terms: ["Kasmweb"],
+      workspace: "voca1",
+    });
     expect([again.body.approved, again.body.unmatched]).toEqual([[], []]);
     // A reject records the word even when nothing was waiting, so it reports no miss.
     const rej = await rig.api("POST", "/vocab/reject", { terms: ["Nowhere"], workspace: "voca1" });
