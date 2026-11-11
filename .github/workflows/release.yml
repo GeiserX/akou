@@ -121,13 +121,17 @@ jobs:
           retention-days: 14
       # A tag releases only a commit CI already passed (docs/CI-CD.md CI-19), so the tests are not
       # run again here: the newest ci.yml run of the tagged commit must end with ci-ok green. A pull
-      # request or a dry run has its own ci.yml run.
+      # request or a dry run has its own ci.yml run. A release is a tag on main, so a tag on a
+      # branch head that never reached main stops here, whatever its pull request's run said.
       - name: the tagged commit passed ci-ok
         if: github.ref_type == 'tag'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
-        run: bun scripts/ci/tested-commit.ts "$SHA" --wait-minutes 90
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not on main; tag a commit on main"; exit 1; }
+          bun scripts/ci/tested-commit.ts "$SHA" --wait-minutes 90
 
   app:
     needs: version

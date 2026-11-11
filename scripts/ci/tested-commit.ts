@@ -15,6 +15,8 @@ export interface Run {
   status: string;
   conclusion: string | null;
   html_url: string;
+  event?: string;
+  head_branch?: string | null;
 }
 
 export interface Job {
@@ -30,7 +32,7 @@ export function verdict(sha: string, run: Run | null, ciOk: Job | null): Verdict
   if (!run)
     return {
       state: "stop",
-      why: `ci.yml never ran on ${sha}; tag a commit on main that CI tested`,
+      why: `ci.yml never ran on ${sha} as a push to main; tag a commit on main that CI tested`,
     };
   if (run.status !== "completed")
     return { state: "wait", why: `CI is ${run.status} on ${sha}: ${run.html_url}` };
@@ -52,19 +54,20 @@ async function api<T>(repo: string, path: string, token: string): Promise<T> {
   return (await r.json()) as T;
 }
 
-async function look(repo: string, sha: string, token: string): Promise<Verdict> {
-  const runs = await api<{ workflow_runs: Run[] }>(
-    repo,
-    `actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=20`,
-    token,
+/**
+ * Only a push run on main counts. A pull request's run has the same head_sha, but it ran the
+ * branch's own ci.yml and tested a merge commit, so it is no evidence for a tag.
+ */
+export async function look(sha: string, get: <T>(path: string) => Promise<T>): Promise<Verdict> {
+  const runs = await get<{ workflow_runs: Run[] }>(
+    `actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=main&per_page=20`,
   );
   // Newest first; a rerun keeps its run, so the newest run carries the newest attempt.
-  const run = runs.workflow_runs[0] ?? null;
+  const run =
+    runs.workflow_runs.find((r) => r.event === "push" && r.head_branch === "main") ?? null;
   if (run?.status !== "completed") return verdict(sha, run, null);
-  const jobs = await api<{ jobs: Job[] }>(
-    repo,
+  const jobs = await get<{ jobs: Job[] }>(
     `actions/runs/${run.id}/jobs?filter=latest&per_page=100`,
-    token,
   );
   return verdict(sha, run, jobs.jobs.find((j) => j.name === "ci-ok") ?? null);
 }
@@ -83,7 +86,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   const deadline = Date.now() + waitMinutes * 60_000;
   for (;;) {
-    const v = await look(repo, sha, token);
+    const v = await look(sha, <T>(path: string) => api<T>(repo, path, token));
     if (v.state === "green") {
       console.log(`tested-commit: ci-ok passed on ${sha}`);
       return 0;

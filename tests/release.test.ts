@@ -36,7 +36,7 @@ import {
 } from "../scripts/build-cli.ts";
 import { main as bumpCask, dmgName, dmgSum, renderCask } from "../scripts/bump-cask.ts";
 import { checkDir, checkUrl, MANIFEST, manifestProblems } from "../scripts/check-feed.ts";
-import { verdict } from "../scripts/ci/tested-commit.ts";
+import { look, verdict } from "../scripts/ci/tested-commit.ts";
 import {
   changelogSection,
   drift,
@@ -629,6 +629,47 @@ describe("[CI-19] a release publishes only a commit whose ci-ok is green", () =>
     expect(gate?.if).toBe("github.ref_type == 'tag'");
     expect(gate?.run).toContain('"$SHA"');
     expect(version?.permissions).toEqual({ contents: "read", actions: "read" });
+  });
+
+  // A fake API that, like GitHub, ignores nothing it is not asked to filter: it returns every run
+  // of the commit, so only the script's own query and pick decide which run counts.
+  const fakeApi = (runs: object[]) => {
+    const paths: string[] = [];
+    const get = async <T>(path: string): Promise<T> => {
+      paths.push(path);
+      if (path.startsWith("actions/workflows/")) return { workflow_runs: runs } as T;
+      return { jobs: [job("success")] } as T;
+    };
+    return { get, paths };
+  };
+
+  test("only a push run on main counts, never a pull request's run of the same commit", async () => {
+    const pr = { ...run("completed", "success"), event: "pull_request", head_branch: "feature" };
+    const { get, paths } = fakeApi([pr]);
+    const v = await look(sha, get);
+    expect(v.state).toBe("stop");
+    expect(v.state !== "green" && v.why).toContain("as a push to main");
+    expect(paths[0]).toContain("event=push");
+    expect(paths[0]).toContain("branch=main");
+  });
+
+  test("positive control: the same green run, pushed to main, releases", async () => {
+    const pushed = { ...run("completed", "success"), event: "push", head_branch: "main" };
+    const pr = { ...run("completed", "failure"), event: "pull_request", head_branch: "main" };
+    expect(await look(sha, fakeApi([pr, pushed]).get)).toEqual({ state: "green" });
+  });
+
+  test("a tag on a commit that is not on main stops before ci-ok is read", () => {
+    const gate = releaseWorkflow().jobs.version?.steps?.find((s) =>
+      s.run?.includes("scripts/ci/tested-commit.ts"),
+    );
+    const lines = (gate?.run ?? "").split("\n");
+    const ancestor = lines.findIndex((l) =>
+      l.includes('git merge-base --is-ancestor "$SHA" origin/main'),
+    );
+    expect(ancestor).toBeGreaterThanOrEqual(0);
+    expect(lines[ancestor]).toContain("exit 1");
+    expect(ancestor).toBeLessThan(lines.findIndex((l) => l.includes("tested-commit.ts")));
   });
 });
 
