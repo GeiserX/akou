@@ -421,6 +421,10 @@ const OUT = {
     path: z.string().optional().describe("The vocabulary file written."),
     approved: z.array(z.string()).optional().describe("The terms approved."),
     rejected: z.array(z.string()).optional().describe("The terms rejected."),
+    unmatched: z
+      .array(z.string())
+      .optional()
+      .describe("The terms to approve that were not waiting there; they are still unapproved."),
   }),
   enhancedPut: z.looseObject({
     call: z.string().describe("The call the notes were saved on."),
@@ -1578,6 +1582,14 @@ export function createMcpServer(o: McpOptions): McpServer {
       },
       async (a) => {
         const r = await req("POST", `/vocab/${action}`, { body: a });
+        // An approval that found none of its words approved nothing: say so, never a bare ok
+        // (VOC-A1). Some found: the answer lists the rest under `unmatched`.
+        const missed: string[] = r.status === 200 ? (r.body?.unmatched ?? []) : [];
+        if (missed.length > 0 && (r.body?.approved ?? []).length === 0) {
+          return errorText(
+            `not_found: nothing approved; no word waiting named ${missed.join(", ")} in ${r.body?.path}. Pass the \`call\` it was proposed with, or check the spelling.`,
+          );
+        }
         return asResult(r, compact);
       },
     );

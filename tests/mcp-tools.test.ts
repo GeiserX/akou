@@ -293,6 +293,39 @@ describe("answers that once broke on an empty or partial body", () => {
   });
 });
 
+describe("an approval that found no word says so", () => {
+  const answer = (approved: string[], unmatched: string[]) =>
+    recorder((m, path) =>
+      m === "POST" && path === "/vocab/approve"
+        ? { ok: true, path: "/v/global.yaml", approved, unmatched }
+        : {},
+    ).api;
+
+  test("[VOC-A1] akou_vocab_approve that approved nothing is an error naming the words", async () => {
+    const c = await mcpClient(answer([], ["Hetzner"]));
+    try {
+      const r = await c.call("akou_vocab_approve", { terms: ["Hetzner"] });
+      expect(r.isError).toBe(true);
+      expect(r.text).toStartWith("not_found: nothing approved");
+      expect(r.text).toContain("Hetzner");
+      expect(r.text).toContain("`call`");
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("[VOC-A1] control: a partial approval is a success that lists the rest", async () => {
+    const c = await mcpClient(answer(["Hetzner"], ["Kasm"]));
+    try {
+      const r = await c.call("akou_vocab_approve", { terms: ["Hetzner", "Kasm"] });
+      expect(r.isError).toBe(false);
+      expect(r.structured).toMatchObject({ approved: ["Hetzner"], unmatched: ["Kasm"] });
+    } finally {
+      await c.close();
+    }
+  });
+});
+
 describe("tools that wait behind the call's hand-off work", () => {
   /**
    * An API whose export answers only after the call's hooks ran (11 minutes here): a request with
