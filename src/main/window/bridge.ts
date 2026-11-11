@@ -90,7 +90,13 @@ export class Bridge {
   async request(
     method: Method,
     path: string,
-    o: { body?: unknown; signal?: AbortSignal; headers?: Record<string, string> } = {},
+    o: {
+      body?: unknown;
+      signal?: AbortSignal;
+      headers?: Record<string, string>;
+      /** From the page server: the window in a browser, which may not set window-only keys. */
+      browser?: boolean;
+    } = {},
   ): Promise<Response> {
     if (!METHODS.includes(method)) {
       return Response.json({ error: "bad_method", message: "unknown method" }, { status: 405 });
@@ -110,6 +116,7 @@ export class Bridge {
     });
     return routeRequest(this.router, this.app, req, {
       by: WINDOW_AUTHOR,
+      browser: o.browser,
       onError: (err) => this.onError?.(err),
     });
   }
