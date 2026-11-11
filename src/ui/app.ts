@@ -870,7 +870,31 @@ class App {
     const bar = byId<HTMLProgressElement>("final-progress");
     bar.hidden = n?.state !== "running";
     if (n?.progress !== undefined) bar.value = n.progress;
+    // A failed pass is said aloud and offers Retry (WINDOW 17); never while the call records or a
+    // pass runs, which the app refuses (409).
+    const failed = n?.state === "failed" && !v?.live && !run;
+    if (failed) el.setAttribute("role", "alert");
+    else el.removeAttribute("role");
+    byId("final-retry").hidden = !failed;
     byId("handoff").textContent = bits.join("  ·  ");
+  }
+
+  /** Runs a failed final pass again; the app's refusal (a pass running, no model) is the toast. */
+  private async retryFinal(): Promise<void> {
+    const id = this.callId;
+    if (!id) return;
+    const btn = byId<HTMLButtonElement>("final-retry");
+    btn.disabled = true;
+    try {
+      const r = await this.t
+        .request<{ error?: string }>("POST", `/calls/${encodeURIComponent(id)}/finalize`, {})
+        .catch(() => null);
+      if (!r) toast("The final pass did not start: akou did not answer.");
+      else if (r.status >= 400)
+        toast(message(r.body, `the final pass did not start (${r.status})`));
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   private meters(l: Levels | null): void {
@@ -1251,6 +1275,7 @@ class App {
         });
       }
     });
+    byId("final-retry").addEventListener("click", () => void this.retryFinal());
     byId("share-start").addEventListener("click", () => void this.share());
     const copy = byId("copy-transcript");
     copy.title += this.platform === "mac" ? " (⌘⇧C)" : " (Ctrl+Shift+C)";

@@ -1199,6 +1199,67 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "[W17.1] A failed final pass offers Retry, which asks the app to run it again and shows its refusal",
+    async () => {
+      const ids = { fail: "01J8Z6Q4M2VX0K7B3D4E5FRTRY", done: "01J8Z6Q4M2VX0K7B3D4E5FRDNE" };
+      await withRig(
+        {
+          seed: (home) => {
+            for (const id of [ids.fail, ids.done]) {
+              seedCall(home, (b) => {
+                b.created({ id });
+                b.partStarted(1, T0);
+                b.seg({ id: "l000001", w0: T0 + 1000, text: "a line" });
+                b.partEnded(1, "stop");
+                b.add({ type: "call.ended", reason: "stop" });
+                b.add({ type: "final.started", pid: 1 });
+                if (id === ids.fail)
+                  b.add({ type: "final.failed", step: "diarize", error: "the model is missing" });
+                else b.add({ type: "final.done", parts: [1] });
+              });
+            }
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(ids.done);
+          await page.waitForSelector("#final:not([hidden])");
+          // Positive control: a finished pass has nothing to retry and is not an alert.
+          expect(await page.locator("#final-retry").isVisible()).toBe(false);
+          expect(await page.getAttribute("#final", "role")).toBeNull();
+          const posts: string[] = [];
+          let answer = { status: 202, body: {} as object };
+          await page.route("**/api/v1/calls/*/finalize", (route) => {
+            posts.push(new URL(route.request().url()).pathname);
+            void route.fulfill({
+              status: answer.status,
+              contentType: "application/json",
+              body: JSON.stringify(answer.body),
+            });
+          });
+          await page.click(`#calls li[data-id="${ids.fail}"] button`);
+          await page.waitForSelector("#final-retry:not([hidden])", { timeout: 5000 });
+          expect(await page.getAttribute("#final", "role")).toBe("alert");
+          await page.click("#final-retry");
+          await until(async () => posts.length === 1, 5000, "one finalize request");
+          expect(posts[0]).toBe(`/api/v1/calls/${ids.fail}/finalize`);
+          answer = {
+            status: 501,
+            body: { error: "final_unavailable", message: "No speech model is downloaded." },
+          };
+          await page.click("#final-retry");
+          await until(
+            async () => (await text(page, "#toast")) === "No speech model is downloaded.",
+            5000,
+            "the app's refusal",
+          );
+          expect(posts.length).toBe(2);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Languages chip after the final pass, only when a model reported the language",
     async () => {
       const ids = { en: "01J8Z6Q4M2VX0K7B3D4E5LANGS", none: "01J8Z6Q4M2VX0K7B3D4E5NOLNG" };
