@@ -72,6 +72,22 @@ describe("[ST-1] a desktop start that fails", () => {
     }
   });
 
+  test("the desktop entry reports a start that fails before it quits", () => {
+    // main.ts is the entry no test imports: a scan proves its catch still calls the report.
+    const reportsBeforeQuit = (src: string): boolean => {
+      const tail = src.slice(src.lastIndexOf("} catch (err) {"));
+      const branch = tail.slice(Math.max(0, tail.indexOf("} else {")));
+      const report = branch.indexOf("reportStartFailure(");
+      return tail.includes("} else {") && report >= 0 && branch.indexOf("ui.quit()") > report;
+    };
+    const src = readFileSync(join(import.meta.dir, "..", "src", "main", "window", "main.ts"), "utf8");
+    expect(reportsBeforeQuit(src)).toBe(true);
+    // Positive control: the same entry without the call is caught.
+    const removed = src.replace(/reportStartFailure\([\s\S]*?\}\);\n/, "");
+    expect(removed).not.toBe(src);
+    expect(reportsBeforeQuit(removed)).toBe(false);
+  });
+
   test("a config folder that throws and a notifier that throws still return, so the quit follows", () => {
     expect(() =>
       reportStartFailure(new Error("bad env"), {

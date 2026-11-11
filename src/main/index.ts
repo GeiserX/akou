@@ -2132,7 +2132,6 @@ export class AkouApp implements ApiApp {
     change: ConfigFile | ((current: ConfigFile) => ConfigFile),
     o: { keep?: readonly SettingKey[] },
   ): Promise<LoadedConfig> {
-    const file = typeof change === "function" ? change(this.cfg.file) : change;
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     const env = this.o.env ?? process.env;
     // The keys the API cannot write are the file's: what is on disk now wins over this process's
@@ -2150,6 +2149,9 @@ export class AkouApp implements ApiApp {
         `${this.cfg.paths.configFile}: ${why}; fix it or remove it, then save again`,
       );
     }
+    // A change applies to the file as it is now, not to the copy read at start: that copy is empty
+    // when the file did not parse then, and keys fixed by hand since would be dropped (CF-1).
+    const file = typeof change === "function" ? change(this.withSecrets(loaded).file) : change;
     const onDisk = loaded.file;
     const unknown = unknownKeys(this.cfg.paths.configFile);
     const next: Partial<Record<SettingKey, SettingValue>> = { ...file };
