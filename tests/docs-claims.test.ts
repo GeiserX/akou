@@ -171,9 +171,9 @@ describe("[T1.39] Docs drift from code: a full recognizer queue", () => {
       ),
     ).toBe(true);
     // The final pass can fail or skip a piece (DESIGN 3.3), so it promises nothing either.
-    expect(promisesNoDrop("the final pass decodes the file, so the final transcript still has it.")).toBe(
-      true,
-    );
+    expect(
+      promisesNoDrop("the final pass decodes the file, so the final transcript still has it."),
+    ).toBe(true);
   });
 });
 
