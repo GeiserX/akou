@@ -66,3 +66,27 @@ describe("[T1.39] Docs drift from code: the dictation engine", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * The lines of a Security section that claim the desktop app listens on loopback alone. The app
+ * can also listen on `network.bind` (`network.enabled`) and `share.bind` (a share link).
+ */
+export function loopbackOnlyClaims(md: string): string[] {
+  const section = md.split(/^## Security\s*$/m)[1]?.split(/^## /m)[0] ?? "";
+  const lines = section.split("\n").filter((l) => /127\.0\.0\.1 only/.test(l));
+  return section.includes("`network.enabled`") && section.includes("share") ? lines : [section];
+}
+
+describe("[T1.39] Docs drift from code: what the desktop app listens on", () => {
+  test("How it works names both opt-in listeners and never says 127.0.0.1 only", () => {
+    expect(loopbackOnlyClaims(read("docs/how-it-works.md"))).toEqual([]);
+  });
+
+  test("positive control: the old loopback-only bullet is caught", () => {
+    expect(
+      loopbackOnlyClaims(
+        "## Security\n\n- The desktop app listens on 127.0.0.1 only. Every request needs the token.\n",
+      ),
+    ).not.toEqual([]);
+  });
+});

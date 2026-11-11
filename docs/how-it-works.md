@@ -61,7 +61,8 @@ akou keeps no library across calls. A finished call leaves through the export fo
 
 ## Security
 
-- The desktop app listens on 127.0.0.1 only. Every request needs the token, which lives in a file readable by your user alone; `akou token rotate` replaces it.
+- The desktop app's API listens on 127.0.0.1. Every request needs the token, which lives in a file readable by your user alone; `akou token rotate` replaces it.
+- Two listeners go further, and both are off until you turn them on. With `network.enabled`, the app also listens for API keys (`akou keys create`), so a phone can read what each key's scopes allow; the app's token is refused there. A share link serves one call read-only. Each listens on the tailnet by default; set `network.bind` or `share.bind` to `lan` and it is plain HTTP, visible to that network. See [Configuration](configuration.md).
 - Settings that name a program akou runs, or an address your audio or transcripts go to, can be written only in the config file or the window, never over the API, so the token cannot be turned into a way to run a command or send your calls elsewhere.
 - Text quoted from a call reaches an agent marked as data, never as instructions.
 - In server mode, each program gets its own key with scopes, and the server refuses to listen beyond loopback until a reverse proxy with TLS is in front of it. See [Server mode](server.md).
