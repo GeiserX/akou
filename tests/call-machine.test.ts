@@ -739,6 +739,44 @@ describe("restart", () => {
     expect(types(s.events).slice(-2)).toEqual(["part.ended", "call.ended"]);
   });
 
+  test("[LG-3] a start during the interrupt's flush keeps the resume of the old call from recording too", async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let flushing = false;
+    const s = setup(
+      {},
+      {
+        beforeEnd: () => {
+          flushing = true;
+          return held;
+        },
+      },
+    );
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    for (let i = 0; i < 5; i++) {
+      s.engine.last.exit(70);
+      await c?.idle();
+      await s.clock.advance(1_000);
+    }
+    s.engine.last.exit(70);
+    await until(() => flushing, 2_000, "the interrupt's flush");
+    const restart = s.mgr.restart(a.call);
+    await flush();
+    // The interrupted call is not live, so a new call may start while the flush is held.
+    const b = await s.mgr.start({ workspace: "work", title: "Next" });
+    expect(b.ok).toBe(true);
+    release();
+    const r = await restart;
+    // One live call at a time: the resume is refused and names the call that is recording.
+    expect(r).toMatchObject({ ok: false, status: 409, code: "already_recording" });
+    expect(s.mgr.live()?.id).toBe(b.ok ? b.call : "");
+    expect(c?.live).toBe(false);
+  });
+
   test("positive control: the same crashes spread over more than ten minutes never interrupt", async () => {
     const s = setup();
     const a = await started(s);

@@ -694,6 +694,14 @@ export class CallController {
   // -------------------------------------------------------------------------
   // Restart
 
+  /**
+   * Resolves once an interrupt still flushing has written its `call.ended`. The manager awaits it
+   * before it looks for another live call, so no await sits between that look and the restart.
+   */
+  settled(): Promise<void> {
+    return this.interrupting?.catch(() => {}) ?? Promise.resolve();
+  }
+
   /** A new part in the same call. Make before break: the old helper stops after the new captures. */
   async restart(opts: { force?: boolean } = {}): Promise<Outcome<{ part: number }>> {
     // The call shows `interrupted` while its interrupt still flushes and writes `call.ended`: a
