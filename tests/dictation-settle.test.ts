@@ -168,3 +168,36 @@ describe("T4.40: the helper exits while a dictation decodes", () => {
     expect(again.log.items().map((i) => i.id)).toEqual(["d0"]);
   });
 });
+
+describe("T4.41: a draft box call that throws", () => {
+  test("[T4.41] fails only its own dictation; the next one still decodes and goes in", async () => {
+    const said: DictationEngine = {
+      name: "fast",
+      decode: async () => reading("next words"),
+    };
+    const { s, log, sent, dictate } = session(said, {
+      onDraft: () => {
+        throw new Error("the window is gone");
+      },
+    });
+    dictate("1", true);
+    await s.settled();
+    dictate("2");
+    await until(() => sent.some((c) => c.type === "insert"), 5000, "the second insert");
+    await s.settled();
+    const items = log.items();
+    expect(items.map((i) => i.state)).toEqual(["inserting", "failed"]);
+    expect(sent.find((c) => c.type === "insert")).toMatchObject({ id: "2", text: "next words" });
+  });
+
+  test("[T4.41] positive control: a draft box that opens drafts the dictation", async () => {
+    const said: DictationEngine = {
+      name: "fast",
+      decode: async () => reading("words"),
+    };
+    const { s, log, dictate } = session(said, { onDraft: () => true });
+    dictate("1", true);
+    await s.settled();
+    expect(log.items()[0]?.state).toBe("drafted");
+  });
+});
