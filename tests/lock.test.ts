@@ -163,9 +163,7 @@ describe("SI-4: a lock that survives a container restart", () => {
       const bootTime = kernelNow() - 86_400_000;
       expect(refused(() => acquireLock(lock, process.pid, processAlive, { bootTime }))).toBe(true);
       expect(
-        refused(() =>
-          acquireLock(lock, process.pid, processAlive, { serverMode: true, bootTime }),
-        ),
+        refused(() => acquireLock(lock, process.pid, processAlive, { serverMode: true, bootTime })),
       ).toBe(true);
     } finally {
       t.cleanup();
