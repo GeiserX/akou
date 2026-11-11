@@ -1376,14 +1376,17 @@ export class JobService {
     if (this.closed) return;
     let kept = this.slots.filter((s) => s.job).length;
     const room = this.concurrency();
-    const queued = this.store.queued();
+    // Read only when an idle Worker holds a model: a submit while every slot is busy reads no row.
+    let queued: Job[] | null = null;
+    const wanted = (model: string) =>
+      (queued ??= this.store.queued()).some((j) => this.modelOf(j) === model);
     const warm = this.o.keepIdleWorkers?.() ?? true;
     const idleMs = this.idleMs();
     const now = this.now();
     let wake = Number.POSITIVE_INFINITY;
     for (const s of this.slots) {
       if (s.job || !s.worker) continue;
-      const needed = s.model !== null && queued.some((j) => this.modelOf(j) === s.model);
+      const needed = s.model !== null && wanted(s.model);
       const left = idleMs - (now - (s.idleSince ?? now));
       // Kept warm (a server) for its idle minutes; the desktop app keeps none.
       if ((needed || (warm && s.model !== null && left > 0)) && kept < room) {
