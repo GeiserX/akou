@@ -23,6 +23,8 @@ pub struct World {
     pub count: u64,
     /// Reads of the promise not yet collected, with their time.
     pub pending_reads: Vec<u64>,
+    /// Another program holds the clipboard open, so it cannot be read now (Windows).
+    pub busy: bool,
     /// Without `--clipboard fake` there is no clipboard at all.
     pub no_clipboard: bool,
     /// Every key event posted, in order: `RightOption up`, `Command+Code(9)`, `type hello`.
@@ -117,8 +119,12 @@ pub fn slack() -> Target {
 pub struct Board(pub Shared);
 
 impl Clipboard for Board {
-    fn snapshot(&mut self) -> Snapshot {
-        self.0.borrow().board.clone()
+    fn snapshot(&mut self) -> Result<Snapshot, String> {
+        let w = self.0.borrow();
+        if w.busy {
+            return Err("the clipboard is held by another program".into());
+        }
+        Ok(w.board.clone())
     }
     fn publish(&mut self, text: &str) -> Result<u64, String> {
         let mut w = self.0.borrow_mut();

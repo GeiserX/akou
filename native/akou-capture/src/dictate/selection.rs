@@ -155,15 +155,16 @@ impl<C: Conn> Selection<C> {
 }
 
 impl<C: Conn> Clipboard for Selection<C> {
-    fn snapshot(&mut self) -> Snapshot {
+    fn snapshot(&mut self) -> Result<Snapshot, String> {
         self.pump();
         let all = match &self.serving {
             Some(s) => s.types.clone(),
             None => self.conn.fetch(),
         };
-        all.into_iter()
+        Ok(all
+            .into_iter()
             .filter(|(t, _)| !META.contains(&t.as_str()))
-            .collect()
+            .collect())
     }
 
     fn publish(&mut self, text: &str) -> Result<u64, String> {

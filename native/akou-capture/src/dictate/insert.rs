@@ -28,7 +28,9 @@
 //!    leaves the text there as a lasting copy, since a promise dies with the process that made
 //!    it. So does an empty snapshot: the clipboard was empty, or this process may not read it
 //!    (macOS pasteboard privacy set to deny), and restoring nothing would clear the clipboard,
-//!    the dictation with it. The send key (DC-S2) is pressed only once the target read.
+//!    the dictation with it. A clipboard that cannot be read at all (Windows: another program
+//!    holds it open) is not empty: the insert fails `clipboard-busy` before the publish, so what
+//!    the user copied stays. The send key (DC-S2) is pressed only once the target read.
 //!
 //! A clipboard-only write the helper chose for the user (`secure`, `elevated`) is marked
 //! concealed, so a clipboard manager does not keep what was meant for a password field; one the
@@ -79,7 +81,9 @@ const MS: u64 = 1_000_000;
 pub type Snapshot = Vec<(String, Vec<u8>)>;
 
 pub trait Clipboard {
-    fn snapshot(&mut self) -> Snapshot;
+    /// `Err` when the clipboard could not be read now (Windows: another program holds it open),
+    /// never for a clipboard that is empty or that this process may not read.
+    fn snapshot(&mut self) -> Result<Snapshot, String>;
     /// Publishes `text` as a promise (handed over when a reader asks), marked transient and
     /// concealed so clipboard managers skip it. Returns the change count it left.
     fn publish(&mut self, text: &str) -> Result<u64, String>;
@@ -467,10 +471,13 @@ impl Inserter {
     }
 
     fn paste(&mut self, req: &Request, app: &str, t_ns: u64) -> Option<Outcome> {
-        let snapshot = req
-            .restore
-            .then(|| self.clip.snapshot())
-            .filter(|s| !s.is_empty());
+        // A clipboard that cannot be read now is not an empty one: publishing over it would lose
+        // what the user copied, so nothing is touched and the insert fails.
+        let snapshot = match req.restore.then(|| self.clip.snapshot()) {
+            Some(Err(_)) => return Some(Outcome::Failed("clipboard-busy".into())),
+            Some(Ok(s)) => Some(s).filter(|s| !s.is_empty()),
+            None => None,
+        };
         let count = match self.clip.publish(&req.text) {
             Ok(c) => c,
             Err(e) => return Some(Outcome::Failed(e)),
@@ -821,6 +828,25 @@ mod tests {
         assert_eq!(w.board.len(), 1, "{:?}", w.board);
         assert_eq!(w.board[0].1, b"hello");
         assert!(w.promise.is_none(), "a lasting copy, not the dying promise");
+    }
+
+    /// [DC-N6] A clipboard another program holds open while the snapshot is taken cannot be
+    /// read, which is not empty: the paste fails `clipboard-busy` before it publishes, so the
+    /// user's copy stays even when the program lets go a moment later. The test above, an empty
+    /// but readable clipboard keeping the dictation, is the positive control.
+    #[test]
+    fn dc_n6_a_clipboard_too_busy_to_read_is_never_replaced() {
+        let mut r = Rig::new(Os::Windows);
+        r.w.borrow_mut().busy = true;
+        r.insert(&req("paste", "none"), &cap());
+        r.w.borrow_mut().busy = false;
+        r.read_at(10);
+        r.until(9_000);
+        assert_eq!(r.done.len(), 1, "{:?}", r.done);
+        assert_eq!(r.done[0].1, Outcome::Failed("clipboard-busy".into()));
+        assert!(r.w.borrow().posted.is_empty(), "{:?}", r.w.borrow().posted);
+        assert_eq!(r.board_text(), "old", "what the user copied is still there");
+        assert_eq!(r.w.borrow().board.len(), 2, "the image too");
     }
 
     /// Terminals get the terminal's paste: Ctrl+Shift+V on Windows, Shift+Insert on Linux.
