@@ -485,12 +485,16 @@ export class ApiClient {
       try {
         return await this.send(rt, method, path, o);
       } catch (err) {
-        if (!isConnectionError(err, method === "GET" || method === "HEAD")) throw err;
+        if (!isConnectionError(err, method === "GET" || method === "HEAD")) {
+          throw tookTooLong(err, method, path, o);
+        }
       }
     }
     if (!allowLaunch || !this.launchCmd) throw this.notRunning(allowLaunch);
     rt = await this.launch();
-    return this.send(rt, method, path, o);
+    return this.send(rt, method, path, o).catch((err) => {
+      throw tookTooLong(err, method, path, o);
+    });
   }
 
   /**
@@ -509,12 +513,14 @@ export class ApiClient {
       try {
         return await this.fetchRaw(rt, method, path, o);
       } catch (err) {
-        if (!isConnectionError(err, false)) throw err;
+        if (!isConnectionError(err, false)) throw tookTooLong(err, method, path, o);
       }
     }
     if ((o.launch ?? true) === false || !this.launchCmd) throw this.notRunning(o.launch ?? true);
     rt = await this.launch();
-    return this.fetchRaw(rt, method, path, o);
+    return this.fetchRaw(rt, method, path, o).catch((err) => {
+      throw tookTooLong(err, method, path, o);
+    });
   }
 
   /**
@@ -812,6 +818,20 @@ function proxyNote(base: string, env: Record<string, string | undefined>): strin
   return name
     ? `; ${name} is set, so the request went through that proxy unless NO_PROXY names the host`
     : "";
+}
+
+/**
+ * The local app took the request and did not answer it within its deadline: it runs, slowly, so
+ * this is a `Hung` (exit 69), which no command reads as "akou is not running". A write may still
+ * land, so the message says to look before running it again.
+ */
+function tookTooLong(err: unknown, method: string, path: string, o: RequestOptions): unknown {
+  if ((err as Error)?.name !== "TimeoutError") return err;
+  const s = Math.round((o.timeoutMs ?? 60_000) / 100) / 10;
+  const write = method !== "GET" && method !== "HEAD";
+  return new Hung(
+    `akou took longer than ${s} s to answer ${method} ${path}${write ? "; it may still finish: check akou status before running the command again" : ""}`,
+  );
 }
 
 function isConnectionError(err: unknown, idempotent: boolean): boolean {
