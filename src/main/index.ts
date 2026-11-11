@@ -253,6 +253,8 @@ import { LiveRefused, LiveService } from "./server/live.ts";
 import {
   type AutoChoice,
   autoChoice,
+  FREE_MARGIN_BYTES,
+  freeOf,
   type Held,
   hardwareChoice,
   kindOf,
@@ -1281,6 +1283,16 @@ export class AkouApp implements ApiApp {
     const dir = now.dir;
     const pull: ModelsPull = { running: null, done: new Map() };
     this.modelsPull = pull;
+    // The same free-space rule as one model's download (ModelStore.admit): a pull that cannot fit
+    // fails before its first byte, rather than filling the volume and leaving the partial files.
+    const need = now.total - now.bytes;
+    const free = (this.o.jobs?.modelStore?.freeBytes ?? freeOf)(dir);
+    if (free < need + FREE_MARGIN_BYTES) {
+      pull.error = `the models need ${need} bytes and 1 GB to spare, and the volume has ${free} bytes free`;
+      this.log("warn", `models: ${pull.error}`);
+      for (const fn of this.statusWatchers) fn();
+      return this.models();
+    }
     let pushedAt = 0;
     pull.running = downloadModels(
       dir,
