@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdirSync } from "node:fs";
 import { connect } from "node:net";
+import { errorResponse, HttpError } from "../src/main/api/http.ts";
 import { formOf } from "../src/main/api/routes/jobs.ts";
 import type { ApiApp } from "../src/main/api/server.ts";
 import { until } from "./capture-helpers.ts";
@@ -50,9 +51,11 @@ function serve(dir: string): { port: number; answered: number[] } {
         await form.discard();
         answered.push(size);
         return Response.json({ size });
-      } catch {
+      } catch (err) {
+        // As the API server's router answers a refusal.
         answered.push(-1);
-        return new Response("bad", { status: 400 });
+        if (err instanceof HttpError) return errorResponse(err);
+        throw err;
       }
     },
   });
@@ -81,6 +84,10 @@ describe("[SV-D3] A stalled upload holds its socket", () => {
     const socket = connect(port, "127.0.0.1");
     cleanups.push(() => socket.destroy());
     let closed = false;
+    let reply = "";
+    socket.on("data", (d) => {
+      reply += d.toString();
+    });
     socket.on("close", () => {
       closed = true;
     });
@@ -92,6 +99,8 @@ describe("[SV-D3] A stalled upload holds its socket", () => {
     await until(() => uploads(t.dir).length === 1, 5000, "the upload to be spooled");
     await until(() => closed, 8000, "the stalled socket to be closed");
     await until(() => uploads(t.dir).length === 0, 5000, "the spool file to be deleted");
+    expect(reply).toStartWith("HTTP/1.1 400");
+    expect(reply).toContain('"error":"bad_multipart"');
   }, 20_000);
 
   test("positive control: an upload that sends a chunk a second for longer than the idle timeout completes", async () => {

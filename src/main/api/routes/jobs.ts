@@ -249,8 +249,16 @@ function stalling(
     async pull(ctl) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const stalled = new Promise<never>((_, reject) => {
-        const message = `the upload sent nothing for ${ms / 1000} s`;
-        timer = setTimeout(() => reject(new HttpError(400, "bad_multipart", message)), ms);
+        // The refusal closes the connection: the silent client would otherwise keep it open.
+        const cut = () =>
+          new HttpError(
+            400,
+            "bad_multipart",
+            `the upload sent nothing for ${ms / 1000} s`,
+            {},
+            { Connection: "close" },
+          );
+        timer = setTimeout(() => reject(cut()), ms);
       });
       try {
         const r = await Promise.race([reader.read(), stalled]);
