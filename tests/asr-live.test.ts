@@ -238,6 +238,36 @@ describe("segmenting", () => {
     ]);
   });
 
+  test("[LV-1] a short segmentPause: the next line never starts inside the line before it", () => {
+    const lines = (segmentPause: number, pause: number) => {
+      const { p, segs } = pipeline({}, { segmentPause });
+      feed(
+        p,
+        "call",
+        concat(
+          silence(0.5),
+          speak(["hello", "world"]),
+          silence(pause),
+          speak(["we", "should"]),
+          silence(1),
+        ),
+      );
+      p.endPart(1);
+      return segs() as Extract<LiveOut, { type: "seg" }>[];
+    };
+    const short = lines(0.3, 0.45);
+    expect(short.map((s) => s.text)).toEqual(["hello world", "we should"]);
+    const [a, b] = short as [Extract<LiveOut, { type: "seg" }>, Extract<LiveOut, { type: "seg" }>];
+    expect(b.a0).toBeGreaterThanOrEqual(a.a1);
+    // The rest of the pre-roll is kept: the line starts where the one before it closed.
+    expect(b.a0).toBeCloseTo(a.a1, 2);
+    // Control: at the default pause the pre-roll never reaches the line before, and is whole.
+    const long = lines(0.7, 0.9);
+    expect(long.map((s) => s.text)).toEqual(["hello world", "we should"]);
+    const [c, d] = long as [Extract<LiveOut, { type: "seg" }>, Extract<LiveOut, { type: "seg" }>];
+    expect(d.a0).toBeGreaterThan(c.a1);
+  });
+
   test("unbroken speech is cut at the 12 s window, and nothing is lost at the cut", () => {
     const words = Array.from({ length: 40 }, (_, i) => (i % 2 ? "deploy" : "today"));
     const { p, segs } = pipeline();

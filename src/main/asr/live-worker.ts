@@ -326,6 +326,11 @@ interface ChannelState {
   inSpeech: boolean;
   segStart: number;
   lastSpeech: number;
+  /**
+   * Where the last closed line ended: the next line's pre-roll never reaches back past it, so a
+   * short `segmentPause` cannot decode the end of one line again at the start of the next.
+   */
+  closedAt: number;
   lastProvisional: number;
   /** Provisional re-decodes of the open segment, and their time (ms), for `LINE_TIMING`. */
   provisionals: number;
@@ -399,6 +404,7 @@ export class LivePipeline {
       inSpeech: false,
       segStart: 0,
       lastSpeech: 0,
+      closedAt: 0,
       lastProvisional: 0,
       provisionals: 0,
       provisionalMs: 0,
@@ -644,6 +650,7 @@ export class LivePipeline {
     st.pendingStart = pos;
     st.audio.reset(pos);
     st.inSpeech = false;
+    st.closedAt = pos;
     st.pseq = 0;
     st.shown = "";
     st.utt = null;
@@ -710,7 +717,7 @@ export class LivePipeline {
     if (speech) {
       if (!st.inSpeech) {
         st.inSpeech = true;
-        st.segStart = Math.max(st.audio.start, ws - this.sec(o.preRoll));
+        st.segStart = Math.max(st.audio.start, ws - this.sec(o.preRoll), st.closedAt);
         st.lastProvisional = we;
         this.embedderAhead(st);
       }
@@ -783,6 +790,7 @@ export class LivePipeline {
 
   private close(st: ChannelState, from: number, to: number): void {
     if (st.part === null || to <= from) return;
+    st.closedAt = to;
     const samples = st.audio.slice(from, to);
     const startedAt = this.now();
     const t = performance.now();
