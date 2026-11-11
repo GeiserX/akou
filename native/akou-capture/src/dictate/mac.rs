@@ -77,7 +77,7 @@ use super::mac_hotkey;
 use super::mac_insert::{self, Events, Pasteboard};
 use super::mac_keys;
 use super::protocol::{self as p, Target};
-use super::readback::{Field, char_index};
+use super::readback::{Field, char_index, on_target};
 use super::session::{Binder, Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use crate::clock;
@@ -419,6 +419,17 @@ impl Targets for Screen {
         let Ok(pid) = i32::try_from(t.pid) else {
             return Field::Unreadable;
         };
+        // The app's focused element follows its key window: after the user moved to another of
+        // its windows it is that window's field, never the target's (DC-L2). Another app in
+        // front leaves the target's window first among the app's own, so that read stays.
+        let window = windows()
+            .into_iter()
+            .find(|w| w.pid == pid)
+            .map(|w| w.number.to_string())
+            .unwrap_or_default();
+        if !on_target(t, t.pid, &window) {
+            return Field::Unreadable;
+        }
         let Some(el) = focused(pid) else {
             return Field::Unreadable;
         };
