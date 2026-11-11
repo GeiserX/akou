@@ -443,6 +443,35 @@ describe("[SV-M2] on-demand downloads stop at the size cap and at low free space
       r.cleanup();
     }
   });
+
+  test("[SV-M2] a partial file left by a stopped download counts as had: the resume needs only the rest", () => {
+    const r = rig();
+    try {
+      // B is 4096 bytes and 3000 of them wait in its partial file.
+      mkdirSync(join(r.dir, B), { recursive: true });
+      writeFileSync(join(r.dir, B, "b.onnx.part"), new Uint8Array(3000));
+      r.settings.maxGb = 0;
+      r.settings.free = 1e9 + 1095;
+      const e = refusal(() => r.store.admit([B]));
+      expect([e.details.reason, e.details.bytes]).toEqual(["disk_full", 1096]);
+      r.settings.free = 1e9 + 1096;
+      r.store.admit([B]);
+      expect(r.store.waiting([B])).toEqual({ model: B, bytes: 3000, total: 4096 });
+      // The cap counts the partial bytes once: on disk, not again as still to come.
+      r.settings.free = 1e12;
+      r.settings.maxGb = (3 * 4096 + 4096 - 1) / 1e9;
+      expect(refusal(() => r.store.admit([B])).details.reason).toBe("models_max_gb");
+      r.settings.maxGb = (3 * 4096 + 4096) / 1e9;
+      r.store.admit([B]);
+      // A partial file larger than the file is fetched whole, so it counts for nothing.
+      writeFileSync(join(r.dir, B, "b.onnx.part"), new Uint8Array(5000));
+      r.settings.maxGb = 0;
+      r.settings.free = 1e9 + 4095;
+      expect(refusal(() => r.store.admit([B])).details.bytes).toBe(4096);
+    } finally {
+      r.cleanup();
+    }
+  });
 });
 
 describe("[SV-M3] a failed download is retried, then fails for good", () => {

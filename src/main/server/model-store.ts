@@ -387,6 +387,19 @@ function bytesUnder(path: string): number {
   return n;
 }
 
+/**
+ * Bytes of `path.part` the next download resumes from: none when it is missing, or larger than
+ * the file, which `downloadFile` deletes and fetches whole.
+ */
+function partial(path: string, size: number): number {
+  try {
+    const have = statSync(`${path}.part`).size;
+    return have <= size ? have : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** The ledger in `dir`, `{model id: last used, epoch ms}`; an unreadable file is an empty one. */
 export function readUsage(dir: string): Record<string, number> {
   try {
@@ -703,14 +716,21 @@ export class ModelStore {
     });
   }
 
-  /** Bytes a model still needs from the network. */
+  /**
+   * Bytes a model still needs from the network. With no download or copy running, a partial file
+   * left by a cancelled or failed one counts as had, since the next download resumes from it.
+   */
   private remaining(m: ModelSpecEntry): number {
     const dir = this.o.dir();
     const d = this.downloads.get(m.id);
+    const c = this.copies.get(m.id);
     let n = 0;
     for (const f of m.files) {
-      if (existsSync(modelFile(dir, m.id, f.name))) continue;
-      n += f.size - (d?.bytes.get(f.name) ?? this.copies.get(m.id)?.bytes.get(f.name) ?? 0);
+      const path = modelFile(dir, m.id, f.name);
+      if (existsSync(path)) continue;
+      const had =
+        d || c ? (d?.bytes.get(f.name) ?? c?.bytes.get(f.name) ?? 0) : partial(path, f.size);
+      n += f.size - had;
     }
     return n;
   }
