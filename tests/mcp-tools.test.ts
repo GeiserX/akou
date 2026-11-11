@@ -293,6 +293,30 @@ describe("answers that once broke on an empty or partial body", () => {
   });
 });
 
+describe("the list of calls says what `failed` returns", () => {
+  test("[MCP-F1] akou_list_calls `failed` reads as the failed starts instead of the others, not as more", async () => {
+    const { api, seen } = recorder(() => ({ calls: [] }));
+    const c = await mcpClient(api);
+    try {
+      const tools = (await c.client.listTools()).tools;
+      const failed = (
+        tools.find((t) => t.name === "akou_list_calls")?.inputSchema.properties as Record<
+          string,
+          { description?: string }
+        >
+      ).failed?.description;
+      // The API lists only the failed starts with `failed` (GET /calls, call/manager.ts).
+      expect(failed).toStartWith("Only the calls whose start failed");
+      expect(failed).not.toContain("Also");
+      // The control: the tool does send the API's `failed`, which replaces the list.
+      await c.call("akou_list_calls", { failed: true });
+      expect(seen[0]?.o.query).toMatchObject({ failed: true });
+    } finally {
+      await c.close();
+    }
+  });
+});
+
 describe("an approval that found no word says so", () => {
   const answer = (approved: string[], unmatched: string[]) =>
     recorder((m, path) =>

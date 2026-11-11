@@ -1874,7 +1874,12 @@ export function createMcpServer(o: McpOptions): McpServer {
           .max(1000)
           .default(20)
           .describe("The most calls to return, newest first, 1 to 1000."),
-        failed: z.boolean().optional().describe("Also the calls whose capture failed."),
+        failed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Only the calls whose start failed (nothing was recorded), instead of the others. A call whose final pass failed is not one.",
+          ),
       }),
       outputSchema: OUT.calls,
     },
