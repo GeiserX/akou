@@ -138,18 +138,21 @@ describe("the player bar exists only with a recording (WINDOW section 5)", () =>
 });
 
 describe("[T3.9] Offsets shown as times of day", () => {
+  const SPANS = [0, 5, 59, 60, 61, 125, 3599, 3600, 3725, 86_399];
+  /** The spans a duration renderer writes as a bare mm:ss, or without its units. */
+  const bareSpans = (fmt: (s: number) => string): string[] =>
+    SPANS.map(fmt).filter((d) => /^\d{1,2}:\d{2}$/.test(d) || !/\d+ (s|min|h)/.test(d));
+
   test("a duration always carries its units, never a bare mm:ss", () => {
-    for (const s of [0, 5, 59, 60, 61, 125, 3599, 3600, 3725, 86_399]) {
-      const d = formatDuration(s);
-      expect(d).not.toMatch(/^\d{1,2}:\d{2}$/);
-      expect(d).toMatch(/\d+ (s|min|h)/);
-    }
+    expect(bareSpans(formatDuration)).toEqual([]);
     expect(formatDuration(125)).toBe("2 min 5 s");
     expect(formatDuration(3725)).toBe("1 h 2 min");
   });
 
   test("positive control: the check fails on the hark-style span", () => {
-    expect("12:30").toMatch(/^\d{1,2}:\d{2}$/);
+    const hark = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    expect(bareSpans(hark)).toContain("2:05");
+    expect(bareSpans(hark)).toHaveLength(SPANS.length);
   });
 });
 
