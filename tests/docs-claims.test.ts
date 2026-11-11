@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { SETTINGS } from "../src/main/config/schema.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const read = (f: string) => readFileSync(join(ROOT, f), "utf8");
@@ -53,9 +54,26 @@ export function autoRowFollowsFinal(md: string): boolean {
   return row !== undefined && row.includes("`dictation.final`") && row.includes("`live`");
 }
 
+/** Whether a `dictation.engine` description still picks `best` by the machine for `auto`. */
+export function autoPicksByMachine(doc: string): boolean {
+  return /`auto`: best where Qwen runs on a GPU/.test(doc);
+}
+
 describe("[T1.39] Docs drift from code: the dictation engine", () => {
   test("the dictation page says `auto` follows `dictation.final`, live by default", () => {
     expect(autoRowFollowsFinal(read("docs/dictation.md"))).toBe(true);
+  });
+
+  test("the `dictation.engine` setting says `auto` follows `dictation.final`", () => {
+    const doc = SETTINGS["dictation.engine"].doc;
+    expect(autoPicksByMachine(doc)).toBe(false);
+    expect(doc).toContain("`auto`: what `dictation.final` names");
+  });
+
+  test("positive control: the old machine-based `auto` setting text is caught", () => {
+    expect(
+      autoPicksByMachine("`auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere"),
+    ).toBe(true);
   });
 
   test("positive control: the old machine-based `auto` row is caught", () => {
@@ -134,14 +152,16 @@ describe("[T1.39] Docs drift from code: the models DESIGN section 3 lists", () =
  * reads that span back during the call; only the final pass covers it.
  */
 export function promisesNoDrop(design: string): boolean {
-  return /never dropped for the recognizer|reads back from the Opus file/.test(design);
+  return /never dropped for the recognizer|reads back from the Opus file|final transcript still has it/.test(
+    design,
+  );
 }
 
 describe("[T1.39] Docs drift from code: a full recognizer queue", () => {
   test("DESIGN 3.1 says the live layer drops the overflow and the final pass covers it", () => {
     const design = readFileSync(join(ROOT, "docs", "DESIGN.md"), "utf8");
     expect(promisesNoDrop(design)).toBe(false);
-    expect(design).toContain("the final transcript still has it");
+    expect(design).toContain("the recording keeps it and the final pass decodes it");
   });
 
   test("positive control: the old read-back promise is caught", () => {
@@ -150,5 +170,35 @@ describe("[T1.39] Docs drift from code: a full recognizer queue", () => {
         "Beyond that the Worker reads back from the Opus file. Audio is never dropped for the recognizer; it only lags.",
       ),
     ).toBe(true);
+    // The final pass can fail or skip a piece (DESIGN 3.3), so it promises nothing either.
+    expect(promisesNoDrop("the final pass decodes the file, so the final transcript still has it.")).toBe(
+      true,
+    );
+  });
+});
+
+/**
+ * The lines that say the default model keeps whichever is on disk. With both on disk the default
+ * is not a tie: live prefers a downloaded Nemotron over Parakeet (chooseLiveEngine,
+ * src/main/asr/live-engines.ts) and the final pass a downloaded Qwen (src/main/asr/model-set.ts).
+ */
+export function tiedDefaultClaims(md: string): string[] {
+  return md.split("\n").filter((l) => /keeps whichever/.test(l));
+}
+
+describe("[T1.39] Docs drift from code: the default model with both on disk", () => {
+  test("How it works names the order the default prefers, Nemotron or Qwen first", () => {
+    const page = read("docs/how-it-works.md");
+    expect(tiedDefaultClaims(page)).toEqual([]);
+    expect(page).toContain("a downloaded Nemotron first, else a downloaded Parakeet");
+    expect(page).toContain("a downloaded Qwen3-ASR first, else a downloaded Parakeet");
+  });
+
+  test("positive control: the old keeps-whichever sentence is caught", () => {
+    expect(
+      tiedDefaultClaims(
+        "The default keeps whichever of the two is already on disk, so a Mac that has Parakeet keeps Parakeet.",
+      ),
+    ).toHaveLength(1);
   });
 });
