@@ -662,7 +662,10 @@ describe("[A follower re-reads the whole log per event] LogFollower", () => {
     w2.append(segDraft("lx00001", "first"));
     w2.close();
     writeFileSync(path, readFileSync(join(other, EVENTS_FILE)));
+    // Same inode, smaller than the cursor: only the size check can send this to a whole read.
+    let before = f.stats.bytes;
     expect(await f.after(11)).toEqual(await readAfter(path, 11));
+    expect(f.stats.bytes - before).toBe(statSync(path).size);
     expect(await f.after(1)).toEqual(await readAfter(path, 1));
     const w3 = LogWriter.open(other);
     for (let i = 0; i < 20; i++) w3.append(segDraft(`ly${String(i).padStart(6, "0")}`));
@@ -670,6 +673,10 @@ describe("[A follower re-reads the whole log per event] LogFollower", () => {
     const tmp = `${path}.new`;
     writeFileSync(tmp, readFileSync(join(other, EVENTS_FILE)));
     renameSync(tmp, path);
+    // A new inode, larger than the cursor, with the same first bytes: only the inode check can
+    // send this to a whole read; a tail from the stale cursor reads fewer bytes than the file.
+    before = f.stats.bytes;
     expect(await f.after(2)).toEqual(await readAfter(path, 2));
+    expect(f.stats.bytes - before).toBe(statSync(path).size);
   });
 });
