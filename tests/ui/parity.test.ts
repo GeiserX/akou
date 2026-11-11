@@ -537,9 +537,11 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           const control = page.locator("#pages button:visible").first();
           await control.waitFor();
           await control.focus();
-          await page.keyboard.press("-");
-          await page.keyboard.press("+");
-          expect(await size()).toBe(up);
+          // Check after each press: a '-' then '+' pair would cancel out and hide a missing guard.
+          for (const k of ["-", "+"]) {
+            await page.keyboard.press(k);
+            expect(await size()).toBe(up);
+          }
         },
       );
     },
