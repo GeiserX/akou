@@ -1454,10 +1454,10 @@ jobs:
   # running, start it as getting-started.md says (the port published on 127.0.0.1, `server.behind_proxy` set
   # by AKOU_BEHIND_PROXY, since a container binds 0.0.0.0 and SV-P5 refuses that without it), and ask
   # it for /healthz within 60 s, for /v1/server with no token and for `id -u`; then transcribe an Ogg
-  # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The job round trip runs when the
-  # server's own /v1/server says it has jobs, webhooks and the event feed, and warns when it does not.
-  # Then akou from the compose example beside Telegram-Archive (SV-T6), and last Bazarr's request
-  # against a server with AKOU_BAZARR on (SV-C3), on the same gate.
+  # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The leg fails unless /v1/server says
+  # it has jobs, the event feed, webhooks, Wyoming and Bazarr; then the job round trip, akou from the
+  # compose example beside Telegram-Archive (SV-T6), and last Bazarr's request against a server with
+  # AKOU_BAZARR on (SV-C3).
   server:
     needs: changes
     if: needs.changes.outputs.code == 'true'

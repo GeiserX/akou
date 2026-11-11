@@ -347,6 +347,39 @@ describe("[SV-T1] the server job in ci.yml", () => {
       }),
     ).toEqual(["a capability the server lacks does not fail the leg"]);
   });
+
+  /** Where SERVER.md's SV-T1 row or ci.yml's comment on the server job still tells of a skip. */
+  function gateDocGaps(serverMd: string, ciYml: string): string[] {
+    const gaps: string[] = [];
+    const row = serverMd.split("\n").find((l) => l.startsWith("| SV-T1 |")) ?? "";
+    const comment = /((?:\n {2}#[^\n]*)+)\n {2}server:/.exec(ciYml)?.[1] ?? "";
+    const stale = /warning|warns|on the same gate|runs when/;
+    if (!row.includes("the leg fails unless") || stale.test(row))
+      gaps.push("SERVER.md SV-T1 does not say a missing capability fails the leg");
+    if (!comment.includes("The leg fails unless") || stale.test(comment))
+      gaps.push("ci.yml's server job comment does not say a missing capability fails the leg");
+    return gaps;
+  }
+
+  test("[T1.39] the docs describe the gate the leg has: a missing capability fails it", () => {
+    const md = read("docs", "ux", "SERVER.md");
+    expect(gateDocGaps(md, read(".github", "workflows", "ci.yml"))).toEqual([]);
+  });
+
+  test("[T1.39] positive control: the old warn-and-skip wording is caught in both places", () => {
+    const md = read("docs", "ux", "SERVER.md").replace(
+      /the leg fails unless[^|]*/,
+      "the round trip runs when `/v1/server` reports jobs, and puts a warning on the run when it does not ",
+    );
+    const yml = read(".github", "workflows", "ci.yml").replace(
+      /The leg fails unless[^\n]*/,
+      "The job round trip runs when the server says it has jobs, and warns when it does not.",
+    );
+    expect(gateDocGaps(md, yml)).toEqual([
+      "SERVER.md SV-T1 does not say a missing capability fails the leg",
+      "ci.yml's server job comment does not say a missing capability fails the leg",
+    ]);
+  });
 });
 
 /** Runs a workflow step's script with bash, a fake `docker` on PATH that records its arguments. */
