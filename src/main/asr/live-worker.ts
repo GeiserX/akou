@@ -701,14 +701,19 @@ export class LivePipeline {
     }
     let off = 0;
     let at = st.pendingStart;
-    while (buf.length - off >= w) {
-      const speech = st.vad.accept(buf.subarray(off, off + w));
-      this.window(st, at, at + w, speech);
-      off += w;
-      at += w;
+    try {
+      while (buf.length - off >= w) {
+        const speech = st.vad.accept(buf.subarray(off, off + w));
+        off += w;
+        at += w;
+        this.window(st, at - w, at, speech);
+      }
+    } finally {
+      // Whatever a window's decode throws, the windows the VAD has taken stay taken and the rest
+      // waits for the next audio, so the channel's timeline never falls behind its audio.
+      st.pending = buf.slice(off);
+      st.pendingStart = at;
     }
-    st.pending = buf.slice(off);
-    st.pendingStart = at;
     this.emit({ type: "progress", part, ch, pos: st.pos });
   }
 
@@ -794,7 +799,20 @@ export class LivePipeline {
     const samples = st.audio.slice(from, to);
     const startedAt = this.now();
     const t = performance.now();
-    const r = this.decode(samples);
+    let r: ReturnType<LivePipeline["decode"]>;
+    try {
+      r = this.decode(samples);
+    } catch (err) {
+      // A one-off native error loses this line only; the final pass decodes its audio again.
+      st.provisionals = 0;
+      st.provisionalMs = 0;
+      this.emit({
+        type: "log",
+        level: "warn",
+        msg: `live ${st.ch}: the line from ${(from / ASR_RATE).toFixed(2)} s to ${(to / ASR_RATE).toFixed(2)} s is lost (${(err as Error).message}); the final pass covers it`,
+      });
+      return;
+    }
     if (this.timing) {
       const timing = {
         part: st.part,
