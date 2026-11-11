@@ -90,3 +90,40 @@ describe("[T1.39] Docs drift from code: what the desktop app listens on", () => 
     ).not.toEqual([]);
   });
 });
+
+/**
+ * The Model cells of DESIGN section 3's model table that name a recognizer akou has no build of.
+ * The catalog (src/main/asr/models.ts) has no Moonshine, no Whisper tiny or base and no Whisper
+ * turbo; its one Whisper is large-v3 as a GGUF on transcribe-cpp.
+ */
+export function unbuiltModels(design: string): string[] {
+  const section = design.split(/^## 3\. /m)[1]?.split(/^## /m)[0] ?? "";
+  return section
+    .split("\n")
+    .filter((l) => l.startsWith("| ") && !l.startsWith("| Job "))
+    .map((l) => l.split("|")[2]?.trim() ?? "")
+    .filter((model) => /moonshine|turbo|whisper tiny|whisper base/i.test(model));
+}
+
+describe("[T1.39] Docs drift from code: the models DESIGN section 3 lists", () => {
+  test("every model the table names is one the catalog has", () => {
+    expect(unbuiltModels(readFileSync(join(ROOT, "docs", "DESIGN.md"), "utf8"))).toEqual([]);
+  });
+
+  test("positive control: the old Moonshine and Whisper turbo rows are caught", () => {
+    const old = [
+      "## 3. Speech recognition",
+      "",
+      "| Job | Model | Weights licence | Notes |",
+      "|---|---|---|---|",
+      "| Live recognition on slow machines | Moonshine tiny/base | MIT | English only |",
+      "| Other languages | Whisper large-v3-turbo through sherpa-onnx | MIT | Chosen per workspace |",
+      "",
+      "## 4. The event log",
+    ].join("\n");
+    expect(unbuiltModels(old)).toEqual([
+      "Moonshine tiny/base",
+      "Whisper large-v3-turbo through sherpa-onnx",
+    ]);
+  });
+});
