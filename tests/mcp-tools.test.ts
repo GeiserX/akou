@@ -292,3 +292,45 @@ describe("answers that once broke on an empty or partial body", () => {
     }
   });
 });
+
+describe("tools that wait behind the call's hand-off work", () => {
+  /**
+   * An API whose export answers only after the call's hooks ran (11 minutes here): a request with
+   * a shorter deadline gives up the way the client's own does, with "The operation timed out.".
+   */
+  function slowExport() {
+    const seen: RequestOptions[] = [];
+    const api = {
+      request: async (_method: string, path: string, o: RequestOptions = {}) => {
+        if (path === "/status") return { status: 200, body: {}, text: "{}", contentType: "" };
+        seen.push(o);
+        if ((o.timeoutMs ?? 60_000) < 11 * 60_000) throw new Error("The operation timed out.");
+        const body = { call: "c1", path: "/export/c1.md" };
+        return { status: 200, body, text: JSON.stringify(body), contentType: "application/json" };
+      },
+    } as unknown as Parameters<typeof mcpClient>[0];
+    return { api, seen };
+  }
+
+  test("[MCP-X1] akou_export waits as long as the CLI's export, not the client's 60 s default", async () => {
+    const { api, seen } = slowExport();
+    const c = await mcpClient(api);
+    try {
+      const r = await c.call("akou_export", { call: "c1" });
+      expect(r.text).not.toContain("timed out");
+      expect(r.isError).toBe(false);
+      expect(r.structured).toEqual({ call: "c1", path: "/export/c1.md" });
+      // The same deadline as `akou export`, an hour, so a hook still running is no failure.
+      expect(seen[0]?.timeoutMs).toBe(60 * 60_000);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("[MCP-X1] positive control: the fake gives up on a request with the default deadline", async () => {
+    const { api } = slowExport();
+    await expect(api.request("POST", "/calls/c1/export", {})).rejects.toThrow(
+      "The operation timed out.",
+    );
+  });
+});

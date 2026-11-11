@@ -1989,8 +1989,16 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ call: CALL_REF }),
       outputSchema: OUT.exported,
     },
-    async (a) => {
-      const r = await req("POST", `/calls/${id(a.call)}/export`);
+    async (a, ctx) => {
+      // Queued behind the call's hand-off hooks (up to 600 s each), so the CLI's deadline, not the
+      // client's 60 s default (MCP-X1).
+      const stop = progressBeat(ctx, "Exporting the call");
+      let r: ApiResponse;
+      try {
+        r = await req("POST", `/calls/${id(a.call)}/export`, { timeoutMs: 60 * 60_000 });
+      } finally {
+        stop();
+      }
       return asResult(r, compact);
     },
   );
