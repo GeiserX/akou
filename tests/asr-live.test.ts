@@ -320,8 +320,8 @@ describe("segmenting", () => {
     expect(failed.lines.map((s) => s.text)).toEqual(["we should", "move the build"]);
     // The lost line is named with its span.
     expect(failed.warns.length).toBe(1);
-    const [first] = clean.lines;
-    expect(JSON.stringify(failed.warns[0])).toContain((first?.a0 as number).toFixed(2));
+    const first = clean.lines[0] as Extract<LiveOut, { type: "seg" }>;
+    expect(JSON.stringify(failed.warns[0])).toContain(first.a0.toFixed(2));
     // The lines after it are cut from the same audio as without the error.
     for (const [i, s] of failed.lines.entries()) {
       expect(s.a0).toBeCloseTo(clean.lines[i + 1]?.a0 as number, 3);
