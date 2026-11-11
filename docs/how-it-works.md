@@ -27,13 +27,13 @@ The helper runs as its own process so that a stuck audio device can never freeze
 
 ## The live pass
 
-While the call runs, a recognizer in a background thread of the app turns each channel into text. On a Mac with a GPU and 16 GB of memory it is streaming Nemotron by default, which shows words about half a second after they are spoken and never takes one back. With less memory it is Parakeet TDT 0.6B v3, which re-reads each stretch of speech between pauses, so a word on screen can still change. The default keeps whichever of the two is already on disk, so a Mac that has Parakeet keeps Parakeet. Your channel is labelled with your name; the call channel is split into speakers as they talk.
+While the call runs, a recognizer in a background thread of the app turns each channel into text. On a Mac with a GPU and 16 GB of memory it is streaming Nemotron by default, which shows words about half a second after they are spoken and never takes one back. With less memory it is Parakeet TDT 0.6B v3, which re-reads each stretch of speech between pauses, so a word on screen can still change. The default prefers what is already on disk, a downloaded Nemotron first, else a downloaded Parakeet, so a Mac that has only Parakeet keeps Parakeet. Your channel is labelled with your name; the call channel is split into speakers as they talk.
 
 A line still being spoken is marked `DRAFT` until it settles.
 
 ## The final pass
 
-After the call, akou reads the whole recording again for the accurate transcript: Qwen3-ASR on a Mac with a GPU and 16 GB of memory, Parakeet with less (again, the default keeps whichever is already on disk), and speaker labels from Nemotron 3 Diarization and TitaNet. It runs in its own Worker, one call at a time, and frees the models' memory when it ends, so a long call does not leave the app large. The final text replaces the live text in the window and in every export, and every line keeps its time of day.
+After the call, akou reads the whole recording again for the accurate transcript: Qwen3-ASR on a Mac with a GPU and 16 GB of memory, Parakeet with less (again, the default prefers what is already on disk: a downloaded Qwen3-ASR first, else a downloaded Parakeet), and speaker labels from Nemotron 3 Diarization and TitaNet. It runs in its own Worker, one call at a time, and frees the models' memory when it ends, so a long call does not leave the app large. The final text replaces the live text in the window and in every export, and every line keeps its time of day.
 
 All of this runs on the Mac. The speech models are one download of about 3.0 to 3.7 GB, by what the Mac runs: about 3.7 GB with streaming Nemotron and Qwen3-ASR, about 3.0 GB with Parakeet. Each file is checked against a SHA-256 pinned in akou's code.
 
