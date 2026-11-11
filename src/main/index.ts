@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
 import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
-import { eventsAfter, readLog } from "../core/log/reader.ts";
+import { LogFollower, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
   EVENTS_FILE,
@@ -674,6 +674,8 @@ export class AkouApp implements ApiApp {
   private pageStarting: Promise<PageServer> | null = null;
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
+  /** Each loaded call's log follower, so a long poll reads only what was appended (`events`). */
+  private readonly followers = new WeakMap<CallController, LogFollower>();
   private readonly vocabCache = new Map<string, VocabSource>();
   /** The live setup each call runs, chosen once when it first takes the recognizer. */
   private readonly liveRan = new Map<string, LiveSetupChoice>();
@@ -2498,8 +2500,15 @@ export class AkouApp implements ApiApp {
 
   async events(id: string, after: number): Promise<LogEvent[]> {
     const c = await this.call(id);
-    const { events } = await readLog(join(c.dir, EVENTS_FILE));
-    return eventsAfter(events, after);
+    // The view holds every committed seq: a poll waiting at the head of the log reads nothing.
+    if (after >= c.view.lastSeq) return [];
+    const path = join(c.dir, EVENTS_FILE);
+    let f = this.followers.get(c);
+    if (f?.path !== path) {
+      f = new LogFollower(path);
+      this.followers.set(c, f);
+    }
+    return f.after(after);
   }
 
   async status(): Promise<Record<string, unknown>> {
