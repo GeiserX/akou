@@ -13,6 +13,7 @@ import {
   patchConfig,
   resolvePaths,
   SETTING_KEYS,
+  SETTINGS,
   settingsReference,
   validateSetting,
 } from "../src/main/config/schema.ts";
@@ -355,5 +356,15 @@ describe("[ASR-7] the old asr.live upgrade", () => {
     expect(validateSetting("asr.review.everySeconds", 601).ok).toBe(false);
     expect(validateSetting("asr.review.everySeconds", 90.5).ok).toBe(false);
     expect(validateSetting("asr.review.model", "whisper").ok).toBe(false);
+  });
+});
+
+describe("[Docs drift from code] a folder setting says when it applies", () => {
+  test("recordings.root applies at the next start and says the calls already recorded stay behind", () => {
+    const doc = SETTINGS["recordings.root"].doc;
+    expect(doc).toContain("Applies at the next start");
+    expect(doc).toContain("old folder");
+    // Positive control: the models folder applies at once, so it carries no such note.
+    expect(SETTINGS["asr.modelsDir"].doc).not.toContain("Applies at the next start");
   });
 });
