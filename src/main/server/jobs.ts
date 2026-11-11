@@ -1378,8 +1378,10 @@ export class JobService {
     const room = this.concurrency();
     // Read only when an idle Worker holds a model: a submit while every slot is busy reads no row.
     let queued: Job[] | null = null;
-    const wanted = (model: string) =>
-      (queued ??= this.store.queued()).some((j) => this.modelOf(j) === model);
+    const wanted = (model: string) => {
+      queued ??= this.store.queued();
+      return queued.some((j) => this.modelOf(j) === model);
+    };
     const warm = this.o.keepIdleWorkers?.() ?? true;
     const idleMs = this.idleMs();
     const now = this.now();
