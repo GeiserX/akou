@@ -511,6 +511,39 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "[W14.1] The font keys leave the size alone under Cmd or Ctrl (the browser's zoom) and on the pages",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) }, async (rig) => {
+        const page = await rig.open(id);
+        await page.waitForSelector("#lines .row");
+        const size = () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue("--size"),
+          );
+        await page.locator("#scroller").focus();
+        // Positive control: the bare key moves the size, so a size that stays put means something.
+        const start = await size();
+        await page.keyboard.press("+");
+        const up = await size();
+        expect(up).not.toBe(start);
+        for (const k of ["Control+=", "Control+-", "Meta+=", "Meta+-", "Control++"]) {
+          await page.keyboard.press(k);
+          expect(await size()).toBe(up);
+        }
+        await page.click("#settings-open");
+        const control = page.locator("#pages button:visible").first();
+        await control.waitFor();
+        await control.focus();
+        await page.keyboard.press("-");
+        await page.keyboard.press("+");
+        expect(await size()).toBe(up);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[W4.1] The live transcript sits at the bottom: the space above a few lines, the newest and the grey line at the bottom edge, pinned as lines arrive, left alone once scrolled up",
     async () => {
       const t = tempDir("akou-wav-");

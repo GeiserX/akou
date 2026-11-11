@@ -197,7 +197,9 @@ export class FontKeys {
     if (saved >= FONT_MIN && saved <= FONT_MAX) this.set(saved);
     document.addEventListener("keydown", (e) => {
       const t = e.target as HTMLElement | null;
-      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      if (t?.closest("input, textarea, select, [contenteditable], dialog, #pages")) return;
+      // Cmd or Ctrl with + or - is the browser's zoom, not ours; Ctrl+Alt is AltGr on Windows.
+      if (e.metaKey || (e.ctrlKey && !e.altKey)) return;
       if (e.key === "+" || e.key === "=") this.set(this.size + 2);
       else if (e.key === "-") this.set(this.size - 2);
     });
