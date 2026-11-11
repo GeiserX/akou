@@ -2181,7 +2181,10 @@ export class AkouApp implements ApiApp {
       }
     }
     await this.storeSecrets(next);
-    writePrivate(this.cfg.paths.configFile, `${JSON.stringify({ ...unknown, ...next }, null, 2)}\n`);
+    writePrivate(
+      this.cfg.paths.configFile,
+      `${JSON.stringify({ ...unknown, ...next }, null, 2)}\n`,
+    );
     this.cfg = this.withSecrets(loadConfig(env, this.o.platform));
     const after = this.cfg.settings;
     const same = (k: "vocab.extraFiles" | "vocab.languages") =>
@@ -4442,7 +4445,8 @@ export class AkouApp implements ApiApp {
     );
     // What the plain entry prints to stderr: the desktop app's stderr is read by nobody, and a
     // config.json refused whole puts every setting back to its default with no other trace.
-    for (const i of this.cfg.issues) this.appLog.line("warn", `setting refused: ${i.message}`);    this.watchdog = startWatchdog({
+    for (const i of this.cfg.issues) this.appLog.line("warn", `setting refused: ${i.message}`);
+    this.watchdog = startWatchdog({
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
       // A start counts from before its helper is spawned, so a stall in between never reads as
