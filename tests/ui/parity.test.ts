@@ -1251,7 +1251,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
                 b.add({ type: "final.started", pid: 1 });
                 if (id === ids.fail)
                   b.add({ type: "final.failed", step: "diarize", error: "the model is missing" });
-                else b.add({ type: "final.done", parts: [1] });
+                else b.add({ type: "final.done", parts: [1], skipped: [] });
               });
             }
           },
