@@ -127,3 +127,28 @@ describe("[T1.39] Docs drift from code: the models DESIGN section 3 lists", () =
     ]);
   });
 });
+
+/**
+ * Whether DESIGN 3.1 still promises that the recognizer never loses audio. PcmQueue
+ * (src/main/capture/ingest.ts) drops the oldest audio past `capture.queueSeconds`, and nothing
+ * reads that span back during the call; only the final pass covers it.
+ */
+export function promisesNoDrop(design: string): boolean {
+  return /never dropped for the recognizer|reads back from the Opus file/.test(design);
+}
+
+describe("[T1.39] Docs drift from code: a full recognizer queue", () => {
+  test("DESIGN 3.1 says the live layer drops the overflow and the final pass covers it", () => {
+    const design = readFileSync(join(ROOT, "docs", "DESIGN.md"), "utf8");
+    expect(promisesNoDrop(design)).toBe(false);
+    expect(design).toContain("the final transcript still has it");
+  });
+
+  test("positive control: the old read-back promise is caught", () => {
+    expect(
+      promisesNoDrop(
+        "Beyond that the Worker reads back from the Opus file. Audio is never dropped for the recognizer; it only lags.",
+      ),
+    ).toBe(true);
+  });
+});
