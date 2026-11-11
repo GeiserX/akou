@@ -271,6 +271,64 @@ describe("[W13.3] Move to Trash, with Undo", () => {
   );
 
   test(
+    "[W13.3] a second toast inside the Undo's 10 s moves the first Undo aside, and it still restores its call",
+    async () => {
+      await withRig({ seed: seedThree }, async (rig) => {
+        const page = await rig.open(C);
+        await page.waitForSelector("#calls li >> nth=2");
+        const trash = async (id: string) => {
+          await page.click(`${row(id)} .what`, { button: "right" });
+          await page.click('#calls-menu [data-action="call.trash"]');
+          await until(async () => !(await listed(rig)).includes(id), 5000, `${id} trashed`);
+        };
+        await trash(B);
+        await page.waitForSelector("#toast:not([hidden]) .toast-action");
+        expect(await page.textContent("#toast")).toContain("“Beta planning” moved to the Trash.");
+        await trash(A);
+        await until(
+          async () => (await page.textContent("#toast"))?.includes("“Alpha review”") === true,
+          5000,
+          "A's toast",
+        );
+        // B's Undo is still offered beside the newer message, and only once.
+        const held = page.locator("#toast-held .toast-action");
+        expect(await held.count()).toBe(1);
+        expect(await page.textContent("#toast-held")).toContain("“Beta planning” moved to the Trash.");
+        await held.click();
+        await page.waitForSelector(row(B));
+        expect(await listed(rig)).toContain(B);
+        expect(await listed(rig)).not.toContain(A);
+        expect(await page.locator("#toast-held .toast-action").count()).toBe(0);
+        // A's own Undo is untouched by B's.
+        await page.click("#toast .toast-action");
+        await page.waitForSelector(row(A));
+        expect(await listed(rig)).toContain(A);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a plain message after the Undo's 10 s replaces it: the held Undo keeps only its own time",
+    async () => {
+      await withRig({ seed: seedThree }, async (rig) => {
+        const page = await rig.open(C);
+        await page.waitForSelector("#calls li >> nth=2");
+        await page.click(`${row(B)} .what`, { button: "right" });
+        await page.click('#calls-menu [data-action="call.trash"]');
+        await page.waitForSelector("#toast:not([hidden]) .toast-action");
+        await page.waitForSelector("#toast", { state: "hidden", timeout: 15_000 });
+        await page.click(`${row(A)} .what`, { button: "right" });
+        await page.click('#calls-menu [data-action="call.trash"]');
+        await page.waitForSelector("#toast:not([hidden]) .toast-action");
+        // The expired Undo was not brought back beside the new one.
+        expect(await page.locator("#toast-held .toast-action").count()).toBe(0);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "trashing the only call on screen leaves no call open",
     async () => {
       await withRig({ seed: (home) => seedCall(home, call(A, "Alpha review", 0)) }, async (rig) => {
