@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
@@ -526,6 +526,46 @@ describe("[SV-M3] a failed download is retried, then fails for good", () => {
       expect(row()).not.toHaveProperty("error");
       r.store.pull(B);
       await until(async () => r.store.state(B) === "ready", 5000, "the last pull");
+      expect(row()).not.toHaveProperty("error");
+    } finally {
+      reg.failNext("b.onnx", 0);
+      r.cleanup();
+    }
+  });
+
+  test("[SV-M3] a model made ready by another door, then deleted or evicted, shows no old reason", async () => {
+    const r = rig();
+    const held = { defaults: new Set<string>(), inUse: new Set<string>() };
+    const row = () => r.store.list(held, () => null).find((m) => m.id === B);
+    const ends: { ok: boolean }[] = [];
+    r.store.onEnd((e) => ends.push(e));
+    const fail = async (n: number) => {
+      reg.failNext("b.onnx", Number.POSITIVE_INFINITY);
+      r.store.pull(B);
+      await until(async () => ends.length === n, 5000, "download failed");
+      reg.failNext("b.onnx", 0);
+      // Positive control: the reason is on the row.
+      expect(row()?.error).toContain("HTTP 500");
+    };
+    try {
+      // Its files arrive by another door (an import), and it is deleted unseen.
+      await fail(1);
+      reg.install(r.dir, entry(B));
+      r.store.remove(B);
+      expect(row()?.state).toBe("missing");
+      expect(row()).not.toHaveProperty("error");
+      // The sweep evicts it unseen.
+      await fail(2);
+      reg.install(r.dir, entry(B));
+      r.store.sweep(new Set());
+      r.clock.t += 31 * DAY_MS;
+      expect(r.store.sweep(new Set()).map((g) => g.id)).toContain(B);
+      expect(row()).not.toHaveProperty("error");
+      // Read as ready once, then its folder goes by hand.
+      await fail(3);
+      reg.install(r.dir, entry(B));
+      expect(row()?.state).toBe("ready");
+      rmSync(join(r.dir, B), { recursive: true, force: true });
       expect(row()).not.toHaveProperty("error");
     } finally {
       reg.failNext("b.onnx", 0);

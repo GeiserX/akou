@@ -633,7 +633,10 @@ export class ModelStore {
   /** The import running, if any: a second one waits for it, so one copy owns each model. */
   private importing: Promise<unknown> = Promise.resolve();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
-  /** Why each model's last download gave up, by id; a Cancel is no failure and leaves none. */
+  /**
+   * Why each model's last download gave up, by id; a Cancel is no failure and leaves none. A
+   * delete, an eviction or the model read as ready forgets it.
+   */
   private readonly failures = new Map<string, string>();
   private closed = false;
 
@@ -974,6 +977,7 @@ export class ModelStore {
           continue;
         }
         delete l[id];
+        this.failures.delete(id);
         changed = true;
         out.push({ id, last_used_at: last, bytes });
         this.o.log(
@@ -1071,6 +1075,8 @@ export class ModelStore {
     const iso = (t: number | undefined) => (t === undefined ? null : new Date(t).toISOString());
     return this.o.catalog().map((m) => {
       const state = this.state(m.id);
+      // On disk by any door (a pull, an import, the desktop's download): the old reason is spent.
+      if (state === "ready") this.failures.delete(m.id);
       const last = state === "ready" ? ledger[m.id] : undefined;
       const error = state === "missing" ? this.failures.get(m.id) : undefined;
       const kept = held.defaults.has(m.id) || held.inUse.has(m.id);
@@ -1151,6 +1157,7 @@ export class ModelStore {
     const path = join(this.o.dir(), id);
     const bytes = bytesUnder(path);
     rmSync(path, { recursive: true, force: true });
+    this.failures.delete(id);
     const l = this.ledger();
     if (l[id] !== undefined) {
       delete l[id];
