@@ -250,8 +250,35 @@ export class CallController {
 
   private closeWriter(): void {
     if (this.holds > 0) return;
-    this.writer?.close();
+    const w = this.writer;
     this.writer = null;
+    w?.close();
+  }
+
+  /**
+   * Writes the event that ends a part or the call. A log that cannot be written (a full or failing
+   * disk) must not leave the call half-ended: the error is returned, and the caller still moves
+   * the call on and closes its log. Recovery at the next start writes what is missing.
+   */
+  private appendEnd(draft: EventDraft): Error | null {
+    try {
+      this.append(draft);
+      return null;
+    } catch (err) {
+      console.error(`call ${this.id}: could not write ${draft.type}`, err);
+      return err as Error;
+    }
+  }
+
+  /** `closeWriter` that returns its error instead of throwing it (see `appendEnd`). */
+  private closeEnd(): Error | null {
+    try {
+      this.closeWriter();
+      return null;
+    } catch (err) {
+      console.error(`call ${this.id}: could not close its log`, err);
+      return err as Error;
+    }
   }
 
   /**
@@ -596,7 +623,8 @@ export class CallController {
     if (run.ended) return;
     run.ended = true;
     this.clearDead(run);
-    this.append({ type: "part.ended", part: run.part, reason, fileSeconds });
+    // A failed write must not stop what follows the part's end (the automatic restart, the stop).
+    this.appendEnd({ type: "part.ended", part: run.part, reason, fileSeconds });
   }
 
   /** Stops a part's helper within the stop budget and writes its `part.ended`. */
@@ -807,8 +835,8 @@ export class CallController {
     if (this.current && !this.current.ended) void this.retire(this.current, "stop");
     await this.drain();
     await this.flushBeforeEnd();
-    this.append({ type: "call.ended", reason: "interrupted" });
-    this.closeWriter();
+    this.appendEnd({ type: "call.ended", reason: "interrupted" });
+    this.closeEnd();
   }
 
   private cancelLaunch(run: PartRun): void {
@@ -846,9 +874,12 @@ export class CallController {
     if (run && !run.ended) void this.retire(run, "stop");
     await this.drain();
     await this.flushBeforeEnd();
-    this.append({ type: "call.ended", reason: "stop" });
+    const failed = this.appendEnd({ type: "call.ended", reason: "stop" });
     this.setStatus("ended");
-    this.closeWriter();
+    const closeFailed = this.closeEnd();
+    // The call is ended and its folder free either way; the caller still hears of the failure.
+    const err = failed ?? closeFailed;
+    if (err) throw err;
     return { ok: true };
   }
 

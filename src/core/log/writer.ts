@@ -492,14 +492,25 @@ export class LogWriter {
     this.stats.syncs++;
   }
 
-  /** Syncs, closes the file and releases the lock. */
+  /**
+   * Syncs, closes the file and releases the lock. A sync that fails (a full or failing disk) is
+   * thrown, but only after the file is closed and the lock released: the call must not keep its
+   * folder locked until akou restarts.
+   */
   close(): void {
     if (this.fd === -1) return;
-    if (!this.closed) this.sync();
-    this.closed = true;
-    closeSync(this.fd);
-    this.fd = -1;
-    this.releaseLock();
+    try {
+      if (!this.closed) this.sync();
+    } finally {
+      this.closed = true;
+      const fd = this.fd;
+      this.fd = -1;
+      try {
+        closeSync(fd);
+      } finally {
+        this.releaseLock();
+      }
+    }
   }
 
   private releaseLock(): void {

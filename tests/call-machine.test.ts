@@ -8,7 +8,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PartClock } from "../src/core/log/clock.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
-import { LOCK_FILE } from "../src/core/log/writer.ts";
+import { LOCK_FILE, LogWriter } from "../src/core/log/writer.ts";
 import { folderName, slugify, ulid } from "../src/main/call/folder.ts";
 import { CallManager, type CallManagerOptions } from "../src/main/call/manager.ts";
 import { opusDurationSeconds } from "../src/main/call/recovery.ts";
@@ -546,6 +546,61 @@ describe("stop", () => {
     expect((await stop).ok).toBe(true);
     const killed = s.events.filter((e) => e.type === "part.ended" && e.reason === "killed");
     expect(killed.length).toBe(1);
+  });
+
+  test("[LG-4] a stop on a disk that fails every fsync still ends the call and frees its folder", async () => {
+    const s = setup();
+    const a = await started(s);
+    s.engine.last.audio(0.5);
+    const c = s.mgr.controller(a.call);
+    const sync = LogWriter.prototype.sync;
+    LogWriter.prototype.sync = () => {
+      throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+    };
+    let stopped: unknown;
+    try {
+      stopped = await s.mgr.stop(a.call).catch((err: Error) => err);
+    } finally {
+      LogWriter.prototype.sync = sync;
+    }
+    // The caller hears of the failure, and nothing is left half-ended.
+    expect(stopped).toBeInstanceOf(Error);
+    expect(c?.status).toBe("ended");
+    expect(existsSync(join(a.folder, LOCK_FILE))).toBe(false);
+    expect((await s.mgr.stop(a.call)) as { code?: string }).toMatchObject({ code: "not_live" });
+    // A finished call is restartable again once the disk works.
+    s.engine.onStart = (x) => x.capturing();
+    expect(await s.mgr.restart(a.call)).toMatchObject({ ok: true, part: 2 });
+  });
+
+  test("[LG-4] a part.ended that cannot be written still restarts the helper that exited", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    const append = LogWriter.prototype.append;
+    let refused = 0;
+    LogWriter.prototype.append = function (this: LogWriter, d) {
+      if (d.type === "part.ended" && refused === 0) {
+        refused++;
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      }
+      return append.call(this, d);
+    };
+    try {
+      s.engine.last.exit(70);
+      await c?.idle();
+    } finally {
+      LogWriter.prototype.append = append;
+    }
+    expect(refused).toBe(1);
+    // Never a call that says recording while nothing captures: the next part is recording.
+    expect(s.engine.sessions.length).toBe(2);
+    expect(ofType(s.events, "part.started").map((e) => e.part)).toEqual([1, 2]);
+    expect(c?.current?.part).toBe(2);
+    expect(c?.status).toBe("recording");
   });
 
   test("[T4.31] budgets are injected: a 100 ms stop budget resolves at 100 ms on a fake clock", async () => {
