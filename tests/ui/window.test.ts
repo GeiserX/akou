@@ -600,6 +600,46 @@ describe("the confirm bar", () => {
   );
 });
 
+describe("[W3.1] the controls when akou does not answer", () => {
+  test(
+    "Record and Stop whose request gets no answer say so, and work again once akou answers",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const page = await rig.open();
+        await page.waitForSelector("#record", { state: "visible" });
+        const drop = (r: Route) =>
+          r.request().method() === "POST" ? void r.abort() : void r.continue();
+        await page.route("**/api/v1/calls", drop);
+        await page.click("#record");
+        await until(
+          async () => (await text(page, "#toast")) === "The call did not start: akou did not answer.",
+          5000,
+          "the start's toast",
+        );
+        expect(await page.locator("#record").isEnabled()).toBe(true);
+        await page.unroute("**/api/v1/calls", drop);
+        // Positive control: with akou answering, the same click records and shows no such toast.
+        await page.click("#record");
+        await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
+        await page.route("**/api/v1/calls/*/stop", drop);
+        await page.click("#stop");
+        await until(
+          async () => (await text(page, "#toast")) === "stop failed: akou did not answer.",
+          5000,
+          "the stop's toast",
+        );
+        expect(await text(page, "#state")).toBe("rec");
+        await page.unroute("**/api/v1/calls/*/stop", drop);
+        await page.click("#stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the notepad (DESIGN 5.1)", () => {
   test(
     "a typed line is a note by the user, timed at its first keystroke; agent lines look different",

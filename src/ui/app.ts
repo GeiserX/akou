@@ -1234,7 +1234,14 @@ class App {
 
   private async control(name: string, id: string | null, body: unknown = {}): Promise<boolean> {
     if (!id) return false;
-    const r = await this.t.request<{ error?: string }>("POST", `/calls/${id}/${name}`, body);
+    const r = await this.t
+      .request<{ error?: string }>("POST", `/calls/${id}/${name}`, body)
+      .catch(() => null);
+    if (!r) {
+      // The click never stays silent: a request that got no answer says so (W3.1).
+      toast(`${name} failed: akou did not answer.`);
+      return false;
+    }
     if (r.status >= 400) {
       if (r.body.error === "stale_restart") {
         this.confirm(
@@ -1308,19 +1315,25 @@ class App {
     // Only a pick that differs from capture.call is sent: an untouched menu sends what Record
     // always sent, and the app resolves the setting itself.
     const source = this.callPicker.value();
-    let r: Reply<{ call?: string; error?: string }>;
+    let r: Reply<{ call?: string; error?: string }> | null;
     try {
-      r = await this.t.request("POST", "/calls", {
-        workspace,
-        title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(live ?? {}),
-        ...(source ? { call: source } : {}),
-      });
+      r = await this.t
+        .request<{ call?: string; error?: string }>("POST", "/calls", {
+          workspace,
+          title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
+          ...(live ?? {}),
+          ...(source ? { call: source } : {}),
+        })
+        .catch(() => null);
     } finally {
       // The pick was for this one call, started or not.
       this.callPicker.used();
       this.starting = false;
       this.paint();
+    }
+    if (!r) {
+      toast("The call did not start: akou did not answer.");
+      return;
     }
     const call = r.body.call;
     if (r.status === 201 && call) {
