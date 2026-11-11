@@ -33,6 +33,11 @@ function aged(path: string, seconds: number): void {
   utimesSync(path, t, t);
 }
 
+/** Now on the kernel's clock, which stamps mtimes; the nightly year-ahead run moves only `Date`. */
+function kernelNow(): number {
+  return performance.timeOrigin + performance.now();
+}
+
 function refused(fn: () => unknown): boolean {
   try {
     fn();
@@ -154,10 +159,44 @@ describe("SI-4: a lock that survives a container restart", () => {
       writeFileSync(lock, `${process.ppid} 0123456789abcdef\n`);
       aged(lock, 600);
       expect(processAlive(process.ppid)).toBe(true);
-      expect(refused(() => acquireLock(lock, process.pid, processAlive))).toBe(true);
+      // Old within this boot: a runner may have booted minutes ago, so the boot is given.
+      const bootTime = kernelNow() - 86_400_000;
+      expect(refused(() => acquireLock(lock, process.pid, processAlive, { bootTime }))).toBe(true);
       expect(
-        refused(() => acquireLock(lock, process.pid, processAlive, { serverMode: true })),
+        refused(() =>
+          acquireLock(lock, process.pid, processAlive, { serverMode: true, bootTime }),
+        ),
       ).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("[LG-2] a lock last touched before this boot is taken, even when its pid now belongs to a live process", () => {
+    const t = tempDir("akou-lock-");
+    try {
+      const lock = join(t.dir, "akou.lock");
+      // A crash, then a reboot: the old pid is now an unrelated live process (the runner's parent).
+      writeFileSync(lock, `${process.ppid} 0123456789abcdef\n`);
+      const hourAgo = (kernelNow() - 3_600_000) / 1000;
+      utimesSync(lock, hourAgo, hourAgo);
+      expect(processAlive(process.ppid)).toBe(true);
+      // Positive control: the same lock written after the boot is a live holder's, and refused.
+      const longUp = kernelNow() - 2 * 3_600_000;
+      expect(
+        refused(() => acquireLock(lock, process.pid, processAlive, { bootTime: longUp })),
+      ).toBe(true);
+      const tenMinUp = kernelNow() - 600_000;
+      expect(acquireLock(lock, process.pid, processAlive, { bootTime: tenMinUp })).toBe(
+        process.ppid,
+      );
+      expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
+      // Server mode too: the lock's heartbeat stopped before the boot.
+      writeFileSync(lock, `${process.ppid} 0123456789abcdef\n`);
+      utimesSync(lock, hourAgo, hourAgo);
+      expect(
+        acquireLock(lock, process.pid, processAlive, { serverMode: true, bootTime: tenMinUp }),
+      ).toBe(process.ppid);
     } finally {
       t.cleanup();
     }
