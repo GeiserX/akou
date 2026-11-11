@@ -173,7 +173,8 @@ export function stamp(root: string, version: string): string[] {
     }
     const text = readFileSync(path, "utf8");
     // search(), not test(): test() on a global pattern moves its lastIndex.
-    if (text.search(p.pattern) === -1) throw new Error(`${p.file}: no version found where expected`);
+    if (text.search(p.pattern) === -1)
+      throw new Error(`${p.file}: no version found where expected`);
     const next = text.replace(
       p.pattern,
       (_all, a: string, _v: string, b: string) => a + version + b,
