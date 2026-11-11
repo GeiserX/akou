@@ -55,7 +55,9 @@ function readPcm(path: string, w: { data: number; bytes: number; channels: numbe
     const frameBytes = 2 * w.channels;
     const frames = Math.floor(w.bytes / frameBytes);
     const out = new Float32Array(frames);
-    const chunk = 65536 * frameBytes;
+    // About 4 MB of whole frames, at least one: the header's channel count (up to 65535) must not
+    // size the buffer, or a crafted header asks for gigabytes whatever the file holds.
+    const chunk = Math.max(1, Math.floor((4 << 20) / frameBytes)) * frameBytes;
     const buf = new Uint8Array(chunk);
     let frame = 0;
     for (let at = 0; frame < frames; at += chunk) {
