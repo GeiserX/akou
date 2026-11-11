@@ -61,6 +61,7 @@ Traps that belong to the user's own downstream pipelines (archive formats, word-
 - **Torn last line** [F2.50]. Given a truncated final line, readers must ignore it and the writer must truncate it at the next open. Test: chop the file mid-line.
 - **Two writers** (M1). Given a second app instance on the same folder, it must refuse (`.akou.lock`). Test: two writers.
 - **Layer switch confuses a live reader** [design risk] (M1). Given a reader holding live ids across `final.part.done` and `final.done`, the ids must still resolve and the `best` view must switch per part on `final.part.done`. Given a resume after `final.done`, the new part must show the live layer until the final pass re-runs. Test: the fold suite.
+- **A re-run's retraction that loses to an edit** [LG-1] (M1). Given a final pass that re-runs over a call that has a final layer, its retractions are built from the log it read at its start and written only once every part is decoded. A line relabelled meanwhile already holds the rev the retraction carries, and the fold drops a revision that is not above the current one, so the old line stayed beside the new layer: the sentence showed twice in the transcript, the pack and the export. A retraction must be written above the line's revision at the time it is written. Test: `tests/asr-final.test.ts` `[LG-1]`, a relabel from inside the re-run's progress callback; the old line is retracted and the final layer has no duplicate. Against the old relay the old line stays visible.
 
 ## Custom vocabulary
 
