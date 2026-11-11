@@ -879,7 +879,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
 |---|---|---|---|
 | `workspace` | `string` | no | Only this workspace's calls. |
 | `limit` | `integer` | no | The most calls to return, newest first, 1 to 1000. |
-| `failed` | `boolean` | no | Also the calls whose capture failed. |
+| `failed` | `boolean` | no | Only the calls whose start failed (nothing was recorded), instead of the others. A call whose final pass failed is not one. |
 
 <details markdown>
 <summary>Input schema</summary>
@@ -901,7 +901,7 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
       "maximum": 1000
     },
     "failed": {
-      "description": "Also the calls whose capture failed.",
+      "description": "Only the calls whose start failed (nothing was recorded), instead of the others. A call whose final pass failed is not one.",
       "type": "boolean"
     }
   },
