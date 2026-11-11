@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   CLI_REFERENCE_FILE,
   cliReferenceDrifted,
@@ -61,5 +62,27 @@ describe("CLI-31: docs/cli.md is generated and kept in sync", () => {
 
   test("line endings alone are not drift", () => {
     expect(cliReferenceDrifted(committed().replace(/\n/g, "\r\n"))).toBe(false);
+  });
+});
+
+/** The codes the "exit codes are fixed" sentence of a page names, in order. */
+function namedExitCodes(page: string): number[] {
+  const sentence = /The exit codes are fixed: ([^\n]*)/.exec(page)?.[1] ?? "";
+  return [...sentence.matchAll(/(?:^|, )(\d+) /g)].map((m) => Number(m[1]));
+}
+
+describe("[T1.39] Docs drift from code: docs/agents.md names every exit code the CLI returns", () => {
+  const codes = [...new Set<number>(Object.values(EXIT))].sort((a, b) => a - b);
+
+  test("its sentence lists exactly the codes in EXIT", () => {
+    const page = readFileSync(join(import.meta.dir, "..", "docs", "agents.md"), "utf8");
+    expect(namedExitCodes(page)).toEqual(codes);
+  });
+
+  test("positive control: the sentence without 65 and 78 fails", () => {
+    const short =
+      "The exit codes are fixed: 0 ok, 3 no call, 64 usage, 69 unavailable, 70 software, 75 already recording, 77 permission, 124 timed out, 130 interrupted by Ctrl-C.";
+    expect(namedExitCodes(short)).toHaveLength(codes.length - 2);
+    expect(namedExitCodes(short)).not.toEqual(codes);
   });
 });
