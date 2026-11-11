@@ -1,11 +1,12 @@
 /**
- * An upload that stops arriving is cut at the server's idle timeout (docs/TRAPS.md, "A stalled
- * upload holds its socket"). Bun resets the idle timeout on every chunk, so an upload that keeps
- * sending, however slowly, is never cut; one that goes silent mid-body, or a peer that vanishes
- * without closing, must not hold its socket and its spool file for the life of the process.
+ * An upload that stops arriving is cut (docs/TRAPS.md, "A stalled upload holds its socket"): one
+ * that goes silent mid-body, or a peer that vanishes without closing, must not hold its socket and
+ * its spool file for the life of the process. Bun's idle timeout counts from the start of the
+ * request, not from the last body chunk, so it cannot be the cut: an upload that keeps sending,
+ * however long it takes, must complete.
  *
  * A real Bun server with a 2 s idle timeout reads the body through the routes' own `formOf`, with
- * the same `timeout` hook the API server hands every route.
+ * the same `timeout` hook the API server hands every route and a 2 s stall limit.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -43,6 +44,7 @@ function serve(dir: string): { port: number; answered: number[] } {
             timeout: (seconds) => srv.timeout(req, seconds),
           },
           dir,
+          2000,
         );
         const size = form.files()[0]?.size ?? -1;
         await form.discard();
@@ -72,7 +74,7 @@ function head(port: number, bytes: number): string {
 const uploads = (dir: string) => readdirSync(dir).filter((f) => f.endsWith(".upload"));
 
 describe("[SV-D3] A stalled upload holds its socket", () => {
-  test("an upload that goes silent mid-body is closed at the idle timeout, and its spool file is deleted", async () => {
+  test("an upload that goes silent mid-body is cut, and its socket and spool file are let go", async () => {
     const t = tempDir("akou-upload-idle-");
     cleanups.push(t.cleanup);
     const { port } = serve(t.dir);
@@ -92,7 +94,7 @@ describe("[SV-D3] A stalled upload holds its socket", () => {
     await until(() => uploads(t.dir).length === 0, 5000, "the spool file to be deleted");
   }, 20_000);
 
-  test("positive control: an upload that trickles a chunk a second for longer than the idle timeout completes", async () => {
+  test("positive control: an upload that sends a chunk a second for longer than the idle timeout completes", async () => {
     const t = tempDir("akou-upload-trickle-");
     cleanups.push(t.cleanup);
     const { port, answered } = serve(t.dir);
