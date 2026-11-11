@@ -11,6 +11,9 @@
  * - `docs/api/openapi.json`: `info.version` of the generated OpenAPI file (`scripts/openapi.ts`).
  * - `examples/compose/telegram-archive/.env.example`: `AKOU_VERSION`, the image tag the compose
  *   example runs. Bumped by hand, it missed 0.6.0 to 0.6.2.
+ * - `README.md`: the name of the DMG to download. `docs/server.md` and `docs/server-hardware.md`:
+ *   every `drumsergio/akou:<version>` image tag and the `git clone --branch v<version>` line. Bumped
+ *   by hand, they missed 1.7.5 and 1.7.6. Every occurrence in these files is read and written.
  * - `native/akou-capture/Cargo.toml` and `Cargo.lock`: the helper's version, reported by
  *   `akou-capture --version` and in its `hello` packet. Skipped while `native/` is absent.
  * - `native/akou-diarize/Cargo.toml` and `Cargo.lock`: the diarization helper's version, reported
@@ -50,9 +53,16 @@ interface Place {
   file: string;
   /** Skip this place when the file is absent (the helper before its crate is merged). */
   optional?: boolean;
-  /** Group 2 is the version; groups 1 and 3 are kept around it when stamping. */
+  /**
+   * Group 2 is the version; groups 1 and 3 are kept around it when stamping. With the `g` flag,
+   * every occurrence is read and written, and one stale occurrence is drift.
+   */
   pattern: RegExp;
 }
+
+/** A doc's image tags (with the `-vulkan` and `-cuda` variants) and its source clone line. */
+const DOC_TAGS =
+  /(drumsergio\/akou:|git clone --branch v)([0-9][0-9A-Za-z.+-]*?)((?:-vulkan|-cuda)?)(?=[\s`]|$)/gm;
 
 export const PLACES: readonly Place[] = [
   {
@@ -84,6 +94,12 @@ export const PLACES: readonly Place[] = [
     file: "examples/compose/telegram-archive/.env.example",
     pattern: /^(AKOU_VERSION=)(.*)()$/m,
   },
+  {
+    file: "README.md",
+    pattern: /(akou-)([0-9][0-9A-Za-z.+-]*?)(-macos-arm64\.dmg)/g,
+  },
+  { file: "docs/server.md", pattern: DOC_TAGS },
+  { file: "docs/server-hardware.md", pattern: DOC_TAGS },
   {
     file: "native/akou-capture/Cargo.toml",
     optional: true,
@@ -119,7 +135,10 @@ export function sourceVersion(root: string): string {
   return v;
 }
 
-/** What every present place says; null where the pattern is not found. */
+/**
+ * What every present place says; null where the pattern is not found. A global place that says
+ * more than one version reports them all, comma-separated, so it never equals one version.
+ */
 export function readAll(root: string): Found[] {
   const out: Found[] = [];
   for (const p of PLACES) {
@@ -129,8 +148,10 @@ export function readAll(root: string): Found[] {
       out.push({ file: p.file, version: null });
       continue;
     }
-    const m = p.pattern.exec(readFileSync(path, "utf8"));
-    out.push({ file: p.file, version: m ? (m[2] as string) : null });
+    const text = readFileSync(path, "utf8");
+    const matches = p.pattern.global ? [...text.matchAll(p.pattern)] : [p.pattern.exec(text)];
+    const versions = [...new Set(matches.flatMap((m) => (m ? [m[2] as string] : [])))];
+    out.push({ file: p.file, version: versions.length > 0 ? versions.join(", ") : null });
   }
   return out;
 }
@@ -151,7 +172,8 @@ export function stamp(root: string, version: string): string[] {
       throw new Error(`${p.file} is missing`);
     }
     const text = readFileSync(path, "utf8");
-    if (!p.pattern.test(text)) throw new Error(`${p.file}: no version found where expected`);
+    // search(), not test(): test() on a global pattern moves its lastIndex.
+    if (text.search(p.pattern) === -1) throw new Error(`${p.file}: no version found where expected`);
     const next = text.replace(
       p.pattern,
       (_all, a: string, _v: string, b: string) => a + version + b,
