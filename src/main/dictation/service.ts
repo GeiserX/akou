@@ -459,7 +459,12 @@ export class DictationService {
     let gone: string[] = [];
     try {
       if (days !== undefined) {
-        gone = this.forget(expiredDictations(this.log.items(), this.o.now(), days));
+        // The draft box's dictation still waits for the user: its Retry and a refused insert
+        // need it, so it goes at a sweep after the box answers (T4.42).
+        const held = this.draft.holding();
+        gone = this.forget(
+          expiredDictations(this.log.items(), this.o.now(), days).filter((id) => id !== held),
+        );
         if (gone.length > 0)
           this.o.onLog?.("info", `dictation: ${gone.length} past retention deleted`);
       }
