@@ -66,9 +66,7 @@ export async function look(sha: string, get: <T>(path: string) => Promise<T>): P
   const run =
     runs.workflow_runs.find((r) => r.event === "push" && r.head_branch === "main") ?? null;
   if (run?.status !== "completed") return verdict(sha, run, null);
-  const jobs = await get<{ jobs: Job[] }>(
-    `actions/runs/${run.id}/jobs?filter=latest&per_page=100`,
-  );
+  const jobs = await get<{ jobs: Job[] }>(`actions/runs/${run.id}/jobs?filter=latest&per_page=100`);
   return verdict(sha, run, jobs.jobs.find((j) => j.name === "ci-ok") ?? null);
 }
 

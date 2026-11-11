@@ -325,8 +325,13 @@ describe("[SV-T1] the server job in ci.yml", () => {
     // The gate this leg had: a warning, an output, and the round trip run only on that output.
     expect(
       gapsAfter((s) => {
-        capsOf(s).run =
-          "if jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks' server.json; then\n  echo roundtrip=true >> \"$GITHUB_OUTPUT\"\nelse\n  echo \"::warning::skipped\"\nfi\n";
+        capsOf(s).run = [
+          "if jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks' server.json; then",
+          '  echo roundtrip=true >> "$GITHUB_OUTPUT"',
+          "else",
+          '  echo "::warning::skipped"',
+          "fi",
+        ].join("\n");
         for (const st of s)
           if (/server-roundtrip|probe\.py|compose-e2e|task=transcribe/.test(st.run ?? ""))
             st.if = "steps.caps.outputs.roundtrip == 'true'";
