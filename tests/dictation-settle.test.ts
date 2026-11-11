@@ -181,7 +181,7 @@ describe("T4.41: a draft box call that throws", () => {
       },
     });
     dictate("1", true);
-    await s.settled();
+    await until(() => log.items()[0]?.text === "next words", 5000, "the first decode");
     dictate("2");
     await until(() => sent.some((c) => c.type === "insert"), 5000, "the second insert");
     await s.settled();
@@ -195,9 +195,8 @@ describe("T4.41: a draft box call that throws", () => {
       name: "fast",
       decode: async () => reading("words"),
     };
-    const { s, log, dictate } = session(said, { onDraft: () => true });
+    const { log, dictate } = session(said, { onDraft: () => true });
     dictate("1", true);
-    await s.settled();
-    expect(log.items()[0]?.state).toBe("drafted");
+    await until(() => log.items()[0]?.state === "drafted", 5000, "the draft");
   });
 });
