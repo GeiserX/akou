@@ -87,6 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # Every tag: a stable version's terms check must be dated on or after the previous stable tag's day
           # (docs/CI-CD.md CI-28), and a shallow checkout has no tags to compare with.
           fetch-depth: 0
@@ -150,6 +151,8 @@ jobs:
       HELPER_FLAG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.allow_missing_helper)) && '--allow-missing-helper' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: macOS arm64 only
         run: |
           test "$(uname -m)" = arm64 || { echo "the app is built on arm64; this runner is $(uname -m)"; exit 1; }
@@ -335,6 +338,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Rust ${{ env.RUST_VERSION }}
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
@@ -421,6 +426,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -474,6 +481,8 @@ jobs:
       VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: log in to Docker Hub (a pushed tag only)
         if: env.PUSH == 'true'
         env:
@@ -563,6 +572,8 @@ jobs:
     steps:
       # For the feed check after publishing; first, since checkout empties the workspace.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -649,6 +660,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}

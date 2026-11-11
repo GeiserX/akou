@@ -594,6 +594,34 @@ function releaseWorkflow(): {
   ) as never;
 }
 
+describe("[CI-16] no release checkout leaves the job token for later steps", () => {
+  // No job pushes through its checkout (bump-cask clones the tap with its own token), so a
+  // persisted token would only be in reach of every script that runs after the checkout.
+  const keepingToken = (wf: ReturnType<typeof releaseWorkflow>): string[] =>
+    Object.entries(wf.jobs).flatMap(([name, job]) =>
+      (job.steps ?? [])
+        .filter((s) => s.uses?.startsWith("actions/checkout@"))
+        .filter((s) => String(s.with?.["persist-credentials"]) !== "false")
+        .map(() => name),
+    );
+
+  test("every checkout sets persist-credentials: false", () => {
+    const wf = releaseWorkflow();
+    const checkouts = Object.values(wf.jobs).flatMap((j) =>
+      (j.steps ?? []).filter((s) => s.uses?.startsWith("actions/checkout@")),
+    );
+    expect(checkouts.length).toBeGreaterThanOrEqual(7);
+    expect(keepingToken(wf)).toEqual([]);
+  });
+
+  test("positive control: a checkout without it is caught", () => {
+    const wf = releaseWorkflow();
+    const co = wf.jobs.release?.steps?.find((s) => s.uses?.startsWith("actions/checkout@"));
+    delete co?.with?.["persist-credentials"];
+    expect(keepingToken(wf)).toEqual(["release"]);
+  });
+});
+
 describe("[CI-19] a release publishes only a commit whose ci-ok is green", () => {
   const sha = "0".repeat(40);
   const run = (status: string, conclusion: string | null) => ({
