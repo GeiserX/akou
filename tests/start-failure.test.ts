@@ -80,7 +80,10 @@ describe("[ST-1] a desktop start that fails", () => {
       const report = branch.indexOf("reportStartFailure(");
       return tail.includes("} else {") && report >= 0 && branch.indexOf("ui.quit()") > report;
     };
-    const src = readFileSync(join(import.meta.dir, "..", "src", "main", "window", "main.ts"), "utf8");
+    const src = readFileSync(
+      join(import.meta.dir, "..", "src", "main", "window", "main.ts"),
+      "utf8",
+    );
     expect(reportsBeforeQuit(src)).toBe(true);
     // Positive control: the same entry without the call is caught.
     const removed = src.replace(/reportStartFailure\([\s\S]*?\}\);\n/, "");
