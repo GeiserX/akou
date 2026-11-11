@@ -30,7 +30,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import type { LogEvent } from "../../core/log/events.ts";
-import type { CallView } from "../../core/log/fold.ts";
+import { type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE, type WriterOptions } from "../../core/log/writer.ts";
 import { legacyLive } from "../asr/live-setups.ts";
@@ -175,13 +175,26 @@ export class CallManager {
       if ([...this.controllers.values()].some((c) => c.dir === dir)) continue;
       // One unreadable folder must never stop a start: skip it and say so.
       try {
-        const a = await recoverCall(dir, {
-          now: () => this.clock.now(),
-          abandonAfterMs: this.budgets.abandonAfterMs,
-          writerOptions: this.o.writer,
-        });
-        if (a) actions.push(a);
-        await this.reindex(dir, workspace);
+        // Each log is read and folded once: recovery and the index share it. A folder recovery
+        // appended to is read again, so its summary is what the writer committed.
+        const { events } = await readLog(join(dir, EVENTS_FILE));
+        const view = fold(events);
+        const a = await recoverCall(
+          dir,
+          {
+            now: () => this.clock.now(),
+            abandonAfterMs: this.budgets.abandonAfterMs,
+            writerOptions: this.o.writer,
+          },
+          { events, view },
+        );
+        if (a) {
+          actions.push(a);
+          await this.reindex(dir, workspace);
+        } else {
+          const s = summarize(dir, workspace, events, view);
+          if (s) this.index.set(s.id, s);
+        }
       } catch (err) {
         this.recoveryErrors.push({ dir, error: (err as Error).message });
       }
