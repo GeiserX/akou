@@ -31,12 +31,12 @@ When an app cannot take the text, or when you ask for it (Shift+Enter, a second 
 
 | Engine | What it is |
 |---|---|
-| `fast` | Parakeet, already loaded for calls: about 0.1 s for 5 s of speech |
+| `fast` | Parakeet: about 0.1 s for 5 s of speech |
 | `best` | Qwen3-ASR 1.7B, kept warm while dictation is on. Falls back to `fast` when it fails or is too slow, and says so |
 | `auto` | `best` where Qwen runs on a GPU and is downloaded, `fast` elsewhere. The default |
 | `remote` | Another akou you run, with one of its `jobs` keys, so this Mac needs no model of its own |
 
-Qwen3-ASR is a separate download of about 2.5 GB; the setup's Speech models step lists it when you pick Dictation or Both. **Languages** lists the languages you speak; with more than one, `auto` chooses among them as you speak, and a language chip on the island switches it with a click.
+Qwen3-ASR is about 2.5 GB, already on disk where calls use it for the transcript after the call; the setup's Speech models step lists it when you pick Dictation or Both. **Languages** lists the languages you speak; with more than one, `auto` chooses among them as you speak, and a language chip on the island switches it with a click.
 
 ## Learning from your fixes
 

@@ -36,7 +36,7 @@ brew install --cask geiserx/akou/akou
 open -a akou
 ```
 
-The first window asks what you will use akou for and downloads the speech models (about 3.0 GB). At your first Record, macOS asks for the microphone and system audio; the call then shows up in the sidebar with a live transcript. Needs a Mac with Apple silicon and macOS 14.4 or later. To let Claude Code or Codex follow your calls, install the command line from the akou menu and run `akou skill install`; see [Getting started](https://geiserx.github.io/akou/getting-started/) and [Agents and the command line](https://geiserx.github.io/akou/agents/).
+The first window asks what you will use akou for and downloads the speech models (about 3.0 to 3.7 GB, by what your Mac runs). At your first Record, macOS asks for the microphone and system audio; the call then shows up in the sidebar with a live transcript. Needs a Mac with Apple silicon and macOS 14.4 or later. To let Claude Code or Codex follow your calls, install the command line from the akou menu and run `akou skill install`; see [Getting started](https://geiserx.github.io/akou/getting-started/) and [Agents and the command line](https://geiserx.github.io/akou/agents/).
 
 ## Status
 

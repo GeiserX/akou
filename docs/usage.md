@@ -6,7 +6,7 @@ akou is one window with three columns: your calls on the left, the transcript in
 
 ## The first run
 
-The first time akou opens, it asks what you will use it for: **Calls**, **Dictation** or **Both**. It then asks only the steps that choice needs: where calls go, the permissions, the dictation key and engine, the speech models and the assistant. The models step downloads the speech models once, about 3.0 GB, and Record stays disabled with its reason until they are on disk. **Run the setup again** in Settings brings the same steps back. See [Getting started](getting-started.md).
+The first time akou opens, it asks what you will use it for: **Calls**, **Dictation** or **Both**. It then asks only the steps that choice needs: where calls go, the permissions, the dictation key and engine, the speech models and the assistant. The models step downloads the speech models once, about 3.0 to 3.7 GB by what your Mac runs, and Record stays disabled with its reason until they are on disk. **Run the setup again** in Settings brings the same steps back. See [Getting started](getting-started.md).
 
 ## The sidebar
 
