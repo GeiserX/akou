@@ -485,7 +485,11 @@ export const SETTINGS = {
       XDG_DATA_HOME: process.env.XDG_DATA_HOME,
     }),
     env: "AKOU_MODELS_DIR",
-    doc: "Folder the speech models are downloaded into and loaded from.",
+    // akou runs the llama-server and CrispASR builds kept in it: set in the desktop window or the
+    // file, never by an HTTP client, so a key cannot point it at a folder holding its own program.
+    apiWritable: false,
+    windowWritable: true,
+    doc: "Folder the speech models are downloaded into and loaded from. Set it in the akou window or the config file, never over the API: akou runs the speech programs kept in it.",
   },
   "asr.threads": {
     type: "integer",

@@ -128,7 +128,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 
 | Key | Default | What it does |
 |---|---|---|
-| `asr.modelsDir` | `"~/Library/Application Support/akou/models"` | Folder the speech models are downloaded into and loaded from. |
+| `asr.modelsDir` (window or file) | `"~/Library/Application Support/akou/models"` | Folder the speech models are downloaded into and loaded from. Set it in the akou window or the config file, never over the API: akou runs the speech programs kept in it. |
 | `asr.threads` | `2` | Threads per recognizer. |
 | `asr.diarizer` | `"nemotron"` | Who speaks when on the call channel: `nemotron` (NVIDIA Nemotron 3 Diarization, live at 2 s latency and in the final pass, through the akou-diarize helper) or `embeddings` (voice-embedding clusters live, pyannote in the final pass). `akou models pull` fetches what the choice needs; takes effect at the next start. |
 | `asr.accelerator` | `"auto"` | The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. Natively `sycl` and `rocm` download llama.cpp's SYCL or ROCm build, which needs Intel's oneAPI or AMD's ROCm runtime on the host. `asr.llamaServer` runs an own build instead. Applies to the next job that starts llama-server. |
