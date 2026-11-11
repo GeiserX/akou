@@ -221,8 +221,9 @@ export function taskOf(form: Form): JobTask {
  * one. The caller deletes the files it does not keep with `form.discard`.
  */
 export async function formOf(c: RouteContext<ApiApp>, dir: string): Promise<Form> {
-  // An upload can take a while to arrive: no idle cut while it does.
-  c.timeout?.(0);
+  // The idle cut stays on while the body arrives: every chunk resets it, so a slow upload that
+  // keeps sending is never cut, and one that stops holds no socket or spool file. Each caller
+  // lifts it after the body, before its own long wait.
   return readMultipart(c.req.body, c.req.headers.get("content-type"), dir);
 }
 
