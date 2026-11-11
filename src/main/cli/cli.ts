@@ -293,5 +293,10 @@ if (import.meta.main) {
     stdinIsTTY: process.stdin.isTTY === true,
     keys: process.stdin.isTTY ? stdinKeys() : undefined,
   });
+  // A pipe holds about 64 KiB, and `process.exit` drops whatever is still queued for a slow reader
+  // (`akou show | (sleep 1; jq)`). Bun calls an empty write back at once, so only `end` waits until
+  // everything before it is written (TRAPS akou-3vx.1).
+  const drained = (s: NodeJS.WriteStream) => new Promise<void>((r) => s.end(() => r()));
+  await Promise.all([drained(process.stdout), drained(process.stderr)]);
   process.exit(code);
 }
