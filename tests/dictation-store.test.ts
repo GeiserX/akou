@@ -271,11 +271,12 @@ describe("a write the disk cuts short", () => {
     const d = dir();
     const log = new DictationLog(d);
     for (const id of ["da", "db", "dc"]) dictate(log, id, `words of ${id}`);
-    const before = readFileSync(log.path, "utf8");
     log.write = fullDisk(300, 1_000_000, true);
     log.forget(["da"]);
-    expect(readFileSync(log.path, "utf8").length).toBeLessThan(before.length);
     log.close();
+    // The rename put a cut file over the log: db and dc are gone with da.
+    expect(readFileSync(log.path, "utf8")).not.toContain("words of dc");
+    expect(new DictationLog(d).items().map((i) => i.id)).not.toContain("dc");
   });
 
   test("[T4.43] positive control: one write call keeps only what the disk took, and says nothing", () => {
