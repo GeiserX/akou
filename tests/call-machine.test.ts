@@ -1257,7 +1257,10 @@ describe("crash recovery at the next start", () => {
     const calls = s.mgr.calls();
     expect(calls.find((x) => x.dir === crashed)?.state).toBe("crashed");
     for (const [i, dir] of ended.entries()) {
-      expect(calls.find((x) => x.dir === dir)).toMatchObject({ state: "ended", title: `Ended ${i}` });
+      expect(calls.find((x) => x.dir === dir)).toMatchObject({
+        state: "ended",
+        title: `Ended ${i}`,
+      });
     }
   });
 });
