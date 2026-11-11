@@ -4439,7 +4439,10 @@ export class AkouApp implements ApiApp {
     this.appLog.line(
       "info",
       `akou ${this.version} started (pid ${process.pid}, ${this.runMode}, ${this.headless ? "headless" : "with the window"}, API on port ${this.server?.port})`,
-    );    this.watchdog = startWatchdog({
+    );
+    // What the plain entry prints to stderr: the desktop app's stderr is read by nobody, and a
+    // config.json refused whole puts every setting back to its default with no other trace.
+    for (const i of this.cfg.issues) this.appLog.line("warn", `setting refused: ${i.message}`);    this.watchdog = startWatchdog({
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
       // A start counts from before its helper is spawned, so a stall in between never reads as
