@@ -173,6 +173,7 @@ import {
   buildSettings,
   HOOK_STAGES,
   type HookStage,
+  isSettingKey,
   type LoadedConfig,
   loadConfig,
   SETTING_KEYS,
@@ -2137,7 +2138,20 @@ export class AkouApp implements ApiApp {
     // The keys the API cannot write are the file's: what is on disk now wins over this process's
     // copy, so a save never drops a value written since the start (`akou admin set-password`).
     // `keep` names the window-only keys the desktop window set in this request.
-    const onDisk = loadConfig(env, this.o.platform).file;
+    const loaded = loadConfig(env, this.o.platform);
+    // A file that does not parse reads as no settings at all: writing over it would replace every
+    // hand-written value with the few keys this save knows. Refuse, and leave the file to be fixed.
+    const unreadable = loaded.issues.find((i) => i.key === "*");
+    if (unreadable) {
+      const why = unreadable.message.replace(/; using the defaults$/, "");
+      throw new HttpError(
+        409,
+        "config_file_invalid",
+        `${this.cfg.paths.configFile}: ${why}; fix it or remove it, then save again`,
+      );
+    }
+    const onDisk = loaded.file;
+    const unknown = unknownKeys(this.cfg.paths.configFile);
     const next: Partial<Record<SettingKey, SettingValue>> = { ...file };
     for (const k of SETTING_KEYS) {
       if ((SETTINGS[k] as SettingSpec).apiWritable !== false || o.keep?.includes(k)) continue;
@@ -2167,7 +2181,7 @@ export class AkouApp implements ApiApp {
       }
     }
     await this.storeSecrets(next);
-    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
+    writePrivate(this.cfg.paths.configFile, `${JSON.stringify({ ...unknown, ...next }, null, 2)}\n`);
     this.cfg = this.withSecrets(loadConfig(env, this.o.platform));
     const after = this.cfg.settings;
     const same = (k: "vocab.extraFiles" | "vocab.languages") =>
@@ -4425,8 +4439,7 @@ export class AkouApp implements ApiApp {
     this.appLog.line(
       "info",
       `akou ${this.version} started (pid ${process.pid}, ${this.runMode}, ${this.headless ? "headless" : "with the window"}, API on port ${this.server?.port})`,
-    );
-    this.watchdog = startWatchdog({
+    );    this.watchdog = startWatchdog({
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
       // A start counts from before its helper is spawned, so a stall in between never reads as
@@ -4577,6 +4590,21 @@ function releaseLock(path: string): void {
   try {
     unlinkSync(path);
   } catch {}
+}
+
+/**
+ * The keys of `config.json` this version does not know, as written: a newer akou's, kept by a save
+ * so a downgrade or a CLI and app on two versions never delete them. Empty when the file is not
+ * there or not an object.
+ */
+function unknownKeys(file: string): Record<string, unknown> {
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter(([k]) => !isSettingKey(k)));
+  } catch {
+    return {};
+  }
 }
 
 function readRuntime(configDir: string): { port?: number; version?: string } | null {

@@ -96,7 +96,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: OPEN_BODY,
       ok: 200,
-      errors: { 400: ["bad_setting"], 500: ["keychain"] },
+      errors: { 400: ["bad_setting"], 409: ["config_file_invalid"], 500: ["keychain"] },
     },
     async (c) => {
       const body = await c.body<Record<string, unknown>>();
