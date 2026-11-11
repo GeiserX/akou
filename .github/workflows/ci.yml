@@ -1540,20 +1540,14 @@ jobs:
       - name: four containers transcribe in the image (SV-P6)
         run: docker run --rm -v "$MODELS:/models" -v "$PWD/scripts:/app/scripts:ro" --entrypoint bun akou:ci scripts/server-smoke.ts /models
       # The round trip needs the job routes (SV-J1), the keys (SV-K2), the event feed (SV-E1) and the
-      # webhook (SV-E2). The server says which it has in /v1/server, from its own route table, so a
-      # renamed file cannot turn the step off; a skip is a warning on the run, never silent.
-      - name: what the server can do
-        id: caps
+      # webhook (SV-E2); the steps after it need Wyoming and Bazarr, which this container turns on.
+      # The server says which it has in /v1/server, from its own route table. A missing one fails the
+      # leg: a skipped round trip is not a pass (TESTING.md section 0).
+      - name: the server can do everything this leg tests
         run: |
-          if jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks' server.json; then
-            echo "roundtrip=true" >> "$GITHUB_OUTPUT"
-          else
-            msg="the job round trip did not run: /v1/server says $(jq -c .capabilities server.json)"
-            echo "::warning::$msg"
-            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          jq -c .capabilities server.json
+          jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks and .capabilities.wyoming and .capabilities.bazarr' server.json
       - name: job round trip by long-poll, event feed and signed webhook
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           work=$(mktemp -d)
@@ -1580,7 +1574,6 @@ jobs:
       # clip is 24 kHz; Home Assistant always sends 16000 Hz, 16-bit, mono, so the step resamples it
       # first with the image's ffmpeg, and the probe refuses any other format.
       - name: Wyoming round trip with the wyoming package (SV-T4)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           jq -e '.capabilities.wyoming == true and .wyoming_port == 10300' server.json
@@ -1602,7 +1595,6 @@ jobs:
       # the transcript from the signed callback; a tampered delivery must be refused. The script
       # prints every service's log when it fails.
       - name: akou beside Telegram-Archive from the compose example (SV-T6)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           docker rm -f akou
           docker tag akou:ci drumsergio/akou:ci
@@ -1611,7 +1603,6 @@ jobs:
       # `audio_file` part, `Subliminal/2.1`, no key, `encode=false`, and an SRT back. The server
       # above went with the compose step, so this one starts its own with AKOU_BAZARR on.
       - name: Bazarr-shaped /asr against the image (SV-C3)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           data=$(mktemp -d)
