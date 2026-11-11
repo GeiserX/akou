@@ -640,6 +640,50 @@ describe("restart", () => {
     expect(await s.mgr.restart(a.call)).toMatchObject({ ok: true, part: 7 });
   });
 
+  test("[LG-3] a resume clicked while the interrupt still flushes starts after its call.ended", async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let flushing = false;
+    const s = setup(
+      {},
+      {
+        beforeEnd: () => {
+          flushing = true;
+          return held;
+        },
+      },
+    );
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    for (let i = 0; i < 5; i++) {
+      s.engine.last.exit(70);
+      await c?.idle();
+      await s.clock.advance(1_000);
+    }
+    // The sixth crash interrupts the call; its flush is held, so call.ended is not written yet.
+    s.engine.last.exit(70);
+    await until(() => flushing, 2_000, "the interrupt's flush");
+    expect(c?.status).toBe("interrupted");
+    expect(ofType(s.events, "call.ended")).toEqual([]);
+    const restart = s.mgr.restart(a.call);
+    await flush();
+    release();
+    expect(await restart).toMatchObject({ ok: true, part: 7 });
+    await c?.idle();
+    const ended = ofType(s.events, "call.ended");
+    expect(ended).toMatchObject([{ reason: "interrupted" }]);
+    const lastStart = ofType(s.events, "part.started").at(-1);
+    expect(lastStart?.part).toBe(7);
+    expect((lastStart?.seq ?? 0) > (ended[0]?.seq ?? 0)).toBe(true);
+    // The resumed call still writes and stops cleanly.
+    expect(c?.status).toBe("recording");
+    expect((await s.mgr.stop(a.call)).ok).toBe(true);
+    expect(types(s.events).slice(-2)).toEqual(["part.ended", "call.ended"]);
+  });
+
   test("positive control: the same crashes spread over more than ten minutes never interrupt", async () => {
     const s = setup();
     const a = await started(s);

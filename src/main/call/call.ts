@@ -163,6 +163,8 @@ export class CallController {
   private readonly autoRestarts: number[] = [];
   private restarting = false;
   private stopping: Promise<Outcome> | null = null;
+  /** An interrupt still flushing before its `call.ended`; a restart waits for it. */
+  private interrupting: Promise<void> | null = null;
   private watchdog: unknown = null;
   private readonly background = new Set<Promise<unknown>>();
 
@@ -666,6 +668,9 @@ export class CallController {
 
   /** A new part in the same call. Make before break: the old helper stops after the new captures. */
   async restart(opts: { force?: boolean } = {}): Promise<Outcome<{ part: number }>> {
+    // The call shows `interrupted` while its interrupt still flushes and writes `call.ended`: a
+    // resume clicked then starts after that end, never before it in the log.
+    if (this.interrupting) await this.interrupting.catch(() => {});
     if (this.status === "recording" || this.status === "paused") return this.restartLive();
     if (this.status === "ended" || this.status === "interrupted" || this.status === "failed") {
       const age = this.deps.clock.now() - this.lastAudioAt();
@@ -786,9 +791,16 @@ export class CallController {
   }
 
   /** Too many automatic restarts: stop capturing, keep the call resumable. */
-  private async interrupt(): Promise<void> {
-    if (this.status !== "recording" && this.status !== "paused") return;
+  private interrupt(): Promise<void> {
+    if (this.status !== "recording" && this.status !== "paused") return Promise.resolve();
     this.setStatus("interrupted");
+    this.interrupting = this.endInterrupted().finally(() => {
+      this.interrupting = null;
+    });
+    return this.interrupting;
+  }
+
+  private async endInterrupted(): Promise<void> {
     this.disarmWatchdog();
     const launching = this.launching;
     if (launching) this.cancelLaunch(launching);
