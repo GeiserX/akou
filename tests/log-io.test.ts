@@ -600,7 +600,7 @@ describe("[A follower re-reads the whole log per event] LogFollower", () => {
     let appended = 0;
     let wholeReads = 0;
     for (let i = 0; i < 200; i++) {
-      const e = w.append(segDraft(`m${String(i).padStart(6, "0")}`));
+      const e = w.append(segDraft(`lm${String(i).padStart(6, "0")}`));
       appended += Buffer.byteLength(`${JSON.stringify(e)}\n`);
       // What the long poll does when a `types` filter drops this event: read, then read again.
       expect(await f.after(cursor)).toEqual([e]);
@@ -659,13 +659,13 @@ describe("[A follower re-reads the whole log per event] LogFollower", () => {
     const other = callDir();
     const w2 = LogWriter.open(other);
     w2.append(created);
-    w2.append(segDraft("x000001", "first"));
+    w2.append(segDraft("lx00001", "first"));
     w2.close();
     writeFileSync(path, readFileSync(join(other, EVENTS_FILE)));
     expect(await f.after(11)).toEqual(await readAfter(path, 11));
     expect(await f.after(1)).toEqual(await readAfter(path, 1));
     const w3 = LogWriter.open(other);
-    for (let i = 0; i < 20; i++) w3.append(segDraft(`y${String(i).padStart(6, "0")}`));
+    for (let i = 0; i < 20; i++) w3.append(segDraft(`ly${String(i).padStart(6, "0")}`));
     w3.close();
     const tmp = `${path}.new`;
     writeFileSync(tmp, readFileSync(join(other, EVENTS_FILE)));
