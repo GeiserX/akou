@@ -215,7 +215,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect((await readLog(join(dir, EVENTS_FILE))).seqErrors).toEqual([]);
   });
 
-  test("[Two writers]: a second writer on the same folder refuses (.akou.lock)", () => {
+  test("[T4.40] Two writers: a second writer on the same folder refuses (.akou.lock)", () => {
     const dir = callDir();
     const first = open(dir);
     first.append(created);
@@ -234,7 +234,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(second.lastSeq).toBe(2);
   });
 
-  test("[Two writers]: the lock holds the writer's pid", () => {
+  test("[T4.40] Two writers: the lock holds the writer's pid", () => {
     const dir = callDir();
     open(dir, { pid: 4242, isAlive: () => true });
     // The pid, then the id of the process start (SI-4).
@@ -252,7 +252,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
   });
 
-  test("[Two writers]: two writers taking over the same stale lock at once cannot both win", () => {
+  test("[T4.40] Two writers: two writers taking over the same stale lock at once cannot both win", () => {
     const dir = callDir();
     const stale = 999_001;
     writeFileSync(join(dir, LOCK_FILE), `${stale}\n`);
@@ -274,7 +274,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(readdirSync(dir).sort()).toEqual([LOCK_FILE, EVENTS_FILE].sort());
   });
 
-  test("[Two writers]: a writer whose stale lock was taken over does not remove the new holder's lock", () => {
+  test("[T4.40] Two writers: a writer whose stale lock was taken over does not remove the new holder's lock", () => {
     const dir = callDir();
     const a = LogWriter.open(dir, { pid: 1001, isAlive: () => true });
     // B judges 1001 dead and takes the lock over.

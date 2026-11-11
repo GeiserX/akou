@@ -299,7 +299,7 @@ describe("the bearer token", () => {
   });
 
   test.skipIf(process.platform === "win32")(
-    "[Token file readable by others] the token file is mode 0600, 32 random bytes (POSIX file modes; skipped on Windows)",
+    "[T4.41] Token file readable by others: the token file is mode 0600, 32 random bytes (POSIX file modes; skipped on Windows)",
     () => {
       const path = guarded.app.tokenPath;
       expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -346,7 +346,7 @@ describe("the bearer token", () => {
   );
 
   test.skipIf(process.platform === "win32")(
-    "[Token file readable by others] a live token whose file goes loose is burned at once (POSIX file modes; skipped on Windows)",
+    "[T4.41] Token file readable by others: a live token whose file goes loose is burned at once (POSIX file modes; skipped on Windows)",
     async () => {
       const path = guarded.app.tokenPath;
       const old = guarded.token;
@@ -373,7 +373,7 @@ describe("the bearer token", () => {
 describe("the token file on Windows (an ACL for the current user only)", () => {
   const ME = "S-1-5-21-1111-2222-3333-1001";
 
-  test("[Token file readable by others] an ACL is private only when nobody but the user is allowed", () => {
+  test("[T4.41] Token file readable by others: an ACL is private only when nobody but the user is allowed", () => {
     // SYSTEM and the administrators can read any file anyway: an entry for them lets nobody in.
     expect(othersAllowed(`D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;${ME})`, ME)).toBe(false);
     // What a file on a data drive inherits: every signed-in user can read it.
@@ -415,7 +415,7 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
     "2900280041003b003b00460041003b003b003b00420041002900280041003b003b00460041003b003b003b004c00" +
     "410029000d000a00";
 
-  test("[Token file readable by others] the runner's real ACL: the RID 500 user is `LA`, and private", () => {
+  test("[T4.41] Token file readable by others: the runner's real ACL: the RID 500 user is `LA`, and private", () => {
     const sddl = sddlOf(Buffer.from(RUNNER_SAVE, "hex"));
     expect(sddl).toBe("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)");
     expect(othersAllowed(sddl as string, RUNNER)).toBe(false);
@@ -430,7 +430,7 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
   });
 
   test.skipIf(process.platform !== "win32")(
-    "[Token file readable by others] a token whose ACL cannot be set is never written (Windows ACLs; Windows only)",
+    "[T4.41] Token file readable by others: a token whose ACL cannot be set is never written (Windows ACLs; Windows only)",
     () => {
       const t = tempDir();
       const first = ensureToken(t.dir);
@@ -449,7 +449,7 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
   );
 
   test.skipIf(process.platform !== "win32")(
-    "[Token file readable by others] the token is the user's alone; one others can read is replaced (Windows ACLs; Windows only)",
+    "[T4.41] Token file readable by others: the token is the user's alone; one others can read is replaced (Windows ACLs; Windows only)",
     () => {
       const t = tempDir();
       const first = ensureToken(t.dir);

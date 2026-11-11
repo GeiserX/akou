@@ -124,6 +124,34 @@ describe("[TS-6] every reached trap has a test that ran and asserted", () => {
     expect(full.length).toBeGreaterThan(40);
   });
 
+  test("[T4.43] every entry before the kept invariants is a trap the check reads", () => {
+    const md = readFileSync(join(ROOT, "docs", "TRAPS.md"), "utf8");
+    const head = md.slice(0, md.indexOf("\n## Kept from closed traps"));
+    const entries = head.split("\n").filter((l) => l.startsWith("- **"));
+    expect(traps.length).toBe(entries.length);
+    // Every reached trap carries an id today; a new entry without one fails below.
+    expect(traps.filter((t) => t.ids.length === 0)).toEqual([]);
+  });
+
+  test("[T4.43] positive control: a reached entry with no id fails instead of vanishing", () => {
+    const [bare] = trapsOf("# Traps\n\n- **New trap** (M1). Given x, y. Test: x.\n");
+    expect(bare).toEqual({
+      title: "New trap",
+      ids: [],
+      milestone: "M1",
+      text: "Given x, y. Test: x.",
+    });
+    const { lines, failed } = report(judge([bare as Trap], []));
+    expect(failed).toBe(1);
+    expect(lines).toEqual([
+      "FAIL    [] New trap: TRAPS.md gives it no [id] a test can be named after",
+    ]);
+    // A marker does not excuse a missing id, but a milestone not reached yet still lists it.
+    const marked = { ...(bare as Trap), text: "Test (not written yet): x." };
+    expect(judge([marked], [])[0]?.status).toBe("missing");
+    expect(judge([{ ...(bare as Trap), milestone: "M4" }], [])[0]?.status).toBe("listed");
+  });
+
   test("ids are read from every bracket of a test's name and describe", () => {
     expect([...idsIn("[T1.9, T4.19] Short spans > [F2.50] torn")]).toEqual([
       "T1.9",
