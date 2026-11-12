@@ -4504,7 +4504,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does.",
+        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. `unmatched` names the terms that were neither waiting there nor already confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does.",
         "requestBody": {
           "required": true,
           "content": {

@@ -652,6 +652,28 @@ describe("the vocabulary files", () => {
     expect([del.status, del.body.error]).toEqual([409, "vocab_file_invalid"]);
     expect(readFileSync(path, "utf8")).toBe(text);
   });
+
+  test("[VOC-A1] an approval names the words it did not find, never a bare ok", async () => {
+    await rig.api("POST", "/vocab", { term: "Kasmweb", workspace: "voca1", confirmed: false });
+    // Without the workspace it was proposed into, the global file has no such word waiting.
+    const miss = await rig.api("POST", "/vocab/approve", { terms: ["Kasmweb"] });
+    expect([miss.status, miss.body.approved, miss.body.unmatched]).toEqual([200, [], ["Kasmweb"]]);
+    // A misspelt word next to a found one: the found one is approved, the other named.
+    const some = await rig.api("POST", "/vocab/approve", {
+      terms: ["Kasmweb", "Kasmwbe"],
+      workspace: "voca1",
+    });
+    expect([some.body.approved, some.body.unmatched]).toEqual([["Kasmweb"], ["Kasmwbe"]]);
+    // The control: a word already confirmed there is found, so nothing is unmatched.
+    const again = await rig.api("POST", "/vocab/approve", {
+      terms: ["Kasmweb"],
+      workspace: "voca1",
+    });
+    expect([again.body.approved, again.body.unmatched]).toEqual([[], []]);
+    // A reject records the word even when nothing was waiting, so it reports no miss.
+    const rej = await rig.api("POST", "/vocab/reject", { terms: ["Nowhere"], workspace: "voca1" });
+    expect([rej.status, rej.body.rejected, rej.body.unmatched]).toEqual([200, [], undefined]);
+  });
 });
 
 describe("settings over the API", () => {
