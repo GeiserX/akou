@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { APP_IDENTITY, type Identity } from "../src/main/api/access.ts";
-import type { Mode } from "../src/main/api/http.ts";
+import { errorResponse, HttpError, type Mode } from "../src/main/api/http.ts";
 import { type ApiApp, buildRouter } from "../src/main/api/server.ts";
 import {
   buildSettings,
@@ -21,6 +21,16 @@ import {
 
 /** An admin `ak_` key: what the network listener and server mode's keys resolve to. */
 const ADMIN_KEY: Identity = { id: "k_admin", name: "laptop", scopes: ["admin"], callbackHosts: [] };
+
+/** A handler's answer, with a thrown refusal turned into its response as the server does. */
+async function answer(run: () => Promise<Response> | Response): Promise<Response> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof HttpError) return errorResponse(err);
+    throw err;
+  }
+}
 
 interface Caller {
   identity?: Identity | null;
@@ -46,15 +56,17 @@ async function patch(who: Caller, body: Record<string, unknown>, start = {}) {
   const m = router.match("PATCH", "/config");
   if ("status" in m) throw new Error("no config route");
   const req = new Request(url.href, { method: "PATCH", body: JSON.stringify(body) });
-  const res = await m.handler({
-    req,
-    url,
-    params: m.params,
-    app,
-    by: "agent:test",
-    identity: who.identity,
-    browser: who.browser,
-  });
+  const res = await answer(() =>
+    m.handler({
+      req,
+      url,
+      params: m.params,
+      app,
+      by: "agent:test",
+      identity: who.identity,
+      browser: who.browser,
+    }),
+  );
   return { status: res.status, body: (await res.json()) as Record<string, unknown>, file };
 }
 
@@ -73,15 +85,17 @@ async function exportTo(who: Caller, body: Record<string, unknown>) {
   const m = buildRouter("app").match("POST", "/calls/c1/export");
   if ("status" in m) throw new Error("no export route");
   const req = new Request(url.href, { method: "POST", body: JSON.stringify(body) });
-  const res = await m.handler({
-    req,
-    url,
-    params: m.params,
-    app,
-    by: "agent:test",
-    identity: who.identity,
-    browser: who.browser,
-  });
+  const res = await answer(() =>
+    m.handler({
+      req,
+      url,
+      params: m.params,
+      app,
+      by: "agent:test",
+      identity: who.identity,
+      browser: who.browser,
+    }),
+  );
   return { status: res.status, body: (await res.json()) as Record<string, unknown>, asked };
 }
 
