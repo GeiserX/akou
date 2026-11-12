@@ -49,6 +49,7 @@
 import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { workerData } from "node:worker_threads";
+import { type EchoLine, isEcho } from "../../core/log/echo.ts";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import { type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
@@ -717,6 +718,11 @@ export async function runFinalPass(
     };
     const closePart = (p: number, lines: Line[]) => {
       lines.sort((a, b) => (a.w0 as number) - (b.w0 as number) || (a.ch === "mic" ? -1 : 1));
+      // Echo (DESIGN 3.1 step 7), by the live path's rule: a mic line that repeats a call line.
+      const calls = lines.filter((l) => l.ch === "call") as EchoLine[];
+      for (const l of lines) {
+        if (l.ch === "mic" && calls.some((c) => isEcho(l as EchoLine, c))) l.echo = true;
+      }
       for (const l of lines) {
         layer.push({ ...l, id: `f${String(nextFinal).padStart(6, "0")}` } as EventDraft);
         nextFinal++;

@@ -67,7 +67,7 @@ The suites that exist, one line each, so a reader knows where a new test goes.
 
 - **Log and fold** (`events`, `log-io`, `fold`, `clock`): append-only writes, torn last lines, the one sort order, revisions win, wall-clock rendering. The fold is the only reader of raw events, so its tests cover every view.
 - **Call machine** (`call-machine`, `capture-*`): start answers 201 only once audio is written, bounded teardown, restarts in the same folder, crash reconciliation, health verdicts.
-- **Speech** (`asr-live`, `asr-final`, `asr-speakers`, `asr-models`, `first-run`): padding of short spans, the whole-timeline rule of the final pass, echo marking, cluster naming, checksummed resumable downloads.
+- **Speech** (`asr-live`, `asr-final`, `echo`, `asr-speakers`, `asr-models`, `first-run`): padding of short spans, the whole-timeline rule of the final pass, echo marking (the rule's bounds in `echo`, its writers on the live path and in the final pass), cluster naming, checksummed resumable downloads.
 - **Query** (`query`, `query-traps`, `bench-pack`, `eval/replay`): packs stay inside the budget, recency and BM25 find the answer, citations are wall-clock, pack p95 under 50 ms on a synthetic 3-hour call.
 - **Notes and providers** (`notes`, `memo`, `reenhance`, `llm-harness`, `llm-http`, `session-reuse`): citations are checked, the harness is spawned with no tools, usage-limit exits fall back to excerpts, sessions are reused.
 - **Vocabulary** (`vocab-*`, `bpe-vocab`): decode lists, read-time correction with raw text kept, approval before anything is learned.

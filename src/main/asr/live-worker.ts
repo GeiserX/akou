@@ -61,6 +61,7 @@
  */
 
 import { workerData } from "node:worker_threads";
+import { isEcho } from "../../core/log/echo.ts";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { CHANNELS, type Clock, realClock, withDeadline } from "../capture/engine.ts";
@@ -1882,7 +1883,12 @@ interface HostCall {
   live?: LiveChoice | null;
   /** The call's second pass, asked once with the engine; null for none. */
   upgrade?: HostUpgrade | null;
+  /** The ids of the lines written in the last `ECHO_RECENT_MS`, for the echo check. */
+  recent: string[];
 }
+
+/** How far back a written line is kept to be compared with the other channel's next lines. */
+const ECHO_RECENT_MS = 10_000;
 
 /** Worker answers that end a use of the models (`LiveAsr.releaseIdle`). */
 const USE_ENDS: ReadonlySet<FromWorker["type"]> = new Set([
@@ -2430,6 +2436,7 @@ export class LiveAsr {
       parts: new Map(),
       lagLevel: 0,
       superseded: false,
+      recent: [],
     };
     this.calls.set(callId, c);
     this.current = c;
@@ -2718,6 +2725,30 @@ export class LiveAsr {
     c.access.view.provisional.commit(m.ch, w1);
     if (c.upgrade && m.key !== undefined) c.upgrade.keys.set(m.key, id);
     if (m.held && m.key !== undefined) c.held.set(m.key, id);
+    this.markEcho(c, id);
+  }
+
+  /**
+   * Echo (DESIGN 3.1 step 7): a mic line that repeats a call line (`isEcho`) gets a revision
+   * carrying `echo: true` alone. Checked whichever channel just wrote, since a call line can close
+   * after the mic line that heard it. Never writes `echo: false`, and leaves a line a person
+   * touched as it is.
+   */
+  private markEcho(c: HostCall, id: string): void {
+    const view = c.access.view;
+    const s = view.segment(id);
+    if (!s) return;
+    c.recent = c.recent.filter((r) => (view.segment(r)?.w1 ?? 0) >= s.w0 - ECHO_RECENT_MS);
+    for (const other of c.recent) {
+      const o = view.segment(other);
+      if (!o || o.ch === s.ch) continue;
+      const mic = s.ch === "mic" ? s : o;
+      const call = s.ch === "mic" ? o : s;
+      if (mic.echo || mic.revisions.some((r) => r.by !== undefined)) continue;
+      if (!isEcho(mic, call)) continue;
+      c.access.record({ type: "seg", id: mic.id, rev: mic.rev + 1, echo: true });
+    }
+    c.recent.push(id);
   }
 
   /**
