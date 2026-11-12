@@ -837,6 +837,16 @@ jobs:
           $h.Send('{"type":"insert","id":"t1","text":"typed \u00e9 \ud83d\ude00","method":"type","send_key":"none","target":' + $tj + '}')
           if (-not $h.Wait('"id":"t1"', 15000)) { throw ('no answer to the typing: ' + $h.Stop()) }
           [Probe]::Pump(500)
+          # DC-L2: the user moves to another window of the same process while a paste is watched.
+          # That window has the keyboard, so its field must not be read: the watch ends unreadable.
+          $h.Send('{"type":"insert","id":"p2","text":" second paste","method":"paste","send_key":"none","read_field":true,"target":' + $tj + '}')
+          if (-not $h.Wait('"type":"inserted","id":"p2"', 15000)) { throw ('no answer to the second paste: ' + $h.Stop()) }
+          # The snapshot was read in the target, so the watch is live before the user moves.
+          if ($h.Wait('"id":"p2","reason"', 500)) { throw ('the second paste was never watched: ' + $h.Stop()) }
+          $other = New-Object 'Probe+Target'
+          [Probe]::Raise($other.Hwnd)
+          "in front after the move: $([Probe]::Front()), other: $($other.Hwnd.ToInt64())"
+          if (-not $h.Wait('"id":"p2","reason"', 5000)) { throw ('the watch did not end when the window changed: ' + $h.Stop()) }
           "in front after the inserts: $([Probe]::Front())"
           $log = $h.Stop()
           $log
@@ -848,7 +858,8 @@ jobs:
           Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
           Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
           Check ($log -match '"type":"edit","id":"p1","hunks":\[\{"inserted":"akou","now":"Akou","at":2\}\]') 'the read-back did not carry exactly the fixed word'
-          $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
+          Check ($log -match '"type":"edit.unreadable","id":"p2","reason":"unreadable"') 'the read-back read the window the user moved to'
+          $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600) + ' second paste'
           Check ($field -ceq $want) 'the box holds the wrong text'
           Check ($clip.TrimEnd() -eq 'copied before akou') "the clipboard was not restored: $clip"
 

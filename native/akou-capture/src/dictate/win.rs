@@ -91,7 +91,7 @@ use super::insert::{Inserter, Os, Targets};
 use super::live::{self, Device, Msg, Stdio};
 use super::media::{Players, Worker};
 use super::protocol::{self as p, Target};
-use super::readback::{Field, char_index};
+use super::readback::{Field, char_index, on_target};
 use super::session::{Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use super::win_insert::{self, Clip, Keys};
@@ -716,7 +716,15 @@ impl Targets for Screen {
         }
     }
 
-    fn read_field(&mut self, _t: &Target) -> Field {
+    fn read_field(&mut self, t: &Target) -> Field {
+        // The focused element is the whole desktop's: after the user moved to another window it
+        // is that window's field, never the target's (DC-L2).
+        let Some((hwnd, pid)) = foreground() else {
+            return Field::Unreadable;
+        };
+        if !on_target(t, i64::from(pid), &(hwnd.0 as usize).to_string()) {
+            return Field::Unreadable;
+        }
         let Some(el) = self.focused() else {
             return Field::Unreadable;
         };
