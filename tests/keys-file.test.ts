@@ -4,11 +4,21 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writePrivateFile } from "../src/main/api/guard.ts";
 import { KeyError, KeyStore } from "../src/main/api/keys.ts";
+import { runCli } from "../src/main/cli/cli.ts";
+import { EXIT } from "../src/main/cli/client.ts";
 
 const dirs: string[] = [];
 function dir(): string {
@@ -43,6 +53,23 @@ describe("[SV-K2] A key edit over a keys file that does not read", () => {
       expect(readFileSync(join(d, "keys.json"), "utf8")).toBe(text);
     });
   }
+
+  test("[SV-K2] `akou keys revoke` over a broken file answers bad_key and leaves it byte for byte", async () => {
+    const home = dir();
+    const configDir = join(home, ".config", "akou");
+    mkdirSync(configDir, { recursive: true });
+    const text = '{"version": 1, "keys": [],}\n';
+    writeFileSync(join(configDir, "keys.json"), text);
+    const out: string[] = [];
+    const code = await runCli(
+      ["keys", "revoke", "key_00000000", "--json"],
+      { env: { ...process.env, AKOU_HOME: home }, out: (s) => out.push(s), err: () => {} },
+      { launch: null },
+    );
+    expect(JSON.parse(out.join("")).error).toBe("bad_key");
+    expect(code).toBe(EXIT.usage);
+    expect(readFileSync(join(configDir, "keys.json"), "utf8")).toBe(text);
+  });
 
   test("[SV-K2] positive control: a valid file keeps its key when another is made", () => {
     const d = dir();

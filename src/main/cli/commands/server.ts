@@ -128,7 +128,14 @@ const keys: Command = {
     }
     if (sub === "revoke") {
       if (!id || rest.length > 0) return usage(ctx, "keys revoke needs one key id");
-      if (!store(ctx).revoke(id)) {
+      let gone: boolean;
+      try {
+        gone = store(ctx).revoke(id);
+      } catch (err) {
+        if (err instanceof KeyError) return refused(ctx, "bad_key", err.message, EXIT.usage);
+        throw err;
+      }
+      if (!gone) {
         return refused(ctx, "not_found", `no key ${id}; \`akou keys list\` shows them`, EXIT.usage);
       }
       if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, revoked: id }));
