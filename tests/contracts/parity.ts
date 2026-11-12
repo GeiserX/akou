@@ -371,7 +371,7 @@ export const PARITY: readonly Row[] = [
     cli: ["calls"],
     api: ["GET /trash", "DELETE /trash"],
     mcp: {
-      none: "deleting calls for good is the user's, with a confirmation; no agent tool deletes data that cannot come back",
+      none: "deleting calls for good is the user's, behind a confirmation; PG-M4 names no tool for it",
     },
     window: [app('"GET", "/trash"'), app('"DELETE", "/trash"')],
     note: "`akou calls empty-trash` asks on a terminal and needs `--yes` elsewhere; the window asks first, naming how many calls go (W13.3).",
