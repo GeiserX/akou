@@ -111,6 +111,19 @@ describe("[EXP-1] The export folder set by an API key", () => {
     expect(r.file).toEqual(DIR);
   });
 
+  test("an admin ak_ key's PATCH of recordings.root is 400 too: every later call is recorded there", async () => {
+    const ROOT = { "recordings.root": "/calls" };
+    const r = await patch({ identity: ADMIN_KEY }, { "recordings.root": "\\\\host.example\\drop" }, ROOT);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe("bad_setting");
+    expect(String(r.body.message)).toContain("recordings.root");
+    expect(r.file).toEqual(ROOT);
+    // Positive control: `akou config set recordings.root` (the app token on loopback) still sets it.
+    const cli = await patch({ identity: APP_IDENTITY }, { "recordings.root": "/notes" }, ROOT);
+    expect(cli.status).toBe(200);
+    expect(cli.file).toEqual({ "recordings.root": "/notes" });
+  });
+
   test("the app's own token in server mode is refused too", async () => {
     const r = await patch({ identity: APP_IDENTITY, mode: "server" }, SHARE, DIR);
     expect(r.status).toBe(400);
