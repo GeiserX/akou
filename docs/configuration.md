@@ -187,7 +187,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 
 | Key | Default | What it does |
 |---|---|---|
-| `export.dir` | `""` | Folder finished calls are exported into, one subfolder per workspace: Markdown with frontmatter, the event log and the audio. Empty: no export until you set it. |
+| `export.dir` | `""` | Folder finished calls are exported into, one subfolder per workspace: Markdown with frontmatter, the event log and the audio. Empty: no export until you set it. Set in the window, the file or with `akou config set` on this computer; an API key cannot set it, since it decides where your transcripts are written. |
 | `export.audio` | `"link"` | How the export carries the audio: a link to the call's file, a copy, or nothing. |
 
 ### hooks

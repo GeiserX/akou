@@ -4,7 +4,7 @@
  */
 
 import { APP_IDENTITY, callbackAllowed, type Identity } from "./access.ts";
-import { HttpError } from "./http.ts";
+import { HttpError, type Mode } from "./http.ts";
 
 /** `POST /v1/jobs` with a callback the key may not name: 422 `callback_not_allowed`. */
 export function requireCallbackAllowed(identity: Identity, url: string): void {
@@ -28,4 +28,20 @@ export function caller(c: { identity?: Identity | null }): Identity {
     throw new HttpError(401, "unauthorized", "a valid bearer token is required");
   }
   return c.identity;
+}
+
+/**
+ * Is the caller the user on this computer: the desktop window in process, or the app's own token,
+ * which the desktop app takes only on its loopback listener? Never an `ak_` key (the network
+ * listener takes nothing else), the window's page in a browser, or server mode. For what decides
+ * where transcripts are written: `export.dir` and the export's `to`.
+ */
+export function isLocalUser(c: {
+  identity?: Identity | null;
+  browser?: boolean;
+  app: { mode?(): Mode };
+}): boolean {
+  if ((c.app.mode?.() ?? "app") !== "app") return false;
+  if (c.identity === undefined) return c.browser !== true;
+  return c.identity === APP_IDENTITY;
 }

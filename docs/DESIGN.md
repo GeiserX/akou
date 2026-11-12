@@ -637,7 +637,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `GET /vocab` · `POST /vocab` · `DELETE /vocab/{term}` · `POST /vocab/{approve,reject,suggest,check,import}` | The vocabulary files |
 | `POST /calls/{id}/enhance` `{template}` · `GET …/enhance/context?template=` · `PUT …/enhanced` `{markdown, coversSeq}` | Enhancement, with or without a provider |
 | `GET /calls/{id}/audio/{part}` | Range requests |
-| `POST /calls/{id}/export` `{to?}` · `POST /calls/{id}/hooks` `{stage?}` · `POST /calls/{id}/finalize` | Hand-off, re-run. `to` is an absolute folder in place of `export.dir`; `409 export_not_configured` when neither is set, `409 not_ended` on a live call. `hooks` waits for the hooks and answers each run |
+| `POST /calls/{id}/export` `{to?}` · `POST /calls/{id}/hooks` `{stage?}` · `POST /calls/{id}/finalize` | Hand-off, re-run. `to` is an absolute folder in place of `export.dir`, taken like `export.dir` only from akou on this computer (the app's token on loopback, or the window), never from an `ak_` key or in server mode; `409 export_not_configured` when neither is set, `409 not_ended` on a live call. `hooks` waits for the hooks and answers each run |
 | `POST /import/hark-viewer` `{dirs[], workspace?}` | Imports predecessor call folders (absolute paths); `422 not_imported` with the reasons when none could be |
 | `POST /share` · `DELETE /share` · `GET /share` | Sharing |
 | `GET /templates` · `GET /templates/{name}` · `GET /config` · `PATCH /config` | Settings |
