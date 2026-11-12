@@ -1760,6 +1760,16 @@ export class JobService {
   }
 
   /**
+   * Marks a remote full after its 507 and says whether another remote may take the job: one is up
+   * and offers it, or would once it has room or is probed, as `routeOf` picks it.
+   */
+  private otherRemote(j: Job, url: string): boolean {
+    this.remotes.full(url);
+    const route = this.noEngine() !== null ? "remote" : j.route;
+    return this.remotes.pick(this.namesOf(j), route !== "remote") !== null;
+  }
+
+  /**
    * With no engine here (#436), ends every queued job that can never run: one stored to run here
    * (a dictation, or a job a primary forwarded), every job while no remote is set, and, once every
    * remote has been probed, one that could have run on that engine (route null) that no remote has
@@ -1887,6 +1897,8 @@ export class JobService {
           // The remote no longer offers it: asked again after its next probe.
           this.heldUntil.set(job.id, performance.now() + (this.o.remoteProbeMs ?? 30_000));
           void this.remotes.probeAll();
+        } else if (e.status === 507 && this.otherRemote(job, url)) {
+          // Its disk is full (DSK-F2): another remote that offers the job takes it.
         } else if (job.route === "remote" || this.noEngine()) {
           // With no engine here (#436) a refused job has nowhere else to run either.
           this.conclude(job, {

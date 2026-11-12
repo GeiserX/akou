@@ -4423,7 +4423,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Remove a word from the user's vocabulary file.",
+        "description": "Remove a word from the user's vocabulary file. `entry` is the entry removed, whole, which `POST /vocab/restore` puts back as it was.",
         "parameters": [
           {
             "name": "term",
@@ -4481,6 +4481,77 @@
           },
           "409": {
             "$ref": "#/components/responses/409.vocab_file_invalid"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/restore": {
+      "post": {
+        "operationId": "vocab.restore",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Put back an entry `DELETE /vocab/{term}` removed (the window's Undo), exactly as it was: its heard forms, scope, source, date, note and whether it is confirmed. A learned dictation pair is accepted again. Refused when the file holds the term again, so an Undo never overwrites a newer entry.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entry": {
+                    "type": "object"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "entry"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_entry.bad_field.bad_json.bad_workspace.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.term_exists.vocab_file_invalid"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -5223,6 +5294,9 @@
           },
           "503": {
             "$ref": "#/components/responses/503.models_missing"
+          },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -6940,6 +7014,9 @@
           "503": {
             "$ref": "#/components/responses/503.no_engine"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7901,6 +7978,9 @@
           "503": {
             "$ref": "#/components/responses/503.no_engine"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -8001,6 +8081,9 @@
           },
           "503": {
             "$ref": "#/components/responses/503.no_engine"
+          },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -8185,6 +8268,9 @@
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -8306,6 +8392,9 @@
           },
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -8440,6 +8529,34 @@
                         "bad_field",
                         "bad_json",
                         "bad_term",
+                        "bad_workspace",
+                        "missing_field",
+                        "unknown_field"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "400.bad_entry.bad_field.bad_json.bad_workspace.missing_field.unknown_field": {
+        "description": "Bad request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_entry",
+                        "bad_field",
+                        "bad_json",
                         "bad_workspace",
                         "missing_field",
                         "unknown_field"
@@ -10243,6 +10360,30 @@
           }
         }
       },
+      "409.term_exists.vocab_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "term_exists",
+                        "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.vocab_file_invalid": {
         "description": "Conflict",
         "content": {
@@ -11028,6 +11169,29 @@
             }
           }
         }
+      },
+      "507.insufficient_storage": {
+        "description": "Insufficient storage",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "insufficient_storage"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -11227,6 +11391,10 @@
           {
             "const": "idempotency_conflict",
             "description": "The Idempotency-Key was used with another file or other options."
+          },
+          {
+            "const": "insufficient_storage",
+            "description": "The server's disk is under the free space it keeps, so it takes no upload now; retrying does not help until space is freed."
           },
           {
             "const": "internal",

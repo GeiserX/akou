@@ -31,7 +31,12 @@ import { QWEN_LANGUAGE_CODES } from "../../asr/llama-catalog.ts";
 import { CANARY_1B_V2, WHISPER_LARGE_V3 } from "../../asr/models.ts";
 import { translateEngine } from "../../asr/transcribe-cpp.ts";
 import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
-import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
+import {
+  FREE_MARGIN_BYTES,
+  freeOf,
+  type ModelChoice,
+  ModelRefused,
+} from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
 import { FORWARDED_HEADER } from "../../server/remotes.ts";
 import {
@@ -218,7 +223,8 @@ export function taskOf(form: Form): JobTask {
 
 /**
  * The multipart body, its files written into `dir` as they arrive (SV-D3), or 400 when it is not
- * one. The caller deletes the files it does not keep with `form.discard`.
+ * one. The caller deletes the files it does not keep with `form.discard`. The volume of `dir` keeps
+ * the same 1 GB as a model download (SV-M2): under it the upload is refused or cut, 507.
  */
 export async function formOf(
   c: RouteContext<ApiApp>,
@@ -229,7 +235,11 @@ export async function formOf(
   // so it would cut any upload that takes longer than it. It is off while the body arrives, and
   // the body has its own clock instead: an upload that stops sending is cut (`stalling`).
   c.timeout?.(0);
-  return readMultipart(stalling(c.req.body, stallMs), c.req.headers.get("content-type"), dir);
+  const free = () => (c.app.freeBytes ? c.app.freeBytes(dir) : freeOf(dir));
+  return readMultipart(stalling(c.req.body, stallMs), c.req.headers.get("content-type"), dir, {
+    free,
+    floor: FREE_MARGIN_BYTES,
+  });
 }
 
 /** How long an upload may send nothing before it is cut (SV-D3): the server's idle limit. */

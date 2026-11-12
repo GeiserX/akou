@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fold } from "../src/core/log/fold.ts";
@@ -24,6 +24,7 @@ import {
   redactUrl,
   sendWebhook,
   signBody,
+  signTimestamped,
   webhookDoneDraft,
   webhookProblem,
 } from "../src/main/handoff/webhook.ts";
@@ -312,8 +313,14 @@ describe("hooks (DESIGN 8.2)", () => {
 
 describe("the webhook (DESIGN 8.2)", () => {
   let server: ReturnType<typeof Bun.serve>;
-  const got: { event: string | null; sig: string | null; delivery: string | null; body: string }[] =
-    [];
+  const got: {
+    event: string | null;
+    sig: string | null;
+    sigV2: string | null;
+    timestamp: string | null;
+    delivery: string | null;
+    body: string;
+  }[] = [];
   let answers: number[] = [];
 
   beforeAll(() => {
@@ -324,6 +331,8 @@ describe("the webhook (DESIGN 8.2)", () => {
         got.push({
           event: req.headers.get("x-akou-event"),
           sig: req.headers.get("x-akou-signature"),
+          sigV2: req.headers.get("x-akou-signature-v2"),
+          timestamp: req.headers.get("x-akou-timestamp"),
           delivery: req.headers.get("x-akou-delivery"),
           body: await req.text(),
         });
@@ -357,6 +366,60 @@ describe("the webhook (DESIGN 8.2)", () => {
     expect(signBody("s3cret", body)).toBe(want);
     // Positive control: another secret gives another signature.
     expect(signBody("other", body)).not.toBe(want);
+  });
+
+  test("[WEBHOOK-R1] a captured delivery cannot be replayed later: v2 signs the timestamp with the body", async () => {
+    got.length = 0;
+    const body = JSON.stringify({ version: 1, stage: "final.done" });
+    const r = await sendWebhook({
+      url: url(),
+      secret: "s3cret",
+      stage: "final.done",
+      body,
+      now: () => 1_790_000_000_400,
+      ...noWait,
+    });
+    expect(r).toEqual({ status: 200, attempts: 1 });
+    const g = got[0];
+    // Positive control: the old header is byte for byte what it always was, so receivers that
+    // check it keep working; on its own it verifies the same body at any later time.
+    expect(g?.sig).toBe(`sha256=${createHmac("sha256", "s3cret").update(body).digest("hex")}`);
+    // The timestamp is whole seconds since the epoch.
+    expect(g?.timestamp).toBe("1790000000");
+    // A receiver's v2 check: HMAC-SHA256 over `<delivery>.<timestamp>.<body>` with the same secret.
+    const delivery = g?.delivery ?? "";
+    const v2 = (id: string, ts: string) =>
+      `sha256=${createHmac("sha256", "s3cret").update(`${id}.${ts}.${body}`).digest("hex")}`;
+    expect(g?.sigV2).toBe(v2(delivery, "1790000000"));
+    expect(signTimestamped("s3cret", delivery, "1790000000", body)).toBe(
+      v2(delivery, "1790000000"),
+    );
+    // The same delivery sent again with a fresh timestamp no longer verifies.
+    expect(g?.sigV2).not.toBe(v2(delivery, "1790000301"));
+    // Nor inside the window with a fresh X-Akou-Delivery, which a receiver's dedupe would let by.
+    expect(g?.sigV2).not.toBe(v2(randomUUID(), "1790000000"));
+  });
+
+  test("[WEBHOOK-R1] every retry of one delivery carries the same timestamp and v2 signature", async () => {
+    got.length = 0;
+    answers = [503, 200];
+    let t = 1_790_000_000_000;
+    const r = await sendWebhook({
+      url: url(),
+      secret: "s",
+      stage: "enhanced",
+      body: "{}",
+      now: () => {
+        t += 60_000;
+        return t;
+      },
+      ...noWait,
+    });
+    expect(r).toEqual({ status: 200, attempts: 2 });
+    expect(new Set(got.map((g) => `${g.delivery} ${g.timestamp} ${g.sigV2}`)).size).toBe(1);
+    expect(got[0]?.sigV2).toBe(
+      signTimestamped("s", got[0]?.delivery ?? "", got[0]?.timestamp ?? "", "{}"),
+    );
   });
 
   test("retries a 5xx with the same delivery id; a 4xx is final", async () => {

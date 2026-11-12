@@ -4,8 +4,9 @@
  * - Per call: `GET /calls/{id}/vocab` (what is in force), `POST /calls/{id}/vocab` (a call-scoped
  *   `vocab.add`, which applies forward to decoding and backward to reading at once), `DELETE
  *   /calls/{id}/vocab/{vid}` (its retraction, a new revision with `term: null`).
- * - The files: `GET /vocab`, `POST /vocab`, `DELETE /vocab/{term}`, and approving or rejecting
- *   entries and a call's proposals. A proposal is inert until approved; approving it writes the
+ * - The files: `GET /vocab`, `POST /vocab`, `DELETE /vocab/{term}` (which answers with the entry
+ *   it removed, so `POST /vocab/restore` can put it back whole: the window's Undo, VOC-UNDO1), and
+ *   approving or rejecting entries and a call's proposals. A proposal is inert until approved; approving it writes the
  *   entry, confirmed, into the workspace file. akou never grows the files on its own.
  *
  * - The post-call pass (`POST /calls/{id}/vocab/pass`, layer 3): the configured provider corrects
@@ -35,6 +36,7 @@ import { reasonText } from "../../query/ask.ts";
 import { STOPWORDS } from "../../query/bm25.ts";
 import {
   callEntries,
+  checkApiEntry,
   emptyVocab,
   importGlossary,
   type LoadedVocab,
@@ -571,7 +573,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab/:term",
     doc({
       id: "vocab.delete",
-      doc: "Remove a word from the user's vocabulary file.",
+      doc: "Remove a word from the user's vocabulary file. `entry` is the entry removed, whole, which `POST /vocab/restore` puts back as it was.",
       params: { term: "The word, as written in the file." },
       query: { workspace: WORKSPACE },
       body: {},
@@ -584,12 +586,41 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       const path = targetPath(c.app, workspace);
       const term = c.params.term as string;
       const removed = await editFile(path, (file) => {
-        const next = removeEntry(file, term);
-        return next.entries.length === file.entries.length ? null : { file: next, result: true };
+        const had = file.entries.find((e) => termKey(e.term) === termKey(term));
+        return had ? { file: removeEntry(file, term), result: had } : null;
       });
       if (!removed) throw new HttpError(404, "not_found", `"${term}" is not in ${path}`);
       c.app.vocabChanged();
-      return json(200, { ok: true, path, term });
+      return json(200, { ok: true, path, term, entry: removed });
+    },
+  );
+
+  r.add(
+    "POST",
+    "/vocab/restore",
+    doc({
+      id: "vocab.restore",
+      doc: "Put back an entry `DELETE /vocab/{term}` removed (the window's Undo), exactly as it was: its heard forms, scope, source, date, note and whether it is confirmed. A learned dictation pair is accepted again. Refused when the file holds the term again, so an Undo never overwrites a newer entry.",
+      body: { entry: "object", "workspace?": "string" },
+      ok: 201,
+      errors: {
+        400: ["bad_entry", "bad_workspace"],
+        409: ["term_exists", "vocab_file_invalid"],
+      },
+    }),
+    async (c) => {
+      const b = await c.body<{ entry: unknown; workspace?: string }>();
+      const workspace = checkWorkspace(b.workspace);
+      const entry = checkApiEntry(b.entry);
+      if (typeof entry === "string") throw new HttpError(400, "bad_entry", entry);
+      const path = targetPath(c.app, workspace);
+      await editFile(path, (file) => {
+        if (file.entries.some((e) => termKey(e.term) === termKey(entry.term)))
+          throw new HttpError(409, "term_exists", `"${entry.term}" is in ${path} again`);
+        return { file: upsertEntry(file, entry), result: null };
+      });
+      c.app.vocabChanged();
+      return json(201, { ok: true, path, entry });
     },
   );
 

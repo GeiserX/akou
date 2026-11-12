@@ -245,6 +245,8 @@ export interface ApiApp {
   recognizerFailed?(): boolean;
   /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
+  /** The bytes free on the volume that holds `dir`: an upload keeps a floor of it (507). */
+  freeBytes?(dir: string): number;
   /**
    * The file jobs (docs/ux/SERVER.md section 5), in both modes: in app mode the one token owns
    * every job, as the key id `app`.
