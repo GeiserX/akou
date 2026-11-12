@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fold } from "../src/core/log/fold.ts";
@@ -386,13 +386,18 @@ describe("the webhook (DESIGN 8.2)", () => {
     expect(g?.sig).toBe(`sha256=${createHmac("sha256", "s3cret").update(body).digest("hex")}`);
     // The timestamp is whole seconds since the epoch.
     expect(g?.timestamp).toBe("1790000000");
-    // A receiver's v2 check: HMAC-SHA256 over `<timestamp>.<body>` with the same secret.
-    const v2 = (ts: string) =>
-      `sha256=${createHmac("sha256", "s3cret").update(`${ts}.${body}`).digest("hex")}`;
-    expect(g?.sigV2).toBe(v2("1790000000"));
-    expect(signTimestamped("s3cret", "1790000000", body)).toBe(v2("1790000000"));
+    // A receiver's v2 check: HMAC-SHA256 over `<delivery>.<timestamp>.<body>` with the same secret.
+    const delivery = g?.delivery ?? "";
+    const v2 = (id: string, ts: string) =>
+      `sha256=${createHmac("sha256", "s3cret").update(`${id}.${ts}.${body}`).digest("hex")}`;
+    expect(g?.sigV2).toBe(v2(delivery, "1790000000"));
+    expect(signTimestamped("s3cret", delivery, "1790000000", body)).toBe(
+      v2(delivery, "1790000000"),
+    );
     // The same delivery sent again with a fresh timestamp no longer verifies.
-    expect(g?.sigV2).not.toBe(v2("1790000301"));
+    expect(g?.sigV2).not.toBe(v2(delivery, "1790000301"));
+    // Nor inside the window with a fresh X-Akou-Delivery, which a receiver's dedupe would let by.
+    expect(g?.sigV2).not.toBe(v2(randomUUID(), "1790000000"));
   });
 
   test("[WEBHOOK-R1] every retry of one delivery carries the same timestamp and v2 signature", async () => {
@@ -411,8 +416,10 @@ describe("the webhook (DESIGN 8.2)", () => {
       ...noWait,
     });
     expect(r).toEqual({ status: 200, attempts: 2 });
-    expect(new Set(got.map((g) => `${g.timestamp} ${g.sigV2}`)).size).toBe(1);
-    expect(got[0]?.sigV2).toBe(signTimestamped("s", got[0]?.timestamp ?? "", "{}"));
+    expect(new Set(got.map((g) => `${g.delivery} ${g.timestamp} ${g.sigV2}`)).size).toBe(1);
+    expect(got[0]?.sigV2).toBe(
+      signTimestamped("s", got[0]?.delivery ?? "", got[0]?.timestamp ?? "", "{}"),
+    );
   });
 
   test("retries a 5xx with the same delivery id; a 4xx is final", async () => {
