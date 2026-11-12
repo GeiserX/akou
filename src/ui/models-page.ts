@@ -453,6 +453,9 @@ export class ModelsPage {
     }
     if (missing.length > 0) {
       const need = missing.reduce((n, r) => n + r.size, 0);
+      // A download that gave up says why, in the row's help, until the next one starts.
+      const failed = missing.find((r) => r.error !== undefined);
+      const why = reasonText(failed?.error);
       const down = h(
         "button",
         {
@@ -462,11 +465,17 @@ export class ModelsPage {
           on: { click: () => void this.pull(missing.map((r) => r.id)) },
         },
         icon(...ICONS.download),
-        "Download",
+        failed ? "Try again" : "Download",
       );
       return {
         controls: [h("span", { class: "pg-value" }, gbText(need)), down],
-        help: null,
+        help: failed
+          ? h(
+              "span",
+              { attrs: { "data-stopped": "" } },
+              `The download stopped${why ? `: ${why}` : ""}. Files already verified are kept.`,
+            )
+          : null,
         state: "missing",
       };
     }
