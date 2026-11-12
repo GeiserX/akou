@@ -292,3 +292,98 @@ describe("answers that once broke on an empty or partial body", () => {
     }
   });
 });
+
+describe("the list of calls says what `failed` returns", () => {
+  test("[MCP-F1] akou_list_calls `failed` reads as the failed starts instead of the others, not as more", async () => {
+    const { api, seen } = recorder(() => ({ calls: [] }));
+    const c = await mcpClient(api);
+    try {
+      const tools = (await c.client.listTools()).tools;
+      const props = tools.find((t) => t.name === "akou_list_calls")?.inputSchema.properties ?? {};
+      const failed = (props as Record<string, { description?: string }>).failed?.description;
+      // The API lists only the failed starts with `failed` (GET /calls, call/manager.ts).
+      expect(failed).toStartWith("Only the calls whose start failed");
+      expect(failed).not.toContain("Also");
+      // The control: the tool does send the API's `failed`, which replaces the list.
+      await c.call("akou_list_calls", { failed: true });
+      expect(seen[0]?.o.query).toMatchObject({ failed: true });
+    } finally {
+      await c.close();
+    }
+  });
+});
+
+describe("an approval that found no word says so", () => {
+  const answer = (approved: string[], unmatched: string[]) =>
+    recorder((m, path) =>
+      m === "POST" && path === "/vocab/approve"
+        ? { ok: true, path: "/v/global.yaml", approved, unmatched }
+        : {},
+    ).api;
+
+  test("[VOC-A1] akou_vocab_approve that approved nothing is an error naming the words", async () => {
+    const c = await mcpClient(answer([], ["Hetzner"]));
+    try {
+      const r = await c.call("akou_vocab_approve", { terms: ["Hetzner"] });
+      expect(r.isError).toBe(true);
+      expect(r.text).toStartWith("not_found: nothing approved");
+      expect(r.text).toContain("Hetzner");
+      expect(r.text).toContain("`call`");
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("[VOC-A1] control: a partial approval is a success that lists the rest", async () => {
+    const c = await mcpClient(answer(["Hetzner"], ["Kasm"]));
+    try {
+      const r = await c.call("akou_vocab_approve", { terms: ["Hetzner", "Kasm"] });
+      expect(r.isError).toBe(false);
+      expect(r.structured).toMatchObject({ approved: ["Hetzner"], unmatched: ["Kasm"] });
+    } finally {
+      await c.close();
+    }
+  });
+});
+
+describe("tools that wait behind the call's hand-off work", () => {
+  /**
+   * An API whose export answers only after the call's hooks ran (11 minutes here): a request with
+   * a shorter deadline gives up the way the client's own does, with "The operation timed out.".
+   */
+  function slowExport() {
+    const seen: RequestOptions[] = [];
+    const api = {
+      request: async (_method: string, path: string, o: RequestOptions = {}) => {
+        if (path === "/status") return { status: 200, body: {}, text: "{}", contentType: "" };
+        seen.push(o);
+        if ((o.timeoutMs ?? 60_000) < 11 * 60_000) throw new Error("The operation timed out.");
+        const body = { call: "c1", path: "/export/c1.md" };
+        return { status: 200, body, text: JSON.stringify(body), contentType: "application/json" };
+      },
+    } as unknown as Parameters<typeof mcpClient>[0];
+    return { api, seen };
+  }
+
+  test("[MCP-X1] akou_export waits as long as the CLI's export, not the client's 60 s default", async () => {
+    const { api, seen } = slowExport();
+    const c = await mcpClient(api);
+    try {
+      const r = await c.call("akou_export", { call: "c1" });
+      expect(r.text).not.toContain("timed out");
+      expect(r.isError).toBe(false);
+      expect(r.structured).toEqual({ call: "c1", path: "/export/c1.md" });
+      // The same deadline as `akou export`, an hour, so a hook still running is no failure.
+      expect(seen[0]?.timeoutMs).toBe(60 * 60_000);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("[MCP-X1] positive control: the fake gives up on a request with the default deadline", async () => {
+    const { api } = slowExport();
+    await expect(api.request("POST", "/calls/c1/export", {})).rejects.toThrow(
+      "The operation timed out.",
+    );
+  });
+});

@@ -36,7 +36,23 @@ describe("[DK-M8] app.log", () => {
       expect(log.trimEnd().split("\n").at(-1)).toMatch(/info akou .* quit \(pid \d+\)$/);
       expect(log).not.toContain(TITLE);
       expect(log).not.toContain("Zq7-name-marker");
+      // [CF-2] positive control: a config file with nothing refused writes no refused line.
+      expect(log).not.toContain("setting refused");
       if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("[CF-2] every setting the config file had refused is a warn line in app.log at the start", async () => {
+    const rig = await appRig({
+      supervise: true,
+      settings: { "zzz.fromNewerAkou": 1, "asr.segmentPause": 99 },
+    });
+    try {
+      const log = readFileSync(join(rig.home, ".config", "akou", "app.log"), "utf8");
+      expect(log).toContain("warn setting refused: zzz.fromNewerAkou: unknown setting");
+      expect(log).toContain("warn setting refused: asr.segmentPause: 99 is out of range");
     } finally {
       await rig.close();
     }

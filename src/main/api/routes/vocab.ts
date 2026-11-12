@@ -601,7 +601,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         id: `vocab.${action}`,
         doc:
           action === "approve"
-            ? "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does."
+            ? "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. `unmatched` names the terms that were neither waiting there nor already confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does."
             : "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again. With `dictation: true`, the words fixed while dictating, as the chip's Not a word: a learned pair also leaves the file.",
         body: {
           terms: "string[]",
@@ -673,6 +673,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
           }
         }
         const path = targetPath(c.app, workspace);
+        const held = new Set<string>();
         await editFile(path, (file) => {
           let next: VocabFile = file;
           for (const e of accepted) {
@@ -693,6 +694,8 @@ export function vocabRoutes(r: Router<ApiApp>): void {
                 : removeEntry(next, e.term);
             done.push(e.term);
           }
+          // A term the file holds confirmed is no miss: approving it again changes nothing.
+          for (const e of next.entries) if (e.confirmed) held.add(termKey(e.term));
           if (action === "reject") {
             const rejected = new Set(next.rejected);
             for (const t of b.terms) rejected.add(t);
@@ -701,11 +704,12 @@ export function vocabRoutes(r: Router<ApiApp>): void {
           return next === file ? null : { file: next, result: null };
         });
         c.app.vocabChanged();
-        return json(200, {
-          ok: true,
-          path,
-          [action === "approve" ? "approved" : "rejected"]: done,
-        });
+        if (action === "reject") return json(200, { ok: true, path, rejected: done });
+        // An approval that found nothing says so: a word proposed into another workspace or call,
+        // or misspelt, is still waiting (VOC-A1). A reject always records the term, so it has none.
+        for (const t of done) held.add(termKey(t));
+        const unmatched = b.terms.filter((t) => !held.has(termKey(t)));
+        return json(200, { ok: true, path, approved: done, unmatched });
       },
     );
   }

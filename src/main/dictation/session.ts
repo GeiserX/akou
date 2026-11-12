@@ -581,6 +581,8 @@ export class DictationSession {
   private latest: Listening | null = null;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
+  /** The helper exited: a decode that ends now has no one to insert its text. */
+  private gone = false;
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
   /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
@@ -1164,6 +1166,7 @@ export class DictationSession {
 
   /** The helper exited: a session in progress is lost with it, and says so. */
   helperGone(): void {
+    this.gone = true;
     const c = this.cur;
     this.cur = null;
     this.latest = null;
@@ -1290,6 +1293,20 @@ export class DictationSession {
     }
   }
 
+  /**
+   * A call out of the decode chain (the pill's notice, the draft box): one that throws gives
+   * `fallback` for this dictation, so the shared chain never rejects and skips every later decode
+   * (T4.41).
+   */
+  private shielded<T>(f: () => T, fallback: T): T {
+    try {
+      return f();
+    } catch (err) {
+      this.o.onLog?.("error", `dictation: ${(err as Error).message}`);
+      return fallback;
+    }
+  }
+
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */
   private notInserted(c: Listening, d: DictationDraft): void {
     this.decoding--;
@@ -1334,7 +1351,10 @@ export class DictationSession {
     }
     // "send it" at the very end (DC-S5): the words went, and the send key goes with the insert.
     const spoken = r.kind === "text" && r.send;
-    if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
+    if (r.kind === "text" && r.d.notice) {
+      const notice = r.d.notice;
+      this.shielded(() => this.o.onNotice?.(id, notice), undefined);
+    }
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
     if (r.kind === "empty" || r.text === "") {
@@ -1349,7 +1369,10 @@ export class DictationSession {
     }
     // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.
     if (c.asked === "draft" && !c.secure) {
-      const opened = this.o.onDraft?.(id, "key", true, draftRule(c.rule, false)) ?? false;
+      const opened = this.shielded(
+        () => this.o.onDraft?.(id, "key", true, draftRule(c.rule, false)) ?? false,
+        false,
+      );
       this.notInserted(
         c,
         opened
@@ -1362,7 +1385,12 @@ export class DictationSession {
     const rule = c.rule;
     const sendKey = (rule?.sendKey as SendKey | undefined) ?? p.sendKey;
     // A press while the draft box had the keyboard adds to the draft there (DC-A4).
-    if (c.toDraft && c.asked === "insert" && !c.secure && this.o.onAppend?.(id, r.text)) {
+    if (
+      c.toDraft &&
+      c.asked === "insert" &&
+      !c.secure &&
+      this.shielded(() => this.o.onAppend?.(id, r.text) ?? false, false)
+    ) {
       this.notInserted(c, { type: "dictation.drafted", id, reason: "append" });
       return;
     }
@@ -1373,17 +1401,26 @@ export class DictationSession {
       !c.secure &&
       (rule?.mode === "draft" || rule?.mode === "draft-send")
     ) {
-      const opened =
-        this.o.onDraft?.(id, "rule", true, {
-          ...draftRule(rule, false),
-          enterSends: rule.mode === "draft-send",
-        }) ?? false;
+      const opened = this.shielded(
+        () =>
+          this.o.onDraft?.(id, "rule", true, {
+            ...draftRule(rule, false),
+            enterSends: rule.mode === "draft-send",
+          }) ?? false,
+        false,
+      );
       this.notInserted(
         c,
         opened
           ? { type: "dictation.drafted", id, reason: "rule" }
           : { type: "dictation.failed", id, error: "the draft box needs the desktop window" },
       );
+      return;
+    }
+    // The helper exited during the decode: an insert sent now goes nowhere and no receipt comes,
+    // so the dictation fails here, its text kept for Copy and Open draft (T4.40).
+    if (this.gone) {
+      this.notInserted(c, { type: "dictation.failed", id, error: "the dictation helper stopped" });
       return;
     }
     // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.

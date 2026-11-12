@@ -652,6 +652,28 @@ describe("the vocabulary files", () => {
     expect([del.status, del.body.error]).toEqual([409, "vocab_file_invalid"]);
     expect(readFileSync(path, "utf8")).toBe(text);
   });
+
+  test("[VOC-A1] an approval names the words it did not find, never a bare ok", async () => {
+    await rig.api("POST", "/vocab", { term: "Kasmweb", workspace: "voca1", confirmed: false });
+    // Without the workspace it was proposed into, the global file has no such word waiting.
+    const miss = await rig.api("POST", "/vocab/approve", { terms: ["Kasmweb"] });
+    expect([miss.status, miss.body.approved, miss.body.unmatched]).toEqual([200, [], ["Kasmweb"]]);
+    // A misspelt word next to a found one: the found one is approved, the other named.
+    const some = await rig.api("POST", "/vocab/approve", {
+      terms: ["Kasmweb", "Kasmwbe"],
+      workspace: "voca1",
+    });
+    expect([some.body.approved, some.body.unmatched]).toEqual([["Kasmweb"], ["Kasmwbe"]]);
+    // The control: a word already confirmed there is found, so nothing is unmatched.
+    const again = await rig.api("POST", "/vocab/approve", {
+      terms: ["Kasmweb"],
+      workspace: "voca1",
+    });
+    expect([again.body.approved, again.body.unmatched]).toEqual([[], []]);
+    // A reject records the word even when nothing was waiting, so it reports no miss.
+    const rej = await rig.api("POST", "/vocab/reject", { terms: ["Nowhere"], workspace: "voca1" });
+    expect([rej.status, rej.body.rejected, rej.body.unmatched]).toEqual([200, [], undefined]);
+  });
 });
 
 describe("settings over the API", () => {
@@ -684,6 +706,8 @@ describe("settings over the API", () => {
         "api.bind",
         "asr.diarizeHelper",
         "asr.llamaServer",
+        // SEC-2: akou runs the llama-server and CrispASR builds kept in it.
+        "asr.modelsDir",
         "capture.helper",
         "dictation.remote.url",
         "hooks",
@@ -708,6 +732,59 @@ describe("settings over the API", () => {
       ].sort(),
     );
     expect(got.body.schema["api.port"].apiWritable).toBe(true);
+  });
+
+  test("[CF-1] a save refuses a config.json that does not parse and leaves the file as it is", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    // A hand edit that left a trailing comma.
+    const broken = `${before.trimEnd().slice(0, -1)},}\n`;
+    writeFileSync(file, broken);
+    try {
+      const r = await rig.api("PATCH", "/config", { "asr.segmentPause": 0.9 });
+      expect([r.status, r.body.error]).toEqual([409, "config_file_invalid"]);
+      expect(r.body.message).toContain("not valid JSON");
+      expect(readFileSync(file, "utf8")).toBe(broken);
+    } finally {
+      writeFileSync(file, before);
+    }
+  });
+
+  test("[CF-1] after the refused save, the file fixed by hand keeps every key it holds at the next save", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    writeFileSync(file, `${before.trimEnd().slice(0, -1)},}\n`);
+    try {
+      expect((await rig.api("PATCH", "/config", { "user.name": "Bea" })).status).toBe(409);
+      // The fix by hand: the comma gone, and a key the app's own copy never held.
+      const raw = JSON.parse(before) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify({ ...raw, "asr.segmentPause": 0.7 }, null, 2));
+      const r = await rig.api("PATCH", "/config", { "user.name": "Bea" });
+      expect(r.status).toBe(200);
+      const after = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      expect([after["user.name"], after["asr.segmentPause"]]).toEqual(["Bea", 0.7]);
+    } finally {
+      writeFileSync(file, before);
+      await rig.api("PATCH", "/config", { "asr.segmentPause": null, "user.name": "Ana" });
+    }
+  });
+
+  test("[CF-1] positive control: a save keeps the keys this version does not know and the file-only keys", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    const raw = JSON.parse(before) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...raw, "zzz.fromNewerAkou": { on: true } }, null, 2));
+    try {
+      const r = await rig.api("PATCH", "/config", { "asr.segmentPause": 0.9 });
+      expect(r.status).toBe(200);
+      const after = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      expect(after["zzz.fromNewerAkou"]).toEqual({ on: true });
+      expect(after["capture.helper"]).toEqual(raw["capture.helper"]);
+      expect(after["asr.segmentPause"]).toBe(0.9);
+    } finally {
+      writeFileSync(file, before);
+      await rig.api("PATCH", "/config", { "asr.segmentPause": null });
+    }
   });
 
   test("status always answers 200 and names what is missing", async () => {

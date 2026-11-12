@@ -220,10 +220,60 @@ export function taskOf(form: Form): JobTask {
  * The multipart body, its files written into `dir` as they arrive (SV-D3), or 400 when it is not
  * one. The caller deletes the files it does not keep with `form.discard`.
  */
-export async function formOf(c: RouteContext<ApiApp>, dir: string): Promise<Form> {
-  // An upload can take a while to arrive: no idle cut while it does.
+export async function formOf(
+  c: RouteContext<ApiApp>,
+  dir: string,
+  stallMs = UPLOAD_STALL_MS,
+): Promise<Form> {
+  // Bun's idle timeout counts from the start of the request, not from the last chunk of its body,
+  // so it would cut any upload that takes longer than it. It is off while the body arrives, and
+  // the body has its own clock instead: an upload that stops sending is cut (`stalling`).
   c.timeout?.(0);
-  return readMultipart(c.req.body, c.req.headers.get("content-type"), dir);
+  return readMultipart(stalling(c.req.body, stallMs), c.req.headers.get("content-type"), dir);
+}
+
+/** How long an upload may send nothing before it is cut (SV-D3): the server's idle limit. */
+export const UPLOAD_STALL_MS = 60_000;
+
+/**
+ * The body, failing once no chunk has arrived for `ms`: a client gone silent mid-body, or a peer
+ * that dropped off the network without closing, must not hold its socket and spool file forever.
+ */
+function stalling(
+  body: ReadableStream<Uint8Array> | null,
+  ms: number,
+): ReadableStream<Uint8Array> | null {
+  if (!body) return null;
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(ctl) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const stalled = new Promise<never>((_, reject) => {
+        // The refusal closes the connection: the silent client would otherwise keep it open.
+        const cut = () =>
+          new HttpError(
+            400,
+            "bad_multipart",
+            `the upload sent nothing for ${ms / 1000} s`,
+            {},
+            { Connection: "close" },
+          );
+        // clock: the upload's stall bound, `ms` of silence on the wire; tests pass a short one.
+        timer = setTimeout(() => reject(cut()), ms);
+      });
+      try {
+        const r = await Promise.race([reader.read(), stalled]);
+        if (r.done) ctl.close();
+        else ctl.enqueue(r.value);
+      } catch (err) {
+        await reader.cancel().catch(() => {});
+        ctl.error(err);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
 }
 
 /** One text field, or undefined; a file where text is expected is refused. */

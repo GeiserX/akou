@@ -253,6 +253,18 @@ describe("[SV-X2, SV-X3, SV-X4] a job the primary cannot run runs on a worker; t
     expect(s.text).not.toContain("worker.key");
   });
 
+  test("[known bug] The remotes shown to a caller with no key: GET /v1/server lists none without a key", async () => {
+    const res = await fetch(`http://127.0.0.1:${primary.port}/v1/server`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(JSON.parse(text).remotes).toEqual([]);
+    expect(text).not.toContain(`127.0.0.1:${workerPort}`);
+    // What a remote offers still counts as available here, without naming the remote.
+    expect(JSON.parse(text).presets.find((p: Body) => p.name === "fast").available).toBe(true);
+    // Positive control: the same request with a key lists the worker.
+    expect((await get(primary, "/v1/server")).body.remotes).toHaveLength(1);
+  });
+
   test("the job runs on the worker and comes back under the primary's id, feed, metadata and webhook", async () => {
     const receiver = startReceiver({ secret: primary.secret });
     try {

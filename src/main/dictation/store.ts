@@ -26,6 +26,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  rmSync,
   truncateSync,
   writeSync,
 } from "node:fs";
@@ -113,6 +114,9 @@ export class DictationLog {
   /** Called with every event appended. */
   onAppend: ((e: DictationEvent) => void) | null = null;
 
+  /** One write(2) call: it may write less than asked (T4.43). Tests replace it with a full disk. */
+  write: (fd: number, b: Uint8Array) => number = (f, b) => writeSync(f, b);
+
   private load(): LogOpenReport {
     const report = { truncated: 0, invalidLines: 0 };
     if (!existsSync(this.path)) return report;
@@ -163,7 +167,7 @@ export class DictationLog {
     if (this.fd === null) throw new Error("the dictation log is closed");
     if (this.deleted.has(draft.id)) return null;
     const e = { v: 1, seq: this.seq + 1, t: this.now(), ...draft } as DictationEvent;
-    writeSync(this.fd, `${JSON.stringify(e)}\n`);
+    writeAll(this.fd, `${JSON.stringify(e)}\n`, this.write);
     fsyncSync(this.fd);
     this.seq = e.seq;
     this.all.push(e);
@@ -195,11 +199,15 @@ export class DictationLog {
     const tmp = `${this.path}.tmp`;
     const fd = openSync(tmp, "w", 0o600);
     try {
-      writeSync(fd, keep.map((e) => `${JSON.stringify(e)}\n`).join(""));
+      writeAll(fd, keep.map((e) => `${JSON.stringify(e)}\n`).join(""), this.write);
       fsyncSync(fd);
-    } finally {
+    } catch (err) {
+      // A short history must never be renamed over the whole one (T4.43).
       closeSync(fd);
+      rmSync(tmp, { force: true });
+      throw err;
     }
+    closeSync(fd);
     if (this.fd !== null) closeSync(this.fd);
     renameSync(tmp, this.path);
     this.fd = openSync(this.path, "a", 0o600);
@@ -222,6 +230,25 @@ export class DictationLog {
   close(): void {
     if (this.fd !== null) closeSync(this.fd);
     this.fd = null;
+  }
+}
+
+/**
+ * Writes all of `text` to `fd` (T4.43). One `writeSync` on a nearly full disk can write part of it
+ * and return the short count without throwing; this writes the rest, and throws when nothing more
+ * goes. `write` is the syscall, injected by tests.
+ */
+export function writeAll(
+  fd: number,
+  text: string,
+  write: (fd: number, b: Uint8Array) => number = (f, b) => writeSync(f, b),
+): void {
+  const bytes = Buffer.from(text, "utf8");
+  let off = 0;
+  while (off < bytes.length) {
+    const n = write(fd, bytes.subarray(off));
+    if (n <= 0) throw new Error(`short write: ${off} of ${bytes.length} bytes`);
+    off += n;
   }
 }
 

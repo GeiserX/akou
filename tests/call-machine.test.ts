@@ -8,7 +8,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PartClock } from "../src/core/log/clock.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
-import { LOCK_FILE } from "../src/core/log/writer.ts";
+import { LOCK_FILE, LogWriter } from "../src/core/log/writer.ts";
 import { folderName, slugify, ulid } from "../src/main/call/folder.ts";
 import { CallManager, type CallManagerOptions } from "../src/main/call/manager.ts";
 import { opusDurationSeconds } from "../src/main/call/recovery.ts";
@@ -548,6 +548,61 @@ describe("stop", () => {
     expect(killed.length).toBe(1);
   });
 
+  test("[LG-4] a stop on a disk that fails every fsync still ends the call and frees its folder", async () => {
+    const s = setup();
+    const a = await started(s);
+    s.engine.last.audio(0.5);
+    const c = s.mgr.controller(a.call);
+    const sync = LogWriter.prototype.sync;
+    LogWriter.prototype.sync = () => {
+      throw Object.assign(new Error("EIO: i/o error, fsync"), { code: "EIO" });
+    };
+    let stopped: unknown;
+    try {
+      stopped = await s.mgr.stop(a.call).catch((err: Error) => err);
+    } finally {
+      LogWriter.prototype.sync = sync;
+    }
+    // The caller hears of the failure, and nothing is left half-ended.
+    expect(stopped).toBeInstanceOf(Error);
+    expect(c?.status).toBe("ended");
+    expect(existsSync(join(a.folder, LOCK_FILE))).toBe(false);
+    expect((await s.mgr.stop(a.call)) as { code?: string }).toMatchObject({ code: "not_live" });
+    // A finished call is restartable again once the disk works.
+    s.engine.onStart = (x) => x.capturing();
+    expect(await s.mgr.restart(a.call)).toMatchObject({ ok: true, part: 2 });
+  });
+
+  test("[LG-4] a part.ended that cannot be written still restarts the helper that exited", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    const append = LogWriter.prototype.append;
+    let refused = 0;
+    LogWriter.prototype.append = function (this: LogWriter, d) {
+      if (d.type === "part.ended" && refused === 0) {
+        refused++;
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      }
+      return append.call(this, d);
+    };
+    try {
+      s.engine.last.exit(70);
+      await c?.idle();
+    } finally {
+      LogWriter.prototype.append = append;
+    }
+    expect(refused).toBe(1);
+    // Never a call that says recording while nothing captures: the next part is recording.
+    expect(s.engine.sessions.length).toBe(2);
+    expect(ofType(s.events, "part.started").map((e) => e.part)).toEqual([1, 2]);
+    expect(c?.current?.part).toBe(2);
+    expect(c?.status).toBe("recording");
+  });
+
   test("[T4.31] budgets are injected: a 100 ms stop budget resolves at 100 ms on a fake clock", async () => {
     const s = setup({ stopMs: 100 });
     await started(s);
@@ -638,6 +693,88 @@ describe("restart", () => {
     // One click resumes it as a new part.
     s.engine.onStart = (x) => x.capturing();
     expect(await s.mgr.restart(a.call)).toMatchObject({ ok: true, part: 7 });
+  });
+
+  test("[LG-3] a resume clicked while the interrupt still flushes starts after its call.ended", async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let flushing = false;
+    const s = setup(
+      {},
+      {
+        beforeEnd: () => {
+          flushing = true;
+          return held;
+        },
+      },
+    );
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    for (let i = 0; i < 5; i++) {
+      s.engine.last.exit(70);
+      await c?.idle();
+      await s.clock.advance(1_000);
+    }
+    // The sixth crash interrupts the call; its flush is held, so call.ended is not written yet.
+    s.engine.last.exit(70);
+    await until(() => flushing, 2_000, "the interrupt's flush");
+    expect(c?.status).toBe("interrupted");
+    expect(ofType(s.events, "call.ended")).toEqual([]);
+    const restart = s.mgr.restart(a.call);
+    await flush();
+    release();
+    expect(await restart).toMatchObject({ ok: true, part: 7 });
+    await c?.idle();
+    const ended = ofType(s.events, "call.ended");
+    expect(ended).toMatchObject([{ reason: "interrupted" }]);
+    const lastStart = ofType(s.events, "part.started").at(-1);
+    expect(lastStart?.part).toBe(7);
+    expect((lastStart?.seq ?? 0) > (ended[0]?.seq ?? 0)).toBe(true);
+    // The resumed call still writes and stops cleanly.
+    expect(c?.status).toBe("recording");
+    expect((await s.mgr.stop(a.call)).ok).toBe(true);
+    expect(types(s.events).slice(-2)).toEqual(["part.ended", "call.ended"]);
+  });
+
+  test("[LG-3] a start during the interrupt's flush keeps the resume of the old call from recording too", async () => {
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let flushing = false;
+    const s = setup(
+      {},
+      {
+        beforeEnd: () => {
+          flushing = true;
+          return held;
+        },
+      },
+    );
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.onStart = (x) => x.capturing();
+    for (let i = 0; i < 5; i++) {
+      s.engine.last.exit(70);
+      await c?.idle();
+      await s.clock.advance(1_000);
+    }
+    s.engine.last.exit(70);
+    await until(() => flushing, 2_000, "the interrupt's flush");
+    const restart = s.mgr.restart(a.call);
+    await flush();
+    // The interrupted call is not live, so a new call may start while the flush is held.
+    const b = await s.mgr.start({ workspace: "work", title: "Next" });
+    expect(b.ok).toBe(true);
+    release();
+    const r = await restart;
+    // One live call at a time: the resume is refused and names the call that is recording.
+    expect(r).toMatchObject({ ok: false, status: 409, code: "already_recording" });
+    expect(s.mgr.live()?.id).toBe(b.ok ? b.call : "");
+    expect(c?.live).toBe(false);
   });
 
   test("positive control: the same crashes spread over more than ten minutes never interrupt", async () => {

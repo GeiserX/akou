@@ -485,7 +485,11 @@ export const SETTINGS = {
       XDG_DATA_HOME: process.env.XDG_DATA_HOME,
     }),
     env: "AKOU_MODELS_DIR",
-    doc: "Folder the speech models are downloaded into and loaded from.",
+    // akou runs the llama-server and CrispASR builds kept in it: set in the desktop window or the
+    // file, never by an HTTP client, so a key cannot point it at a folder holding its own program.
+    apiWritable: false,
+    windowWritable: true,
+    doc: "Folder the speech models are downloaded into and loaded from. Set it in the akou window or the config file, never over the API: akou runs the speech programs kept in it.",
   },
   "asr.threads": {
     type: "integer",
@@ -809,7 +813,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_ENGINES,
     default: "auto",
-    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: what `dictation.final` names (`live` by default: the streaming model's words); `remote`: another akou (`dictation.remote.url`), with no local model needed.",
   },
   "dictation.final": {
     type: "string",

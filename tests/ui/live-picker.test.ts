@@ -255,6 +255,40 @@ describe("W3.19: the live panel in the Record row", () => {
   );
 
   test(
+    "[SV-M3] + Add a model: a download that gave up says why and offers Try again",
+    async () => {
+      await withModels(4, async (rig) => {
+        await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
+        const page = await rig.open();
+        await until(async () => (await label(page)) === "Nemotron English", 5000, "the model");
+        // Positive control: with no failure the row reads as before.
+        await openPanel(page);
+        await page.click('#live-menu [data-add="live"]');
+        await page.waitForSelector('#live-menu [data-cat="live"]');
+        expect(await catalogRows(page, "live")).toEqual([[OTHER, "Download"]]);
+        expect(await page.$("#live-menu [data-stopped]")).toBeNull();
+        await page.route("**/api/v1/models", async (r) => {
+          const res = await r.fetch();
+          const body = (await res.json()) as { models: { id: string; error?: string }[] };
+          for (const m of body.models)
+            if (m.id === OTHER) m.error = "download of http://127.0.0.1/s35.onnx failed: HTTP 500";
+          await r.fulfill({ response: res, json: body });
+        });
+        await page.reload();
+        await until(async () => (await label(page)) === "Nemotron English", 5000, "the reload");
+        await openPanel(page);
+        await page.click('#live-menu [data-add="live"]');
+        await page.waitForSelector(`#live-menu [data-model="${OTHER}"] [data-stopped]`);
+        expect(await catalogRows(page, "live")).toEqual([[OTHER, "Try again"]]);
+        expect(await page.textContent(`#live-menu [data-model="${OTHER}"] [data-stopped]`)).toBe(
+          "The download stopped: the network failed. Files already verified are kept.",
+        );
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "with no live model the button reads Live: no model, and the Live slot says so with its Add a model list open, again after the panel closes",
     async () => {
       let id = "";

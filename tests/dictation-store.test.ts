@@ -5,9 +5,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import type { DictationItem } from "../src/core/dictation/events.ts";
-import { DictationLog, expiredDictations, newDictationId } from "../src/main/dictation/store.ts";
+import {
+  DictationLog,
+  expiredDictations,
+  newDictationId,
+  writeAll,
+} from "../src/main/dictation/store.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
@@ -198,5 +203,86 @@ describe("DC-H2: what dictation.retainDays deletes", () => {
     const items = [item("d3", now), item("d2", now - 5, "inserting"), item("d1", now - 9)];
     expect(expiredDictations(items, now, 0)).toEqual(["d1"]);
     expect(expiredDictations([item("d1", now)], now, 0)).toEqual([]);
+  });
+});
+
+describe("a write the disk cuts short", () => {
+  /** A disk with `room` bytes left that takes at most `step` bytes a call, as write(2) may. */
+  function disk(room: number, step: number) {
+    const got: number[] = [];
+    return {
+      got,
+      write: (_fd: number, b: Uint8Array) => {
+        const n = Math.min(b.length, step, room - got.length);
+        for (const x of b.subarray(0, n)) got.push(x);
+        return n;
+      },
+    };
+  }
+
+  test("[T4.43] every byte goes, over as many short writes as the disk takes", () => {
+    const text = `${"x".repeat(10_000)}ñ\n`;
+    const d = disk(1_000_000, 4096);
+    writeAll(0, text, d.write);
+    expect(Buffer.from(d.got).toString("utf8")).toBe(text);
+  });
+
+  test("[T4.43] a full disk throws instead of passing a short write as whole", () => {
+    const d = disk(5000, 4096);
+    expect(() => writeAll(0, "y".repeat(10_000), d.write)).toThrow(
+      "short write: 5000 of 10000 bytes",
+    );
+  });
+
+  /** The log's real file behind a disk with `room` bytes left, `step` bytes a call at most. */
+  function fullDisk(room: number, step: number, claimWhole = false) {
+    let used = 0;
+    return (fd: number, b: Uint8Array) => {
+      const n = Math.max(0, Math.min(b.length, step, room - used));
+      used += n;
+      if (n > 0) writeSync(fd, b.subarray(0, n));
+      // claimWhole: a caller that ignores the count, as one bare writeSync did.
+      return claimWhole ? b.length : n;
+    };
+  }
+
+  test("[T4.43] a deletion on a full disk throws, keeps the whole history and leaves no .tmp", () => {
+    const d = dir();
+    const log = new DictationLog(d);
+    for (const id of ["da", "db", "dc"]) dictate(log, id, `words of ${id}`);
+    const before = readFileSync(log.path, "utf8");
+    // Room for the tombstone, not for the rewritten history.
+    log.write = fullDisk(300, 64);
+    expect(() => log.forget(["da"])).toThrow("short write");
+    const after = readFileSync(log.path, "utf8");
+    expect(after.startsWith(before)).toBe(true);
+    expect(after.slice(before.length)).toMatch(/^\{[^\n]*"dictation\.deleted"[^\n]*\}\n$/);
+    expect(existsSync(`${log.path}.tmp`)).toBe(false);
+    log.close();
+    expect(
+      new DictationLog(d)
+        .items()
+        .map((i) => i.id)
+        .sort(),
+    ).toEqual(["db", "dc"]);
+  });
+
+  test("[T4.43] positive control: a write whose short count is ignored renames a cut history over the log", () => {
+    const d = dir();
+    const log = new DictationLog(d);
+    for (const id of ["da", "db", "dc"]) dictate(log, id, `words of ${id}`);
+    log.write = fullDisk(300, 1_000_000, true);
+    log.forget(["da"]);
+    log.close();
+    // The rename put a cut file over the log: db and dc are gone with da.
+    expect(readFileSync(log.path, "utf8")).not.toContain("words of dc");
+    expect(new DictationLog(d).items().map((i) => i.id)).not.toContain("dc");
+  });
+
+  test("[T4.43] positive control: one write call keeps only what the disk took, and says nothing", () => {
+    const d = disk(1_000_000, 4096);
+    const bytes = Buffer.from("z".repeat(10_000));
+    expect(d.write(0, bytes)).toBe(4096);
+    expect(d.got).toHaveLength(4096);
   });
 });

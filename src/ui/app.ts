@@ -36,6 +36,7 @@ import { liveChip } from "./live-options.ts";
 import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
+  type Banner,
   banner,
   type CallSummary,
   callHeadMeta,
@@ -210,6 +211,8 @@ class App {
   private follower: Follower | null = null;
   private hues = new HueBook();
   private disconnectedSince: number | null = null;
+  /** When the app's status stream was lost, by the page's clock; apart, so a call switch keeps it. */
+  private statusLostSince: number | null = null;
   private levelAt: number | null = null;
   /** When the follow of the call on screen first opened, so a call joined late is not "dead". */
   private followedAt: number | null = null;
@@ -382,7 +385,15 @@ class App {
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
-    this.t.watchStatus((s) => this.onStatus(s));
+    this.t.watchStatus(
+      (s) => this.onStatus(s),
+      (state) => {
+        // clock: when the page lost the app's status stream, by its own clock.
+        if (state === "lost") this.statusLostSince ??= Date.now();
+        else this.statusLostSince = null;
+        this.paint();
+      },
+    );
     // clock: the page repaints its ages and timers once a second.
     setInterval(() => this.paint(), 1000);
     this.paint();
@@ -540,7 +551,9 @@ class App {
       view: v,
       status: s,
       // A reconnect that takes more than 3 s is worth saying; a quick one is not.
-      disconnected: this.disconnectedSince !== null && now - this.disconnectedSince > 3000,
+      disconnected:
+        (this.disconnectedSince !== null && now - this.disconnectedSince > 3000) ||
+        (this.statusLostSince !== null && now - this.statusLostSince > 3000),
       now,
       lastLineAt: this.lastLineAt,
       levelAt: this.levelAt,
@@ -834,14 +847,18 @@ class App {
   }
 
   private drawBanner(v: CallView | null, now: number): void {
-    const b = banner({
-      view: v,
-      now,
-      lastLineAt: this.lastLineAt,
-      callHeardAt: this.callHeardAt,
-      levelAt: this.levelAt,
-      platform: this.platform,
-    });
+    // A page that lost the app for 10 s says so in words, with or without a call open (WINDOW 17).
+    const gone = this.statusLostSince !== null && now - this.statusLostSince > 10_000;
+    const b: Banner | null = gone
+      ? { kind: "lag", text: "akou is not running. Open it with `akou open`." }
+      : banner({
+          view: v,
+          now,
+          lastLineAt: this.lastLineAt,
+          callHeardAt: this.callHeardAt,
+          levelAt: this.levelAt,
+          platform: this.platform,
+        });
     const el = byId("banner");
     el.className = b ? b.kind : "";
     el.hidden = !b;
@@ -870,7 +887,31 @@ class App {
     const bar = byId<HTMLProgressElement>("final-progress");
     bar.hidden = n?.state !== "running";
     if (n?.progress !== undefined) bar.value = n.progress;
+    // A failed pass is said aloud and offers Retry (WINDOW 17); never while the call records or a
+    // pass runs, which the app refuses (409).
+    const failed = n?.state === "failed" && !v?.live && !run;
+    if (failed) el.setAttribute("role", "alert");
+    else el.removeAttribute("role");
+    byId("final-retry").hidden = !failed;
     byId("handoff").textContent = bits.join("  ·  ");
+  }
+
+  /** Runs a failed final pass again; the app's refusal (a pass running, no model) is the toast. */
+  private async retryFinal(): Promise<void> {
+    const id = this.callId;
+    if (!id) return;
+    const btn = byId<HTMLButtonElement>("final-retry");
+    btn.disabled = true;
+    try {
+      const r = await this.t
+        .request<{ error?: string }>("POST", `/calls/${encodeURIComponent(id)}/finalize`, {})
+        .catch(() => null);
+      if (!r) toast("The final pass did not start: akou did not answer.");
+      else if (r.status >= 400)
+        toast(message(r.body, `the final pass did not start (${r.status})`));
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   private meters(l: Levels | null): void {
@@ -1210,7 +1251,14 @@ class App {
 
   private async control(name: string, id: string | null, body: unknown = {}): Promise<boolean> {
     if (!id) return false;
-    const r = await this.t.request<{ error?: string }>("POST", `/calls/${id}/${name}`, body);
+    const r = await this.t
+      .request<{ error?: string }>("POST", `/calls/${id}/${name}`, body)
+      .catch(() => null);
+    if (!r) {
+      // The click never stays silent: a request that got no answer says so (W3.1).
+      toast(`${name} failed: akou did not answer.`);
+      return false;
+    }
     if (r.status >= 400) {
       if (r.body.error === "stale_restart") {
         this.confirm(
@@ -1251,6 +1299,7 @@ class App {
         });
       }
     });
+    byId("final-retry").addEventListener("click", () => void this.retryFinal());
     byId("share-start").addEventListener("click", () => void this.share());
     const copy = byId("copy-transcript");
     copy.title += this.platform === "mac" ? " (⌘⇧C)" : " (Ctrl+Shift+C)";
@@ -1283,19 +1332,25 @@ class App {
     // Only a pick that differs from capture.call is sent: an untouched menu sends what Record
     // always sent, and the app resolves the setting itself.
     const source = this.callPicker.value();
-    let r: Reply<{ call?: string; error?: string }>;
+    let r: Reply<{ call?: string; error?: string }> | null;
     try {
-      r = await this.t.request("POST", "/calls", {
-        workspace,
-        title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(live ?? {}),
-        ...(source ? { call: source } : {}),
-      });
+      r = await this.t
+        .request<{ call?: string; error?: string }>("POST", "/calls", {
+          workspace,
+          title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
+          ...(live ?? {}),
+          ...(source ? { call: source } : {}),
+        })
+        .catch(() => null);
     } finally {
       // The pick was for this one call, started or not.
       this.callPicker.used();
       this.starting = false;
       this.paint();
+    }
+    if (!r) {
+      toast("The call did not start: akou did not answer.");
+      return;
     }
     const call = r.body.call;
     if (r.status === 201 && call) {

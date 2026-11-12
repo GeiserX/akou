@@ -578,6 +578,13 @@ export class CallManager {
     const r = this.resolve(ref);
     if (!r.ok) return r;
     let c = this.controllers.get(r.id);
+    // An interrupt still flushing shows `interrupted`, which is not live, so a start can take over
+    // while it flushes; wait for it here, before the look for another live call (LG-3). A start
+    // that reached its folder stage meanwhile counts as live once that stage settles.
+    if (c) {
+      await c.settled();
+      if (this.folderStage) await this.folderSettled();
+    }
     if (!c?.live) {
       const other = this.live();
       if (other && other.id !== r.id) {
