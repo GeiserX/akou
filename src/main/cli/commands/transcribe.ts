@@ -12,11 +12,12 @@
  * here: the server's own refusal is printed, so its limits live in one place (docs/ux/CLI.md rule 1).
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { bool, repeated, str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import { api, type Body, type Command, finish } from "../context.ts";
+import { uploadFile } from "../upload-body.ts";
 import { usage } from "./calls.ts";
 
 const PRESETS = ["lite", "fast", "best", "fusion", "auto"];
@@ -74,15 +75,11 @@ export const transcribeCommand: Command = {
         return usage(ctx, `cannot read ${keywordsFile}: ${(err as Error).message}`);
       }
     }
-    let bytes: Uint8Array;
-    try {
-      if (!statSync(file).isFile()) return usage(ctx, `${file} is not a file`);
-      bytes = readFileSync(file);
-    } catch (err) {
-      return usage(ctx, `cannot read ${file}: ${(err as Error).message}`);
-    }
+    // Read only as it is sent (`uploadBody`): a long recording is never held in memory whole.
+    const media = uploadFile(file);
+    if (typeof media === "string") return usage(ctx, media);
     const form = new FormData();
-    form.append("file", new Blob([bytes]), basename(file));
+    form.append("file", media, basename(file));
     if (preset) form.append("preset", preset);
     const language = str(p, "language");
     if (language) form.append("language", language);

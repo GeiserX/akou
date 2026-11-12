@@ -665,7 +665,8 @@ export const MAX_ANSWER_BYTES = 16 * 1024 * 1024;
 
 /**
  * A file to upload, or why not: missing, not a file, over `max` bytes, or not audio or video. The
- * file goes out as a `Bun.file`, read as it is sent, never held in memory whole.
+ * file goes out as a `Bun.file` in the client's streamed body (`uploadBody`), read as it is sent:
+ * a `FormData` handed to `fetch` as it is would be built whole in memory first.
  */
 export function readMedia(
   path: string,

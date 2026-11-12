@@ -50,6 +50,7 @@ import {
   stopList,
   stopStrayLaunchers,
 } from "./heal.ts";
+import { uploadBody } from "./upload-body.ts";
 
 /** Exit codes (DESIGN 6.1). */
 export const EXIT = {
@@ -242,7 +243,10 @@ export interface ClientOptions {
 
 export interface RequestOptions {
   body?: unknown;
-  /** A multipart body instead of JSON: an upload route (`akou transcribe`). */
+  /**
+   * A multipart body instead of JSON: an upload route (`akou transcribe`). It is sent as a stream
+   * (`uploadBody`), so a file part is read from disk as it goes, never held in memory whole.
+   */
   form?: FormData;
   query?: Record<string, string | number | boolean | undefined>;
   /** Launch the app if it is not running. Default true. */
@@ -418,14 +422,20 @@ export class ApiClient {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
     const hasBody = method !== "GET" && method !== "HEAD";
+    // A form is streamed, built again for each send: a retry after a launch reads the file anew.
+    const upload = o.form ? uploadBody(o.form) : null;
     return fetch(url, {
       method,
       headers: {
         authorization: `Bearer ${remote ? to.key : this.token()}`,
         "x-akou-client": o.client ?? this.o.client,
-        ...(hasBody && !o.form ? { "content-type": "application/json" } : {}),
+        ...(upload
+          ? { "content-type": upload.contentType, "content-length": String(upload.length) }
+          : hasBody
+            ? { "content-type": "application/json" }
+            : {}),
       },
-      body: o.form ?? (hasBody ? JSON.stringify(o.body ?? {}) : undefined),
+      body: upload ? upload.body : hasBody ? JSON.stringify(o.body ?? {}) : undefined,
       signal: o.signal
         ? AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs ?? 60_000)])
         : AbortSignal.timeout(o.timeoutMs ?? 60_000),
