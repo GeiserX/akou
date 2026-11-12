@@ -15,7 +15,8 @@
  *   replaces the whole entry, so the page sends them back (the route keeps `source` and
  *   `added_at`).
  * - A row opens to Use in calls too, a switch: on is the same route without `scope`, an ordinary
- *   entry; off puts `scope: "dictation"` back. Remove is `DELETE /vocab/{term}`, one click.
+ *   entry; off puts `scope: "dictation"` back. Remove is `DELETE /vocab/{term}`, one click, and
+ *   its Undo puts the removed entry back whole through `POST /vocab/restore`.
  * - Import: a text file, one term per line, through `POST /vocab/import {scope: "dictation"}`, into
  *   the same file; a word the file already holds for calls stays one.
  * - To review: the words fixed while dictating (DC-L5, `dictation-review.ts`).
@@ -544,13 +545,33 @@ export class DictationDictionary {
   }
 
   private async remove(term: string): Promise<void> {
-    const r = await this.t.request("DELETE", `/vocab/${encodeURIComponent(term)}`);
+    const r = await this.t.request<{ entry?: unknown }>(
+      "DELETE",
+      `/vocab/${encodeURIComponent(term)}`,
+    );
     if (r.status >= 400) {
       toast(message(r.body, `the word was not removed (HTTP ${r.status})`));
       return;
     }
     this.opened = null;
-    toast(`Removed ${term}.`, "info");
+    // Undo puts back the entry the route removed, whole: its forms, scope, source and date
+    // (VOC-UNDO1). Written again through `POST /vocab`, it would lose all but its forms.
+    const entry = r.body.entry;
+    toast(
+      `Removed ${term}.`,
+      "info",
+      entry ? { label: "Undo", run: () => void this.restore(term, entry) } : undefined,
+    );
+    await this.load();
+  }
+
+  private async restore(term: string, entry: unknown): Promise<void> {
+    const r = await this.t.request("POST", "/vocab/restore", { entry });
+    if (r.status >= 400) {
+      toast(message(r.body, `the word was not put back (HTTP ${r.status})`));
+      return;
+    }
+    toast(`Put back ${term}.`, "info");
     await this.load();
   }
 
