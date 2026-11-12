@@ -258,6 +258,7 @@ function stalling(
             {},
             { Connection: "close" },
           );
+        // clock: the upload's stall bound, `ms` of silence on the wire; tests pass a short one.
         timer = setTimeout(() => reject(cut()), ms);
       });
       try {
