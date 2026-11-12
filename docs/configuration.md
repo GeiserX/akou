@@ -201,7 +201,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 | Key | Default | What it does |
 |---|---|---|
 | `webhook.url` (file only) | `""` | Address the call is POSTed to at every hand-off stage, signed with `webhook.secret`. Empty: off. File only: it decides where your transcripts are sent. |
-| `webhook.secret` | `""` | Secret for the webhook's HMAC-SHA256 signatures: `X-Akou-Signature` over the body, and `X-Akou-Signature-V2` over `<X-Akou-Timestamp>.<body>`, which lets a receiver refuse a replay. The webhook stays off until it is set. Never shown back or logged. |
+| `webhook.secret` | `""` | Secret for the webhook's HMAC-SHA256 signatures: `X-Akou-Signature` over the body, and `X-Akou-Signature-V2` over `<X-Akou-Delivery>.<X-Akou-Timestamp>.<body>`, which lets a receiver refuse a replay. The webhook stays off until it is set. Never shown back or logged. |
 
 ### vocab
 

@@ -7,8 +7,9 @@
  * - `X-Akou-Signature: sha256=<hex>`: HMAC-SHA256 of the exact body bytes with `webhook.secret`.
  *   The webhook stays off until a secret is set, so an unsigned delivery is never sent.
  * - `X-Akou-Timestamp`: whole seconds since the epoch, fixed for the delivery and all its retries,
- *   and `X-Akou-Signature-V2: sha256=<hex>`: HMAC-SHA256 of `<timestamp>.<body>` with the same
- *   secret. A receiver that checks v2 and refuses an old timestamp refuses a replayed delivery;
+ *   and `X-Akou-Signature-V2: sha256=<hex>`: HMAC-SHA256 of `<delivery>.<timestamp>.<body>` with
+ *   the same secret, where `<delivery>` is `X-Akou-Delivery`. A receiver that checks v2, refuses an
+ *   old timestamp and drops a delivery id it already has refuses a replayed delivery;
  *   the body-only header stays byte for byte as it was, so receivers that check it keep working.
  * - Three retries after the first attempt, with backoff, on a network error, a timeout, 408, 429
  *   or any 5xx. Any other answer is final.
@@ -29,9 +30,14 @@ export function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-/** `sha256=<hex>` over `<timestamp>.<body>`: the v2 signature, which a replay cannot reuse. */
-export function signTimestamped(secret: string, timestamp: string, body: string): string {
-  return `sha256=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
+/** `sha256=<hex>` over `<delivery>.<timestamp>.<body>`: the v2 signature a replay cannot reuse. */
+export function signTimestamped(
+  secret: string,
+  delivery: string,
+  timestamp: string,
+  body: string,
+): string {
+  return `sha256=${createHmac("sha256", secret).update(`${delivery}.${timestamp}.${body}`).digest("hex")}`;
 }
 
 /** The address as the log may keep it: scheme, host and port only. */
@@ -91,15 +97,17 @@ export async function sendWebhook(o: WebhookOptions): Promise<WebhookResult> {
   const backoff = o.backoffMs ?? WEBHOOK_BACKOFF_MS;
   // clock: the default of an injected now; tests pass their own.
   const timestamp = String(Math.floor((o.now ?? Date.now)() / 1000));
+  // The same id on every attempt, so a receiver can drop a retried delivery it already has. v2
+  // signs it, so a replay inside the timestamp window cannot pass that check with a fresh id.
+  const delivery = randomUUID();
   const headers = {
     "content-type": "application/json",
     "user-agent": `akou/${o.version}`,
     "x-akou-event": o.stage,
     "x-akou-signature": signBody(o.secret, o.body),
     "x-akou-timestamp": timestamp,
-    "x-akou-signature-v2": signTimestamped(o.secret, timestamp, o.body),
-    // The same id on every attempt, so a receiver can drop a retried delivery it already has.
-    "x-akou-delivery": randomUUID(),
+    "x-akou-signature-v2": signTimestamped(o.secret, delivery, timestamp, o.body),
+    "x-akou-delivery": delivery,
   };
   let status = 0;
   let error: string | undefined;
