@@ -8,9 +8,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { $ } from "bun";
 import { CLI } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -27,9 +27,16 @@ const LONG_MESSAGE = `the request was refused: ${"x".repeat(300_000)}`;
 let server: ReturnType<typeof Bun.serve>;
 let t: { dir: string; cleanup(): void };
 let runs = 0;
+/** The slow reader: waits, then writes all of its stdin to the file named first. */
+let reader = "";
 
 beforeAll(() => {
   t = tempDir("akou-piped-");
+  reader = join(t.dir, "reader.ts");
+  writeFileSync(
+    reader,
+    "const [got, ms] = process.argv.slice(2);\nawait Bun.sleep(Number(ms));\nawait Bun.write(got, await Bun.stdin.text());\n",
+  );
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -53,8 +60,10 @@ afterAll(() => {
 
 /**
  * Runs the CLI with its stdout (and, with `stderr`, its stderr too) piped into a second process that
- * starts reading after `delayMs`, through an OS pipe as a shell makes one. `Bun.spawn` with
- * `stdout: "pipe"` reads the child as it writes, so it never shows the cut.
+ * starts reading after `delayMs`, through an OS pipe made by the system shell (sh, or cmd on
+ * Windows). `Bun.spawn` with `stdout: "pipe"` reads the child as it writes, so it never shows the
+ * cut. Bun's own shell (`$`) is not used: on Windows its `2>&1 | reader` never finished, however
+ * the CLI wrote its stderr.
  */
 async function slowReader(argv: string[], delayMs: number, o: { stderr?: boolean } = {}) {
   const env: Record<string, string> = {};
@@ -63,11 +72,14 @@ async function slowReader(argv: string[], delayMs: number, o: { stderr?: boolean
   env.AKOU_API_KEY = KEY;
   delete env.AKOU_API_KEY_FILE;
   const got = join(t.dir, `got-${++runs}.txt`);
-  const reader = `await Bun.sleep(${delayMs}); await Bun.write(${JSON.stringify(got)}, await Bun.stdin.text());`;
   const bun = process.execPath;
-  await (o.stderr
-    ? $`${bun} ${CLI} ${argv} 2>&1 | ${bun} -e ${reader}`.env(env).nothrow().quiet()
-    : $`${bun} ${CLI} ${argv} | ${bun} -e ${reader}`.env(env).nothrow().quiet());
+  const q = (words: string[]) => words.map((w) => `"${w}"`).join(" ");
+  const line = `${q([bun, CLI, ...argv])}${o.stderr ? " 2>&1" : ""} | ${q([bun, reader, got, String(delayMs)])}`;
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(line, { shell: true, env, stdio: "ignore" });
+    p.on("error", reject);
+    p.on("exit", () => resolve());
+  });
   return readFileSync(got, "utf8");
 }
 
