@@ -810,6 +810,29 @@ describe("[ECHO-1] Mic hears the call", () => {
     });
   }
 
+  test("a pause cuts the call line where the mic's copy runs on: the mic line is still echo", async () => {
+    const r = rig();
+    await startCall(r);
+    const a = remote.slice(0, 4);
+    const b = remote.slice(4);
+    const call = concat(silence(1), speak(a, { voice: 3 }), silence(1.2), speak(b, { voice: 3 }));
+    const mic = concat(silence(1.1), speak(remote), silence(1.1));
+    r.engine.last.play(mic, call);
+    r.engine.last.play(silence(3), silence(3));
+    await r.mgr.stop();
+    const s = segs(r.events);
+    // The case the test is about: two call lines, one mic line.
+    expect(s.filter((x) => x.ch === "call" && x.rev === 1).map((x) => x.text)).toEqual([
+      a.join(" "),
+      b.join(" "),
+    ]);
+    const micLine = s.find((x) => x.ch === "mic" && x.rev === 1) as Seg;
+    expect(micLine.text).toBe(remote.join(" "));
+    expect(s.filter((x) => x.echo !== undefined)).toMatchObject([
+      { id: micLine.id, rev: 2, echo: true },
+    ]);
+  });
+
   test("positive control: the user's own words at the same time get no echo revision", async () => {
     const { s, view } = await play(["hello", "world", "thanks", "meeting", "today"], remote);
     expect(s.filter((x) => x.echo !== undefined)).toEqual([]);

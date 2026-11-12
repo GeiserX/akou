@@ -61,7 +61,7 @@
  */
 
 import { workerData } from "node:worker_threads";
-import { isEcho } from "../../core/log/echo.ts";
+import { isEchoOfCalls } from "../../core/log/echo.ts";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { CHANNELS, type Clock, realClock, withDeadline } from "../capture/engine.ts";
@@ -2729,26 +2729,25 @@ export class LiveAsr {
   }
 
   /**
-   * Echo (DESIGN 3.1 step 7): a mic line that repeats a call line (`isEcho`) gets a revision
-   * carrying `echo: true` alone. Checked whichever channel just wrote, since a call line can close
-   * after the mic line that heard it. Never writes `echo: false`, and leaves a line a person
-   * touched as it is.
+   * Echo (DESIGN 3.1 step 7): a mic line that repeats the call lines near it (`isEchoOfCalls`)
+   * gets a revision carrying `echo: true` alone. Checked whichever channel just wrote, since a call
+   * line can close after the mic line that heard it. Never writes `echo: false`, and leaves a line
+   * a person touched as it is.
    */
   private markEcho(c: HostCall, id: string): void {
     const view = c.access.view;
     const s = view.segment(id);
     if (!s) return;
     c.recent = c.recent.filter((r) => (view.segment(r)?.w1 ?? 0) >= s.w0 - ECHO_RECENT_MS);
-    for (const other of c.recent) {
-      const o = view.segment(other);
-      if (!o || o.ch === s.ch) continue;
-      const mic = s.ch === "mic" ? s : o;
-      const call = s.ch === "mic" ? o : s;
+    c.recent.push(id);
+    const lines = c.recent.flatMap((r) => view.segment(r) ?? []);
+    const calls = lines.filter((l) => l.ch === "call");
+    const mics = s.ch === "mic" ? [s] : lines.filter((l) => l.ch === "mic");
+    for (const mic of mics) {
       if (mic.echo || mic.revisions.some((r) => r.by !== undefined)) continue;
-      if (!isEcho(mic, call)) continue;
+      if (!isEchoOfCalls(mic, calls)) continue;
       c.access.record({ type: "seg", id: mic.id, rev: mic.rev + 1, echo: true });
     }
-    c.recent.push(id);
   }
 
   /**

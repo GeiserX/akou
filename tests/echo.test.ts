@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { type EchoLine, isEcho } from "../src/core/log/echo.ts";
+import { type EchoLine, isEcho, isEchoOfCalls } from "../src/core/log/echo.ts";
 
 const T = 1_000_000;
 const call: EchoLine = { w0: T, w1: T + 2000, text: "We ship on Friday, after the review." };
@@ -53,5 +53,30 @@ describe("[ECHO-1] Mic hears the call", () => {
     expect(isEcho(mic({ text: "can you hear me now" }), call)).toBe(false);
     expect(isEcho(mic({ text: null }), call)).toBe(false);
     expect(isEcho(mic(), { ...call, text: null })).toBe(false);
+  });
+});
+
+describe("[ECHO-1] Mic hears the call: one mic line over several call lines", () => {
+  // Two remote turns, cut apart on the call channel and heard as one line on the mic.
+  const a: EchoLine = { w0: T, w1: T + 1800, text: "we should move the build" };
+  const b: EchoLine = { w0: T + 1900, w1: T + 3700, text: "to new box thanks meeting" };
+  const both = mic({ w0: T + 100, w1: T + 3800, text: `${a.text} ${b.text}` });
+
+  test("the call lines are read together: neither alone holds 70 % of the mic line", () => {
+    expect(isEcho(both, a)).toBe(false);
+    expect(isEcho(both, b)).toBe(false);
+    expect(isEchoOfCalls(both, [b, a])).toBe(true);
+  });
+
+  test("a call line is pooled only while the mic line may have heard it", () => {
+    // Positive control: the same two lines, one ending more than 1.5 s before the mic starts.
+    const old = { ...a, w0: a.w0 - 5000, w1: a.w1 - 5000 };
+    expect(isEchoOfCalls(both, [old, b])).toBe(false);
+    // A call line that starts after the mic line ends is not pooled either.
+    const late = { ...a, w0: both.w1 + 1, w1: both.w1 + 1800 };
+    expect(isEchoOfCalls(both, [late, b])).toBe(false);
+    // And the earliest pooled call line must start first, as for one line.
+    expect(isEchoOfCalls({ ...both, w0: a.w0 - 1 }, [a, b])).toBe(false);
+    expect(isEchoOfCalls(both, [])).toBe(false);
   });
 });

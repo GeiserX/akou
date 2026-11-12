@@ -44,3 +44,24 @@ export function isEcho(mic: EchoLine, call: EchoLine): boolean {
   }
   return found * 10 >= said.length * ECHO_MIN_SHARE_TENTHS;
 }
+
+/**
+ * Whether the mic line `mic` is the mic hearing the call lines near it, taken together. The two
+ * channels are not cut in the same places (the final pass cuts the call channel at every turn
+ * between two remote speakers, and a pause can close a call line where the mic's copy runs on), so
+ * one mic line can hold the echo of several call lines. The call lines that may have been heard are
+ * the ones that start before the mic line ends and end at most `ECHO_WINDOW_MS` before it starts;
+ * they are read as one line, from the first one's start to the last end.
+ */
+export function isEchoOfCalls(mic: EchoLine, calls: readonly EchoLine[]): boolean {
+  const near = calls
+    .filter((c) => c.w1 + ECHO_WINDOW_MS >= mic.w0 && c.w0 <= mic.w1)
+    .sort((a, b) => a.w0 - b.w0);
+  const first = near[0];
+  if (!first) return false;
+  return isEcho(mic, {
+    w0: first.w0,
+    w1: Math.max(...near.map((c) => c.w1)),
+    text: near.map((c) => c.text ?? "").join(" "),
+  });
+}

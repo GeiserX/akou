@@ -200,6 +200,25 @@ describe("[ECHO-1] Mic hears the call: the final pass marks it too", () => {
     const r = await run(callLog([1]), part(["hello", "world", "thanks", "meeting", "today"]));
     expect(r.segs.map((s) => s.echo)).toEqual([undefined, undefined]);
   });
+
+  test("two remote speakers: the call is cut at the turn, the mic is not, and the mic line is still echo", async () => {
+    const a = ["we", "should", "move", "the", "build"];
+    const b = ["to", "new", "box", "thanks", "meeting"];
+    const r = await run(callLog([1]), {
+      1: {
+        mic: concat(silence(1.1), speak([...a, ...b]), silence(2)),
+        call: concat(silence(1), speak(a, { voice: 1 }), speak(b, { voice: 4 }), silence(2.1)),
+      },
+    });
+    // The case the test is about: two call lines, one mic line.
+    expect(r.segs.filter((s) => s.ch === "call").map((s) => s.text)).toEqual([
+      a.join(" "),
+      b.join(" "),
+    ]);
+    expect(r.segs.filter((s) => s.ch === "mic").map((s) => [s.text, s.echo])).toEqual([
+      [[...a, ...b].join(" "), true],
+    ]);
+  });
 });
 
 describe("speakers across the call", () => {
