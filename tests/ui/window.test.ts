@@ -600,6 +600,79 @@ describe("the confirm bar", () => {
   );
 });
 
+describe("[W3.1] the controls when akou does not answer", () => {
+  test(
+    "Record and Stop whose request gets no answer say so, and work again once akou answers",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const page = await rig.open();
+        await page.waitForSelector("#record", { state: "visible" });
+        const drop = (r: Route) =>
+          r.request().method() === "POST" ? void r.abort() : void r.continue();
+        await page.route("**/api/v1/calls", drop);
+        await page.click("#record");
+        await until(
+          async () =>
+            (await text(page, "#toast")) === "The call did not start: akou did not answer.",
+          5000,
+          "the start's toast",
+        );
+        expect(await page.locator("#record").isEnabled()).toBe(true);
+        await page.unroute("**/api/v1/calls", drop);
+        // Positive control: with akou answering, the same click records and shows no such toast.
+        await page.click("#record");
+        await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
+        await page.route("**/api/v1/calls/*/stop", drop);
+        await page.click("#stop");
+        await until(
+          async () => (await text(page, "#toast")) === "stop failed: akou did not answer.",
+          5000,
+          "the stop's toast",
+        );
+        expect(await text(page, "#state")).toBe("rec");
+        await page.unroute("**/api/v1/calls/*/stop", drop);
+        await page.click("#stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[W17.1] a page that lost the app", () => {
+  test(
+    "with no call open, the word turns to reconnecting and after 10 s the page says akou is not running; both go when it answers",
+    async () => {
+      await withRig({}, async (rig) => {
+        let down = true;
+        const page = await rig.open(undefined, {
+          before: (p) =>
+            p.route("**/app/stream", (r) => (down ? void r.abort() : void r.continue())),
+        });
+        await until(
+          async () => (await text(page, "#state")) === "reconnecting",
+          8000,
+          "reconnecting",
+        );
+        await until(
+          async () =>
+            (await page.isVisible("#banner")) &&
+            (await text(page, "#banner-text")) === "akou is not running. Open it with `akou open`.",
+          15_000,
+          "the not-running line",
+        );
+        // Positive control: once akou answers, the same checks see the page come back.
+        down = false;
+        await until(async () => (await text(page, "#state")) !== "reconnecting", 10_000, "back");
+        await until(async () => !(await page.isVisible("#banner")), 5000, "banner gone");
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the notepad (DESIGN 5.1)", () => {
   test(
     "a typed line is a note by the user, timed at its first keystroke; agent lines look different",

@@ -503,7 +503,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
 | Notes | the input's placeholder, "Enter to add, Shift+Enter for a new line", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
 | Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated in plain words (a missing or signed-out assistant is one line that points at Settings, never a setting's key), excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
-| Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
+| Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry (Retry has) |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |
 | Page lost the app | n/a | "Reconnecting…" | after 10 s: "akou is not running. Open it with `akou open`." Never `akou start`, which records (CLI.md rule 4) |

@@ -338,3 +338,54 @@ describe("[CLI-03] One way to name a call in every command", () => {
     expect(out.join("\n")).toContain("the call is named twice");
   });
 });
+
+describe("[CLI-15] With --json a usage error is one JSON value on stdout, in every command", () => {
+  const run = async (argv: string[]) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runCli(
+      argv,
+      { env: {}, out: (t) => out.push(t), err: (t) => err.push(t) },
+      { launch: null },
+    );
+    return { code, out: out.join("\n"), err: err.join("\n") };
+  };
+  const usageJson = (r: { code: number; out: string }): string => {
+    expect(r.code).toBe(64);
+    const v = JSON.parse(r.out);
+    expect(v.error).toBe("usage");
+    expect(typeof v.message).toBe("string");
+    return v.message;
+  };
+
+  test("an unknown flag, for every command in the registry", async () => {
+    for (const c of COMMANDS) {
+      const r = await run([c.name, "--no-such-flag", "--json"]);
+      expect([c.name, usageJson(r)]).toEqual([c.name, "unknown option --no-such-flag"]);
+      // People still read the error on stderr.
+      expect(r.err).toContain("unknown option --no-such-flag");
+    }
+  });
+
+  test("a flag value refused while the command runs, a flag missing its value, a call named twice", async () => {
+    expect(usageJson(await run(["calls", "--limit", "0", "--json"]))).toContain("--limit");
+    expect(usageJson(await run(["start", "--json", "--title"]))).toBe("--title needs a value");
+    expect(usageJson(await run(["show", "one", "-c", "two", "--json"]))).toContain(
+      "the call is named twice",
+    );
+  });
+
+  test("an unknown command, and a secret flag whose value never reaches stdout", async () => {
+    expect(usageJson(await run(["frobnicate", "--json"]))).toContain("frobnicate");
+    const secret = await run(["jobs", "list", "--api-key", "ak_should-not-print", "--json"]);
+    usageJson(secret);
+    expect(secret.out).not.toContain("ak_should-not-print");
+  });
+
+  test("positive control: without --json, or with --json after --, stdout stays empty", async () => {
+    const plain = await run(["calls", "--limit", "0"]);
+    expect([plain.code, plain.out]).toEqual([64, ""]);
+    const word = await run(["frobnicate", "--", "--json"]);
+    expect([word.code, word.out]).toEqual([64, ""]);
+  });
+});

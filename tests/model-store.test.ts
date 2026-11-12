@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
@@ -443,6 +443,35 @@ describe("[SV-M2] on-demand downloads stop at the size cap and at low free space
       r.cleanup();
     }
   });
+
+  test("[SV-M2] a partial file left by a stopped download counts as had: the resume needs only the rest", () => {
+    const r = rig();
+    try {
+      // B is 4096 bytes and 3000 of them wait in its partial file.
+      mkdirSync(join(r.dir, B), { recursive: true });
+      writeFileSync(join(r.dir, B, "b.onnx.part"), new Uint8Array(3000));
+      r.settings.maxGb = 0;
+      r.settings.free = 1e9 + 1095;
+      const e = refusal(() => r.store.admit([B]));
+      expect([e.details.reason, e.details.bytes]).toEqual(["disk_full", 1096]);
+      r.settings.free = 1e9 + 1096;
+      r.store.admit([B]);
+      expect(r.store.waiting([B])).toEqual({ model: B, bytes: 3000, total: 4096 });
+      // The cap counts the partial bytes once: on disk, not again as still to come.
+      r.settings.free = 1e12;
+      r.settings.maxGb = (3 * 4096 + 4096 - 1) / 1e9;
+      expect(refusal(() => r.store.admit([B])).details.reason).toBe("models_max_gb");
+      r.settings.maxGb = (3 * 4096 + 4096) / 1e9;
+      r.store.admit([B]);
+      // A partial file larger than the file is fetched whole, so it counts for nothing.
+      writeFileSync(join(r.dir, B, "b.onnx.part"), new Uint8Array(5000));
+      r.settings.maxGb = 0;
+      r.settings.free = 1e9 + 4095;
+      expect(refusal(() => r.store.admit([B])).details.bytes).toBe(4096);
+    } finally {
+      r.cleanup();
+    }
+  });
 });
 
 describe("[SV-M3] a failed download is retried, then fails for good", () => {
@@ -464,6 +493,80 @@ describe("[SV-M3] a failed download is retried, then fails for good", () => {
       r.store.fetch([B]);
       await until(async () => ends.length === 2, 5000, "second download");
       expect(ends[1]).toEqual({ model: B, ok: true });
+    } finally {
+      reg.failNext("b.onnx", 0);
+      r.cleanup();
+    }
+  });
+
+  test("[SV-M3] a download that gives up keeps its reason on the model's row until the next pull; a Cancel leaves none", async () => {
+    const r = rig();
+    const held = { defaults: new Set<string>(), inUse: new Set<string>() };
+    const row = () => r.store.list(held, () => null).find((m) => m.id === B);
+    reg.failNext("b.onnx", Number.POSITIVE_INFINITY);
+    const ends: { ok: boolean }[] = [];
+    r.store.onEnd((e) => ends.push(e));
+    try {
+      // Positive control: a model never fetched carries no reason.
+      expect(row()).not.toHaveProperty("error");
+      r.store.pull(B);
+      await until(async () => ends.length === 1, 5000, "download failed");
+      expect(row()?.state).toBe("missing");
+      expect(row()?.error).toContain("HTTP 500");
+      // A new pull clears it while it runs, and a success leaves none.
+      const release = reg.hold("b.onnx", 1024);
+      reg.failNext("b.onnx", 0);
+      r.store.pull(B);
+      expect(row()?.state).toBe("downloading");
+      expect(row()).not.toHaveProperty("error");
+      // A Cancel is on purpose: no failure to show.
+      expect(r.store.cancel(B, "admin")).toBe(true);
+      release();
+      expect(row()?.state).toBe("missing");
+      expect(row()).not.toHaveProperty("error");
+      r.store.pull(B);
+      await until(async () => r.store.state(B) === "ready", 5000, "the last pull");
+      expect(row()).not.toHaveProperty("error");
+    } finally {
+      reg.failNext("b.onnx", 0);
+      r.cleanup();
+    }
+  });
+
+  test("[SV-M3] a model made ready by another door, then deleted or evicted, shows no old reason", async () => {
+    const r = rig();
+    const held = { defaults: new Set<string>(), inUse: new Set<string>() };
+    const row = () => r.store.list(held, () => null).find((m) => m.id === B);
+    const ends: { ok: boolean }[] = [];
+    r.store.onEnd((e) => ends.push(e));
+    const fail = async (n: number) => {
+      reg.failNext("b.onnx", Number.POSITIVE_INFINITY);
+      r.store.pull(B);
+      await until(async () => ends.length === n, 5000, "download failed");
+      reg.failNext("b.onnx", 0);
+      // Positive control: the reason is on the row.
+      expect(row()?.error).toContain("HTTP 500");
+    };
+    try {
+      // Its files arrive by another door (an import), and it is deleted unseen.
+      await fail(1);
+      reg.install(r.dir, entry(B));
+      r.store.remove(B);
+      expect(row()?.state).toBe("missing");
+      expect(row()).not.toHaveProperty("error");
+      // The sweep evicts it unseen.
+      await fail(2);
+      reg.install(r.dir, entry(B));
+      r.store.sweep(new Set());
+      r.clock.t += 31 * DAY_MS;
+      expect(r.store.sweep(new Set()).map((g) => g.id)).toContain(B);
+      expect(row()).not.toHaveProperty("error");
+      // Read as ready once, then its folder goes by hand.
+      await fail(3);
+      reg.install(r.dir, entry(B));
+      expect(row()?.state).toBe("ready");
+      rmSync(join(r.dir, B), { recursive: true, force: true });
+      expect(row()).not.toHaveProperty("error");
     } finally {
       reg.failNext("b.onnx", 0);
       r.cleanup();

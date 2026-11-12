@@ -18,10 +18,13 @@ const FILES: Record<string, Uint8Array> = {
   "/m/a.onnx": new Uint8Array(200_000).map((_, i) => i % 251),
   "/m/tokens.txt": new TextEncoder().encode("a 0\nb 1\n"),
 };
+/** Every file request the model server got: a refused pull must make none. */
+let requests = 0;
 const server = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
   fetch(req) {
+    requests++;
     const body = FILES[new URL(req.url).pathname];
     return body ? new Response(body) : new Response("no", { status: 404 });
   },
@@ -174,6 +177,40 @@ describe("first run without the speech models", () => {
       "models failed",
     );
     expect(existsSync(join(old, "encoder.int8.onnx"))).toBe(true);
+    await rig.close();
+  });
+
+  test("[MD-1] the first-run pull checks free space first: a full volume fails it before any byte is fetched", async () => {
+    const rig = await appRig({
+      modelRegistry: registry(),
+      jobs: { modelStore: { freeBytes: () => 1 } },
+    });
+    const before = requests;
+    expect((await rig.api("POST", "/models/pull")).status).toBe(202);
+    await until(
+      async () => (await rig.api("GET", "/models")).body.state === "failed",
+      10_000,
+      "models failed",
+    );
+    const m = await rig.api("GET", "/models");
+    expect(m.body.error).toContain("bytes free");
+    expect(requests).toBe(before);
+    await rig.close();
+  });
+
+  test("[MD-1] positive control: with room on the volume the same pull fetches every file", async () => {
+    const rig = await appRig({
+      modelRegistry: registry(),
+      jobs: { modelStore: { freeBytes: () => 1e12 } },
+    });
+    const before = requests;
+    expect([200, 202]).toContain((await rig.api("POST", "/models/pull")).status);
+    await until(
+      async () => (await rig.api("GET", "/models")).body.state === "ready",
+      10_000,
+      "models ready",
+    );
+    expect(requests - before).toBeGreaterThanOrEqual(Object.keys(FILES).length);
     await rig.close();
   });
 

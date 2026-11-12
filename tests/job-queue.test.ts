@@ -162,6 +162,31 @@ describe("SV-Q1: server.concurrency, the jobs run at once", () => {
   });
 });
 
+describe("[akou-nby] A store too big to read on the server's thread", () => {
+  test("a submit while every slot is busy reads no queued row", async () => {
+    const r = rig({ concurrency: 1 });
+    job(put(r));
+    await until(() => r.started.length === 1, 10_000, "the first job to start");
+    for (let i = 0; i < 20; i++) job(put(r));
+    const store = r.svc.store;
+    const real = store.queued.bind(store);
+    let rows = 0;
+    store.queued = () => {
+      const q = real();
+      rows += q.length;
+      return q;
+    };
+    try {
+      for (let i = 0; i < 10; i++) job(put(r));
+    } finally {
+      store.queued = real;
+    }
+    // Nothing can start and no idle Worker holds a model: the queue need not be read at all.
+    expect(rows).toBe(0);
+    expect(r.started.length).toBe(1);
+  });
+});
+
 describe("SV-Q2: priority, then submit order, kept across a restart", () => {
   test("a higher priority runs first; equal priorities run in submit order", async () => {
     const r = rig({ concurrency: 1 });

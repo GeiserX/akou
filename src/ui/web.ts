@@ -201,22 +201,30 @@ class HttpTransport implements Transport {
     return r.blob();
   }
 
-  watchStatus(fn: (s: AppStatus) => void): { close(): void } {
+  watchStatus(
+    fn: (s: AppStatus) => void,
+    connection?: (state: "open" | "lost") => void,
+  ): { close(): void } {
     const ctl = new AbortController();
     let wait = 250;
     const loop = async () => {
       while (!ctl.signal.aborted) {
+        // A signed-out page is the login's business, not a lost app.
+        let signedOut = false;
         try {
           const r = await fetch("/app/stream", { headers: this.headers(), signal: ctl.signal });
-          if (r.status === 401) sessionEnded();
+          signedOut = r.status === 401;
+          if (signedOut) sessionEnded();
           if (r.ok && r.body) {
             wait = 250;
+            connection?.("open");
             for await (const f of sseFrames(r.body)) {
               if (f.event === "status") fn(JSON.parse(f.data) as AppStatus);
             }
           }
         } catch {}
         if (ctl.signal.aborted) return;
+        if (!signedOut) connection?.("lost");
         // clock: the reconnect backoff.
         await new Promise((res) => setTimeout(res, wait));
         wait = Math.min(wait * 2, 5000);

@@ -32,7 +32,7 @@ The questions people ask first. Each answer points at the page with the detail.
 
 ??? question "How big is the download?"
 
-    The app is a normal DMG. The speech models are one more download of about 3.0 GB on the first run, into Application Support, each file checked against a pinned SHA-256. The optional dictation model (Qwen3-ASR) is about 2.5 GB more.
+    The app is a normal DMG. The speech models are one more download on the first run, into Application Support, each file checked against a pinned SHA-256. On a Mac with a GPU and 16 GB of memory it is about 3.7 GB: streaming Nemotron for the live transcript and Qwen3-ASR for the transcript after the call. With less memory it is about 3.0 GB, with Parakeet for both, and Qwen3-ASR for dictation is about 2.5 GB more.
 
 ??? question "Can I use it without a model provider or an agent?"
 

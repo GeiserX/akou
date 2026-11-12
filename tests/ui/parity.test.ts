@@ -511,6 +511,44 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "[W14.1] The font keys leave the size alone under Cmd or Ctrl (the browser's zoom) and on the pages",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row");
+          const size = () =>
+            page.evaluate(() =>
+              getComputedStyle(document.documentElement).getPropertyValue("--size"),
+            );
+          await page.locator("#scroller").focus();
+          // Positive control: the bare key moves the size, so a size that stays put means something.
+          const start = await size();
+          await page.keyboard.press("+");
+          const up = await size();
+          expect(up).not.toBe(start);
+          for (const k of ["Control+=", "Control+-", "Meta+=", "Meta+-", "Control++"]) {
+            await page.keyboard.press(k);
+            expect(await size()).toBe(up);
+          }
+          await page.click("#settings-open");
+          const control = page.locator("#pages button:visible").first();
+          await control.waitFor();
+          await control.focus();
+          // Check after each press: a '-' then '+' pair would cancel out and hide a missing guard.
+          for (const k of ["-", "+"]) {
+            await page.keyboard.press(k);
+            expect(await size()).toBe(up);
+          }
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[W4.1] The live transcript sits at the bottom: the space above a few lines, the newest and the grey line at the bottom edge, pinned as lines arrive, left alone once scrolled up",
     async () => {
       const t = tempDir("akou-wav-");
@@ -1192,6 +1230,67 @@ describe("DESIGN 7 parity with hark-viewer", () => {
             5000,
             "done note",
           );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W17.1] A failed final pass offers Retry, which asks the app to run it again and shows its refusal",
+    async () => {
+      const ids = { fail: "01J8Z6Q4M2VX0K7B3D4E5FRTRY", done: "01J8Z6Q4M2VX0K7B3D4E5FRDNE" };
+      await withRig(
+        {
+          seed: (home) => {
+            for (const id of [ids.fail, ids.done]) {
+              seedCall(home, (b) => {
+                b.created({ id });
+                b.partStarted(1, T0);
+                b.seg({ id: "l000001", w0: T0 + 1000, text: "a line" });
+                b.partEnded(1, "stop");
+                b.add({ type: "call.ended", reason: "stop" });
+                b.add({ type: "final.started", pid: 1 });
+                if (id === ids.fail)
+                  b.add({ type: "final.failed", step: "diarize", error: "the model is missing" });
+                else b.add({ type: "final.done", parts: [1], skipped: [] });
+              });
+            }
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(ids.done);
+          await page.waitForSelector("#final:not([hidden])");
+          // Positive control: a finished pass has nothing to retry and is not an alert.
+          expect(await page.locator("#final-retry").isVisible()).toBe(false);
+          expect(await page.getAttribute("#final", "role")).toBeNull();
+          const posts: string[] = [];
+          let answer = { status: 202, body: {} as object };
+          await page.route("**/api/v1/calls/*/finalize", (route) => {
+            posts.push(new URL(route.request().url()).pathname);
+            void route.fulfill({
+              status: answer.status,
+              contentType: "application/json",
+              body: JSON.stringify(answer.body),
+            });
+          });
+          await page.click(`#calls li[data-id="${ids.fail}"] button`);
+          await page.waitForSelector("#final-retry:not([hidden])", { timeout: 5000 });
+          expect(await page.getAttribute("#final", "role")).toBe("alert");
+          await page.click("#final-retry");
+          await until(async () => posts.length === 1, 5000, "one finalize request");
+          expect(posts[0]).toBe(`/api/v1/calls/${ids.fail}/finalize`);
+          answer = {
+            status: 501,
+            body: { error: "final_unavailable", message: "No speech model is downloaded." },
+          };
+          await page.click("#final-retry");
+          await until(
+            async () => (await text(page, "#toast")) === "No speech model is downloaded.",
+            5000,
+            "the app's refusal",
+          );
+          expect(posts.length).toBe(2);
         },
       );
     },
