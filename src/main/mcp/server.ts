@@ -49,6 +49,7 @@ import { APP_VERSION } from "../app-info.ts";
 import { callModeWords } from "../capture/call-mode.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
+import { mediaFile } from "../cli/upload-body.ts";
 import { listPresets, usesSpeaker } from "../notes/presets.ts";
 import { estimateTokens, type PackState, packState, quoteCallText } from "../query/render.ts";
 import { capAnswer, type ToolResult } from "./bound.ts";
@@ -665,7 +666,8 @@ export const MAX_ANSWER_BYTES = 16 * 1024 * 1024;
 
 /**
  * A file to upload, or why not: missing, not a file, over `max` bytes, or not audio or video. The
- * file goes out as a `Bun.file`, read as it is sent, never held in memory whole.
+ * file goes out in the client's streamed body (`uploadBody`), read from disk as it is sent: a
+ * `FormData` handed to `fetch` as it is would be built whole in memory first, `Bun.file` or not.
  */
 export function readMedia(
   path: string,
@@ -699,7 +701,7 @@ export function readMedia(
   if (!isMediaHead(head)) {
     return { error: `${path} is not an audio or video file; nothing was sent` };
   }
-  return { file: Bun.file(path) };
+  return { file: mediaFile(path) };
 }
 
 /** A loopback host: a plain http request to it never leaves this machine. */
