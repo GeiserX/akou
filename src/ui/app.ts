@@ -1148,7 +1148,53 @@ class App {
         disabled: live ? "Stop the recording to move it to the Trash." : undefined,
         run: () => void this.trashCall(id),
       },
+      {
+        id: "trash.empty",
+        label: "Empty Trash…",
+        danger: true,
+        run: () => void this.askEmptyTrash(),
+      },
     ];
+  }
+
+  /**
+   * Empty Trash… (W13.3): asks first, naming how many calls go and that it cannot be undone, then
+   * deletes every call in the trash for good (`DELETE /trash`). Calls in the list are not touched.
+   */
+  private async askEmptyTrash(): Promise<void> {
+    const r = await this.t
+      .request<{ calls?: { trashedAt: number }[] }>("GET", "/trash")
+      .catch(() => null);
+    if (!r || r.status >= 400) {
+      toast(message(r?.body, "the Trash could not be read"));
+      return;
+    }
+    const listed = r.body.calls ?? [];
+    const n = listed.length;
+    if (n === 0) {
+      toast("The Trash is empty.", "info");
+      return;
+    }
+    // Only the calls the question counts go: one trashed while it is open stays (TRASH-1).
+    const upTo = Math.max(...listed.map((c) => c.trashedAt));
+    const calls = `${n} call${n === 1 ? "" : "s"}`;
+    this.confirm(
+      `Delete the ${calls} in the Trash for good? This cannot be undone.`,
+      "Empty Trash",
+      () => void this.emptyTrash(upTo),
+    );
+  }
+
+  private async emptyTrash(upTo: number): Promise<void> {
+    const r = await this.t
+      .request<{ deleted?: number }>("DELETE", `/trash?upTo=${upTo}`)
+      .catch(() => null);
+    if (!r || r.status >= 400) {
+      toast(message(r?.body, "the Trash was not emptied"));
+      return;
+    }
+    const n = r.body.deleted ?? 0;
+    toast(`${n} call${n === 1 ? "" : "s"} deleted for good.`, "info");
   }
 
   private async moveCall(id: string, workspace: string): Promise<void> {

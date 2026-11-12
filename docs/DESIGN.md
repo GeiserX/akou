@@ -621,6 +621,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
 | `PATCH /calls/{id\|live\|last}` `{title?, workspace?}` | Renames the call at any time with a `call.renamed` event, and an export akou wrote takes the new name; 422 on an empty title, and the old name stays. `workspace` moves a finished call's folder into that workspace and writes `call.moved`; 409 `live_call` while it records |
 | `DELETE /calls/{id}` · `POST /calls/{id}/restore` | Moves a finished call to `.trash/<workspace>/` under the recordings folder, out of every list, deleted for good at the first start after 30 days; 409 `live_call` while it records. Restore brings it back to its workspace unchanged |
+| `GET /trash` · `DELETE /trash` | The calls in the trash, newest first; Empty trash deletes every one for good at once, through the same purge as the start, and touches nothing outside `.trash/` |
 | `PATCH /calls/{id}/segments/{sid}` `{spk}` | Who spoke one line: `seg rev+1` with the new `spk` and `by`; the text, its raw form and every earlier revision stay. 422 for a microphone line. The words of a line are fixed with `POST /calls/{id}/fix` |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |

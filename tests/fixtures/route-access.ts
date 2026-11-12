@@ -47,6 +47,8 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "PATCH /v1/calls/{id}": "admin",
   "DELETE /v1/calls/{id}": "admin",
   "POST /v1/calls/{id}/restore": "admin",
+  "GET /v1/trash": "admin",
+  "DELETE /v1/trash": "admin",
   "PATCH /v1/calls/{id}/segments/{sid}": "admin",
   "GET /v1/devices": "admin",
   "GET /v1/apps": "admin",

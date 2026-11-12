@@ -2,7 +2,8 @@
  * The sidebar's call menu (docs/ux/WINDOW.md W13.2, W13.3) on the real page: a right-click or the
  * keyboard on a call row opens akou's own menu, never the webview's text menu, and the sidebar
  * selects no text. Rename opens the call's title field (W3.16), Move to workspace moves its folder,
- * Move to Trash takes it out of the list with Undo, and a recording call cannot be trashed.
+ * Move to Trash takes it out of the list with Undo, and a recording call cannot be trashed. Empty
+ * Trash… asks, naming how many calls go, before it deletes them for good.
  *
  * Run with `bun run test:ui`.
  */
@@ -93,7 +94,7 @@ async function listed(rig: UiRig): Promise<string[]> {
   return (r.body.calls as { id: string }[]).map((c) => c.id);
 }
 
-const ITEMS = ["Rename…", "Move to workspace…", "Move to Trash"];
+const ITEMS = ["Rename…", "Move to workspace…", "Move to Trash", "Empty Trash…"];
 
 describe("[W13.3] a call row has akou's own menu, never the webview's", () => {
   test(
@@ -206,7 +207,10 @@ describe("[W13.3] a call row has akou's own menu, never the webview's", () => {
         await page.keyboard.press("ArrowDown");
         expect((await menu(page)).focused).toBe("Move to workspace…");
         await page.keyboard.press("End");
+        expect((await menu(page)).focused).toBe("Empty Trash…");
+        await page.keyboard.press("ArrowUp");
         expect((await menu(page)).focused).toBe("Move to Trash");
+        await page.keyboard.press("End");
         await page.keyboard.press("ArrowDown");
         expect((await menu(page)).focused).toBe("Rename…");
         await page.keyboard.press("Escape");
@@ -377,6 +381,7 @@ describe("[W13.3] Move to Trash, with Undo", () => {
         expect((await menu(page)).open).toBe(true);
         // Enter on it, from the keyboard, does nothing either.
         await page.keyboard.press("End");
+        await page.keyboard.press("ArrowUp");
         expect((await menu(page)).focused).toBe("Move to Trash");
         await page.keyboard.press("Enter");
         expect((await menu(page)).open).toBe(true);
@@ -392,6 +397,70 @@ describe("[W13.3] Move to Trash, with Undo", () => {
         ]);
         await page.keyboard.press("Escape");
         await rig.api("POST", `/calls/${live}/stop`);
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[TRASH-1] Empty Trash… from a call row", () => {
+  test(
+    "it asks first, naming how many calls go and that it cannot be undone; Empty Trash deletes only those, not a call trashed while it asked",
+    async () => {
+      await withRig({ seed: seedThree }, async (rig) => {
+        const page = await rig.open(C);
+        await page.waitForSelector("#calls li >> nth=2");
+        const inTrash = async () =>
+          ((await rig.api("GET", "/trash")).body.calls as unknown[]).length;
+        // An empty trash says so and asks nothing.
+        await page.click(`${row(B)} .what`, { button: "right" });
+        await page.click('#calls-menu [data-action="trash.empty"]');
+        await until(
+          async () => (await page.textContent("#toast"))?.includes("The Trash is empty.") === true,
+          5000,
+          "empty said",
+        );
+        expect(await page.locator("#confirm .confirm-row").count()).toBe(0);
+
+        for (const id of [A, B]) {
+          await page.click(`${row(id)} .what`, { button: "right" });
+          await page.click('#calls-menu [data-action="call.trash"]');
+          await until(async () => !(await listed(rig)).includes(id), 5000, `${id} trashed`);
+        }
+        expect(await inTrash()).toBe(2);
+
+        await page.click(`${row(C)} .what`, { button: "right" });
+        await page.click('#calls-menu [data-action="trash.empty"]');
+        await page.waitForSelector("#confirm .confirm-row");
+        expect(await page.textContent("#confirm .confirm-row span")).toBe(
+          "Delete the 2 calls in the Trash for good? This cannot be undone.",
+        );
+        // Dismiss keeps them: the question is the only way in.
+        await page.click("#confirm .confirm-row button:not(.go)");
+        await Bun.sleep(300);
+        expect(await inTrash()).toBe(2);
+
+        await page.click(`${row(C)} .what`, { button: "right" });
+        await page.click('#calls-menu [data-action="trash.empty"]');
+        await page.waitForSelector("#confirm .confirm-row");
+        // While the question is open, C goes to the trash too. The user was asked about 2 calls,
+        // so only those 2 go: C stays in the trash and its Undo still works.
+        await Bun.sleep(20);
+        expect((await rig.api("DELETE", `/calls/${C}`)).status).toBe(200);
+        await page.click("#confirm .confirm-row .go");
+        await until(
+          async () =>
+            (await page.textContent("#toast"))?.includes("2 calls deleted for good.") === true,
+          5000,
+          "deleted said",
+        );
+        expect(
+          ((await rig.api("GET", "/trash")).body.calls as { id: string }[]).map((c) => c.id),
+        ).toEqual([C]);
+        expect((await rig.api("POST", `/calls/${C}/restore`)).status).toBe(200);
+        // The call that was not counted is back, in the list and on screen.
+        expect(await listed(rig)).toEqual([C]);
+        await page.waitForSelector(row(C));
       });
     },
     UI_TIMEOUT,

@@ -48,6 +48,9 @@
       "name": "segments"
     },
     {
+      "name": "trash"
+    },
+    {
       "name": "devices"
     },
     {
@@ -1432,7 +1435,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good after 30 days. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
+        "description": "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good at the first start of akou after 30 days, or at once by `DELETE /trash`. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
         "parameters": [
           {
             "name": "id",
@@ -1635,6 +1638,103 @@
           },
           "409": {
             "$ref": "#/components/responses/409.folder_taken.not_trashed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/trash": {
+      "get": {
+        "operationId": "trash.list",
+        "tags": [
+          "trash"
+        ],
+        "description": "The calls in the trash, newest first: each one's `id`, the `workspace` it came from and `trashedAt` (ms). `POST /calls/{id}/restore` brings one back; `DELETE /trash` deletes them all for good.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "trash.empty",
+        "tags": [
+          "trash"
+        ],
+        "description": "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. With `upTo`, only the calls trashed at that time or before go, so a client that asked about the calls of a `GET /trash` deletes only those. Answers how many calls were deleted.",
+        "parameters": [
+          {
+            "name": "upTo",
+            "in": "query",
+            "required": false,
+            "description": "Delete only the calls trashed at this time (ms) or before: the newest `trashedAt` of the `GET /trash` the user was asked about. Default: all of them.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"

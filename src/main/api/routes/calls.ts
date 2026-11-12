@@ -8,7 +8,8 @@
  * The live controls refuse `last` with 400; `restart` and a rename accept it. `PATCH /calls/{id}`
  * renames a call at any time, live or saved, with a `call.renamed` event, and moves a finished one
  * to another workspace with `call.moved`. `DELETE /calls/{id}` moves a finished call to the trash
- * and `POST /calls/{id}/restore` brings it back (PROGRAMMABILITY PG-A4).
+ * and `POST /calls/{id}/restore` brings it back (PROGRAMMABILITY PG-A4); `GET /trash` lists the
+ * trash and `DELETE /trash` empties it for good (WINDOW W13.3).
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
@@ -483,7 +484,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls/:id",
     {
       id: "calls.delete",
-      doc: "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good after 30 days. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
+      doc: "Move a finished call to the trash: its folder goes to `.trash/` under the recordings folder, no list shows it, and it is deleted for good at the first start of akou after 30 days, or at once by `DELETE /trash`. A call that is recording answers 409 `live_call`. Exports already written are the user's and stay. `POST /calls/{id}/restore` brings it back.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -516,6 +517,41 @@ export function callRoutes(r: Router<ApiApp>): void {
       const r = await c.app.restoreCall(id);
       return r.ok ? json(200, { ok: true, call: id, workspace: r.workspace }) : outcome(r);
     },
+  );
+
+  r.add(
+    "GET",
+    "/trash",
+    {
+      id: "trash.list",
+      doc: "The calls in the trash, newest first: each one's `id`, the `workspace` it came from and `trashedAt` (ms). `POST /calls/{id}/restore` brings one back; `DELETE /trash` deletes them all for good.",
+      access: "admin",
+      modes: ["app"],
+      ok: 200,
+    },
+    async (c) => json(200, { calls: await c.app.manager.trashList() }),
+  );
+
+  r.add(
+    "DELETE",
+    "/trash",
+    {
+      id: "trash.empty",
+      doc: "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. With `upTo`, only the calls trashed at that time or before go, so a client that asked about the calls of a `GET /trash` deletes only those. Answers how many calls were deleted.",
+      access: "admin",
+      modes: ["app"],
+      query: {
+        upTo: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          doc: "Delete only the calls trashed at this time (ms) or before: the newest `trashedAt` of the `GET /trash` the user was asked about. Default: all of them.",
+        },
+      },
+      ok: 200,
+    },
+    async (c) =>
+      json(200, { ok: true, deleted: await c.app.manager.emptyTrash(c.query.int("upTo")) }),
   );
 
   for (const name of LIVE_CONTROLS) {

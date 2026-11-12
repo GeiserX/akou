@@ -161,20 +161,24 @@ example: akou open last
 ## calls
 
 ```text
-akou calls: List calls by date, title and duration (no content search), or rename one
+akou calls: List calls by date, title and duration (no content search), rename one, or empty the trash
 
-usage: akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json]
+usage: akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json] | akou calls empty-trash [--yes] [--json]
 
   -w, --workspace WS  only calls in this workspace
       --limit N       at most N calls, newest first
       --failed        only calls whose start failed (nothing was recorded), instead of the others
   -c, --call CALL     live, last or a call id (default: none; name one)
+      --yes           with empty-trash: delete without asking (needed when stdin is not a terminal)
       --json          print the answer as JSON, errors included
   -h, --help          show this help
       --restart       if akou takes the connection and never answers, restart it first, even for a command that only reads
 
+calls empty-trash deletes every call in the trash for good, now, instead of 30 days after it was trashed; it cannot be undone. On a terminal it asks first; elsewhere it needs --yes.
+
 example: akou calls -w work --limit 5
 example: akou calls rename last Weekly sync
+example: akou calls empty-trash --yes
 ```
 
 ## workspaces
@@ -940,6 +944,7 @@ example: akou serve
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | `src/ui/app.ts` |
 | Rename a call | `calls` | `PATCH /calls/:id` | `akou_rename_call` | `src/ui/app.ts` |
 | Trash and restore a call | none: missing: CLI-26 adds calls delete and calls restore | `DELETE /calls/:id`, `POST /calls/:id/restore` | none: missing: PG-M4 names move, delete and restore (CLI.md doors table) | `src/ui/app.ts` |
+| Empty the trash: delete trashed calls for good, now | `calls` | `GET /trash`, `DELETE /trash` | none: deleting calls for good is the user's, behind a confirmation; PG-M4 names no tool for it | `src/ui/app.ts` |
 | Change who spoke one line | none: missing: CLI-29 adds edit SEG --speaker | `PATCH /calls/:id/segments/:sid` | none: no tool yet, and no design item names one | none: missing: W4.10 adds the speaker picker on a line |
 | List and add workspaces | `workspaces`, `workspace` | `GET /workspaces`, `POST /workspaces` | none: not one call's: akou_start names the workspace and makes its folder, and akou_list_calls shows each call's | `src/ui/workspaces.ts` |
 | Share a live link | `share` | `GET /share`, `POST /share`, `DELETE /share` | `akou_share_on`, `akou_share_off`, `akou_share_status` | `src/ui/app.ts` |
