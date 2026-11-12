@@ -96,13 +96,14 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       modes: ["app", "server"],
       body: OPEN_BODY,
       ok: 200,
-      errors: { 400: ["bad_setting"], 500: ["keychain"] },
+      errors: { 400: ["bad_setting"], 409: ["config_file_invalid"], 500: ["keychain"] },
     },
     async (c) => {
       const body = await c.body<Record<string, unknown>>();
       const cfg = c.app.config();
-      // The window's bridge runs in process with no identity; every HTTP request has one.
-      const inProcess = c.identity === undefined;
+      // The window's bridge runs in process with no identity; every HTTP request has one. The
+      // window's page in a browser uses the same bridge, but is not the desktop window.
+      const inProcess = c.identity === undefined && c.browser !== true;
       const keep = Object.keys(body).filter(
         (k): k is SettingKey =>
           isSettingKey(k) && (SETTINGS[k] as SettingSpec).apiWritable === false,

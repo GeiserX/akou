@@ -364,7 +364,8 @@ interface Download {
   abort: AbortController;
 }
 
-function freeOf(dir: string): number {
+/** The bytes free on the volume that holds `dir`. */
+export function freeOf(dir: string): number {
   // A models folder not made yet is on the volume of its nearest existing parent.
   let at = dir;
   while (!existsSync(at) && dirname(at) !== at) at = dirname(at);
@@ -385,6 +386,19 @@ function bytesUnder(path: string): number {
   let n = 0;
   for (const f of readdirSync(path)) n += bytesUnder(join(path, f));
   return n;
+}
+
+/**
+ * Bytes of `path.part` the next download resumes from: none when it is missing, or larger than
+ * the file, which `downloadFile` deletes and fetches whole.
+ */
+function partial(path: string, size: number): number {
+  try {
+    const have = statSync(`${path}.part`).size;
+    return have <= size ? have : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** The ledger in `dir`, `{model id: last used, epoch ms}`; an unreadable file is an empty one. */
@@ -567,6 +581,11 @@ export interface ModelView {
   /** Where its files are downloaded from: host and repository, for example `huggingface.co/org/repo`. */
   from: string[];
   state: "ready" | "downloading" | "missing";
+  /**
+   * Why its last download gave up, for a missing model; absent otherwise. Cleared when a new
+   * download starts. Kept in memory only, so a restart forgets it.
+   */
+  error?: string;
   bytes: number;
   size: number;
   last_used_at: string | null;
@@ -615,6 +634,11 @@ export class ModelStore {
   /** The import running, if any: a second one waits for it, so one copy owns each model. */
   private importing: Promise<unknown> = Promise.resolve();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
+  /**
+   * Why each model's last download gave up, by id; a Cancel is no failure and leaves none. A
+   * delete, an eviction or the model read as ready forgets it.
+   */
+  private readonly failures = new Map<string, string>();
   private closed = false;
 
   constructor(private readonly o: ModelStoreOptions) {
@@ -696,14 +720,21 @@ export class ModelStore {
     });
   }
 
-  /** Bytes a model still needs from the network. */
+  /**
+   * Bytes a model still needs from the network. With no download or copy running, a partial file
+   * left by a cancelled or failed one counts as had, since the next download resumes from it.
+   */
   private remaining(m: ModelSpecEntry): number {
     const dir = this.o.dir();
     const d = this.downloads.get(m.id);
+    const c = this.copies.get(m.id);
     let n = 0;
     for (const f of m.files) {
-      if (existsSync(modelFile(dir, m.id, f.name))) continue;
-      n += f.size - (d?.bytes.get(f.name) ?? this.copies.get(m.id)?.bytes.get(f.name) ?? 0);
+      const path = modelFile(dir, m.id, f.name);
+      if (existsSync(path)) continue;
+      const had =
+        d || c ? (d?.bytes.get(f.name) ?? c?.bytes.get(f.name) ?? 0) : partial(path, f.size);
+      n += f.size - had;
     }
     return n;
   }
@@ -798,6 +829,7 @@ export class ModelStore {
         abort: new AbortController(),
       };
       this.downloads.set(id, d);
+      this.failures.delete(id);
       this.o.log("info", `model.download ${id} started`);
       void this.attempt(d);
     }
@@ -830,6 +862,7 @@ export class ModelStore {
         return;
       }
       this.downloads.delete(id);
+      this.failures.set(id, cause);
       this.o.log("warn", `model.download ${id} failed after ${d.tries} tries: ${cause}`);
       this.announce({ model: id, ok: false, error: cause });
       return;
@@ -945,6 +978,7 @@ export class ModelStore {
           continue;
         }
         delete l[id];
+        this.failures.delete(id);
         changed = true;
         out.push({ id, last_used_at: last, bytes });
         this.o.log(
@@ -1042,7 +1076,10 @@ export class ModelStore {
     const iso = (t: number | undefined) => (t === undefined ? null : new Date(t).toISOString());
     return this.o.catalog().map((m) => {
       const state = this.state(m.id);
+      // On disk by any door (a pull, an import, the desktop's download): the old reason is spent.
+      if (state === "ready") this.failures.delete(m.id);
       const last = state === "ready" ? ledger[m.id] : undefined;
+      const error = state === "missing" ? this.failures.get(m.id) : undefined;
       const kept = held.defaults.has(m.id) || held.inUse.has(m.id);
       const c = m as Partial<CatalogEntry>;
       const scores = scoresOf(m);
@@ -1059,6 +1096,7 @@ export class ModelStore {
         after_call: c.serves ? c.serves.includes("final") : true,
         from: [...new Set(m.files.map((f) => publishedAt(f.url)))],
         state,
+        ...(error === undefined ? {} : { error }),
         ...this.size(m.id),
         last_used_at: iso(last),
         evicts_at: last === undefined || kept || days === 0 ? null : iso(last + days * DAY_MS),
@@ -1120,6 +1158,7 @@ export class ModelStore {
     const path = join(this.o.dir(), id);
     const bytes = bytesUnder(path);
     rmSync(path, { recursive: true, force: true });
+    this.failures.delete(id);
     const l = this.ledger();
     if (l[id] !== undefined) {
       delete l[id];

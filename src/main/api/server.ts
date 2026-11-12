@@ -359,6 +359,8 @@ export async function routeRequest(
     onError?(err: unknown, req: Request): void;
     /** Who is calling (the guard's answer); absent in process, which is the user. */
     identity?: Identity | null;
+    /** The request came from the window's page in a browser, not the desktop window. */
+    browser?: boolean;
     source?: string;
     /** The routes outside `/v1`; the HTTP server passes them, the window's bridge does not. */
     root?: Router<ApiApp>;
@@ -389,6 +391,7 @@ export async function routeRequest(
       timeout: o.timeout,
       upgrade: o.upgrade,
       identity: o.identity,
+      browser: o.browser,
       source: o.source,
     });
   } catch (err) {

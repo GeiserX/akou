@@ -32,6 +32,9 @@ function repoCopy(): { dir: string; cleanup(): void } {
     ".claude-plugin/plugin.json",
     "docs/api/openapi.json",
     "examples/compose/telegram-archive/.env.example",
+    "README.md",
+    "docs/server.md",
+    "docs/server-hardware.md",
     PROVIDERS,
     GATES,
   ]) {

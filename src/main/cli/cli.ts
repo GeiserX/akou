@@ -149,10 +149,21 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     io.out(o.version ?? APP_VERSION);
     return EXIT.ok;
   }
+  // With --json a usage error is JSON on stdout too, even one found before the flags are parsed
+  // (docs/ux/CLI.md rule 2); a `--json` after `--` is a word, not the flag.
+  const end = rest.indexOf("--");
+  const wantsJson = (end < 0 ? rest : rest.slice(0, end)).includes("--json");
+  const usageError = (text: string, message: string): number => {
+    if (wantsJson) io.out(JSON.stringify({ error: "usage", message }));
+    io.err(text);
+    return EXIT.usage;
+  };
   const cmd = COMMANDS.find((c) => c.name === name);
   if (!cmd) {
-    io.err(`akou: unknown command "${name}"; \`akou help\` lists them`);
-    return EXIT.usage;
+    return usageError(
+      `akou: unknown command "${name}"; \`akou help\` lists them`,
+      `unknown command "${name}"`,
+    );
   }
   let parsed: ReturnType<typeof parseArgs>;
   try {
@@ -161,11 +172,12 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     if (!(err instanceof UsageError)) throw err;
     if (err instanceof SecretFlagError) {
       const again = ["akou", name, ...err.rest].join(" ");
-      io.err(`akou ${name}: ${err.message}\ntry: AKOU_API_KEY_FILE=/path/to/key ${again}`);
-      return EXIT.usage;
+      return usageError(
+        `akou ${name}: ${err.message}\ntry: AKOU_API_KEY_FILE=/path/to/key ${again}`,
+        err.message,
+      );
     }
-    io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
-    return EXIT.usage;
+    return usageError(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`, err.message);
   }
   if (parsed.flags.help === true) {
     io.out(commandHelp(cmd));
@@ -196,8 +208,7 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     return await cmd.run(ctx, parsed);
   } catch (err) {
     if (err instanceof UsageError) {
-      io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
-      return EXIT.usage;
+      return usageError(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`, err.message);
     }
     if (err instanceof TargetError) {
       if (json) io.out(JSON.stringify({ error: "target", message: err.message }));
@@ -293,5 +304,10 @@ if (import.meta.main) {
     stdinIsTTY: process.stdin.isTTY === true,
     keys: process.stdin.isTTY ? stdinKeys() : undefined,
   });
+  // A pipe holds about 64 KiB, and `process.exit` drops whatever is still queued for a slow reader
+  // (`akou show | (sleep 1; jq)`). Bun calls an empty write back at once, so only `end` waits until
+  // everything before it is written (TRAPS akou-3vx.1).
+  const drained = (s: NodeJS.WriteStream) => new Promise<void>((r) => s.end(() => r()));
+  await Promise.all([drained(process.stdout), drained(process.stderr)]);
   process.exit(code);
 }

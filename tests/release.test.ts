@@ -67,6 +67,9 @@ function repoCopy(): { dir: string; cleanup(): void } {
     ".claude-plugin/plugin.json",
     "docs/api/openapi.json",
     "examples/compose/telegram-archive/.env.example",
+    "README.md",
+    "docs/server.md",
+    "docs/server-hardware.md",
   ]) {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
@@ -134,8 +137,51 @@ describe("one version everywhere", () => {
         "skills/akou-vocab/SKILL.md",
         ".claude-plugin/plugin.json",
         "docs/api/openapi.json",
+        "README.md",
+        "docs/server.md",
+        "docs/server-hardware.md",
       ]),
     );
+  });
+
+  test("[T0.30] positive control: a stale image tag or clone line after the first in a doc is drift; stamping repairs every one", () => {
+    const t = repoCopy();
+    try {
+      const server = join(t.dir, "docs", "server.md");
+      const original = readFileSync(server, "utf8");
+      const tag = `drumsergio/akou:${pkg.version}`;
+      // The first tag stays current; a later one and the clone line go stale.
+      const first = original.indexOf(tag);
+      expect(first).toBeGreaterThan(-1);
+      const later = original.indexOf(tag, first + tag.length);
+      expect(later).toBeGreaterThan(-1);
+      const stale = `${original.slice(0, later)}drumsergio/akou:1.0.0${original.slice(later + tag.length)}`;
+      writeFileSync(server, stale.replace(`--branch v${pkg.version}`, "--branch v1.0.1"));
+      const hardware = join(t.dir, "docs", "server-hardware.md");
+      const hw = readFileSync(hardware, "utf8");
+      writeFileSync(hardware, hw.replace(`akou:${pkg.version}-cuda`, "akou:1.0.2-cuda"));
+      const readme = join(t.dir, "README.md");
+      const rd = readFileSync(readme, "utf8");
+      writeFileSync(readme, rd.replace(`akou-${pkg.version}-macos`, "akou-1.0.3-macos"));
+      expect(drift(t.dir, pkg.version)).toEqual([
+        { file: "README.md", version: "1.0.3" },
+        { file: "docs/server.md", version: `${pkg.version}, 1.0.0, 1.0.1` },
+        { file: "docs/server-hardware.md", version: `${pkg.version}, 1.0.2` },
+      ]);
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(1);
+      expect(stamp(t.dir, pkg.version)).toEqual([
+        "README.md",
+        "docs/server.md",
+        "docs/server-hardware.md",
+      ]);
+      // Every occurrence is back, the -vulkan and -cuda suffixes kept, nothing else changed.
+      expect(readFileSync(server, "utf8")).toBe(original);
+      expect(readFileSync(hardware, "utf8")).toBe(hw);
+      expect(readFileSync(readme, "utf8")).toBe(rd);
+      expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(0);
+    } finally {
+      t.cleanup();
+    }
   });
 
   test("[T0.30] positive control: a drifted place is reported and --check exits 1; stamping repairs it", () => {
@@ -188,7 +234,7 @@ describe("one version everywhere", () => {
     const t = repoCopy();
     expect(quiet(() => main(["--set", "0.1.0", "--root", t.dir]))).toBe(0);
     expect(readAll(t.dir).every((f) => f.version === "0.1.0")).toBe(true);
-    expect(readAll(t.dir)).toHaveLength(9);
+    expect(readAll(t.dir)).toHaveLength(12);
     expect(quiet(() => main(["--check", "--tag", "v0.1.0", "--root", t.dir]))).toBe(0);
     expect(quiet(() => main(["--check", "--tag", "v0.1.1", "--root", t.dir]))).toBe(1);
     expect(tagVersion("refs/tags/v1.2.3-rc.1")).toBe("1.2.3-rc.1");

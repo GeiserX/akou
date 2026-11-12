@@ -124,7 +124,7 @@ describe("[TS-6] every reached trap has a test that ran and asserted", () => {
     expect(full.length).toBeGreaterThan(40);
   });
 
-  test("[T4.43] every entry before the kept invariants is a trap the check reads", () => {
+  test("[T4.47] every entry before the kept invariants is a trap the check reads", () => {
     const md = readFileSync(join(ROOT, "docs", "TRAPS.md"), "utf8");
     const head = md.slice(0, md.indexOf("\n## Kept from closed traps"));
     const entries = head.split("\n").filter((l) => l.startsWith("- **"));
@@ -133,7 +133,7 @@ describe("[TS-6] every reached trap has a test that ran and asserted", () => {
     expect(traps.filter((t) => t.ids.length === 0)).toEqual([]);
   });
 
-  test("[T4.43] positive control: a reached entry with no id fails instead of vanishing", () => {
+  test("[T4.47] positive control: a reached entry with no id fails instead of vanishing", () => {
     const [bare] = trapsOf("# Traps\n\n- **New trap** (M1). Given x, y. Test: x.\n");
     expect(bare).toEqual({
       title: "New trap",

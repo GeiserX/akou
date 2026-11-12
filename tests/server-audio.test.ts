@@ -126,3 +126,81 @@ function tempDirFor(): string {
   cleanups.push(t.cleanup);
   return t.dir;
 }
+
+/** A 16-bit 16 kHz PCM WAV of `channels` channels; `sample(frame, channel)` gives each value. */
+function multiChannelWav(
+  channels: number,
+  frames: number,
+  sample: (frame: number, channel: number) => number,
+): string {
+  const data = frames * channels * 2;
+  const bytes = new Uint8Array(44 + data);
+  const v = new DataView(bytes.buffer);
+  const tag = (o: number, s: string) => {
+    for (let i = 0; i < 4; i++) bytes[o + i] = s.charCodeAt(i);
+  };
+  tag(0, "RIFF");
+  v.setUint32(4, 36 + data, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, channels, true);
+  v.setUint32(24, RATE, true);
+  v.setUint32(28, RATE * channels * 2, true);
+  v.setUint16(32, channels * 2, true);
+  v.setUint16(34, 16, true);
+  tag(36, "data");
+  v.setUint32(40, data, true);
+  for (let f = 0; f < frames; f++) {
+    for (let c = 0; c < channels; c++) v.setInt16(44 + (f * channels + c) * 2, sample(f, c), true);
+  }
+  const path = join(tempDirFor(), "multi.wav");
+  writeFileSync(path, bytes);
+  return path;
+}
+
+/** Runs `fn` while recording the largest `new Uint8Array(n)` asked for; past 64 MB it throws. */
+async function largestByteArray(fn: () => Promise<unknown>): Promise<number> {
+  const g = globalThis as { Uint8Array: typeof Uint8Array };
+  const real = g.Uint8Array;
+  let largest = 0;
+  g.Uint8Array = new Proxy(real, {
+    construct(target, args, newTarget) {
+      if (typeof args[0] === "number") {
+        largest = Math.max(largest, args[0]);
+        if (args[0] > 64 * 1024 * 1024) throw new RangeError(`asked for ${args[0]} bytes`);
+      }
+      return Reflect.construct(target, args, newTarget);
+    },
+  });
+  try {
+    await fn();
+  } finally {
+    g.Uint8Array = real;
+  }
+  return largest;
+}
+
+describe("[SV-P6] A WAV header's channel count sizes the read buffer", () => {
+  test("a 16 kHz WAV that claims 65535 channels is read with a buffer of a few MB, not 8.6 GB", async () => {
+    const path = multiChannelWav(65535, 2, () => 16384);
+    let got: Float32Array = new Float32Array(0);
+    const largest = await largestByteArray(async () => {
+      got = await readUploadAudio(path, NO_FFMPEG);
+    });
+    expect(largest).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect([...got]).toEqual([0.5, 0.5]);
+  });
+
+  test("positive control: a stereo WAV longer than one read buffer averages every frame", async () => {
+    // 1.5 M frames of 4 bytes is more than one 4 MB read, so frames land on both sides of it.
+    const frames = 1_500_000;
+    const path = multiChannelWav(2, frames, (f, c) => (c === 0 ? f % 1000 : -(f % 500)));
+    const got = await readUploadAudio(path, NO_FFMPEG);
+    expect(got.length).toBe(frames);
+    for (const f of [0, 1, 999, 1_048_575, 1_048_576, 1_048_577, frames - 1]) {
+      expect(got[f]).toBe(Math.fround(((f % 1000) - (f % 500)) / 2 / 32768));
+    }
+  });
+});

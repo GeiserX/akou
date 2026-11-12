@@ -84,3 +84,60 @@ describe("DC-H2: dictation.retainDays", () => {
     expect(svc.log.items()).toHaveLength(2);
   });
 });
+
+describe("DC-H2 with the draft box", () => {
+  const TARGET = { app: "com.example.chat", pid: 7, window: "w7", field: "editable" } as const;
+
+  /** A dictation the focus guard sent to the draft box. */
+  function drafted(svc: DictationService, id: string): void {
+    svc.log.append({ type: "dictation.started", id, target: TARGET, engine: "fast", by: "user" });
+    svc.log.append({ type: "dictation.ended", id, reason: "release", seconds: 2 });
+    svc.log.append({
+      type: "dictation.text",
+      id,
+      raw: "held words",
+      text: "held words",
+      language: "en",
+      words: [],
+      engine: "fast",
+      model: "stub",
+      ms: 1,
+    });
+    svc.log.append({ type: "dictation.drafted", id, reason: "focus-changed" });
+  }
+
+  const window = {
+    open: () => {},
+    chip: () => {},
+    append: () => {},
+    showInactive: () => {},
+    hide: () => {},
+  };
+
+  test("[T4.42] 0 never deletes the dictation the draft box still holds; it goes once the box lets it go", async () => {
+    const { svc } = service(() => 0);
+    svc.draft.attach(window);
+    drafted(svc, "dA");
+    expect(svc.draft.open("dA", { focus: false })).toEqual({ ok: true });
+    expect(svc.draft.holding()).toBe("dA");
+    await settle();
+    const b = await svc.transcribeClip(clip(), { by: "user" });
+    await settle();
+    // The box still holds A: its Retry and a refused insert still find it.
+    expect(svc.log.items().map((i) => i.id)).toEqual([b.id, "dA"]);
+    expect(svc.log.item("dA")?.text).toBe("held words");
+    svc.draft.attach(null);
+    const c = await svc.transcribeClip(clip(), { by: "user" });
+    await settle();
+    expect(svc.log.items().map((i) => i.id)).toEqual([c.id]);
+  });
+
+  test("[T4.42] positive control: a drafted dictation the box does not hold goes at the next start", async () => {
+    const { svc } = service(() => 0);
+    drafted(svc, "dA");
+    await settle();
+    const b = await svc.transcribeClip(clip(), { by: "user" });
+    await settle();
+    expect(svc.log.items().map((i) => i.id)).toEqual([b.id]);
+  });
+});

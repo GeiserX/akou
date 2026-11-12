@@ -201,6 +201,7 @@ export class LivePicker {
       v.review.setting,
       liveNote(v, this.rows),
       reviewNote(v, this.rows),
+      this.rows.filter((r) => r.error !== undefined).map((r) => [r.id, r.error]),
     ]);
   }
 
@@ -414,6 +415,11 @@ export class LivePicker {
     const rows = missing.map((r) => {
       const downloading = r.state === "downloading";
       const pct = r.size > 0 ? Math.round((100 * r.bytes) / r.size) : 0;
+      // A download that gave up says why until the next one starts.
+      const error = downloading
+        ? undefined
+        : r.models.map((id) => this.rows.find((x) => x.id === id)?.error).find((e) => e);
+      const why = reasonText(error);
       return h(
         "div",
         { class: "live-cat-row", attrs: { "data-model": r.id } },
@@ -422,6 +428,15 @@ export class LivePicker {
           { class: "live-text" },
           h("span", { class: "live-title" }, r.name),
           h("span", { class: "live-line" }, `${r.line} ${sizeShort(r.size)}.`.trim()),
+          ...(error
+            ? [
+                h(
+                  "span",
+                  { class: "live-line", attrs: { "data-stopped": "" } },
+                  `The download stopped${why ? `: ${why}` : ""}. Files already verified are kept.`,
+                ),
+              ]
+            : []),
           ...(downloading
             ? [
                 h(
@@ -452,7 +467,7 @@ export class LivePicker {
             },
             on: { click: () => void (downloading ? this.cancel(r) : this.download(r)) },
           },
-          downloading ? "Cancel" : "Download",
+          downloading ? "Cancel" : error ? "Try again" : "Download",
         ),
       );
     });
