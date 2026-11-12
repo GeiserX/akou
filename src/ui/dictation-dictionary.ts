@@ -545,10 +545,7 @@ export class DictationDictionary {
   }
 
   private async remove(term: string): Promise<void> {
-    const r = await this.t.request<{ entry?: unknown }>(
-      "DELETE",
-      `/vocab/${encodeURIComponent(term)}`,
-    );
+    const r = await this.t.request("DELETE", `/vocab/${encodeURIComponent(term)}`);
     if (r.status >= 400) {
       toast(message(r.body, `the word was not removed (HTTP ${r.status})`));
       return;
@@ -556,7 +553,7 @@ export class DictationDictionary {
     this.opened = null;
     // Undo puts back the entry the route removed, whole: its forms, scope, source and date
     // (VOC-UNDO1). Written again through `POST /vocab`, it would lose all but its forms.
-    const entry = r.body.entry;
+    const entry = (r.body as { entry?: unknown } | null)?.entry;
     toast(
       `Removed ${term}.`,
       "info",

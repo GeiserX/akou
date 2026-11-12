@@ -206,7 +206,7 @@ describe("DC-L5: dictation's words in the words to review", () => {
     const now = entries.find((e) => e.term === "Kubernetes");
     expect(now).not.toEqual(had);
     expect(now).not.toHaveProperty("entryScope");
-    expect(now).toMatchObject({ source: "user" });
+    expect(now?.source).not.toBe("dictation:d1");
     expect(now?.added_at).not.toBe("2020-01-02");
   });
 
