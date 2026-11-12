@@ -218,6 +218,18 @@ describe("[UPL-1] The streamed body through the server's multipart reader", () =
     await expect(new Response(up.body).arrayBuffer()).rejects.toThrow("shrank");
   });
 
+  test("a Bun.file appended as it is sends its file name, never its folder", async () => {
+    const t = tempDir("akou-upl-");
+    cleanups.push(t.cleanup);
+    const path = join(t.dir, "note.wav");
+    writeFileSync(path, "RIFF");
+    const form = new FormData();
+    form.append("file", Bun.file(path), "note.wav");
+    const sent = await new Response(uploadBody(form).body).text();
+    expect(sent).toContain('filename="note.wav"');
+    expect(sent).not.toContain(t.dir);
+  });
+
   test("a missing or unreadable file is refused before anything is sent", () => {
     const t = tempDir("akou-upl-");
     cleanups.push(t.cleanup);

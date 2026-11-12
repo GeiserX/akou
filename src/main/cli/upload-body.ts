@@ -10,6 +10,7 @@
  */
 
 import { closeSync, openSync, statSync } from "node:fs";
+import { basename } from "node:path";
 
 /** A multipart body to send, with its headers. */
 export interface UploadBody {
@@ -39,9 +40,11 @@ export function uploadBody(form: FormData): UploadBody {
       continue;
     }
     const file = value as File;
+    // A `Bun.file` appended as it is keeps its whole path as its name, whatever filename
+    // `append` was given: only the last segment ever goes out.
     parts.push(
       enc.encode(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(file.name ?? "blob")}"\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(basename(file.name || "blob"))}"\r\n` +
           `Content-Type: ${file.type || "application/octet-stream"}\r\n\r\n`,
       ),
       { blob: file, size: file.size },
@@ -90,12 +93,21 @@ export function uploadBody(form: FormData): UploadBody {
  * The file at `path` to upload, read only as it is sent, or why it cannot be: it is opened once
  * here, so a missing or unreadable file is a usage error before anything is sent.
  */
-export function uploadFile(path: string): Blob | string {
+export function uploadFile(path: string): File | string {
   try {
     if (!statSync(path).isFile()) return `${path} is not a file`;
     closeSync(openSync(path, "r"));
   } catch (err) {
     return `cannot read ${path}: ${(err as Error).message}`;
   }
-  return Bun.file(path);
+  return mediaFile(path);
+}
+
+/**
+ * `path` as a `File` named by its last segment, still read from disk only as it is sent. A
+ * `Bun.file` in a `FormData` keeps its whole path as its name.
+ */
+export function mediaFile(path: string): File {
+  const disk = Bun.file(path);
+  return new File([disk], basename(path), { type: disk.type });
 }
