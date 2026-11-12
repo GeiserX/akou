@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { EventDraft } from "../src/core/log/events.ts";
 import {
   compareLines,
   eventsAfter,
+  LogFollower,
   parseLog,
   readLog,
   START_CURSOR,
@@ -215,7 +223,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect((await readLog(join(dir, EVENTS_FILE))).seqErrors).toEqual([]);
   });
 
-  test("[Two writers]: a second writer on the same folder refuses (.akou.lock)", () => {
+  test("[T4.44] Two writers: a second writer on the same folder refuses (.akou.lock)", () => {
     const dir = callDir();
     const first = open(dir);
     first.append(created);
@@ -234,7 +242,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(second.lastSeq).toBe(2);
   });
 
-  test("[Two writers]: the lock holds the writer's pid", () => {
+  test("[T4.44] Two writers: the lock holds the writer's pid", () => {
     const dir = callDir();
     open(dir, { pid: 4242, isAlive: () => true });
     // The pid, then the id of the process start (SI-4).
@@ -252,7 +260,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
   });
 
-  test("[Two writers]: two writers taking over the same stale lock at once cannot both win", () => {
+  test("[T4.44] Two writers: two writers taking over the same stale lock at once cannot both win", () => {
     const dir = callDir();
     const stale = 999_001;
     writeFileSync(join(dir, LOCK_FILE), `${stale}\n`);
@@ -274,7 +282,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(readdirSync(dir).sort()).toEqual([LOCK_FILE, EVENTS_FILE].sort());
   });
 
-  test("[Two writers]: a writer whose stale lock was taken over does not remove the new holder's lock", () => {
+  test("[T4.44] Two writers: a writer whose stale lock was taken over does not remove the new holder's lock", () => {
     const dir = callDir();
     const a = LogWriter.open(dir, { pid: 1001, isAlive: () => true });
     // B judges 1001 dead and takes the lock over.
@@ -569,5 +577,106 @@ describe("reader (DESIGN 4.2, 4.5)", () => {
     // time-only sort, so a regression to either would fail the assertion above.
     expect([...lines].sort((x, y) => x.seq - y.seq).map((l) => l.id)).not.toEqual(sorted);
     expect([...lines].sort((x, y) => x.w0 - y.w0).map((l) => l.id)).not.toEqual(sorted);
+  });
+});
+
+describe("[T1.47] A follower re-reads the whole log per event: LogFollower", () => {
+  const TRAP = "[T1.47] A follower re-reads the whole log per event:";
+
+  async function readAfter(path: string, after: number) {
+    return eventsAfter((await readLog(path)).events, after);
+  }
+
+  test(`${TRAP} a long poll on a 20,000-event log reads only the appended bytes`, async () => {
+    const dir = callDir();
+    const w = open(dir);
+    w.append(created);
+    w.append(partDraft(1));
+    for (let i = 0; i < 20_000; i++) w.append(segDraft(`l${String(i).padStart(6, "0")}`));
+    const path = join(dir, EVENTS_FILE);
+    const f = new LogFollower(path);
+    let cursor = (await f.after(0)).at(-1)?.seq ?? 0;
+    const start = f.stats.bytes;
+    let appended = 0;
+    let wholeReads = 0;
+    for (let i = 0; i < 200; i++) {
+      const e = w.append(segDraft(`lm${String(i).padStart(6, "0")}`));
+      appended += Buffer.byteLength(`${JSON.stringify(e)}\n`);
+      // What the long poll does when a `types` filter drops this event: read, then read again.
+      expect(await f.after(cursor)).toEqual([e]);
+      cursor = e.seq;
+      expect(await f.after(cursor)).toEqual([]);
+      wholeReads += 2 * statSync(path).size;
+    }
+    expect(f.stats.bytes - start).toBe(appended);
+    // Positive control: reading the whole log on each poll, as `readLog` does, breaks the bound.
+    expect(wholeReads).toBeGreaterThan(100 * appended);
+  });
+
+  test(`${TRAP} every answer equals readLog + eventsAfter, for any cursor, old or new`, async () => {
+    const dir = callDir();
+    const w = open(dir);
+    w.append(created);
+    w.append(partDraft(1));
+    const path = join(dir, EVENTS_FILE);
+    const f = new LogFollower(path);
+    for (let i = 0; i < 60; i++) {
+      w.append(segDraft(`l${String(i).padStart(6, "0")}`));
+      for (const after of [0, Math.floor(i / 2), i, i + 1, i + 2, i + 3, 999]) {
+        expect(await f.after(after)).toEqual(await readAfter(path, after));
+      }
+    }
+  });
+
+  test(`${TRAP} a torn tail the next writer truncates is never skipped or read twice`, async () => {
+    const dir = callDir();
+    const w1 = LogWriter.open(dir);
+    w1.append(created);
+    w1.append(segDraft("l000001"));
+    w1.close();
+    const path = join(dir, EVENTS_FILE);
+    appendFileSync(path, '{"seq":3,"t":1,"type":"se');
+    const f = new LogFollower(path);
+    expect((await f.after(0)).map((e) => e.seq)).toEqual([1, 2]);
+    const w2 = open(dir);
+    expect(w2.report.truncated).not.toBeNull();
+    w2.append(segDraft("l000002", "after the crash"));
+    const got = await f.after(2);
+    expect(got).toEqual(await readAfter(path, 2));
+    expect(got.map((e) => e.seq)).toEqual([3]);
+  });
+
+  test(`${TRAP} a file that shrank below the cursor, or was replaced, is read whole`, async () => {
+    const dir = callDir();
+    const path = join(dir, EVENTS_FILE);
+    const w1 = LogWriter.open(dir);
+    w1.append(created);
+    for (let i = 0; i < 10; i++) w1.append(segDraft(`l${String(i).padStart(6, "0")}`));
+    w1.close();
+    const f = new LogFollower(path);
+    await f.after(0);
+    // Another log of the same call put in its place: shorter, then longer than the first.
+    const other = callDir();
+    const w2 = LogWriter.open(other);
+    w2.append(created);
+    w2.append(segDraft("lx00001", "first"));
+    w2.close();
+    writeFileSync(path, readFileSync(join(other, EVENTS_FILE)));
+    // Same inode, smaller than the cursor: only the size check can send this to a whole read.
+    let before = f.stats.bytes;
+    expect(await f.after(11)).toEqual(await readAfter(path, 11));
+    expect(f.stats.bytes - before).toBe(statSync(path).size);
+    expect(await f.after(1)).toEqual(await readAfter(path, 1));
+    const w3 = LogWriter.open(other);
+    for (let i = 0; i < 20; i++) w3.append(segDraft(`ly${String(i).padStart(6, "0")}`));
+    w3.close();
+    const tmp = `${path}.new`;
+    writeFileSync(tmp, readFileSync(join(other, EVENTS_FILE)));
+    renameSync(tmp, path);
+    // A new inode, larger than the cursor, with the same first bytes: only the inode check can
+    // send this to a whole read; a tail from the stale cursor reads fewer bytes than the file.
+    before = f.stats.bytes;
+    expect(await f.after(2)).toEqual(await readAfter(path, 2));
+    expect(f.stats.bytes - before).toBe(statSync(path).size);
   });
 });

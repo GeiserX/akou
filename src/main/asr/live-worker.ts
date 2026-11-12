@@ -326,6 +326,11 @@ interface ChannelState {
   inSpeech: boolean;
   segStart: number;
   lastSpeech: number;
+  /**
+   * Where the last closed line ended: the next line's pre-roll never reaches back past it, so a
+   * short `segmentPause` cannot decode the end of one line again at the start of the next.
+   */
+  closedAt: number;
   lastProvisional: number;
   /** Provisional re-decodes of the open segment, and their time (ms), for `LINE_TIMING`. */
   provisionals: number;
@@ -399,6 +404,7 @@ export class LivePipeline {
       inSpeech: false,
       segStart: 0,
       lastSpeech: 0,
+      closedAt: 0,
       lastProvisional: 0,
       provisionals: 0,
       provisionalMs: 0,
@@ -644,6 +650,7 @@ export class LivePipeline {
     st.pendingStart = pos;
     st.audio.reset(pos);
     st.inSpeech = false;
+    st.closedAt = pos;
     st.pseq = 0;
     st.shown = "";
     st.utt = null;
@@ -694,14 +701,19 @@ export class LivePipeline {
     }
     let off = 0;
     let at = st.pendingStart;
-    while (buf.length - off >= w) {
-      const speech = st.vad.accept(buf.subarray(off, off + w));
-      this.window(st, at, at + w, speech);
-      off += w;
-      at += w;
+    try {
+      while (buf.length - off >= w) {
+        const speech = st.vad.accept(buf.subarray(off, off + w));
+        off += w;
+        at += w;
+        this.window(st, at - w, at, speech);
+      }
+    } finally {
+      // Whatever a window's decode throws, the windows the VAD has taken stay taken and the rest
+      // waits for the next audio, so the channel's timeline never falls behind its audio.
+      st.pending = buf.slice(off);
+      st.pendingStart = at;
     }
-    st.pending = buf.slice(off);
-    st.pendingStart = at;
     this.emit({ type: "progress", part, ch, pos: st.pos });
   }
 
@@ -710,7 +722,7 @@ export class LivePipeline {
     if (speech) {
       if (!st.inSpeech) {
         st.inSpeech = true;
-        st.segStart = Math.max(st.audio.start, ws - this.sec(o.preRoll));
+        st.segStart = Math.max(st.audio.start, ws - this.sec(o.preRoll), st.closedAt);
         st.lastProvisional = we;
         this.embedderAhead(st);
       }
@@ -783,10 +795,24 @@ export class LivePipeline {
 
   private close(st: ChannelState, from: number, to: number): void {
     if (st.part === null || to <= from) return;
+    st.closedAt = to;
     const samples = st.audio.slice(from, to);
     const startedAt = this.now();
     const t = performance.now();
-    const r = this.decode(samples);
+    let r: ReturnType<LivePipeline["decode"]>;
+    try {
+      r = this.decode(samples);
+    } catch (err) {
+      // A one-off native error loses this line only; the final pass decodes its audio again.
+      st.provisionals = 0;
+      st.provisionalMs = 0;
+      this.emit({
+        type: "log",
+        level: "warn",
+        msg: `live ${st.ch}: the line from ${(from / ASR_RATE).toFixed(2)} s to ${(to / ASR_RATE).toFixed(2)} s is lost (${(err as Error).message}); the final pass covers it`,
+      });
+      return;
+    }
     if (this.timing) {
       const timing = {
         part: st.part,

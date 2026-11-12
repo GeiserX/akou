@@ -60,16 +60,19 @@ export type Verdict =
 /** A test id a test name can carry: `T4.31`, `F2.50`, `I0.14`, `DK-T1`, `akou-5an.100`. */
 const TEST_ID = /^(?:[TFI]\d+\.\d+|[A-Z]{2,3}-[A-Z]*\d+[a-z]?|akou-[a-z0-9]+(?:\.\d+)+)$/;
 
-/** The trap entries before "Kept from closed traps": `- **title** [ids] (Mn). text`. */
+/**
+ * The trap entries before "Kept from closed traps": `- **title** [ids] (Mn). text`. An entry with
+ * no bracket is still a trap, with no ids, so the check fails it instead of never seeing it.
+ */
 export function trapsOf(md: string): Trap[] {
   const out: Trap[] = [];
   const end = md.indexOf("\n## Kept from closed traps");
   for (const line of (end < 0 ? md : md.slice(0, end)).split("\n")) {
-    const m = /^- \*\*(.+?)\*\* \[([^\]]+)\](?: \((M\d+)\))?\.?\s*(.*)$/.exec(line);
+    const m = /^- \*\*(.+?)\*\*(?: \[([^\]]+)\])?(?: \((M\d+)\))?\.?\s*(.*)$/.exec(line);
     if (!m) continue;
     out.push({
       title: m[1] as string,
-      ids: (m[2] as string).split(",").map((s) => s.trim()),
+      ids: m[2] ? m[2].split(",").map((s) => s.trim()) : [],
       milestone: m[3] ?? null,
       text: m[4] ?? "",
     });
@@ -119,6 +122,7 @@ export function casesOf(xml: string): Case[] {
 export function listedWhy(t: Trap): string | null {
   if (t.milestone !== null && !REACHED.has(t.milestone))
     return `milestone ${t.milestone} is not reached yet`;
+  if (t.ids.length === 0) return null;
   const marked = MARKED.exec(t.text)?.[1];
   if (marked) return `TRAPS.md marks its test "${marked}"`;
   const ids = t.ids.filter((id) => TEST_ID.test(id));
@@ -158,7 +162,10 @@ export function report(verdicts: Verdict[]): { lines: string[]; failed: number }
     else {
       failed++;
       const what = {
-        missing: "no test with its id in the name ran",
+        missing:
+          v.trap.ids.length === 0
+            ? "TRAPS.md gives it no [id] a test can be named after"
+            : "no test with its id in the name ran",
         skipped: "every test with its id was skipped or failed",
         "no-assertions": "every test with its id made zero assertions",
       }[v.status];

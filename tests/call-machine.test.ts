@@ -3,7 +3,7 @@
  * budget is exact and no test waits on real time (TRAPS T4.31).
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PartClock } from "../src/core/log/clock.ts";
@@ -1358,4 +1358,46 @@ describe("crash recovery at the next start", () => {
       expect((await logOf(dir)).length).toBe(2);
     },
   );
+
+  test("[T3.6] Minutes to start: init reads each ended call's log once, and re-reads only a folder recovery wrote to", async () => {
+    const s = setup();
+    const ended: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const b = new LogBuilder();
+      b.created({ id: `01J8Z6Q4M2VX0K7B3D4E5F6GA${i}`, title: `Ended ${i}` });
+      b.partStarted(1, T0);
+      b.seg({ id: "l000001", text: "hello", a0: 1, a1: 4 });
+      b.partEnded(1, "stop", 5);
+      b.add({ type: "call.ended", reason: "stop" });
+      ended.push(callDir(s.root, `ended-${i}`, b.events));
+    }
+    const c = new LogBuilder();
+    c.created({ id: "01J8Z6Q4M2VX0K7B3D4E5F6GB0" });
+    c.partStarted(1, T0);
+    c.seg({ id: "l000001", text: "hello", a0: 1, a1: 4 });
+    const crashed = callDir(s.root, "crashed", c.events);
+
+    const reads = new Map<string, number>();
+    const spy = spyOn(Bun, "file");
+    try {
+      await s.mgr.init();
+      for (const [arg] of spy.mock.calls) {
+        const p = String(arg);
+        if (p.endsWith("events.jsonl")) reads.set(p, (reads.get(p) ?? 0) + 1);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    for (const dir of ended) expect(reads.get(join(dir, "events.jsonl"))).toBe(1);
+    // Positive control: the folder recovery closed is read again, so its summary is what it wrote.
+    expect(reads.get(join(crashed, "events.jsonl"))).toBe(2);
+    const calls = s.mgr.calls();
+    expect(calls.find((x) => x.dir === crashed)?.state).toBe("crashed");
+    for (const [i, dir] of ended.entries()) {
+      expect(calls.find((x) => x.dir === dir)).toMatchObject({
+        state: "ended",
+        title: `Ended ${i}`,
+      });
+    }
+  });
 });

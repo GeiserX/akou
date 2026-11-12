@@ -837,6 +837,16 @@ jobs:
           $h.Send('{"type":"insert","id":"t1","text":"typed \u00e9 \ud83d\ude00","method":"type","send_key":"none","target":' + $tj + '}')
           if (-not $h.Wait('"id":"t1"', 15000)) { throw ('no answer to the typing: ' + $h.Stop()) }
           [Probe]::Pump(500)
+          # DC-L2: the user moves to another window of the same process while a paste is watched.
+          # That window has the keyboard, so its field must not be read: the watch ends unreadable.
+          $h.Send('{"type":"insert","id":"p2","text":" second paste","method":"paste","send_key":"none","read_field":true,"target":' + $tj + '}')
+          if (-not $h.Wait('"type":"inserted","id":"p2"', 15000)) { throw ('no answer to the second paste: ' + $h.Stop()) }
+          # The snapshot was read in the target, so the watch is live before the user moves.
+          if ($h.Wait('"id":"p2","reason"', 500)) { throw ('the second paste was never watched: ' + $h.Stop()) }
+          $other = New-Object 'Probe+Target'
+          [Probe]::Raise($other.Hwnd)
+          "in front after the move: $([Probe]::Front()), other: $($other.Hwnd.ToInt64())"
+          if (-not $h.Wait('"id":"p2","reason"', 5000)) { throw ('the watch did not end when the window changed: ' + $h.Stop()) }
           "in front after the inserts: $([Probe]::Front())"
           $log = $h.Stop()
           $log
@@ -848,7 +858,8 @@ jobs:
           Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
           Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
           Check ($log -match '"type":"edit","id":"p1","hunks":\[\{"inserted":"akou","now":"Akou","at":2\}\]') 'the read-back did not carry exactly the fixed word'
-          $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
+          Check ($log -match '"type":"edit.unreadable","id":"p2","reason":"unreadable"') 'the read-back read the window the user moved to'
+          $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600) + ' second paste'
           Check ($field -ceq $want) 'the box holds the wrong text'
           Check ($clip.TrimEnd() -eq 'copied before akou') "the clipboard was not restored: $clip"
 
@@ -1454,10 +1465,10 @@ jobs:
   # running, start it as getting-started.md says (the port published on 127.0.0.1, `server.behind_proxy` set
   # by AKOU_BEHIND_PROXY, since a container binds 0.0.0.0 and SV-P5 refuses that without it), and ask
   # it for /healthz within 60 s, for /v1/server with no token and for `id -u`; then transcribe an Ogg
-  # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The job round trip runs when the
-  # server's own /v1/server says it has jobs, webhooks and the event feed, and warns when it does not.
-  # Then akou from the compose example beside Telegram-Archive (SV-T6), and last Bazarr's request
-  # against a server with AKOU_BAZARR on (SV-C3), on the same gate.
+  # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The leg fails unless /v1/server says
+  # it has jobs, the event feed, webhooks, Wyoming and Bazarr; then the job round trip, akou from the
+  # compose example beside Telegram-Archive (SV-T6), and last Bazarr's request against a server with
+  # AKOU_BAZARR on (SV-C3).
   server:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -1540,20 +1551,14 @@ jobs:
       - name: four containers transcribe in the image (SV-P6)
         run: docker run --rm -v "$MODELS:/models" -v "$PWD/scripts:/app/scripts:ro" --entrypoint bun akou:ci scripts/server-smoke.ts /models
       # The round trip needs the job routes (SV-J1), the keys (SV-K2), the event feed (SV-E1) and the
-      # webhook (SV-E2). The server says which it has in /v1/server, from its own route table, so a
-      # renamed file cannot turn the step off; a skip is a warning on the run, never silent.
-      - name: what the server can do
-        id: caps
+      # webhook (SV-E2); the steps after it need Wyoming and Bazarr, which this container turns on.
+      # The server says which it has in /v1/server, from its own route table. A missing one fails the
+      # leg: a skipped round trip is not a pass (TESTING.md section 0).
+      - name: the server can do everything this leg tests
         run: |
-          if jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks' server.json; then
-            echo "roundtrip=true" >> "$GITHUB_OUTPUT"
-          else
-            msg="the job round trip did not run: /v1/server says $(jq -c .capabilities server.json)"
-            echo "::warning::$msg"
-            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          jq -c .capabilities server.json
+          jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks and .capabilities.wyoming and .capabilities.bazarr' server.json
       - name: job round trip by long-poll, event feed and signed webhook
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           work=$(mktemp -d)
@@ -1580,7 +1585,6 @@ jobs:
       # clip is 24 kHz; Home Assistant always sends 16000 Hz, 16-bit, mono, so the step resamples it
       # first with the image's ffmpeg, and the probe refuses any other format.
       - name: Wyoming round trip with the wyoming package (SV-T4)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           jq -e '.capabilities.wyoming == true and .wyoming_port == 10300' server.json
@@ -1602,7 +1606,6 @@ jobs:
       # the transcript from the signed callback; a tampered delivery must be refused. The script
       # prints every service's log when it fails.
       - name: akou beside Telegram-Archive from the compose example (SV-T6)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           docker rm -f akou
           docker tag akou:ci drumsergio/akou:ci
@@ -1611,7 +1614,6 @@ jobs:
       # `audio_file` part, `Subliminal/2.1`, no key, `encode=false`, and an SRT back. The server
       # above went with the compose step, so this one starts its own with AKOU_BAZARR on.
       - name: Bazarr-shaped /asr against the image (SV-C3)
-        if: steps.caps.outputs.roundtrip == 'true'
         run: |
           set -euo pipefail
           data=$(mktemp -d)

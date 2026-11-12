@@ -238,6 +238,105 @@ describe("segmenting", () => {
     ]);
   });
 
+  test("[LV-1] a short segmentPause: the next line never starts inside the line before it", () => {
+    const lines = (segmentPause: number, pause: number) => {
+      const { p, segs } = pipeline({}, { segmentPause });
+      feed(
+        p,
+        "call",
+        concat(
+          silence(0.5),
+          speak(["hello", "world"]),
+          silence(pause),
+          speak(["we", "should"]),
+          silence(1),
+        ),
+      );
+      p.endPart(1);
+      return segs() as Extract<LiveOut, { type: "seg" }>[];
+    };
+    const short = lines(0.3, 0.45);
+    expect(short.map((s) => s.text)).toEqual(["hello world", "we should"]);
+    const [a, b] = short as [Extract<LiveOut, { type: "seg" }>, Extract<LiveOut, { type: "seg" }>];
+    expect(b.a0).toBeGreaterThanOrEqual(a.a1);
+    // The rest of the pre-roll is kept: the line starts where the one before it closed.
+    expect(b.a0).toBeCloseTo(a.a1, 2);
+    // Control: at the default pause the pre-roll never reaches the line before, and is whole.
+    const long = lines(0.7, 0.9);
+    expect(long.map((s) => s.text)).toEqual(["hello world", "we should"]);
+    const [c, d] = long as [Extract<LiveOut, { type: "seg" }>, Extract<LiveOut, { type: "seg" }>];
+    expect(d.a0).toBeGreaterThan(c.a1);
+  });
+
+  test("[LV-2] a decode that throws loses only its own line, says so, and never shifts the lines after it", () => {
+    const audio = concat(
+      silence(0.5),
+      speak(["hello", "world"]),
+      silence(1),
+      speak(["we", "should"]),
+      silence(1),
+      speak(["move", "the", "build"]),
+      silence(1),
+    );
+    // `live` off: only closing lines decode, so the decode that throws is the first line's.
+    // `throwAt`: which decode throws (1-based), as a one-off native error does; 0 for none.
+    const run = (throwAt: number, live = false) => {
+      // Re-decodes in the pause too, on every machine, so the first decode of a live run is one.
+      const { p, models, out, segs } = pipeline({}, { provisionalInPause: true });
+      const patched = new WeakSet<object>();
+      const prepare = models.prepare.bind(models);
+      let decodes = 0;
+      models.prepare = (l) => {
+        const h = prepare(l);
+        if (!patched.has(h.recognizer)) {
+          patched.add(h.recognizer);
+          const decode = h.recognizer.decode.bind(h.recognizer);
+          h.recognizer.decode = (s, hw) => {
+            if (++decodes === throwAt) throw new Error("native decode error");
+            return decode(s, hw);
+          };
+        }
+        return h;
+      };
+      const thrown: string[] = [];
+      // Large chunks, as a Worker that fell behind takes them.
+      for (let at = 0; at < audio.length; at += 4096) {
+        try {
+          p.audio(1, "mic", at, audio.subarray(at, Math.min(audio.length, at + 4096)), live);
+        } catch (err) {
+          thrown.push((err as Error).message);
+        }
+      }
+      p.endPart(1);
+      const warns = out.filter((x) => x.type === "log" && x.level === "warn");
+      return { lines: segs() as Extract<LiveOut, { type: "seg" }>[], thrown, warns };
+    };
+    const clean = run(0);
+    expect(clean.lines.map((s) => s.text)).toEqual(["hello world", "we should", "move the build"]);
+    expect(clean.warns).toEqual([]);
+
+    const failed = run(1);
+    expect(failed.thrown).toEqual([]);
+    expect(failed.lines.map((s) => s.text)).toEqual(["we should", "move the build"]);
+    // The lost line is named with its span.
+    expect(failed.warns.length).toBe(1);
+    const first = clean.lines[0] as Extract<LiveOut, { type: "seg" }>;
+    expect(JSON.stringify(failed.warns[0])).toContain(first.a0.toFixed(2));
+    // The lines after it are cut from the same audio as without the error.
+    for (const [i, s] of failed.lines.entries()) {
+      expect(s.a0).toBeCloseTo(clean.lines[i + 1]?.a0 as number, 3);
+      expect(s.a1).toBeCloseTo(clean.lines[i + 1]?.a1 as number, 3);
+    }
+
+    // A provisional re-decode that throws keeps the timeline too: every line is still there.
+    const live = run(0, true);
+    const provisional = run(1, true);
+    expect(provisional.thrown).toEqual(["native decode error"]);
+    expect(provisional.lines.map((s) => [s.text, s.a0, s.a1])).toEqual(
+      live.lines.map((s) => [s.text, s.a0, s.a1]),
+    );
+  });
+
   test("unbroken speech is cut at the 12 s window, and nothing is lost at the cut", () => {
     const words = Array.from({ length: 40 }, (_, i) => (i % 2 ? "deploy" : "today"));
     const { p, segs } = pipeline();

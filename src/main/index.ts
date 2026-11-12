@@ -41,7 +41,7 @@ import { join, resolve } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
 import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
-import { eventsAfter, readLog } from "../core/log/reader.ts";
+import { LogFollower, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
   EVENTS_FILE,
@@ -677,6 +677,8 @@ export class AkouApp implements ApiApp {
   private pageStarting: Promise<PageServer> | null = null;
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
+  /** Each loaded call's log follower, so a long poll reads only what was appended (`events`). */
+  private readonly followers = new WeakMap<CallController, LogFollower>();
   private readonly vocabCache = new Map<string, VocabSource>();
   /** The live setup each call runs, chosen once when it first takes the recognizer. */
   private readonly liveRan = new Map<string, LiveSetupChoice>();
@@ -2529,8 +2531,15 @@ export class AkouApp implements ApiApp {
 
   async events(id: string, after: number): Promise<LogEvent[]> {
     const c = await this.call(id);
-    const { events } = await readLog(join(c.dir, EVENTS_FILE));
-    return eventsAfter(events, after);
+    // The view holds every committed seq: a poll waiting at the head of the log reads nothing.
+    if (after >= c.view.lastSeq) return [];
+    const path = join(c.dir, EVENTS_FILE);
+    let f = this.followers.get(c);
+    if (f?.path !== path) {
+      f = new LogFollower(path);
+      this.followers.set(c, f);
+    }
+    return f.after(after);
   }
 
   async status(): Promise<Record<string, unknown>> {
@@ -2997,8 +3006,17 @@ export class AkouApp implements ApiApp {
   /**
    * Calls that ended while akou was not running and have no final layer yet, one pass at a time:
    * each pass loads its own models, and a backlog run side by side would hold them all at once.
+   * A call whose last pass failed runs after every call that has not had one: a pass that fails
+   * by running out of its budget (a long call on a slow machine) fails the same way at every
+   * start, and must not hold the calls behind it for that budget each time.
    */
   private async catchUpFinals(): Promise<void> {
+    const failed: { id: string; dir: string; parts: number[] }[] = [];
+    const run = async (s: { id: string; dir: string }, parts: number[]) => {
+      if (!this.finalAudio({ id: s.id, dir: s.dir, parts })) return;
+      const c = await this.manager.open(s.id);
+      if (c && this.runFinal(s.id, false) === null) await this.finals.get(s.id);
+    };
     for (const s of this.manager.calls()) {
       if (this.quitting) return;
       if (s.state !== "ended" && s.state !== "interrupted") continue;
@@ -3007,9 +3025,18 @@ export class AkouApp implements ApiApp {
         const v = fold(events);
         if (finalCurrent(v)) continue;
         const parts = v.parts().map((p) => p.part);
-        if (!this.finalAudio({ id: s.id, dir: s.dir, parts })) continue;
-        const c = await this.manager.open(s.id);
-        if (c && this.runFinal(s.id, false) === null) await this.finals.get(s.id);
+        if (v.final.state === "failed") failed.push({ id: s.id, dir: s.dir, parts });
+        else await run(s, parts);
+      } catch (err) {
+        this.log("warn", `final catch-up for ${s.id}: ${(err as Error).message}`);
+      }
+    }
+    for (const s of failed) {
+      if (this.quitting) return;
+      try {
+        // Read again: a pass run by hand while the others ran may have finalized it since.
+        const v = fold((await readLog(join(s.dir, EVENTS_FILE))).events);
+        if (!finalCurrent(v)) await run(s, s.parts);
       } catch (err) {
         this.log("warn", `final catch-up for ${s.id}: ${(err as Error).message}`);
       }
