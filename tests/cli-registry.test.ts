@@ -389,3 +389,16 @@ describe("[CLI-15] With --json a usage error is one JSON value on stdout, in eve
     expect([word.code, word.out]).toEqual([64, ""]);
   });
 });
+
+describe("[MCP-F1] A flag described as what it does", () => {
+  test("`calls --failed` says it lists only the calls whose start failed, never a final pass", () => {
+    const calls = COMMANDS.find((c) => c.name === "calls") as Command;
+    const desc = calls.flags?.failed?.desc ?? "";
+    // The API lists only the calls whose start failed, instead of the others; a call whose final
+    // pass failed keeps its state and is not one of them.
+    expect(desc).toContain("start failed");
+    expect(desc).not.toMatch(/final pass|\balso\b/i);
+    // Control: the help page prints this description, so a wrong one reaches the user.
+    expect(commandHelp(calls)).toContain(desc);
+  });
+});
