@@ -60,5 +60,7 @@ jobs:
         run: actionlint -color
 
       - name: zizmor
+        # Runs when actionlint fails too, so one run shows both tools' findings.
+        if: ${{ !cancelled() }}
         # Offline: the audits that call the GitHub API need a token this job does not hold.
         run: zizmor --offline --min-severity medium --config .github/zizmor.yml .github/workflows
