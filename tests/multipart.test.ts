@@ -204,3 +204,71 @@ describe("SV-D3: a multipart body read as it arrives", () => {
     expect(readdirSync(dir)).toEqual([]);
   });
 });
+
+describe("[DSK-F1] an upload keeps the volume's free-space floor", () => {
+  const FLOOR = 1_000_000;
+
+  test("a volume under the floor refuses the upload with 507 before reading a byte", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(10_000)]), "a.wav");
+    const body = await encoded(form);
+    const { dir } = tempDir("multipart-");
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctl) {
+        pulled++;
+        ctl.enqueue(body.bytes);
+        ctl.close();
+      },
+    });
+    const err = (await readMultipart(stream, body.type, dir, {
+      free: () => FLOOR - 1,
+      floor: FLOOR,
+    }).catch((e) => e)) as HttpError;
+    expect([err.status, err.code]).toEqual([507, "insufficient_storage"]);
+    expect(err.extra).toMatchObject({ free_bytes: FLOOR - 1, floor_bytes: FLOOR });
+    expect(readdirSync(dir)).toEqual([]);
+    // Nothing was asked of the body beyond what a stream starts with.
+    expect(pulled).toBeLessThanOrEqual(1);
+  });
+
+  test("a volume that falls under the floor mid-body cuts the upload and deletes its file", async () => {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(400_000)]), "a.wav");
+    const body = await encoded(form);
+    const { dir } = tempDir("multipart-");
+    let looks = 0;
+    // Room at the start and at the first look inside the file, then none: another upload filled it.
+    const free = () => (++looks <= 2 ? FLOOR * 10 : FLOOR - 1);
+    const err = (await readMultipart(chunked(body.bytes, 16_384), body.type, dir, {
+      free,
+      floor: FLOOR,
+      every: 100_000,
+    }).catch((e) => e)) as HttpError;
+    expect([err.status, err.code]).toEqual([507, "insufficient_storage"]);
+    expect(looks).toBe(3);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  test("positive control: with room all along, the same upload is read whole", async () => {
+    const form = new FormData();
+    const file = new Uint8Array(400_000).map((_, i) => i % 251);
+    form.append("file", new Blob([file]), "a.wav");
+    const body = await encoded(form);
+    const f = folder();
+    let looks = 0;
+    const got = await readMultipart(chunked(body.bytes, 16_384), body.type, f.dir, {
+      free: () => {
+        looks++;
+        return FLOOR;
+      },
+      floor: FLOOR,
+      every: 100_000,
+    });
+    expect(got.files()[0]?.sha256).toBe(sha(file));
+    // One look before the body, then one after each 100,000 file bytes or a little more.
+    expect(looks).toBeGreaterThanOrEqual(4);
+    await got.discard();
+    f.cleanup();
+  });
+});

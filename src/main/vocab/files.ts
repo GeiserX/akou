@@ -236,6 +236,23 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
   return entry;
 }
 
+/**
+ * One entry as the API hands it out (`entryScope` for the file's `scope` key), checked by the
+ * file's own rules: the entry, or why it is not one.
+ */
+export function checkApiEntry(raw: unknown): VocabEntry | string {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return "an entry is an object";
+  const { entryScope, ...rest } = raw as Record<string, unknown>;
+  const errors: VocabIssue[] = [];
+  const entry = checkEntry(
+    entryScope === undefined ? rest : { ...rest, scope: entryScope },
+    0,
+    errors,
+    [],
+  );
+  return entry ?? errors[0]?.message ?? "not a vocabulary entry";
+}
+
 /** Parses a vocabulary file. A bad entry is skipped with an error; the rest still load. */
 export function parseVocab(text: string): ParsedVocab {
   const errors: VocabIssue[] = [];

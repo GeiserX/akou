@@ -3653,7 +3653,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
   );
 
   test(
-    "DC-L5: a fix left unanswered waits under To review; Learn it writes it, and Remove in the editor gives the heard form back",
+    "DC-L5, [VOC-UNDO1]: a fix left unanswered waits under To review; Learn it writes it, Remove in the editor gives the heard form back, and Undo puts the entry back whole",
     async () => {
       // The fake engine hears "kubernetes" as "kubernetis" unless the vocabulary fixes it.
       const clip = monoWav(concat(silence(0.6), speak(["deploy", "to", "kubernetes"]), silence(1)));
@@ -3703,10 +3703,24 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       const word = "section[data-section='Words'] li[data-term='Kubernetes']";
       await page.waitForSelector(word);
       await page.click(`${word} .pg-link`);
+      const had = vocabFile().find((e) => e.term === "Kubernetes");
+      expect(had).toMatchObject({ entryScope: "dictation", source: `dictation:${id}` });
       await page.click(`${word} button.remove`);
       await page.waitForSelector(word, { state: "detached" });
       expect(vocabFile().some((e) => e.term === "Kubernetes")).toBe(false);
       expect(await dictate()).toBe("deploy to kubernetis");
+
+      // The toast's Undo puts the entry back as it was (scope, source, date), and the pair is
+      // learned again: the next dictation fixes the word once more.
+      await page.click("#toast:not([hidden]) .toast-action");
+      await page.waitForSelector(word);
+      expect(vocabFile().find((e) => e.term === "Kubernetes")).toEqual(had);
+      const pairs = (await rig.api("GET", "/vocab?dictation=true")).body.dictation as {
+        term: string;
+        status: string;
+      }[];
+      expect(pairs.find((p) => p.term === "Kubernetes")?.status).toBe("accepted");
+      expect(await dictate()).toBe("deploy to Kubernetes");
     },
     UI_TIMEOUT,
   );

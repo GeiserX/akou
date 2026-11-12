@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { Channel, LogEvent, Seg } from "../src/core/log/events.ts";
-import { PROVISIONAL_TTL_MS } from "../src/core/log/fold.ts";
+import { fold, PROVISIONAL_TTL_MS } from "../src/core/log/fold.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import type { LiveChoice } from "../src/main/asr/live-engines.ts";
 import {
@@ -760,6 +760,83 @@ describe("the host writes the live layer", () => {
     }
     await r.mgr.stop();
     expect(ofType(r.events, "asr.lag")).toEqual([]);
+  });
+});
+
+describe("[ECHO-1] Mic hears the call", () => {
+  const remote = ["we", "should", "move", "the", "build", "to", "new", "box"];
+  /** Plays `mic` and `call` from 1 s and 1.1 s, and returns the call's segs and folded view. */
+  async function play(micWords: string[], callWords: string[], micGap?: number) {
+    const r = rig();
+    await startCall(r);
+    const call = concat(silence(1), speak(callWords, { voice: 3 }), silence(3));
+    const mic = concat(silence(1.1), speak(micWords, { gapSeconds: micGap }), silence(3));
+    // The host sends each channel's queued audio in turn, so to let the call line be written
+    // before a mic line that is still open, the audio goes in two halves: the call line's first.
+    const cut = call.length;
+    r.engine.last.play(mic.subarray(0, cut), call);
+    await settle(r, () => segs(r.events).some((x) => x.ch === "call"));
+    const rest = mic.subarray(cut);
+    if (rest.length > 0) r.engine.last.play(rest, silence(rest.length / RATE));
+    await r.mgr.stop();
+    return { s: segs(r.events), view: fold(r.events) };
+  }
+
+  for (const [name, micWords, micGap, micFirst] of [
+    ["the mic line is written first", remote.slice(0, 4), undefined, true],
+    // The mic's copy drawn out (0.5 s between words) closes seconds after the call line.
+    ["the call line is written first", remote, 0.5, false],
+  ] as const) {
+    test(`${name}: the mic line gets an echo revision, stays in the log and leaves the view`, async () => {
+      const { s, view } = await play([...micWords], remote, micGap);
+      const micLine = s.find((x) => x.ch === "mic" && x.rev === 1) as Seg;
+      const callLine = s.find((x) => x.ch === "call" && x.rev === 1) as Seg;
+      expect(micLine.text).toBe(micWords.join(" "));
+      // The order the case is about: which line was written first.
+      expect(micLine.seq < callLine.seq).toBe(micFirst);
+      expect(s.filter((x) => x.echo !== undefined)).toMatchObject([
+        { id: micLine.id, rev: 2, echo: true },
+      ]);
+      // Only `echo` in the revision: the text, speaker and times stay revision 1's.
+      const rev2 = s.find((x) => x.echo !== undefined) as Seg;
+      expect(Object.keys(rev2).sort()).toEqual(["echo", "id", "rev", "seq", "t", "type"]);
+      expect(view.lines("live").map((l) => l.ch)).toEqual(["call"]);
+      const all = view.lines("live", { includeEcho: true });
+      expect(all.map((l) => [l.ch, l.echo, l.text])).toContainEqual([
+        "mic",
+        true,
+        micWords.join(" "),
+      ]);
+    });
+  }
+
+  test("a pause cuts the call line where the mic's copy runs on: the mic line is still echo", async () => {
+    const r = rig();
+    await startCall(r);
+    const a = remote.slice(0, 4);
+    const b = remote.slice(4);
+    const call = concat(silence(1), speak(a, { voice: 3 }), silence(1.2), speak(b, { voice: 3 }));
+    const mic = concat(silence(1.1), speak(remote), silence(1.1));
+    r.engine.last.play(mic, call);
+    r.engine.last.play(silence(3), silence(3));
+    await r.mgr.stop();
+    const s = segs(r.events);
+    // The case the test is about: two call lines, one mic line.
+    expect(s.filter((x) => x.ch === "call" && x.rev === 1).map((x) => x.text)).toEqual([
+      a.join(" "),
+      b.join(" "),
+    ]);
+    const micLine = s.find((x) => x.ch === "mic" && x.rev === 1) as Seg;
+    expect(micLine.text).toBe(remote.join(" "));
+    expect(s.filter((x) => x.echo !== undefined)).toMatchObject([
+      { id: micLine.id, rev: 2, echo: true },
+    ]);
+  });
+
+  test("positive control: the user's own words at the same time get no echo revision", async () => {
+    const { s, view } = await play(["hello", "world", "thanks", "meeting", "today"], remote);
+    expect(s.filter((x) => x.echo !== undefined)).toEqual([]);
+    expect(view.lines("live").map((l) => l.ch)).toEqual(["call", "mic"]);
   });
 });
 
