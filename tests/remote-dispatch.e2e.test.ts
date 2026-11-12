@@ -990,6 +990,101 @@ describe("[DSK-F2] a remote whose disk is under its floor", () => {
   });
 });
 
+describe("[DSK-F2] a remote whose disk is full is skipped for another that offers the job", () => {
+  let posts = 0;
+  let full: ReturnType<typeof Bun.serve>;
+
+  beforeAll(() => {
+    // Up and offering fast, with its disk under its floor: every upload is refused with 507.
+    full = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (req) => {
+        const u = new URL(req.url);
+        if (u.pathname === "/v1/server") {
+          return Response.json({
+            name: "akou",
+            version: "9.9.9",
+            mode: "server",
+            presets: [{ name: "fast", available: true }],
+            engines: [],
+          });
+        }
+        if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
+        if (u.pathname === "/v1/jobs" && req.method === "POST") {
+          posts++;
+          return Response.json(
+            { error: "insufficient_storage", message: "under 1 GB free" },
+            { status: 507 },
+          );
+        }
+        return Response.json({ error: "not_found", message: "no" }, { status: 404 });
+      },
+    });
+  });
+  afterAll(() => full.stop(true));
+
+  test("a job only a remote can run lands on the second remote, and the full one stays up", async () => {
+    const worker = await server({ installed: true, keyName: "primary" });
+    const pdir = tempDir("akou-primary-").dir;
+    const kf = keyFile(pdir, worker.key);
+    const primary = await server({
+      home: pdir,
+      installed: false,
+      keyName: "archive",
+      settings: {
+        "server.remotes": [
+          `http://127.0.0.1:${full.port} ${kf}`,
+          `http://127.0.0.1:${worker.port} ${kf}`,
+        ],
+      },
+    });
+    try {
+      // Both up first, so the job is offered to the full one before the other.
+      await until(
+        async () =>
+          ((await get(primary, "/v1/server")).body?.remotes ?? []).every(
+            (r: Body) => r.state === "up",
+          ),
+        10_000,
+        "both remotes up",
+      );
+      posts = 0;
+      const r = await submit(primary, { preset: "fast" });
+      expect(r.status).toBe(202);
+      const done = (await get(primary, `/v1/jobs/${r.body.id}?wait=30`)).body;
+      expect([done.status, done.error?.code]).toEqual(["done", undefined]);
+      expect(posts).toBe(1);
+      expect((await get(worker, "/v1/jobs", worker.token)).body.jobs).toHaveLength(1);
+      expect((await get(primary, "/v1/server")).body.remotes[0].state).toBe("up");
+    } finally {
+      await primary.close();
+      await worker.close();
+    }
+  });
+
+  test("positive control: with no other remote, the job fails with the remote's reason", async () => {
+    const pdir = tempDir("akou-primary-").dir;
+    const primary = await server({
+      home: pdir,
+      installed: false,
+      keyName: "archive",
+      settings: { "server.remotes": [`http://127.0.0.1:${full.port} ${keyFile(pdir, "ak_x")}`] },
+    });
+    try {
+      await remoteState(primary, "up");
+      posts = 0;
+      const r = await submit(primary, { preset: "fast" });
+      expect(r.status).toBe(202);
+      const end = (await get(primary, `/v1/jobs/${r.body.id}?wait=30`)).body;
+      expect([end.status, end.error?.code]).toEqual(["failed", "insufficient_storage"]);
+      expect(posts).toBe(1);
+    } finally {
+      await primary.close();
+    }
+  });
+});
+
 describe("[SV-X5] a remote that went down while a probe was in flight is seen coming back", () => {
   // The stall of 2026-10-07: every remote's long-poll timed out while the periodic probe was in
   // flight. The probe ended `up`, as it began, so it logged nothing and told the queue nothing,
