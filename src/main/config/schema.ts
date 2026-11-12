@@ -124,11 +124,11 @@ export interface SettingSpec {
    */
   windowWritable?: boolean;
   /**
-   * False for a setting that decides where transcripts are written (`export.dir`): over the API
-   * only the user on this computer sets it, with the app's own token on the desktop app's loopback
-   * listener (`akou config set`) or in the desktop window. An `ak_` key, the network listener, the
-   * window's page in a browser and server mode are refused, so a key cannot send every later call
-   * to a folder or share it chose.
+   * False for a setting that decides where calls or transcripts are written (`recordings.root`,
+   * `export.dir`): over the API only the user on this computer sets it, with the app's own token
+   * on the desktop app's loopback listener (`akou config set`) or in the desktop window. An `ak_`
+   * key, the network listener, the window's page in a browser and server mode are refused, so a
+   * key cannot send every later call to a folder or share it chose.
    */
   keyWritable?: boolean;
   /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
@@ -162,7 +162,8 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: join(home, "Recordings", "akou"),
-    doc: "Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them.",
+    keyWritable: false,
+    doc: "Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them. Set in the window, the file or with `akou config set` on this computer; an API key cannot set it, since it decides where your calls are recorded.",
   },
   "user.name": {
     type: "string",

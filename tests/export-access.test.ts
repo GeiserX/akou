@@ -113,7 +113,8 @@ describe("[EXP-1] The export folder set by an API key", () => {
 
   test("an admin ak_ key's PATCH of recordings.root is 400 too: every later call is recorded there", async () => {
     const ROOT = { "recordings.root": "/calls" };
-    const r = await patch({ identity: ADMIN_KEY }, { "recordings.root": "\\\\host.example\\drop" }, ROOT);
+    const SHARED = { "recordings.root": "\\\\host.example\\drop" };
+    const r = await patch({ identity: ADMIN_KEY }, SHARED, ROOT);
     expect(r.status).toBe(400);
     expect(r.body.error).toBe("bad_setting");
     expect(String(r.body.message)).toContain("recordings.root");

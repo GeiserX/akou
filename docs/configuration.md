@@ -40,7 +40,7 @@ The tables below are generated from the settings registry in [src/main/config/sc
 
 | Key | Default | What it does |
 |---|---|---|
-| `recordings.root` | `"~/Recordings/akou"` | Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them. |
+| `recordings.root` | `"~/Recordings/akou"` | Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them. Set in the window, the file or with `akou config set` on this computer; an API key cannot set it, since it decides where your calls are recorded. |
 
 ### user
 
