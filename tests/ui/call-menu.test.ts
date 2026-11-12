@@ -410,7 +410,8 @@ describe("[TRASH-1] Empty Trash… from a call row", () => {
       await withRig({ seed: seedThree }, async (rig) => {
         const page = await rig.open(C);
         await page.waitForSelector("#calls li >> nth=2");
-        const inTrash = async () => ((await rig.api("GET", "/trash")).body.calls as unknown[]).length;
+        const inTrash = async () =>
+          ((await rig.api("GET", "/trash")).body.calls as unknown[]).length;
         // An empty trash says so and asks nothing.
         await page.click(`${row(B)} .what`, { button: "right" });
         await page.click('#calls-menu [data-action="trash.empty"]');
@@ -444,7 +445,8 @@ describe("[TRASH-1] Empty Trash… from a call row", () => {
         await page.click("#confirm .confirm-row .go");
         await until(async () => (await inTrash()) === 0, 5000, "trash emptied");
         await until(
-          async () => (await page.textContent("#toast"))?.includes("2 calls deleted for good.") === true,
+          async () =>
+            (await page.textContent("#toast"))?.includes("2 calls deleted for good.") === true,
           5000,
           "deleted said",
         );

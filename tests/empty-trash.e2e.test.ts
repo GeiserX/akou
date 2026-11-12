@@ -7,9 +7,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { TRASH_DIR } from "../src/main/call/manager.ts";
 import { runCli } from "../src/main/cli/cli.ts";
 import type { Io, Keys } from "../src/main/cli/context.ts";
-import { TRASH_DIR } from "../src/main/call/manager.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
@@ -18,6 +18,12 @@ const KEEP = "01J8Z6Q4M2VX0K7B3D4E5TRSHKP";
 const GONE_A = "01J8Z6Q4M2VX0K7B3D4E5TRSHAA";
 const GONE_B = "01J8Z6Q4M2VX0K7B3D4E5TRSHBB";
 const EARLIER = "01J8Z6Q4M2VX0K7B3D4E5TRSHCC";
+/** Calls the CLI tests trash and empty. */
+const CLI_CALLS = [
+  "01J8Z6Q4M2VX0K7B3D4E5TRSHD1",
+  "01J8Z6Q4M2VX0K7B3D4E5TRSHD2",
+  "01J8Z6Q4M2VX0K7B3D4E5TRSHD3",
+] as const;
 
 /** A saved call under `<root>/<workspace>/<folder>`. */
 function seed(root: string, workspace: string, folder: string, id: string, title: string): string {
@@ -51,6 +57,9 @@ beforeAll(async () => {
   kept = seed(root(), "work", "2026-09-23_153612_keep", KEEP, "Keep me");
   seed(root(), "work", "2026-09-24_1000_aa", GONE_A, "Alpha");
   seed(root(), "hiring", "2026-09-24_1100_bb", GONE_B, "Beta");
+  for (const [i, id] of CLI_CALLS.entries()) {
+    seed(root(), "work", `2026-09-25_100${i}_d${i}`, id, `Cli ${i}`);
+  }
   // A call trashed 10 days ago, by an earlier run: inside the 30 days, so the start keeps it.
   const earlier = seed(join(root(), TRASH_DIR), "work", "2026-09-01_0900_cc", EARLIER, "Earlier");
   writeFileSync(
@@ -100,7 +109,7 @@ describe("[TRASH-1] Empty trash deletes trashed calls for good, now, and nothing
     expect((await rig.api("POST", `/calls/${GONE_A}/restore`)).status).toBe(404);
 
     // The call that was never trashed is untouched: listed, readable, its folder byte for byte.
-    expect(await listed()).toEqual([KEEP]);
+    expect((await listed()).sort()).toEqual([KEEP, ...CLI_CALLS].sort());
     expect(readFileSync(join(kept, "events.jsonl"), "utf8")).toBe(keptLog);
     expect(existsSync(join(kept, "audio", "part-001.opus"))).toBe(true);
     expect((await rig.api("GET", `/calls/${KEEP}/transcript`)).text).toContain("the Keep me line");
@@ -153,19 +162,15 @@ describe("[TRASH-1] akou calls empty-trash", () => {
   };
 
   test("without --yes and no terminal it deletes nothing and says how to; --yes deletes", async () => {
-    // Two new calls under the ids the first test deleted for good; a fresh app indexes them.
-    seed(root(), "work", "2026-09-25_1000_aa", GONE_A, "Alpha again");
-    seed(root(), "work", "2026-09-25_1100_bb", GONE_B, "Beta again");
-    await rig.close();
-    rig = await appRig({ home: home.dir });
-    for (const id of [GONE_A, GONE_B]) {
+    const [d1, d2, d3] = CLI_CALLS;
+    for (const id of [d1, d2]) {
       expect((await rig.api("DELETE", `/calls/${id}`)).status).toBe(200);
     }
 
     const refused = await run(["calls", "empty-trash"]);
     expect(refused.code).toBe(64);
     expect(refused.err.join("\n")).toContain("the trash holds 2 calls; calls empty-trash --yes");
-    expect((await inTrash()).sort()).toEqual([GONE_A, GONE_B].sort());
+    expect((await inTrash()).sort()).toEqual([d1, d2].sort());
 
     // A person at a terminal who answers anything but y keeps them.
     const no = terminal("n");
@@ -180,7 +185,14 @@ describe("[TRASH-1] akou calls empty-trash", () => {
     const deleted = await run(["calls", "empty-trash"], yes);
     expect([deleted.code, deleted.out]).toEqual([0, ["Deleted 2 calls from the trash for good"]]);
     expect(await inTrash()).toEqual([]);
-    expect(await listed()).toContain(KEEP);
+    // The live test's call is listed too; what matters is the untrashed calls stay, the others don't.
+    const left = await listed();
+    expect([left.includes(KEEP), left.includes(d3), left.includes(d1), left.includes(d2)]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
 
     // Nothing left: said so, with or without --yes.
     expect((await run(["calls", "empty-trash"])).out).toEqual(["The trash is empty."]);
@@ -195,13 +207,15 @@ describe("[TRASH-1] akou calls empty-trash", () => {
   }, 30_000);
 
   test("--yes deletes without asking", async () => {
-    seed(root(), "work", "2026-09-26_1000_aa", GONE_A, "Alpha thrice");
-    await rig.close();
-    rig = await appRig({ home: home.dir });
-    expect((await rig.api("DELETE", `/calls/${GONE_A}`)).status).toBe(200);
+    const d3 = CLI_CALLS[2];
+    expect((await rig.api("DELETE", `/calls/${d3}`)).status).toBe(200);
     const asked = terminal("n");
     const r = await run(["calls", "empty-trash", "--yes"], asked);
-    expect([r.code, r.out, asked.asked]).toEqual([0, ["Deleted 1 call from the trash for good"], false]);
+    expect([r.code, r.out, asked.asked]).toEqual([
+      0,
+      ["Deleted 1 call from the trash for good"],
+      false,
+    ]);
     expect(await inTrash()).toEqual([]);
     expect(await listed()).toContain(KEEP);
   }, 30_000);

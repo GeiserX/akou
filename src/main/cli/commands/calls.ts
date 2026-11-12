@@ -260,8 +260,15 @@ async function askYes(ctx: Ctx, keys: Keys, question: string): Promise<boolean> 
  * anywhere else needs `--yes`; without it, it only says how many calls the trash holds.
  */
 async function emptyTrash(ctx: Ctx, p: Parsed): Promise<number> {
-  if (p.positional.length > 1 || str(p, "call") !== undefined || str(p, "workspace") !== undefined) {
-    return usage(ctx, "calls empty-trash takes no call and no workspace: it empties the whole trash");
+  if (
+    p.positional.length > 1 ||
+    str(p, "call") !== undefined ||
+    str(p, "workspace") !== undefined
+  ) {
+    return usage(
+      ctx,
+      "calls empty-trash takes no call and no workspace: it empties the whole trash",
+    );
   }
   if (!bool(p, "yes")) {
     const r = await api(ctx, "GET", "/trash");
@@ -283,13 +290,16 @@ async function emptyTrash(ctx: Ctx, p: Parsed): Promise<number> {
   }
   const r = await api(ctx, "DELETE", "/trash");
   return finish(ctx, r, (b) =>
-    b.deleted === 0 ? "The trash is empty." : `Deleted ${plural(b.deleted)} from the trash for good`,
+    b.deleted === 0
+      ? "The trash is empty."
+      : `Deleted ${plural(b.deleted)} from the trash for good`,
   );
 }
 
 const calls: Command = {
   name: "calls",
-  summary: "List calls by date, title and duration (no content search), rename one, or empty the trash",
+  summary:
+    "List calls by date, title and duration (no content search), rename one, or empty the trash",
   usage:
     "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json] | akou calls empty-trash [--yes] [--json]",
   flags: {
@@ -330,7 +340,8 @@ const calls: Command = {
       const r = await api(ctx, "PATCH", `/calls/${enc(call)}`, { body: { title } });
       return finish(ctx, r, (b) => `${b.call} is now "${b.title}"`);
     }
-    if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE, or calls empty-trash`);
+    if (sub !== undefined)
+      return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE, or calls empty-trash`);
     if (str(p, "call") !== undefined) {
       return usage(ctx, "-c names the call to rename: calls rename -c CALL TITLE");
     }

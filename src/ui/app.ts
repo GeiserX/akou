@@ -1181,9 +1181,7 @@ class App {
   }
 
   private async emptyTrash(): Promise<void> {
-    const r = await this.t
-      .request<{ deleted?: number }>("DELETE", "/trash")
-      .catch(() => null);
+    const r = await this.t.request<{ deleted?: number }>("DELETE", "/trash").catch(() => null);
     if (!r || r.status >= 400) {
       toast(message(r?.body, "the Trash was not emptied"));
       return;
