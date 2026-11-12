@@ -59,7 +59,7 @@ Two examples ship in [examples/hooks](https://github.com/GeiserX/akou/tree/main/
 
 ### 3. The webhook
 
-Set `webhook.url` and `webhook.secret` in `config.json`. akou `POST`s the same JSON as the hooks, signed: `X-Akou-Signature: sha256=<HMAC-SHA256 of the exact body>`, with `X-Akou-Event` naming the stage and `X-Akou-Delivery` one id kept across retries. It stays off until both are set, so no unsigned delivery is ever sent. A failed delivery is tried three more times, after 2, 10 and 30 seconds. The log records only the address's origin, because chat services keep their secret in the path.
+Set `webhook.url` and `webhook.secret` in `config.json`. akou `POST`s the same JSON as the hooks, signed: `X-Akou-Signature: sha256=<HMAC-SHA256 of the exact body>`, with `X-Akou-Event` naming the stage and `X-Akou-Delivery` one id kept across retries. The body-only signature does not stop a replay, so each delivery also carries `X-Akou-Timestamp` (seconds since the epoch) and `X-Akou-Signature-V2: sha256=<HMAC-SHA256 of "<timestamp>.<body>">`. Check v2 and refuse a timestamp more than 5 minutes from your clock; the retries stay inside that window. `X-Akou-Signature` stays as it was, so a receiver that checks it keeps working. It stays off until both are set, so no unsigned delivery is ever sent. A failed delivery is tried three more times, after 2, 10 and 30 seconds. The log records only the address's origin, because chat services keep their secret in the path.
 
 ### 4. Pull
 
