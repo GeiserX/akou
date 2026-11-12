@@ -364,7 +364,8 @@ interface Download {
   abort: AbortController;
 }
 
-function freeOf(dir: string): number {
+/** The bytes free on the volume that holds `dir`. */
+export function freeOf(dir: string): number {
   // A models folder not made yet is on the volume of its nearest existing parent.
   let at = dir;
   while (!existsSync(at) && dirname(at) !== at) at = dirname(at);

@@ -734,6 +734,59 @@ describe("settings over the API", () => {
     expect(got.body.schema["api.port"].apiWritable).toBe(true);
   });
 
+  test("[CF-1] a save refuses a config.json that does not parse and leaves the file as it is", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    // A hand edit that left a trailing comma.
+    const broken = `${before.trimEnd().slice(0, -1)},}\n`;
+    writeFileSync(file, broken);
+    try {
+      const r = await rig.api("PATCH", "/config", { "asr.segmentPause": 0.9 });
+      expect([r.status, r.body.error]).toEqual([409, "config_file_invalid"]);
+      expect(r.body.message).toContain("not valid JSON");
+      expect(readFileSync(file, "utf8")).toBe(broken);
+    } finally {
+      writeFileSync(file, before);
+    }
+  });
+
+  test("[CF-1] after the refused save, the file fixed by hand keeps every key it holds at the next save", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    writeFileSync(file, `${before.trimEnd().slice(0, -1)},}\n`);
+    try {
+      expect((await rig.api("PATCH", "/config", { "user.name": "Bea" })).status).toBe(409);
+      // The fix by hand: the comma gone, and a key the app's own copy never held.
+      const raw = JSON.parse(before) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify({ ...raw, "asr.segmentPause": 0.7 }, null, 2));
+      const r = await rig.api("PATCH", "/config", { "user.name": "Bea" });
+      expect(r.status).toBe(200);
+      const after = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      expect([after["user.name"], after["asr.segmentPause"]]).toEqual(["Bea", 0.7]);
+    } finally {
+      writeFileSync(file, before);
+      await rig.api("PATCH", "/config", { "asr.segmentPause": null, "user.name": "Ana" });
+    }
+  });
+
+  test("[CF-1] positive control: a save keeps the keys this version does not know and the file-only keys", async () => {
+    const file = join(rig.app.configDir, "config.json");
+    const before = readFileSync(file, "utf8");
+    const raw = JSON.parse(before) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...raw, "zzz.fromNewerAkou": { on: true } }, null, 2));
+    try {
+      const r = await rig.api("PATCH", "/config", { "asr.segmentPause": 0.9 });
+      expect(r.status).toBe(200);
+      const after = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      expect(after["zzz.fromNewerAkou"]).toEqual({ on: true });
+      expect(after["capture.helper"]).toEqual(raw["capture.helper"]);
+      expect(after["asr.segmentPause"]).toBe(0.9);
+    } finally {
+      writeFileSync(file, before);
+      await rig.api("PATCH", "/config", { "asr.segmentPause": null });
+    }
+  });
+
   test("status always answers 200 and names what is missing", async () => {
     const r = await rig.api("GET", "/status");
     expect(r.status).toBe(200);

@@ -233,6 +233,9 @@
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
+          "409": {
+            "$ref": "#/components/responses/409.config_file_invalid"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -9632,6 +9635,29 @@
           }
         }
       },
+      "409.config_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "config_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.cursor_stale": {
         "description": "Conflict",
         "content": {
@@ -11132,6 +11158,10 @@
           {
             "const": "capture_failed",
             "description": "The capture helper could not start; `stage` says where."
+          },
+          {
+            "const": "config_file_invalid",
+            "description": "config.json is not a JSON object, so a save would overwrite it; fix or remove the file first."
           },
           {
             "const": "cursor_stale",
