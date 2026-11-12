@@ -959,6 +959,35 @@ describe("a remote that forgot a job", () => {
   });
 });
 
+describe("[DSK-F2] a remote whose disk is under its floor", () => {
+  test("its 507 to the upload is a refusal: the job runs here or fails, and the remote is not down", async () => {
+    const dir = tempDir("akou-remote-full-").dir;
+    const audio = join(dir, "a.wav");
+    writeFileSync(audio, NOTE);
+    const url = "http://remote.example";
+    const upload = async (status: number) => {
+      const r = new Remotes({
+        entries: () => [`${url} ${keyFile(dir, "ak_x")}`],
+        fetch: (async () =>
+          Response.json(
+            { error: status === 507 ? "insufficient_storage" : "internal", message: "no room" },
+            { status },
+          )) as unknown as typeof fetch,
+        log: () => {},
+      });
+      expect(r.configured()).toBe(true);
+      const job = { id: "job_1", audio, language: "auto", keywords: [], languages: [] };
+      return (await r.submit(url, { ...job, diarize: false }).catch((e: unknown) => e)) as RemoteError;
+    };
+    const full = await upload(507);
+    expect(full).toBeInstanceOf(RemoteError);
+    expect([full.kind, full.status, full.code]).toEqual(["rejected", 507, "insufficient_storage"]);
+    expect(full.message).toContain("no room");
+    // Positive control: another 5xx is still a remote that is down.
+    expect((await upload(503)).kind).toBe("down");
+  });
+});
+
 describe("[SV-X5] a remote that went down while a probe was in flight is seen coming back", () => {
   // The stall of 2026-10-07: every remote's long-poll timed out while the periodic probe was in
   // flight. The probe ended `up`, as it began, so it logged nothing and told the queue nothing,

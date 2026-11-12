@@ -474,6 +474,9 @@ export class Remotes {
     if (res.status === 404 || res.status === 410) {
       return new RemoteError("lost", message, res.status, code);
     }
+    // 507: the remote is up and its disk is under its floor. Like a 422 it refuses the job, so the
+    // job runs here or fails; the remote is not marked down and the job is not sent again.
+    if (res.status === 507) return new RemoteError("rejected", message, res.status, code);
     if (res.status === 408 || res.status === 429 || res.status >= 500) {
       return new RemoteError("down", message, res.status, code);
     }
