@@ -766,28 +766,34 @@ describe("the host writes the live layer", () => {
 describe("[ECHO-1] Mic hears the call", () => {
   const remote = ["we", "should", "move", "the", "build", "to", "new", "box"];
   /** Plays `mic` and `call` from 1 s and 1.1 s, and returns the call's segs and folded view. */
-  async function play(micWords: string[], callWords: string[]) {
+  async function play(micWords: string[], callWords: string[], micGap?: number) {
     const r = rig();
     await startCall(r);
     const call = concat(silence(1), speak(callWords, { voice: 3 }), silence(3));
-    const mic = concat(silence(1.1), speak(micWords), silence(3));
-    r.engine.last.play(mic, call);
+    const mic = concat(silence(1.1), speak(micWords, { gapSeconds: micGap }), silence(3));
+    // The host sends each channel's queued audio in turn, so to let the call line be written
+    // before a mic line that is still open, the audio goes in two halves: the call line's first.
+    const cut = call.length;
+    r.engine.last.play(mic.subarray(0, cut), call);
+    await settle(r, () => segs(r.events).some((x) => x.ch === "call"));
+    const rest = mic.subarray(cut);
+    if (rest.length > 0) r.engine.last.play(rest, silence(rest.length / RATE));
     await r.mgr.stop();
     return { s: segs(r.events), view: fold(r.events) };
   }
 
-  for (const [name, micWords] of [
-    ["the mic line closes first", remote.slice(0, 4)],
-    // The user says two words of their own after the echo: 8 of 10 words are the call's.
-    ["the call line closes first", [...remote, "ok", "great"]],
+  for (const [name, micWords, micGap, micFirst] of [
+    ["the mic line is written first", remote.slice(0, 4), undefined, true],
+    // The mic's copy drawn out (0.5 s between words) closes seconds after the call line.
+    ["the call line is written first", remote, 0.5, false],
   ] as const) {
     test(`${name}: the mic line gets an echo revision, stays in the log and leaves the view`, async () => {
-      const { s, view } = await play([...micWords], remote);
+      const { s, view } = await play([...micWords], remote, micGap);
       const micLine = s.find((x) => x.ch === "mic" && x.rev === 1) as Seg;
       const callLine = s.find((x) => x.ch === "call" && x.rev === 1) as Seg;
       expect(micLine.text).toBe(micWords.join(" "));
       // The order the case is about: which line was written first.
-      expect(micLine.seq < callLine.seq).toBe(micWords.length < remote.length);
+      expect(micLine.seq < callLine.seq).toBe(micFirst);
       expect(s.filter((x) => x.echo !== undefined)).toMatchObject([
         { id: micLine.id, rev: 2, echo: true },
       ]);
