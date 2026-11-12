@@ -367,6 +367,16 @@ export const PARITY: readonly Row[] = [
     note: "Moving a call to another workspace is `PATCH /calls/:id {workspace}`, the rename row's route.",
   },
   {
+    action: "Empty the trash: delete trashed calls for good, now",
+    cli: ["calls"],
+    api: ["GET /trash", "DELETE /trash"],
+    mcp: {
+      none: "deleting calls for good is the user's, with a confirmation; no agent tool deletes data that cannot come back",
+    },
+    window: [app('"GET", "/trash"'), app('"DELETE", "/trash"')],
+    note: "`akou calls empty-trash` asks on a terminal and needs `--yes` elsewhere; the window asks first, naming how many calls go (W13.3).",
+  },
+  {
     action: "Change who spoke one line",
     cli: { none: "missing: CLI-29 adds edit SEG --speaker" },
     api: ["PATCH /calls/:id/segments/:sid"],

@@ -14,8 +14,9 @@
  *   on a finished call (TRAPS T3.14). `last` never names a failed start.
  * - **Move, trash, restore (PROGRAMMABILITY PG-A4).** A finished call's folder moves to another
  *   workspace's folder, or to the trash, `<root>/.trash/<workspace>/<folder>` with a
- *   `<folder>.json` beside it saying when; `init()` purges what has been there 30 days. A restore
- *   moves the folder back, untouched. A live or busy call never moves.
+ *   `<folder>.json` beside it saying when; `init()` purges what has been there 30 days, and
+ *   `emptyTrash()` purges all of it at once. A restore moves the folder back, untouched. A live or
+ *   busy call never moves.
  */
 
 import {
@@ -131,7 +132,7 @@ export const TRASH_DIR = ".trash";
 export const TRASH_DAYS = 30;
 
 /** What the trash keeps beside a trashed call's folder. */
-interface Trashed {
+export interface Trashed {
   id: string;
   workspace: string;
   trashedAt: number;
@@ -746,16 +747,35 @@ export class CallManager {
     return { ok: true, dir, workspace: t.workspace };
   }
 
-  /** Deletes what has been in the trash for `TRASH_DAYS` days. */
-  private purgeTrash(): void {
-    const cutoff = this.clock.now() - TRASH_DAYS * 24 * 3600_000;
+  /** What is in the trash now, newest first: each call's id, its workspace and when it went. */
+  async trashList(): Promise<Trashed[]> {
+    await this.init();
+    return this.trashed()
+      .map(({ id, workspace, trashedAt }) => ({ id, workspace, trashedAt }))
+      .sort((a, b) => b.trashedAt - a.trashedAt);
+  }
+
+  /**
+   * Empty trash: deletes every call in the trash for good, now, through the same purge the start
+   * runs after 30 days. Only folders under `.trash/` are touched. Returns how many went.
+   */
+  async emptyTrash(): Promise<number> {
+    await this.init();
+    return this.purgeTrash(Number.POSITIVE_INFINITY);
+  }
+
+  /** Deletes what has been in the trash since `cutoff` or before (`TRASH_DAYS` days by default). */
+  private purgeTrash(cutoff = this.clock.now() - TRASH_DAYS * 24 * 3600_000): number {
+    let n = 0;
     for (const t of this.trashed()) {
       if (t.trashedAt > cutoff) continue;
       try {
         rmSync(t.dir, { recursive: true, force: true });
         rmSync(`${t.dir}.json`, { force: true });
+        n++;
       } catch {}
     }
+    return n;
   }
 
   /** The folder and workspace of a known call, loaded or not. */

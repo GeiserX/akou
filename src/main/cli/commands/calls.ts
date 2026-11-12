@@ -8,7 +8,7 @@ import { processAlive } from "../../../core/log/writer.ts";
 import { finalText } from "../../asr/final-text.ts";
 import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
-import { bool, int, list, str } from "../args.ts";
+import { bool, int, list, type Parsed, str } from "../args.ts";
 import { EXIT, Hung, StoppedHung, Unreachable } from "../client.ts";
 import { healthWord } from "../color.ts";
 import {
@@ -19,6 +19,7 @@ import {
   callFlag,
   enc,
   finish,
+  type Keys,
   objectCall,
   ref,
   wall,
@@ -241,11 +242,56 @@ function minutes(from: number, to: number | null): string {
   return `${Math.max(0, Math.round((to - from) / 60_000))} min`;
 }
 
+const plural = (n: number) => `${n} call${n === 1 ? "" : "s"}`;
+
+/** A yes-or-no question asked on the terminal; any key but y is no. */
+async function askYes(ctx: Ctx, keys: Keys, question: string): Promise<boolean> {
+  ctx.io.err(`${question} [y/N]`);
+  try {
+    for await (const chunk of keys.read()) return /^y/i.test(chunk);
+    return false;
+  } finally {
+    keys.close();
+  }
+}
+
+/**
+ * Empty trash (WINDOW W13.3): deletes every call in the trash for good. It asks on a terminal, and
+ * anywhere else needs `--yes`; without it, it only says how many calls the trash holds.
+ */
+async function emptyTrash(ctx: Ctx, p: Parsed): Promise<number> {
+  if (p.positional.length > 1 || str(p, "call") !== undefined || str(p, "workspace") !== undefined) {
+    return usage(ctx, "calls empty-trash takes no call and no workspace: it empties the whole trash");
+  }
+  if (!bool(p, "yes")) {
+    const r = await api(ctx, "GET", "/trash");
+    if (r.status !== 200) return finish(ctx, r, () => "");
+    const n = (r.body.calls as Body[]).length;
+    if (n === 0) return finish(ctx, r, () => "The trash is empty.");
+    const question = `Delete the ${plural(n)} in the trash for good? This cannot be undone.`;
+    const keys = ctx.json ? undefined : ctx.io.keys;
+    if (!keys) {
+      return usage(
+        ctx,
+        `the trash holds ${plural(n)}; calls empty-trash --yes deletes them for good, which cannot be undone`,
+      );
+    }
+    if (!(await askYes(ctx, keys, question))) {
+      ctx.io.err("akou: nothing was deleted");
+      return EXIT.ok;
+    }
+  }
+  const r = await api(ctx, "DELETE", "/trash");
+  return finish(ctx, r, (b) =>
+    b.deleted === 0 ? "The trash is empty." : `Deleted ${plural(b.deleted)} from the trash for good`,
+  );
+}
+
 const calls: Command = {
   name: "calls",
-  summary: "List calls by date, title and duration (no content search), or rename one",
+  summary: "List calls by date, title and duration (no content search), rename one, or empty the trash",
   usage:
-    "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json]",
+    "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json] | akou calls empty-trash [--yes] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "only calls in this workspace" },
     limit: { type: "string", value: "N", desc: "at most N calls, newest first" },
@@ -254,10 +300,23 @@ const calls: Command = {
       desc: "only calls whose start failed (nothing was recorded), instead of the others",
     },
     call: callFlag("none; name one"),
+    yes: {
+      type: "boolean",
+      desc: "with empty-trash: delete without asking (needed when stdin is not a terminal)",
+    },
   },
-  examples: ["akou calls -w work --limit 5", "akou calls rename last Weekly sync"],
+  notes: [
+    "calls empty-trash deletes every call in the trash for good, now, instead of 30 days after it was trashed; it cannot be undone. On a terminal it asks first; elsewhere it needs --yes.",
+  ],
+  examples: [
+    "akou calls -w work --limit 5",
+    "akou calls rename last Weekly sync",
+    "akou calls empty-trash --yes",
+  ],
   run: async (ctx, p) => {
     const [sub, ...rest] = p.positional;
+    if (sub === "empty-trash") return emptyTrash(ctx, p);
+    if (bool(p, "yes")) return usage(ctx, "--yes goes with calls empty-trash");
     if (sub === "rename") {
       // The call is `-c CALL` or the first word; every word after it is the title.
       const call = str(p, "call") ?? rest.shift();
@@ -271,7 +330,7 @@ const calls: Command = {
       const r = await api(ctx, "PATCH", `/calls/${enc(call)}`, { body: { title } });
       return finish(ctx, r, (b) => `${b.call} is now "${b.title}"`);
     }
-    if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE`);
+    if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE, or calls empty-trash`);
     if (str(p, "call") !== undefined) {
       return usage(ctx, "-c names the call to rename: calls rename -c CALL TITLE");
     }
