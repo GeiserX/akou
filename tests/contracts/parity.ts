@@ -271,9 +271,13 @@ export const PARITY: readonly Row[] = [
   {
     action: "Vocabulary: remove a word",
     cli: ["vocab"],
-    api: ["DELETE /vocab/:term", "DELETE /calls/:id/vocab/:vid"],
+    api: ["DELETE /vocab/:term", "DELETE /calls/:id/vocab/:vid", "POST /vocab/restore"],
     mcp: { none: "no tool yet, and no design item names one" },
-    window: [ui("dictation-dictionary.ts", '"DELETE", `/vocab/#{encodeURIComponent(term)}`')],
+    window: [
+      ui("dictation-dictionary.ts", '"DELETE", `/vocab/#{encodeURIComponent(term)}`'),
+      ui("dictation-dictionary.ts", '"POST", "/vocab/restore"'),
+    ],
+    note: "`POST /vocab/restore` is the window's Undo of a remove (VOC-UNDO1): it puts back the entry `DELETE /vocab/:term` answered with.",
   },
   {
     action: "Vocabulary: suggest and check",

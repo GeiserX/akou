@@ -125,6 +125,8 @@ interface Remote {
   probing: boolean;
   /** The jobs it reported stalled at its last probe (`queue.stalled`, #407): none is sent to it. */
   stalled: number;
+  /** Until when it is skipped: it answered 507, its disk under its floor, to an upload. */
+  fullUntil: number;
 }
 
 export interface RemotesOptions {
@@ -196,6 +198,7 @@ export class Remotes {
           inFlight: 0,
           probing: false,
           stalled: 0,
+          fullUntil: 0,
         };
         this.remotes.set(e.url, r);
       }
@@ -355,6 +358,15 @@ export class Remotes {
     if (was !== r.state) this.o.log("warn", `remote.${r.state} ${url}: ${err.message}`);
   }
 
+  /**
+   * A remote that answered 507 to an upload: up, with its disk under its floor. No job is sent to
+   * it for one probe period, so another remote that offers the job takes it (DSK-F2).
+   */
+  full(url: string): void {
+    const r = this.remotes.get(url);
+    if (r) r.fullUntil = this.now() + (this.o.probeMs ?? REMOTE_PROBE_MS);
+  }
+
   /** What `GET /v1/server` shows. */
   view(): RemoteView[] {
     return this.current().map((r) => ({
@@ -400,6 +412,8 @@ export class Remotes {
       if (r.state !== "up" || !names.some((n) => r.offers.has(n))) continue;
       // A remote with a job stuck at running (#407) would hold a new one the same way.
       if (r.stalled > 0) continue;
+      // A remote whose disk is full (DSK-F2) would refuse it the same way.
+      if (r.fullUntil > this.now()) continue;
       if (r.inFlight >= REMOTE_IN_FLIGHT) {
         busy = true;
         continue;
@@ -474,6 +488,10 @@ export class Remotes {
     if (res.status === 404 || res.status === 410) {
       return new RemoteError("lost", message, res.status, code);
     }
+    // 507: the remote is up and its disk is under its floor. Like a 422 it refuses the job; the
+    // remote is not marked down, it is skipped for a probe period (`full`), and the job goes to
+    // another remote that offers it, or runs here, or fails.
+    if (res.status === 507) return new RemoteError("rejected", message, res.status, code);
     if (res.status === 408 || res.status === 429 || res.status >= 500) {
       return new RemoteError("down", message, res.status, code);
     }

@@ -726,7 +726,7 @@ export const SETTINGS = {
     max: 400,
     default: "",
     secret: true,
-    doc: "Secret for the webhook's HMAC-SHA256 signature (`X-Akou-Signature`). The webhook stays off until it is set. Never shown back or logged.",
+    doc: "Secret for the webhook's HMAC-SHA256 signatures: `X-Akou-Signature` over the body, and `X-Akou-Signature-V2` over `<X-Akou-Delivery>.<X-Akou-Timestamp>.<body>`, which lets a receiver refuse a replay. The webhook stays off until it is set. Never shown back or logged.",
   },
   "vocab.extraFiles": {
     type: "string[]",

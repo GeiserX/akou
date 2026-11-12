@@ -89,6 +89,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/vocab": "admin",
   "POST /v1/vocab": "admin",
   "DELETE /v1/vocab/{term}": "admin",
+  "POST /v1/vocab/restore": "admin",
   "POST /v1/vocab/approve": "admin",
   "POST /v1/vocab/reject": "admin",
   "POST /v1/vocab/import": "admin",

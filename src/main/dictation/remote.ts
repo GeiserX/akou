@@ -715,12 +715,15 @@ export interface RemoteHold {
 /** Dictations in a row that fail before the remote counts as down and is probed. */
 export const REMOTE_DOWN_AFTER = 3;
 
-/** A failure that says the remote is down, not misconfigured: no answer, or a 5xx. */
+/**
+ * A failure that says the remote is down, not misconfigured: no answer, or a 5xx. A 507 is a
+ * remote that is up with its disk under its floor: a refusal, never a reason to probe it.
+ */
 function isDown(e: RemoteDictationError): boolean {
   return (
     e.kind === "unreachable" ||
     e.kind === "timeout" ||
-    (e.kind === "status" && (e.status ?? 0) >= 500)
+    (e.kind === "status" && (e.status ?? 0) >= 500 && e.status !== 507)
   );
 }
 
@@ -809,7 +812,10 @@ export class RemoteEngine {
         ...l,
         engine: local.name,
         fallback_from: "remote",
-        notice: `remote down, used ${local.name}`,
+        notice:
+          err.kind === "status" && err.status === 507
+            ? `remote disk full, used ${local.name}`
+            : `remote down, used ${local.name}`,
         remote_error: err.message,
       };
     }

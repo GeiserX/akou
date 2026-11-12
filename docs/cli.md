@@ -932,7 +932,7 @@ example: akou serve
 | Vocabulary: add, propose, approve, reject, list | `vocab` | `GET /vocab`, `POST /vocab`, `POST /vocab/approve`, `POST /vocab/reject`, `GET /calls/:id/vocab`, `POST /calls/:id/vocab` | `akou_vocab_add`, `akou_vocab_propose`, `akou_vocab_approve`, `akou_vocab_reject`, `akou_vocab_list` | `src/ui/review.ts`, `src/ui/dictation-dictionary.ts` |
 | Fix a line or a word once: the whole call reads it, a term is learned, a rewording noted | `vocab` | `POST /calls/:id/fix`, `POST /calls/:id/fix/undo`, `POST /calls/:id/fix/forget` | `akou_vocab_add` | `src/ui/app.ts` |
 | Words fixed while dictating: review, accept, reject (DC-L5) | `vocab` | `GET /vocab`, `POST /vocab/approve`, `POST /vocab/reject` | `akou_vocab_list` | `src/ui/dictation-review.ts` |
-| Vocabulary: remove a word | `vocab` | `DELETE /vocab/:term`, `DELETE /calls/:id/vocab/:vid` | none: no tool yet, and no design item names one | `src/ui/dictation-dictionary.ts` |
+| Vocabulary: remove a word | `vocab` | `DELETE /vocab/:term`, `DELETE /calls/:id/vocab/:vid`, `POST /vocab/restore` | none: no tool yet, and no design item names one | `src/ui/dictation-dictionary.ts` |
 | Vocabulary: suggest and check | `vocab` | `POST /vocab/suggest`, `POST /vocab/check` | `akou_vocab_suggest`, `akou_vocab_check` | none: the window reviews proposed words; suggestions come from an agent or the CLI |
 | Vocabulary pass over a finished call | `vocab` | `POST /calls/:id/vocab/pass` | none: no tool yet, and no design item names one | none: the window fixes a word on its line; the pass is left to the CLI and scripts |
 | Import a vocabulary file | `vocab` | `POST /vocab/import` | none: no tool yet, and no design item names one | none: no control yet, and no design item names one |

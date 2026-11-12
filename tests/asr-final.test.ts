@@ -172,6 +172,55 @@ describe("[T1.9, T4.19] Short spans lose their words: the final path pads too", 
   });
 });
 
+describe("[ECHO-1] Mic hears the call: the final pass marks it too", () => {
+  const remote = ["we", "should", "move", "the", "build", "to", "new", "box"];
+  const part = (micWords: string[]) => ({
+    1: {
+      mic: concat(silence(1.1), speak(micWords), silence(2)),
+      call: concat(silence(1), speak(remote, { voice: 3 }), silence(2.1)),
+    },
+  });
+
+  test("the mic's copy of a call line is written with echo and leaves the final view", async () => {
+    const r = await run(callLog([1]), part(remote));
+    const byCh = [...r.segs].sort((a, b) => (a.ch as string).localeCompare(b.ch as string));
+    expect(byCh.map((s) => [s.ch, s.text, s.echo])).toEqual([
+      ["call", remote.join(" "), undefined],
+      ["mic", remote.join(" "), true],
+    ]);
+    const view = fold(
+      callLog([1], (b) => {
+        for (const s of r.segs) b.add(s as EventDraft);
+      }),
+    );
+    expect(view.lines("final").map((l) => l.ch)).toEqual(["call"]);
+  });
+
+  test("positive control: the user's own words at the same time are not echo", async () => {
+    const r = await run(callLog([1]), part(["hello", "world", "thanks", "meeting", "today"]));
+    expect(r.segs.map((s) => s.echo)).toEqual([undefined, undefined]);
+  });
+
+  test("two remote speakers: the call is cut at the turn, the mic is not, and the mic line is still echo", async () => {
+    const a = ["we", "should", "move", "the", "build"];
+    const b = ["to", "new", "box", "thanks", "meeting"];
+    const r = await run(callLog([1]), {
+      1: {
+        mic: concat(silence(1.1), speak([...a, ...b]), silence(2)),
+        call: concat(silence(1), speak(a, { voice: 1 }), speak(b, { voice: 4 }), silence(2.1)),
+      },
+    });
+    // The case the test is about: two call lines, one mic line.
+    expect(r.segs.filter((s) => s.ch === "call").map((s) => s.text)).toEqual([
+      a.join(" "),
+      b.join(" "),
+    ]);
+    expect(r.segs.filter((s) => s.ch === "mic").map((s) => [s.text, s.echo])).toEqual([
+      [[...a, ...b].join(" "), true],
+    ]);
+  });
+});
+
 describe("speakers across the call", () => {
   test("diarization runs over all parts at once: one voice has one label in every part", async () => {
     const part = (v: number, w: string[]) => ({
