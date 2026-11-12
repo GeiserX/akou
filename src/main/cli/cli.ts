@@ -16,6 +16,7 @@
  * from `AKOU_HEADLESS`, which is what this CLI sets when it launches it.
  */
 
+import { writeSync } from "node:fs";
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
 import { installTrust } from "../tls-trust.ts";
@@ -271,6 +272,25 @@ function stdinKeys(): Keys {
   };
 }
 
+/**
+ * Writes to stderr before it returns, as Node does for a pipe, so nothing is left queued at the exit
+ * (TRAPS akou-3vx.1). Ending `process.stderr` to wait for it never called back on Windows when
+ * stderr was a pipe (`2>&1 | reader`). A pipe that another stream made non-blocking answers
+ * EAGAIN while it is full: wait and write the rest. A closed one ends the message.
+ */
+function writeErr(text: string): void {
+  const buf = Buffer.from(text);
+  let off = 0;
+  while (off < buf.length) {
+    try {
+      off += writeSync(2, buf, off);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EAGAIN") return;
+      Bun.sleepSync(1);
+    }
+  }
+}
+
 if (import.meta.main) {
   // A macOS server started without MallocLargeCache=0 starts itself again with it, before it
   // opens anything (`large-cache.ts`). Should that fail, it runs on as it is.
@@ -288,13 +308,6 @@ if (import.meta.main) {
   process.stdout.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "EPIPE") process.exit(EXIT.ok);
   });
-  // Which streams got output, so only those are ended before the exit (below).
-  let wroteOut = false;
-  let wroteErr = false;
-  const toStdout = (t: string) => {
-    wroteOut = true;
-    return process.stdout.write(t);
-  };
   const ac = new AbortController();
   process.on("SIGINT", () => {
     if (ac.signal.aborted) process.exit(130);
@@ -302,12 +315,9 @@ if (import.meta.main) {
   });
   const code = await runCli(process.argv.slice(2), {
     env: process.env,
-    out: (t) => toStdout(`${t}\n`),
-    err: (t) => {
-      wroteErr = true;
-      process.stderr.write(`${t}\n`);
-    },
-    write: (t) => toStdout(t),
+    out: (t) => process.stdout.write(`${t}\n`),
+    err: (t) => writeErr(`${t}\n`),
+    write: (t) => process.stdout.write(t),
     signal: ac.signal,
     tty: process.stdout.isTTY === true,
     readStdin: () => Bun.stdin.text(),
@@ -316,11 +326,7 @@ if (import.meta.main) {
   });
   // A pipe holds about 64 KiB, and `process.exit` drops whatever is still queued for a slow reader
   // (`akou show | (sleep 1; jq)`). Bun calls an empty write back at once, so only `end` waits until
-  // everything before it is written (TRAPS akou-3vx.1). A stream with nothing written is left
-  // alone, and the two are ended one after the other: with `2>&1` on Windows both are one pipe, and
-  // ending both at once there never called back.
-  const drained = (s: NodeJS.WriteStream) => new Promise<void>((r) => s.end(() => r()));
-  if (wroteOut) await drained(process.stdout);
-  if (wroteErr) await drained(process.stderr);
+  // everything before it is written (TRAPS akou-3vx.1). stderr is written in place (writeErr).
+  await new Promise<void>((r) => process.stdout.end(() => r()));
   process.exit(code);
 }
