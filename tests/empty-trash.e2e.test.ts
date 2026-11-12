@@ -72,7 +72,10 @@ beforeAll(async () => {
     `${earlier}.json`,
     JSON.stringify({ id: EARLIER, workspace: "work", trashedAt: Date.now() - 10 * DAY }),
   );
-  rig = await appRig({ home: home.dir });
+  // The seeded calls have no final layer, so the start would run their final passes one by one,
+  // and a call in its pass refuses the trash with 409 `busy`. Which call that is depends on the
+  // order the disk lists the folders in. No audio for the final pass: no pass starts.
+  rig = await appRig({ home: home.dir, finalAudio: () => null });
 });
 
 afterAll(async () => {
