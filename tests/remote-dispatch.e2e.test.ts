@@ -1008,6 +1008,7 @@ describe("[DSK-F2] a remote whose disk is full is skipped for another that offer
             mode: "server",
             presets: [{ name: "fast", available: true }],
             engines: [],
+            capabilities: { jobs: true, events: true, webhooks: true },
           });
         }
         if (u.pathname === "/v1/keys/me") return Response.json({ id: "k1", scopes: ["jobs"] });
