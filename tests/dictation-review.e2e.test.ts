@@ -146,6 +146,70 @@ describe("DC-L5: dictation's words in the words to review", () => {
     expect(res.status).toBe(400);
   });
 
+  /** A learned pair's entry, dated before today, as the file holds it after weeks of use. */
+  async function learned(r: AppRig, d: DictationService) {
+    ignored(d, "d1", "Kubernetes", "kubernetis");
+    await r.api("POST", "/vocab/approve", { terms: ["Kubernetes"], dictation: true });
+    const path = join(r.app.configDir, "vocabulary.yaml");
+    writeFileSync(path, vocabFile(r).replace(/added_at: "[^"]*"/, 'added_at: "2020-01-02"'));
+    const entries = (await r.api("GET", "/vocab")).body.entries as Record<string, unknown>[];
+    const had = entries.find((e) => e.term === "Kubernetes");
+    expect(had).toMatchObject({
+      heard: ["kubernetis"],
+      source: "dictation:d1",
+      confirmed: true,
+      added_at: "2020-01-02",
+      entryScope: "dictation",
+    });
+    return had as Record<string, unknown>;
+  }
+
+  test("[VOC-UNDO1] Remove then Undo gives a learned pair back whole: scope, source, added_at and accepted", async () => {
+    const { r, d, dictate } = await rig();
+    const had = await learned(r, d);
+
+    const del = await r.api("DELETE", "/vocab/Kubernetes", {});
+    expect(del.status).toBe(200);
+    const { scope: _file, file: _path, ...stored } = had;
+    expect(del.body.entry).toEqual(stored);
+    expect((await r.api("GET", "/vocab?dictation=true")).body.dictation).toMatchObject([
+      { term: "Kubernetes", status: "ignored" },
+    ]);
+
+    const back = await r.api("POST", "/vocab/restore", { entry: del.body.entry });
+    expect(back.status).toBe(201);
+    const entries = (await r.api("GET", "/vocab")).body.entries as Record<string, unknown>[];
+    expect(entries.find((e) => e.term === "Kubernetes")).toEqual(had);
+    expect((await r.api("GET", "/vocab?dictation=true")).body.dictation).toMatchObject([
+      { term: "Kubernetes", status: "accepted" },
+    ]);
+    expect(await dictate()).toBe("deploy to Kubernetes");
+
+    // An Undo never overwrites the entry the file holds now, and a bad entry writes nothing.
+    const again = await r.api("POST", "/vocab/restore", { entry: del.body.entry });
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe("term_exists");
+    const bad = await r.api("POST", "/vocab/restore", {
+      entry: { ...del.body.entry, term: "Helm", source: "nobody" },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toBe("bad_entry");
+    expect(vocabFile(r)).not.toContain("Helm");
+  });
+
+  test("[VOC-UNDO1] positive control: writing the removed word again through POST /vocab loses its scope, source and date", async () => {
+    const { r, d } = await rig();
+    const had = await learned(r, d);
+    await r.api("DELETE", "/vocab/Kubernetes", {});
+    await r.api("POST", "/vocab", { term: "Kubernetes", heard: ["kubernetis"] });
+    const entries = (await r.api("GET", "/vocab")).body.entries as Record<string, unknown>[];
+    const now = entries.find((e) => e.term === "Kubernetes");
+    expect(now).not.toEqual(had);
+    expect(now).not.toHaveProperty("entryScope");
+    expect(now?.source).not.toBe("dictation:d1");
+    expect(now?.added_at).not.toBe("2020-01-02");
+  });
+
   test("akou vocab list --dictation and approve --dictation", async () => {
     const { r, d } = await rig();
     ignored(d, "d1", "Kubernetes", "kubernetis");
