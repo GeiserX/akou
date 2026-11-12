@@ -73,8 +73,11 @@ export interface CreatedKey {
   secret: string;
 }
 
-/** What a refused edit was refused for: a field of the new key, a taken name, or a held lock. */
-export type KeyErrorReason = "name" | "scope" | "callback_hosts" | "exists" | "busy";
+/**
+ * What a refused edit was refused for: a field of the new key, a taken name, a held lock, or a
+ * keys file that does not read as one.
+ */
+export type KeyErrorReason = "name" | "scope" | "callback_hosts" | "exists" | "busy" | "file";
 
 export class KeyError extends Error {
   override name = "KeyError";
@@ -152,6 +155,8 @@ export class KeyStore {
   readonly usedPath: string;
   private keys: KeyRecord[] = [];
   private stamp = "";
+  /** Whether the file, as last read, exists and does not read as a keys file. */
+  private unreadable = false;
   private used: Record<string, number> = {};
   private usedWritten: Record<string, number> = {};
   /** For the audit: each key id the last read held, with its callback hosts. */
@@ -209,6 +214,7 @@ export class KeyStore {
     const stamp = this.fileStamp();
     if (stamp === this.stamp) return this.keys;
     this.stamp = stamp;
+    this.unreadable = false;
     if (stamp === "") {
       this.keys = [];
       this.notice(this.keys, KEYS_FILE);
@@ -217,7 +223,10 @@ export class KeyStore {
     try {
       const parsed = JSON.parse(readFileSync(this.path, "utf8")) as { keys?: unknown };
       if (Array.isArray(parsed.keys)) this.keys = parsed.keys.filter(valid);
-    } catch {}
+      else this.unreadable = true;
+    } catch {
+      this.unreadable = true;
+    }
     this.notice(this.keys, KEYS_FILE);
     return this.keys;
   }
@@ -247,7 +256,16 @@ export class KeyStore {
     }
     try {
       this.stamp = "";
-      return fn([...this.load()]);
+      const keys = this.load();
+      // A file that does not read keeps the last good read, which is no keys at all in a process
+      // that started on it (the CLI): writing over it would drop every key it holds (SV-K2).
+      if (this.unreadable) {
+        throw new KeyError(
+          `${this.path} is not a valid keys file; fix it or remove it, then run this again`,
+          "file",
+        );
+      }
+      return fn([...keys]);
     } finally {
       const held = readLock(lock);
       if (held?.pid === process.pid && held.id === INSTANCE_ID) {

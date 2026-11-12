@@ -62,6 +62,8 @@ export const ERROR_CODES = {
   key_exists: "A key with that name exists already.",
   keychain: "The system keychain refused to store a secret.",
   keys_busy: "The key store is busy; retry.",
+  keys_file_invalid:
+    "keys.json does not read as a keys file, so an edit would drop its keys; fix or remove it first.",
   last_refused: "`last` is not accepted here; name the call or use `live`.",
   line_changed: "The line changed while it was being fixed.",
   live_call: "The call is recording; stop it first.",

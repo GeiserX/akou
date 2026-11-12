@@ -25,7 +25,7 @@ const KEY_ROUTE = { access: "admin", modes: ["server"] } as const;
 /** What a change to the keys refuses: no key store here, or the store's `refused` reasons. */
 const KEY_REFUSALS: RouteErrors = {
   404: ["not_found"],
-  409: ["key_exists", "keys_busy"],
+  409: ["key_exists", "keys_busy", "keys_file_invalid"],
   422: ["bad_field"],
 };
 
@@ -51,6 +51,7 @@ function refused(err: unknown): never {
   if (!(err instanceof KeyError)) throw err;
   if (err.reason === "exists") throw new HttpError(409, "key_exists", err.message);
   if (err.reason === "busy") throw new HttpError(409, "keys_busy", err.message);
+  if (err.reason === "file") throw new HttpError(409, "keys_file_invalid", err.message);
   const field = err.reason === "scope" ? "scopes" : err.reason;
   throw new HttpError(422, "bad_field", err.message, { field });
 }
