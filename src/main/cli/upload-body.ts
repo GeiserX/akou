@@ -59,13 +59,20 @@ export function uploadBody(form: FormData): UploadBody {
   const length = parts.reduce((n, p) => n + (p instanceof Uint8Array ? p.byteLength : p.size), 0);
 
   let next = 0;
-  let reading: { reader: ReadableStreamDefaultReader<Uint8Array>; left: number } | null = null;
+  /** The file part being sent: its reader, and the bytes it still owes. */
+  let reading: {
+    reader: {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>;
+      cancel(r?: unknown): Promise<void>;
+    };
+    left: number;
+  } | null = null;
   const body = new ReadableStream<Uint8Array>({
     async pull(ctl) {
       for (;;) {
         if (reading) {
           const r = await reading.reader.read();
-          if (!r.done) {
+          if (r.value) {
             reading.left -= r.value.byteLength;
             if (reading.left < 0) throw new Error("a file grew while it was being uploaded");
             ctl.enqueue(r.value);
