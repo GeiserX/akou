@@ -300,9 +300,9 @@ fn close() {
 }
 
 impl Clipboard for Clip {
-    fn snapshot(&mut self) -> Snapshot {
+    fn snapshot(&mut self) -> Result<Snapshot, String> {
         if !self.open() {
-            return Vec::new();
+            return Err("the clipboard is held by another program".into());
         }
         let mut out = Vec::new();
         let mut f = 0;
@@ -333,7 +333,7 @@ impl Clipboard for Clip {
             }
         }
         close();
-        out
+        Ok(out)
     }
 
     fn publish(&mut self, text: &str) -> Result<u64, String> {

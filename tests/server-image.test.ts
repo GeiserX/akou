@@ -229,10 +229,11 @@ describe("[SV-T1] the server job in ci.yml", () => {
       {
         needs?: string[];
         strategy?: { matrix?: { os?: string[] } };
-        steps?: { id?: string; name?: string; run?: string; if?: string }[];
+        steps?: Step[];
       }
     >;
   }
+  type Step = { id?: string; name?: string; run?: string; if?: string };
   /** Why ci.yml's server job would not prove the image, or [] when it would. */
   function serverJobGaps(wf: Wf): string[] {
     const gaps: string[] = [];
@@ -271,18 +272,22 @@ describe("[SV-T1] the server job in ci.yml", () => {
     ]) {
       if (!runs.includes(want)) gaps.push(`no step runs ${want}`);
     }
-    // The round trip runs on what the running server says it can do, never on a file name that a
-    // rename would turn into a step that never runs, and a skip is a warning on the run.
+    // The running server must say it can do everything the leg tests, or the leg fails: a
+    // capability it lacks never turns a step into a skip with the job still green.
     const steps = job.steps ?? [];
     const caps = steps.find((st) => st.run?.includes("capabilities.jobs"));
-    const roundTrip = steps.find((st) => st.run?.includes("server-roundtrip.ts"));
+    const wants = ["jobs", "events", "webhooks", "wyoming", "bazarr"];
     if (
-      !caps?.id ||
-      roundTrip?.if !== `steps.${caps.id}.outputs.roundtrip == 'true'` ||
-      !caps.run?.includes("::warning::")
+      !caps?.run?.includes("jq -e") ||
+      caps.if ||
+      /::warning::|GITHUB_OUTPUT|\|\||\belse\b/.test(caps.run) ||
+      !wants.every((c) => caps.run?.includes(`.capabilities.${c}`))
     ) {
-      gaps.push("the round trip is not gated on the server's own capabilities, loudly");
+      gaps.push("a capability the server lacks does not fail the leg");
     }
+    const e2e = ["server-roundtrip.ts", "probe.py", "compose-e2e.sh", "/v1/asr?task=transcribe"];
+    if (steps.some((st) => st.if && e2e.some((e) => st.run?.includes(e))))
+      gaps.push("an end-to-end step of the leg can be skipped");
     if (steps.some((st) => st.if?.includes("hashFiles")))
       gaps.push("a step is gated on a file name");
     return gaps;
@@ -304,8 +309,75 @@ describe("[SV-T1] the server job in ci.yml", () => {
     const rt = byFile.jobs.server?.steps?.find((st) => st.run?.includes("server-roundtrip.ts"));
     (rt as { if: string }).if = "hashFiles('src/main/api/routes/jobs.ts') != ''";
     expect(serverJobGaps(byFile)).toEqual([
-      "the round trip is not gated on the server's own capabilities, loudly",
+      "an end-to-end step of the leg can be skipped",
       "a step is gated on a file name",
+    ]);
+  });
+
+  test("[T4.20] positive control: a server that lacks a capability skips nothing with the leg green", () => {
+    const wf = Bun.YAML.parse(read(".github", "workflows", "ci.yml")) as Wf;
+    const gapsAfter = (edit: (s: Step[]) => void) => {
+      const w = structuredClone(wf);
+      edit(w.jobs.server?.steps as Step[]);
+      return serverJobGaps(w);
+    };
+    const capsOf = (s: Step[]) => s.find((st) => st.run?.includes("capabilities.jobs")) as Step;
+    // The gate this leg had: a warning, an output, and the round trip run only on that output.
+    expect(
+      gapsAfter((s) => {
+        capsOf(s).run = [
+          "if jq -e '.capabilities.jobs and .capabilities.events and .capabilities.webhooks' server.json; then",
+          '  echo roundtrip=true >> "$GITHUB_OUTPUT"',
+          "else",
+          '  echo "::warning::skipped"',
+          "fi",
+        ].join("\n");
+        for (const st of s)
+          if (/server-roundtrip|probe\.py|compose-e2e|task=transcribe/.test(st.run ?? ""))
+            st.if = "steps.caps.outputs.roundtrip == 'true'";
+      }),
+    ).toEqual([
+      "a capability the server lacks does not fail the leg",
+      "an end-to-end step of the leg can be skipped",
+    ]);
+    // One capability left out of the check is caught too.
+    expect(
+      gapsAfter((s) => {
+        capsOf(s).run = (capsOf(s).run as string).replace(" and .capabilities.bazarr", "");
+      }),
+    ).toEqual(["a capability the server lacks does not fail the leg"]);
+  });
+
+  /** Where SERVER.md's SV-T1 row or ci.yml's comment on the server job still tells of a skip. */
+  function gateDocGaps(serverMd: string, ciYml: string): string[] {
+    const gaps: string[] = [];
+    const row = serverMd.split("\n").find((l) => l.startsWith("| SV-T1 |")) ?? "";
+    const comment = /((?:\n {2}#[^\n]*)+)\n {2}server:/.exec(ciYml)?.[1] ?? "";
+    const stale = /warning|warns|on the same gate|runs when/;
+    if (!row.includes("the leg fails unless") || stale.test(row))
+      gaps.push("SERVER.md SV-T1 does not say a missing capability fails the leg");
+    if (!comment.includes("The leg fails unless") || stale.test(comment))
+      gaps.push("ci.yml's server job comment does not say a missing capability fails the leg");
+    return gaps;
+  }
+
+  test("[T1.39] the docs describe the gate the leg has: a missing capability fails it", () => {
+    const md = read("docs", "ux", "SERVER.md");
+    expect(gateDocGaps(md, read(".github", "workflows", "ci.yml"))).toEqual([]);
+  });
+
+  test("[T1.39] positive control: the old warn-and-skip wording is caught in both places", () => {
+    const md = read("docs", "ux", "SERVER.md").replace(
+      /the leg fails unless[^|]*/,
+      "the round trip runs when `/v1/server` reports jobs, and puts a warning on the run when it does not ",
+    );
+    const yml = read(".github", "workflows", "ci.yml").replace(
+      /The leg fails unless[^\n]*/,
+      "The job round trip runs when the server says it has jobs, and warns when it does not.",
+    );
+    expect(gateDocGaps(md, yml)).toEqual([
+      "SERVER.md SV-T1 does not say a missing capability fails the leg",
+      "ci.yml's server job comment does not say a missing capability fails the leg",
     ]);
   });
 });

@@ -83,14 +83,14 @@ mod mac {
             (format!("1\t{TEXT}"), b"second".to_vec()),
         ];
         pb.restore(&before);
-        let snap = pb.snapshot();
+        let snap = pb.snapshot().unwrap();
         assert_eq!(sorted(snap.clone()), sorted(before.clone()));
         let c0 = pb.change_count();
         pb.publish("the dictation").unwrap();
         assert!(pb.change_count() > c0);
         assert_eq!(read_elsewhere(TEXT), "the dictation");
         pb.restore(&snap);
-        assert_eq!(sorted(pb.snapshot()), sorted(before));
+        assert_eq!(sorted(pb.snapshot().unwrap()), sorted(before));
         let items = elsewhere(format!(
             "ObjC.import('AppKit'); $.NSPasteboard.pasteboardWithName('{}').pasteboardItems.count",
             name()
@@ -107,8 +107,12 @@ mod mac {
     /// ordinary one does not (positive control).
     pub fn dc_n8_a_concealed_copy_carries_the_marker() {
         let mut pb = Pasteboard::named(&name()).unwrap();
-        let has_marker =
-            |pb: &mut Pasteboard| pb.snapshot().iter().any(|(k, _)| k.ends_with(CONCEALED));
+        let has_marker = |pb: &mut Pasteboard| {
+            pb.snapshot()
+                .unwrap()
+                .iter()
+                .any(|(k, _)| k.ends_with(CONCEALED))
+        };
         pb.write("hunter2", true).unwrap();
         assert!(has_marker(&mut pb));
         assert_eq!(read_elsewhere(TEXT), "hunter2", "still a lasting copy");

@@ -186,8 +186,8 @@ impl Pasteboard {
 }
 
 impl Clipboard for Pasteboard {
-    fn snapshot(&mut self) -> Snapshot {
-        autoreleasepool(|_| {
+    fn snapshot(&mut self) -> Result<Snapshot, String> {
+        Ok(autoreleasepool(|_| {
             let mut out = Vec::new();
             // SAFETY: `pasteboardItems` returns an NSArray of NSPasteboardItem, or nil.
             let items: Option<Retained<NSArray<AnyObject>>> =
@@ -206,7 +206,7 @@ impl Clipboard for Pasteboard {
                 }
             }
             out
-        })
+        }))
     }
 
     fn publish(&mut self, text: &str) -> Result<u64, String> {

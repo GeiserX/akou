@@ -45,6 +45,14 @@ pub fn char_index(value: &str, utf16: usize) -> usize {
     value.chars().count()
 }
 
+/// Whether a read may go to the field focused in window `window` of process `pid`: only when
+/// that is the window the insert went into. A read after the user moved to another window (on
+/// Windows any other window, on macOS another window of the same app) would read that window's
+/// field, whose text must never leave the helper as a hunk.
+pub fn on_target(t: &Target, pid: i64, window: &str) -> bool {
+    t.pid == pid && t.window == window
+}
+
 /// One read of the focused field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -248,6 +256,16 @@ mod tests {
         assert_eq!(char_index("a😀b", 3), 2, "the emoji is two UTF-16 units");
         assert_eq!(char_index("a😀b", 4), 3);
         assert_eq!(char_index("ab", 9), 2);
+    }
+
+    /// [DC-L2] A read goes only to the window the insert went into: another window of the same
+    /// app, or another app, is not the target. The same window is (the positive control).
+    #[test]
+    fn dc_l2_a_read_goes_only_to_the_window_the_insert_went_into() {
+        let t = crate::dictate::fake::slack();
+        assert!(on_target(&t, t.pid, &t.window));
+        assert!(!on_target(&t, t.pid, "w2"), "another window of the app");
+        assert!(!on_target(&t, 42, &t.window), "another process");
     }
 
     #[test]
