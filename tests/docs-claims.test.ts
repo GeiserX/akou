@@ -59,6 +59,11 @@ export function autoPicksByMachine(doc: string): boolean {
   return /`auto`: best where Qwen runs on a GPU/.test(doc);
 }
 
+/** Whether a `dictation.engine` description says `fast`'s Parakeet is always loaded. */
+export function fastSaysLoaded(doc: string): boolean {
+  return /Parakeet, already loaded/.test(doc);
+}
+
 describe("[T1.39] Docs drift from code: the dictation engine", () => {
   test("the dictation page says `auto` follows `dictation.final`, live by default", () => {
     expect(autoRowFollowsFinal(read("docs/dictation.md"))).toBe(true);
@@ -74,6 +79,20 @@ describe("[T1.39] Docs drift from code: the dictation engine", () => {
     expect(
       autoPicksByMachine("`auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere"),
     ).toBe(true);
+  });
+
+  test("the `dictation.engine` setting never says Parakeet is already loaded for `fast`", () => {
+    // A Mac with room for Qwen downloads no Parakeet (src/main/asr/model-set.ts), and `fast`
+    // exists only once it is on disk (`fastEngine` in src/main/index.ts).
+    const doc = SETTINGS["dictation.engine"].doc;
+    expect(fastSaysLoaded(doc)).toBe(false);
+    expect(doc).toContain("`akou models pull fast`");
+  });
+
+  test("positive control: the old already-loaded `fast` text is caught", () => {
+    expect(fastSaysLoaded("`fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech")).toBe(
+      true,
+    );
   });
 
   test("positive control: the old machine-based `auto` row is caught", () => {
