@@ -1,9 +1,10 @@
 /**
  * Where finished calls are exported is the user's own choice on this computer: `export.dir` and
  * the `to` of `POST /calls/{id}/export` are taken from the app's own token on the desktop app's
- * loopback listener (`akou config set export.dir`, `akou export --to`) and from the desktop
- * window, never from an `ak_` key, the network listener, the window's page in a browser or server
- * mode. Each refused door is checked at the route, with the CLI's own path as the control.
+ * loopback listener (`akou config set export.dir`, `akou export --to`) and from the window (the
+ * desktop window, or its page in a browser on the app's loopback page server, where the headless
+ * app runs its first-run setup), never from an `ak_` key, the network listener or server mode.
+ * Each refused door is checked at the route, with the CLI's own path as the control.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -131,10 +132,22 @@ describe("[EXP-1] The export folder set by an API key", () => {
     expect(r.file).toEqual(DIR);
   });
 
-  test("the window's page in a browser is refused, as for the window-only keys", async () => {
-    const r = await patch({ browser: true }, SHARE, DIR);
+  test("the window's page in a browser in server mode is refused: it is opened with the admin password or a key", async () => {
+    const r = await patch({ browser: true, mode: "server" }, SHARE, DIR);
     expect(r.status).toBe(400);
     expect(r.file).toEqual(DIR);
+    const root = await patch({ browser: true, mode: "server" }, { "recordings.root": "/calls" });
+    expect(root.status).toBe(400);
+    expect(root.file).toEqual({});
+  });
+
+  test("the window's page in a browser in the app sets both: the headless app's first-run setup picks where calls go", async () => {
+    const root = await patch({ browser: true }, { "recordings.root": "/home/me/Calls" });
+    expect(root.status).toBe(200);
+    expect(root.file).toEqual({ "recordings.root": "/home/me/Calls" });
+    const dir = await patch({ browser: true }, { "export.dir": "/notes" }, DIR);
+    expect(dir.status).toBe(200);
+    expect(dir.file).toEqual({ "export.dir": "/notes" });
   });
 
   test("positive control: `akou config set export.dir` (the app token on loopback) and the desktop window still set it", async () => {
@@ -174,10 +187,16 @@ describe("[EXP-2] An export folder named by an API key", () => {
     expect(posix.asked).toEqual([]);
   });
 
-  test("the window's page in a browser cannot name one either", async () => {
-    const r = await exportTo({ browser: true }, { to: "/elsewhere" });
+  test("the window's page in a browser in server mode cannot name one either", async () => {
+    const r = await exportTo({ browser: true, mode: "server" }, { to: "/elsewhere" });
     expect(r.status).toBe(400);
     expect(r.asked).toEqual([]);
+  });
+
+  test("the window's page in a browser in the app names one, as the desktop window does", async () => {
+    const r = await exportTo({ browser: true }, { to: "/elsewhere" });
+    expect(r.status).toBe(200);
+    expect(r.asked).toEqual(["/elsewhere"]);
   });
 
   test("positive control: `akou export --to` (the app token on loopback) and the desktop window still name one", async () => {
