@@ -33,6 +33,7 @@ import {
   writeSync,
 } from "node:fs";
 import { link, unlink, writeFile } from "node:fs/promises";
+import { uptime } from "node:os";
 import { join } from "node:path";
 import { type EventDraft, LIFECYCLE_TYPES, type LogEvent, validateDraft } from "./events.ts";
 import { parseLog, type TornTail } from "./reader.ts";
@@ -188,6 +189,28 @@ export interface LockOptions {
   now?: () => number;
   /** How old an unseen holder's lock must be to be taken; `LOCK_STALE_MS`. */
   staleMs?: number;
+  /** When the machine booted, epoch ms on the kernel's clock (the one file mtimes use). */
+  bootTime?: number;
+}
+
+/** How far before the boot a lock's mtime must be to count as left by the previous boot. */
+const BOOT_MARGIN_MS = 60_000;
+
+/**
+ * The machine's boot time on the clock that stamps file mtimes. `Date` is not used: the nightly
+ * year-ahead run moves `Date` and not the kernel. `performance` keeps the kernel's time, and a Mac
+ * that slept only makes this earlier, so a live holder's lock is never read as from before it.
+ */
+function bootTime(): number {
+  return performance.timeOrigin + performance.now() - uptime() * 1000;
+}
+
+function fromEarlierBoot(lockPath: string, boot: number): boolean {
+  try {
+    return statSync(lockPath).mtimeMs < boot - BOOT_MARGIN_MS;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -196,7 +219,9 @@ export interface LockOptions {
  * single-instance lock uses it too. In order:
  *
  * 1. The lock names this process (its pid and its id): refused, a second acquire in one process.
- * 2. Its pid is alive here and is not this process: refused, as always.
+ * 2. Its pid is alive here and is not this process: refused, unless the lock was last touched
+ *    before this boot. A live holder touches it every 10 s, so such a lock was left by a crash
+ *    or a power loss, and its pid now belongs to an unrelated process.
  * 3. App mode and its pid is dead: taken at once, so a crash adds no wait to the next launch.
  * 4. Otherwise (this pid with another id: an earlier start with the same pid, as a container's
  *    pid 1; or, in server mode, a pid this namespace cannot see): taken only once the lock's
@@ -215,7 +240,8 @@ export function acquireLock(
   if (holder !== null) {
     if (holder === pid && found?.id === id) throw new LockError(lockPath, holder);
     const alive = holder !== pid && isAlive(holder);
-    if (alive) throw new LockError(lockPath, holder);
+    if (alive && !fromEarlierBoot(lockPath, o.bootTime ?? bootTime()))
+      throw new LockError(lockPath, holder);
     if (holder === pid || o.serverMode) {
       let age = Number.POSITIVE_INFINITY;
       try {
@@ -466,14 +492,25 @@ export class LogWriter {
     this.stats.syncs++;
   }
 
-  /** Syncs, closes the file and releases the lock. */
+  /**
+   * Syncs, closes the file and releases the lock. A sync that fails (a full or failing disk) is
+   * thrown, but only after the file is closed and the lock released: the call must not keep its
+   * folder locked until akou restarts.
+   */
   close(): void {
     if (this.fd === -1) return;
-    if (!this.closed) this.sync();
-    this.closed = true;
-    closeSync(this.fd);
-    this.fd = -1;
-    this.releaseLock();
+    try {
+      if (!this.closed) this.sync();
+    } finally {
+      this.closed = true;
+      const fd = this.fd;
+      this.fd = -1;
+      try {
+        closeSync(fd);
+      } finally {
+        this.releaseLock();
+      }
+    }
   }
 
   private releaseLock(): void {
