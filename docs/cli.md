@@ -167,7 +167,7 @@ usage: akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls re
 
   -w, --workspace WS  only calls in this workspace
       --limit N       at most N calls, newest first
-      --failed        only calls whose capture or final pass failed
+      --failed        only calls whose start failed (nothing was recorded), instead of the others
   -c, --call CALL     live, last or a call id (default: none; name one)
       --json          print the answer as JSON, errors included
   -h, --help          show this help

@@ -27,7 +27,7 @@ import {
   renameSync,
   statSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, uptime } from "node:os";
 import { join } from "node:path";
 import { processAlive, readLock } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
@@ -236,6 +236,8 @@ export interface ClientOptions {
   answerMs?: number;
   /** This command line's version, which an installed app it launches must reach (`APP_VERSION`). */
   version?: string;
+  /** When the machine booted, epoch ms on the clock that stamps file mtimes (tests pin it). */
+  bootTime?: number;
 }
 
 export interface RequestOptions {
@@ -672,10 +674,22 @@ export class ApiClient {
     return app !== null && olderThan(app, cli) ? { bundle, app, cli } : null;
   }
 
-  /** Does the app lock name a live process: an app past the start of its start, not answering yet? */
+  /**
+   * Does the app lock name a live process: an app past the start of its start, not answering yet?
+   * Not when the lock was last touched before this boot: a live app touches it every 10 s, so its
+   * pid now belongs to an unrelated process, as `acquireLock` reads it (LG-2).
+   */
   private lockHeld(): boolean {
-    const pid = readLock(join(this.configDir, APP_LOCK))?.pid;
-    return pid != null && processAlive(pid);
+    const path = join(this.configDir, APP_LOCK);
+    const pid = readLock(path)?.pid;
+    if (pid == null || !processAlive(pid)) return false;
+    // The kernel's clock, which stamps mtimes; `Date` moves in the nightly year-ahead run.
+    const boot = this.o.bootTime ?? performance.timeOrigin + performance.now() - uptime() * 1000;
+    try {
+      return statSync(path).mtimeMs >= boot - 60_000;
+    } catch {
+      return false;
+    }
   }
 
   /** Is a process of `bundle` running? A process list that cannot be read counts as yes. */

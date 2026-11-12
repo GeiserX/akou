@@ -249,7 +249,10 @@ const calls: Command = {
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "only calls in this workspace" },
     limit: { type: "string", value: "N", desc: "at most N calls, newest first" },
-    failed: { type: "boolean", desc: "only calls whose capture or final pass failed" },
+    failed: {
+      type: "boolean",
+      desc: "only calls whose start failed (nothing was recorded), instead of the others",
+    },
     call: callFlag("none; name one"),
   },
   examples: ["akou calls -w work --limit 5", "akou calls rename last Weekly sync"],

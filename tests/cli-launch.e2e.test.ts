@@ -6,7 +6,14 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
 import { APP_LOG } from "../src/main/app-log.ts";
@@ -206,6 +213,44 @@ describe("[T3.6] Minutes to start: a first launch slower than the 3 s target (#3
         expect(rt.pid).toBe(first.pid as number);
       } finally {
         killAll([first.pid as number]);
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "[LG-2] a lock left before this boot, its pid now an unrelated live process, is no launch in progress",
+    async () => {
+      const t = tempDir();
+      try {
+        const dir = join(t.dir, ".config", "akou");
+        mkdirSync(dir, { recursive: true });
+        const lock = join(dir, "akou.lock");
+        // A crash, then a reboot: the old pid is now an unrelated live process (the runner's parent).
+        writeFileSync(lock, `${process.ppid} 0123456789abcdef\n`);
+        // clock: the kernel's, which stamps mtimes.
+        const now = performance.timeOrigin + performance.now();
+        utimesSync(lock, (now - 3_600_000) / 1000, (now - 3_600_000) / 1000);
+        expect(processAlive(process.ppid)).toBe(true);
+        const launchFails = async (bootTime: number) => {
+          const client = new ApiClient({
+            env: { AKOU_HOME: t.dir },
+            client: "test",
+            // What the launch starts ends at once and starts nothing.
+            launch: [process.execPath, "-e", "0"],
+            launchBudgetMs: 4000,
+            bootTime,
+          });
+          return (await client.launch().catch((e: Error) => e)) as Error;
+        };
+        // Booted ten minutes ago: the lock is from the boot before, so the launch fails fast.
+        const stale = await launchFails(now - 600_000);
+        expect(stale.message).toContain("what launched it ended");
+        // Positive control: booted two hours ago, the same lock is a live app's, so it is waited for.
+        const live = await launchFails(now - 2 * 3_600_000);
+        expect(live.message).toContain("did not answer within 4 s");
+      } finally {
         t.cleanup();
       }
     },

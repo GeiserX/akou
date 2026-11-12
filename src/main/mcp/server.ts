@@ -34,6 +34,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
+import { PassThrough } from "node:stream";
 import {
   CLIENT_INFO_META_KEY,
   type McpRequestContext,
@@ -2553,11 +2554,83 @@ function whenClosed(t: StdioServerTransport): Promise<void> {
   });
 }
 
-/** Serves MCP on stdin and stdout, both protocol eras, until the client closes stdin. */
+/**
+ * How long the requests still being answered when stdin ends may take before the server stops:
+ * a bound so no handler that never settles holds the process forever.
+ */
+export const EOF_ANSWER_MS = 10 * 60_000;
+
+/**
+ * Stdin for the transport, which closes the moment stdin ends and drops every answer still being
+ * worked out (`printf '<initialize>\n<tools/call>\n' | akou mcp` lost the call's answer). This one
+ * holds the end back until every request the wire took has had its answer sent, or was cancelled,
+ * or `EOF_ANSWER_MS` passed (MCP-E1).
+ */
+function answerBeforeEof(wire: StdioServerTransport, input: PassThrough): void {
+  const pending = new Set<string | number>();
+  let ended = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settle = () => {
+    if (!ended || pending.size > 0) return;
+    clearTimeout(timer);
+    if (!input.writableEnded) input.end();
+  };
+  const forget = (id: unknown) => {
+    if (typeof id === "string" || typeof id === "number") pending.delete(id);
+    settle();
+  };
+  type Message = Parameters<StdioServerTransport["send"]>[0];
+  let inner: ((m: Message) => void) | undefined;
+  Object.defineProperty(wire, "onmessage", {
+    configurable: true,
+    get: () => (m: Message) => {
+      const r = m as { id?: string | number; method?: string; params?: { requestId?: unknown } };
+      // A 2026-07-28 `subscriptions/listen` is answered only when the server closes, so waiting
+      // for its answer would hold every subscribed client's exit for the whole bound.
+      if (r.method !== undefined && r.id !== undefined && r.method !== "subscriptions/listen")
+        pending.add(r.id);
+      if (r.method === "notifications/cancelled") forget(r.params?.requestId);
+      inner?.(m);
+    },
+    set: (f: ((m: Message) => void) | undefined) => {
+      inner = f;
+    },
+  });
+  const send = wire.send.bind(wire);
+  wire.send = (m: Message) => {
+    const r = m as { id?: unknown; method?: string };
+    const out = send(m);
+    if (r.method === undefined && r.id !== undefined)
+      out.finally(() => forget(r.id)).catch(() => {});
+    return out;
+  };
+  const onData = (c: Buffer) => input.write(c);
+  const onEnd = () => {
+    if (ended) return;
+    ended = true;
+    process.stdin.off("data", onData);
+    // clock: a deadline on the process, so a handler that never settles cannot hold it open.
+    timer = setTimeout(() => {
+      pending.clear();
+      settle();
+    }, EOF_ANSWER_MS);
+    settle();
+  };
+  process.stdin.on("data", onData);
+  process.stdin.once("end", onEnd);
+  process.stdin.once("close", onEnd);
+}
+
+/**
+ * Serves MCP on stdin and stdout, both protocol eras, until the client closes stdin and every
+ * request it sent before that has its answer.
+ */
 export async function runMcpStdio(o: McpOptions & { remote?: boolean }): Promise<void> {
   // A remote target (`AKOU_URL`) is asked once what it is, before the tools are listed.
   const mode = o.mode ?? (o.remote ? await targetMode(o.client) : null);
-  const wire = new StdioServerTransport();
+  const input = new PassThrough();
+  const wire = new StdioServerTransport(input, process.stdout);
+  answerBeforeEof(wire, input);
   const closed = whenClosed(wire);
   serveStdio(mcpFactory({ ...o, mode }), {
     transport: wire,
