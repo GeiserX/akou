@@ -31,17 +31,14 @@ export function caller(c: { identity?: Identity | null }): Identity {
 }
 
 /**
- * Is the caller the user on this computer: the desktop window in process, or the app's own token,
- * which the desktop app takes only on its loopback listener? Never an `ak_` key (the network
- * listener takes nothing else), the window's page in a browser, or server mode. For what decides
- * where transcripts are written: `export.dir` and the export's `to`.
+ * Is the caller the user on this computer: the window in process (the desktop window, or its page
+ * in a browser on the app's own loopback page server, which is how the headless app shows its
+ * window and runs its first-run setup), or the app's own token, which the desktop app takes only
+ * on its loopback listener? Never an `ak_` key (the network listener takes nothing else), or
+ * server mode, whose page is opened with the admin password or a key. For what decides where calls
+ * and transcripts are written: `recordings.root`, `export.dir` and the export's `to`.
  */
-export function isLocalUser(c: {
-  identity?: Identity | null;
-  browser?: boolean;
-  app: { mode?(): Mode };
-}): boolean {
+export function isLocalUser(c: { identity?: Identity | null; app: { mode?(): Mode } }): boolean {
   if ((c.app.mode?.() ?? "app") !== "app") return false;
-  if (c.identity === undefined) return c.browser !== true;
-  return c.identity === APP_IDENTITY;
+  return c.identity === undefined || c.identity === APP_IDENTITY;
 }

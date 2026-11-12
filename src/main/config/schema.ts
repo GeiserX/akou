@@ -126,9 +126,10 @@ export interface SettingSpec {
   /**
    * False for a setting that decides where calls or transcripts are written (`recordings.root`,
    * `export.dir`): over the API only the user on this computer sets it, with the app's own token
-   * on the desktop app's loopback listener (`akou config set`) or in the desktop window. An `ak_`
-   * key, the network listener, the window's page in a browser and server mode are refused, so a
-   * key cannot send every later call to a folder or share it chose.
+   * on the desktop app's loopback listener (`akou config set`) or in the window (the desktop
+   * window, or its page in a browser on the app's loopback page server). An `ak_` key, the network
+   * listener and server mode are refused, so a key cannot send every later call to a folder or
+   * share it chose.
    */
   keyWritable?: boolean;
   /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
@@ -1483,7 +1484,8 @@ export function loadConfig(
  * Validates a `PATCH /config` body: `{key: value}` to set, `{key: null}` to go back to the default.
  * Returns the new file contents, or every error at once. Settings that name a program are refused;
  * a `windowWritable` one is taken only `inProcess`, from the desktop window; a `keyWritable: false`
- * one only in process or from the `local` user (the app's own token on the desktop app's loopback).
+ * one only in process or from the `local` user (the app's own token on the desktop app's loopback,
+ * or the window's page in a browser on the app's loopback page server).
  */
 export function patchConfig(
   current: Partial<Record<SettingKey, SettingValue>>,
