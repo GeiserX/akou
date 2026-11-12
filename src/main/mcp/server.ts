@@ -2609,6 +2609,7 @@ function answerBeforeEof(wire: StdioServerTransport, input: PassThrough): void {
     if (ended) return;
     ended = true;
     process.stdin.off("data", onData);
+    // clock: a deadline on the process, so a handler that never settles cannot hold it open.
     timer = setTimeout(() => {
       pending.clear();
       settle();
