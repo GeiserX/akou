@@ -1162,26 +1162,33 @@ class App {
    * deletes every call in the trash for good (`DELETE /trash`). Calls in the list are not touched.
    */
   private async askEmptyTrash(): Promise<void> {
-    const r = await this.t.request<{ calls?: unknown[] }>("GET", "/trash").catch(() => null);
+    const r = await this.t
+      .request<{ calls?: { trashedAt: number }[] }>("GET", "/trash")
+      .catch(() => null);
     if (!r || r.status >= 400) {
       toast(message(r?.body, "the Trash could not be read"));
       return;
     }
-    const n = r.body.calls?.length ?? 0;
+    const listed = r.body.calls ?? [];
+    const n = listed.length;
     if (n === 0) {
       toast("The Trash is empty.", "info");
       return;
     }
+    // Only the calls the question counts go: one trashed while it is open stays (TRASH-1).
+    const upTo = Math.max(...listed.map((c) => c.trashedAt));
     const calls = `${n} call${n === 1 ? "" : "s"}`;
     this.confirm(
       `Delete the ${calls} in the Trash for good? This cannot be undone.`,
       "Empty Trash",
-      () => void this.emptyTrash(),
+      () => void this.emptyTrash(upTo),
     );
   }
 
-  private async emptyTrash(): Promise<void> {
-    const r = await this.t.request<{ deleted?: number }>("DELETE", "/trash").catch(() => null);
+  private async emptyTrash(upTo: number): Promise<void> {
+    const r = await this.t
+      .request<{ deleted?: number }>("DELETE", `/trash?upTo=${upTo}`)
+      .catch(() => null);
     if (!r || r.status >= 400) {
       toast(message(r?.body, "the Trash was not emptied"));
       return;

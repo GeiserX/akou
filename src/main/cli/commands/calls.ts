@@ -270,11 +270,15 @@ async function emptyTrash(ctx: Ctx, p: Parsed): Promise<number> {
       "calls empty-trash takes no call and no workspace: it empties the whole trash",
     );
   }
+  // Only the calls the question counted go: one trashed while it waits for y stays (TRASH-1).
+  let path = "/trash";
   if (!bool(p, "yes")) {
     const r = await api(ctx, "GET", "/trash");
     if (r.status !== 200) return finish(ctx, r, () => "");
-    const n = (r.body.calls as Body[]).length;
+    const listed = r.body.calls as Body[];
+    const n = listed.length;
     if (n === 0) return finish(ctx, r, () => "The trash is empty.");
+    path = `/trash?upTo=${Math.max(...listed.map((c) => c.trashedAt as number))}`;
     const question = `Delete the ${plural(n)} in the trash for good? This cannot be undone.`;
     const keys = ctx.json ? undefined : ctx.io.keys;
     if (!keys) {
@@ -288,7 +292,7 @@ async function emptyTrash(ctx: Ctx, p: Parsed): Promise<number> {
       return EXIT.ok;
     }
   }
-  const r = await api(ctx, "DELETE", "/trash");
+  const r = await api(ctx, "DELETE", path);
   return finish(ctx, r, (b) =>
     b.deleted === 0
       ? "The trash is empty."

@@ -537,12 +537,21 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/trash",
     {
       id: "trash.empty",
-      doc: "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. Answers how many calls were deleted.",
+      doc: "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. With `upTo`, only the calls trashed at that time or before go, so a client that asked about the calls of a `GET /trash` deletes only those. Answers how many calls were deleted.",
       access: "admin",
       modes: ["app"],
+      query: {
+        upTo: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          doc: "Delete only the calls trashed at this time (ms) or before: the newest `trashedAt` of the `GET /trash` the user was asked about. Default: all of them.",
+        },
+      },
       ok: 200,
     },
-    async (c) => json(200, { ok: true, deleted: await c.app.manager.emptyTrash() }),
+    async (c) =>
+      json(200, { ok: true, deleted: await c.app.manager.emptyTrash(c.query.int("upTo")) }),
   );
 
   for (const name of LIVE_CONTROLS) {

@@ -23,7 +23,11 @@ const CLI_CALLS = [
   "01J8Z6Q4M2VX0K7B3D4E5TRSHD1",
   "01J8Z6Q4M2VX0K7B3D4E5TRSHD2",
   "01J8Z6Q4M2VX0K7B3D4E5TRSHD3",
+  "01J8Z6Q4M2VX0K7B3D4E5TRSHD4",
 ] as const;
+/** Calls the `upTo` test trashes: one before the question is asked, one after. */
+const ASKED = "01J8Z6Q4M2VX0K7B3D4E5TRSHE1";
+const LATER = "01J8Z6Q4M2VX0K7B3D4E5TRSHE2";
 
 /** A saved call under `<root>/<workspace>/<folder>`. */
 function seed(root: string, workspace: string, folder: string, id: string, title: string): string {
@@ -60,6 +64,8 @@ beforeAll(async () => {
   for (const [i, id] of CLI_CALLS.entries()) {
     seed(root(), "work", `2026-09-25_100${i}_d${i}`, id, `Cli ${i}`);
   }
+  seed(root(), "work", "2026-09-26_1000_e1", ASKED, "Asked");
+  seed(root(), "work", "2026-09-26_1100_e2", LATER, "Later");
   // A call trashed 10 days ago, by an earlier run: inside the 30 days, so the start keeps it.
   const earlier = seed(join(root(), TRASH_DIR), "work", "2026-09-01_0900_cc", EARLIER, "Earlier");
   writeFileSync(
@@ -109,13 +115,38 @@ describe("[TRASH-1] Empty trash deletes trashed calls for good, now, and nothing
     expect((await rig.api("POST", `/calls/${GONE_A}/restore`)).status).toBe(404);
 
     // The call that was never trashed is untouched: listed, readable, its folder byte for byte.
-    expect((await listed()).sort()).toEqual([KEEP, ...CLI_CALLS].sort());
+    expect((await listed()).sort()).toEqual([KEEP, ...CLI_CALLS, ASKED, LATER].sort());
     expect(readFileSync(join(kept, "events.jsonl"), "utf8")).toBe(keptLog);
     expect(existsSync(join(kept, "audio", "part-001.opus"))).toBe(true);
     expect((await rig.api("GET", `/calls/${KEEP}/transcript`)).text).toContain("the Keep me line");
 
     // An empty trash empties to nothing.
     expect((await rig.api("DELETE", "/trash")).body).toEqual({ ok: true, deleted: 0 });
+  });
+
+  test("with upTo, a call trashed after the question was asked stays in the trash", async () => {
+    expect((await rig.api("DELETE", `/calls/${ASKED}`)).status).toBe(200);
+    // The question the user answers: what GET /trash held then.
+    const asked = (await rig.api("GET", "/trash")).body.calls as { trashedAt: number }[];
+    expect(asked.length).toBe(1);
+    const upTo = Math.max(...asked.map((c) => c.trashedAt));
+    await Bun.sleep(20);
+    // While the question is open, another call goes to the trash (its Undo still on screen).
+    expect((await rig.api("DELETE", `/calls/${LATER}`)).status).toBe(200);
+
+    expect((await rig.api("DELETE", `/trash?upTo=${upTo}`)).body).toEqual({ ok: true, deleted: 1 });
+    expect(await inTrash()).toEqual([LATER]);
+    // Its Undo still works.
+    expect((await rig.api("POST", `/calls/${LATER}/restore`)).status).toBe(200);
+    expect(await listed()).toContain(LATER);
+
+    // A bad upTo deletes nothing.
+    expect((await rig.api("DELETE", `/calls/${LATER}`)).status).toBe(200);
+    expect((await rig.api("DELETE", "/trash?upTo=soon")).status).toBe(400);
+    expect(await inTrash()).toEqual([LATER]);
+    // Positive control: without upTo the same call goes, so its staying above was upTo's doing.
+    expect((await rig.api("DELETE", "/trash")).body).toEqual({ ok: true, deleted: 1 });
+    expect(await inTrash()).toEqual([]);
   });
 
   test("a live call is never touched by an empty", async () => {
@@ -131,7 +162,10 @@ describe("[TRASH-1] Empty trash deletes trashed calls for good, now, and nothing
 });
 
 /** A terminal that answers the question with `answer`, and records that it was asked. */
-function terminal(answer: string): Keys & { asked: boolean; closed: boolean } {
+function terminal(
+  answer: string,
+  meanwhile?: () => Promise<void>,
+): Keys & { asked: boolean; closed: boolean } {
   const k = {
     asked: false,
     closed: false,
@@ -141,6 +175,7 @@ function terminal(answer: string): Keys & { asked: boolean; closed: boolean } {
     },
     async *read() {
       k.asked = true;
+      await meanwhile?.();
       yield answer;
     },
   };
@@ -181,9 +216,17 @@ describe("[TRASH-1] akou calls empty-trash", () => {
     );
     expect((await inTrash()).length).toBe(2);
 
-    const yes = terminal("y");
+    // While the question waits for y, another call goes to the trash: it is not one the user
+    // was asked about, so it stays.
+    const d4 = CLI_CALLS[3];
+    const yes = terminal("y", async () => {
+      await Bun.sleep(20);
+      expect((await rig.api("DELETE", `/calls/${d4}`)).status).toBe(200);
+    });
     const deleted = await run(["calls", "empty-trash"], yes);
     expect([deleted.code, deleted.out]).toEqual([0, ["Deleted 2 calls from the trash for good"]]);
+    expect(await inTrash()).toEqual([d4]);
+    expect((await rig.api("POST", `/calls/${d4}/restore`)).status).toBe(200);
     expect(await inTrash()).toEqual([]);
     // The live test's call is listed too; what matters is the untrashed calls stay, the others don't.
     const left = await listed();

@@ -757,11 +757,13 @@ export class CallManager {
 
   /**
    * Empty trash: deletes every call in the trash for good, now, through the same purge the start
-   * runs after 30 days. Only folders under `.trash/` are touched. Returns how many went.
+   * runs after 30 days. With `upTo`, only calls trashed at that time or before go: the user was
+   * asked about those, and a call trashed since then stays. Only folders under `.trash/` are
+   * touched. Returns how many went.
    */
-  async emptyTrash(): Promise<number> {
+  async emptyTrash(upTo = Number.POSITIVE_INFINITY): Promise<number> {
     await this.init();
-    return this.purgeTrash(Number.POSITIVE_INFINITY);
+    return this.purgeTrash(upTo);
   }
 
   /** Deletes what has been in the trash since `cutoff` or before (`TRASH_DAYS` days by default). */

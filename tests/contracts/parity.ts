@@ -373,7 +373,7 @@ export const PARITY: readonly Row[] = [
     mcp: {
       none: "deleting calls for good is the user's, behind a confirmation; PG-M4 names no tool for it",
     },
-    window: [app('"GET", "/trash"'), app('"DELETE", "/trash"')],
+    window: [app('"GET", "/trash"'), app('"DELETE", `/trash?upTo=#{upTo}`')],
     note: "`akou calls empty-trash` asks on a terminal and needs `--yes` elsewhere; the window asks first, naming how many calls go (W13.3).",
   },
   {

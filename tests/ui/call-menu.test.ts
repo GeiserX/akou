@@ -405,7 +405,7 @@ describe("[W13.3] Move to Trash, with Undo", () => {
 
 describe("[TRASH-1] Empty Trash… from a call row", () => {
   test(
-    "it asks first, naming how many calls go and that it cannot be undone; Empty Trash deletes only those",
+    "it asks first, naming how many calls go and that it cannot be undone; Empty Trash deletes only those, not a call trashed while it asked",
     async () => {
       await withRig({ seed: seedThree }, async (rig) => {
         const page = await rig.open(C);
@@ -442,17 +442,25 @@ describe("[TRASH-1] Empty Trash… from a call row", () => {
 
         await page.click(`${row(C)} .what`, { button: "right" });
         await page.click('#calls-menu [data-action="trash.empty"]');
+        await page.waitForSelector("#confirm .confirm-row");
+        // While the question is open, C goes to the trash too. The user was asked about 2 calls,
+        // so only those 2 go: C stays in the trash and its Undo still works.
+        await Bun.sleep(20);
+        expect((await rig.api("DELETE", `/calls/${C}`)).status).toBe(200);
         await page.click("#confirm .confirm-row .go");
-        await until(async () => (await inTrash()) === 0, 5000, "trash emptied");
         await until(
           async () =>
             (await page.textContent("#toast"))?.includes("2 calls deleted for good.") === true,
           5000,
           "deleted said",
         );
-        // The call that was never trashed is still there, in the list and on screen.
+        expect(
+          ((await rig.api("GET", "/trash")).body.calls as { id: string }[]).map((c) => c.id),
+        ).toEqual([C]);
+        expect((await rig.api("POST", `/calls/${C}/restore`)).status).toBe(200);
+        // The call that was not counted is back, in the list and on screen.
         expect(await listed(rig)).toEqual([C]);
-        expect(await page.locator(row(C)).count()).toBe(1);
+        await page.waitForSelector(row(C));
       });
     },
     UI_TIMEOUT,
