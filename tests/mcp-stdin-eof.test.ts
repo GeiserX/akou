@@ -47,7 +47,12 @@ describe("[MCP-E1] Requests sent before stdin closes are answered", () => {
         },
       },
       { jsonrpc: "2.0", method: "notifications/initialized" },
-      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "akou_jobs_list", arguments: {} } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "akou_jobs_list", arguments: {} },
+      },
       { jsonrpc: "2.0", id: 3, method: "ping" },
     ];
     const proc = Bun.spawn([process.execPath, CLI, "mcp"], {
