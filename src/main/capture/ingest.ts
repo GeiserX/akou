@@ -11,9 +11,11 @@
  *   up to that bound. No channel ever waits for the other (TRAPS T0.15, T0.16): the helper's
  *   aligner already writes zeros for a silent source, and this is the same rule applied again on
  *   the app side, so a helper that omits packets cannot make one channel run ahead unbounded.
- * - **Queues.** Each channel has a bounded queue for the recognizer (10 minutes by default). When
- *   it is full the oldest audio is dropped from memory and counted; the recognizer reads that span
- *   back from the audio file. Memory never grows with call length.
+ * - **Queues.** Each channel has a bounded queue for the recognizer (`capture.queueSeconds`, 10
+ *   minutes by default). When it is full the oldest audio is dropped from memory and counted, and
+ *   that span gets no live lines: nothing reads it back from the audio file during the call. The
+ *   Worker sees the jump and warns in the app log; the recording keeps the span for the final pass.
+ *   Memory never grows with call length.
  * - **Sleep.** The host clock keeps running during sleep and the file does not; a jump of the host
  *   clock between two consecutive packets that the file position does not show is a `gap`.
  */
