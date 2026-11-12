@@ -372,6 +372,29 @@ describe("with a running app", () => {
       }
     });
   });
+
+  describe("[VOC-A1] An approval that approved nothing does not exit ok", () => {
+    test("`vocab approve` of a word not waiting there exits 3 and names it; found ones exit 0", async () => {
+      await rig.api("POST", "/vocab", { term: "Zorblat", workspace: "clivoc", confirmed: false });
+      // Without the workspace it was proposed into, nothing is waiting under that name.
+      const miss = await run(["vocab", "approve", "Zorblat"]);
+      expect([miss.code, miss.out]).toEqual([EXIT.notLive, ""]);
+      expect(miss.err).toContain("nothing approved");
+      expect(miss.err).toContain("Zorblat");
+      const json = await run(["vocab", "approve", "Zorblat", "--json"]);
+      expect([json.code, json.json?.approved, json.json?.unmatched]).toEqual([
+        EXIT.notLive,
+        [],
+        ["Zorblat"],
+      ]);
+      // A found word next to a misspelt one: exit 0, and the miss is named.
+      const some = await run(["vocab", "approve", "Zorblat", "Zorblta", "-w", "clivoc"]);
+      expect([some.code, some.out]).toEqual([0, "Approved: Zorblat\nNot found: Zorblta"]);
+      // The control: a word already confirmed is found, and a reject records the word either way.
+      expect((await run(["vocab", "approve", "Zorblat", "-w", "clivoc"])).code).toBe(0);
+      expect((await run(["vocab", "reject", "Nowhere", "-w", "clivoc"])).code).toBe(0);
+    });
+  });
 });
 
 describe("[CLI-24] a start or share sent as `user` is still announced (PRINCIPLES 10)", () => {

@@ -21,7 +21,8 @@
  * goes into the workspace file (or the global one). `fix` is what fixing a line in the window does
  * (`POST /calls/{id}/fix`, the live call by default): the call reads the word corrected everywhere,
  * a name or jargon word is learned into the workspace's vocabulary too, and a rewording of common
- * words stays in this call and goes into the call's Notes. A term the API refuses exits 65.
+ * words stays in this call and goes into the call's Notes. A term the API refuses exits 65. An
+ * `approve` that found none of its words waiting exits 3 and names them.
  */
 
 import { readFileSync } from "node:fs";
@@ -195,10 +196,22 @@ export const vocab: Command = {
         const r = await api(ctx, "POST", `/vocab/${sub}`, {
           body: { terms: args, call, workspace: ws, dictation: bool(p, "dictation") || undefined },
         });
+        // An approval that found none of its words approved nothing: exit 3 and name them, never
+        // a bare ok (VOC-A1). A reject records the word either way, so it reports no miss.
+        const missed: string[] = r.status === 200 ? (r.body?.unmatched ?? []) : [];
+        if (missed.length > 0 && (r.body?.approved ?? []).length === 0) {
+          if (ctx.json) ctx.io.out(JSON.stringify(r.body));
+          else
+            ctx.io.err(
+              `akou: nothing approved; no word waiting named ${missed.join(", ")} in ${r.body?.path}. Name the call (--call) or workspace (-w) it was proposed in, or check the spelling.`,
+            );
+          return EXIT.notLive;
+        }
         return finish(ctx, r, (b) => {
           const done: string[] = b.approved ?? b.rejected ?? [];
+          const rest = missed.length > 0 ? `\nNot found: ${missed.join(", ")}` : "";
           return done.length > 0
-            ? `${sub === "approve" ? "Approved" : "Rejected"}: ${done.join(", ")}`
+            ? `${sub === "approve" ? "Approved" : "Rejected"}: ${done.join(", ")}${rest}`
             : "Nothing matched.";
         });
       }
