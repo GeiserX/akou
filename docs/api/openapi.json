@@ -1702,7 +1702,20 @@
         "tags": [
           "trash"
         ],
-        "description": "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. Answers how many calls were deleted.",
+        "description": "Empty the trash: every call in it is deleted for good now, folder and audio, instead of 30 days after it was trashed. This cannot be undone. Calls that are not in the trash are never touched, and exports already written stay. With `upTo`, only the calls trashed at that time or before go, so a client that asked about the calls of a `GET /trash` deletes only those. Answers how many calls were deleted.",
+        "parameters": [
+          {
+            "name": "upTo",
+            "in": "query",
+            "required": false,
+            "description": "Delete only the calls trashed at this time (ms) or before: the newest `trashedAt` of the `GET /trash` the user was asked about. Default: all of them.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -1713,6 +1726,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_param"
           },
           "401": {
             "$ref": "#/components/responses/401.unauthorized"
