@@ -242,6 +242,11 @@ export interface RouteContext<A> {
    */
   identity?: Identity | null;
   /**
+   * True for a request from the window's page in a browser (the page server): it runs in process
+   * as the user, but it is not the desktop window, so a key only the window may set stays closed.
+   */
+  browser?: boolean;
+  /**
    * The source address: the TCP peer, or the client a trusted proxy names (`server.trusted_proxies`,
    * SV-P5). For rate limits and audit, never for access. Absent in process.
    */

@@ -233,6 +233,9 @@
           "403": {
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden"
           },
+          "409": {
+            "$ref": "#/components/responses/409.config_file_invalid"
+          },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
           },
@@ -4504,7 +4507,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does.",
+        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. `unmatched` names the terms that were neither waiting there nor already confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6728,7 +6731,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `seconds_per_audio_second` (the running time over the audio of the last done jobs, so long files do not swing it), `eta_seconds` (what the running jobs have left of their audio at that rate, plus the queued jobs at the mean in rounds of `concurrency`, so a client paces a backlog and picks the server that is free soonest; a queued long file counts at the mean until its decode), `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them) and `stalled` (running jobs past 300 s plus 5 times their audio; a server forwarding jobs sends none to a remote reporting one), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `wyoming_port`: the TCP port of the Wyoming listener for Home Assistant while `server.wyoming` has it up (`capabilities.wyoming`), else null. `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available (`auto` carries `resolves_to`, the preset it runs now or the recognizer `server.default_model` names, and is available when that is), each with its `engines` in priority order, its speaker model (`diarizer`) and how it joins its engines (`fusion`: `rover-conf` for the `fusion` preset, as `asr.fusion` sets it, null for one engine), `auto`: the preset and recognizer a job that names no model runs here and why (`preset`, `model`, `reason`; null where file jobs are off), the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key; empty to a caller with no key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `default_diarize`, whether a job that sends no `diarize` gets speaker labels (`server.default_diarize`; a request's `diarize` always wins), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds`, `seconds_per_audio_second` (the running time over the audio of the last done jobs, so long files do not swing it), `eta_seconds` (what the running jobs have left of their audio at that rate, plus the queued jobs at the mean in rounds of `concurrency`, so a client paces a backlog and picks the server that is free soonest; a queued long file counts at the mean until its decode), `loaded` (the recognizers a job Worker holds loaded now, so a client batches its jobs by them) and `stalled` (running jobs past 300 s plus 5 times their audio; a server forwarding jobs sends none to a remote reporting one), and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (the preset or recognizer `server.dictation_engine` resolves to, so `auto` shows what it picks) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). `bound_languages`: the ISO codes a job's `languages[]` may name (`capabilities.languages_bound`). `wyoming_port`: the TCP port of the Wyoming listener for Home Assistant while `server.wyoming` has it up (`capabilities.wyoming`), else null. `live`: the live door `GET /v1/live` in server mode, `engines` the streaming models on disk it can open (null in the desktop app); `capabilities.live` is true while there is one. Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
@@ -9632,6 +9635,29 @@
           }
         }
       },
+      "409.config_file_invalid": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "config_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.cursor_stale": {
         "description": "Conflict",
         "content": {
@@ -11132,6 +11158,10 @@
           {
             "const": "capture_failed",
             "description": "The capture helper could not start; `stage` says where."
+          },
+          {
+            "const": "config_file_invalid",
+            "description": "config.json is not a JSON object, so a save would overwrite it; fix or remove the file first."
           },
           {
             "const": "cursor_stale",

@@ -80,10 +80,37 @@ export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+/** When the action `#toast` shows stops being offered; null when it shows none. */
+let toastActionEnds: number | null = null;
+
+/**
+ * Moves the action `#toast` still offers (an Undo) into a row of `#toast-held`, where it stays for
+ * the rest of its own time: a later message never takes an Undo away before then (TRAPS W13.3).
+ */
+function holdAction(el: HTMLElement): void {
+  const ends = toastActionEnds;
+  toastActionEnds = null;
+  // clock: what is left of the action's own time.
+  const left = ends === null ? 0 : ends - Date.now();
+  const held = document.getElementById("toast-held");
+  if (el.hidden || left <= 0 || !held) return;
+  const focused = el.contains(document.activeElement);
+  const row = h("div", { class: el.className });
+  row.append(...el.childNodes);
+  held.append(row);
+  held.hidden = false;
+  if (focused) row.querySelector<HTMLElement>(".toast-action")?.focus();
+  // clock: the held row goes when its action's own time is up.
+  setTimeout(() => {
+    row.remove();
+    held.hidden = held.childElementCount === 0;
+  }, left);
+}
 
 /**
  * A short message at the top of the window; errors in red. An `action` (a fix's Undo) is a button
- * after the text, and keeps the message up a little longer.
+ * after the text, and keeps the message up a little longer; a later message moves it aside rather
+ * than replacing it.
  */
 export function toast(
   message: string,
@@ -91,12 +118,15 @@ export function toast(
   action?: { label: string; run: () => void },
 ): void {
   const el = byId("toast");
+  holdAction(el);
   el.textContent = message;
   el.className = kind;
   el.hidden = false;
   const hide = () => {
     el.hidden = true;
+    toastActionEnds = null;
   };
+  const wait = action ? 10_000 : 6000;
   if (action) {
     el.append(
       " ",
@@ -106,9 +136,16 @@ export function toast(
           type: "button",
           class: "toast-action",
           on: {
-            click: () => {
-              clearTimeout(toastTimer);
-              hide();
+            click: (e) => {
+              const row = (e.currentTarget as HTMLElement).parentElement;
+              if (row === el) {
+                clearTimeout(toastTimer);
+                hide();
+              } else {
+                const held = row?.parentElement;
+                row?.remove();
+                if (held) held.hidden = held.childElementCount === 0;
+              }
               action.run();
             },
           },
@@ -116,10 +153,12 @@ export function toast(
         action.label,
       ),
     );
+    // clock: when this action stops being offered.
+    toastActionEnds = Date.now() + wait;
   }
   clearTimeout(toastTimer);
   // clock: how long a toast stays on screen.
-  toastTimer = setTimeout(hide, action ? 10_000 : 6000);
+  toastTimer = setTimeout(hide, wait);
 }
 
 /** The × of a dialog's title row (WINDOW W15.8), for a dialog built in code. */

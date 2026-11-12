@@ -50,7 +50,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { workerData } from "node:worker_threads";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
-import { fold } from "../../core/log/fold.ts";
+import { type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE } from "../../core/log/writer.ts";
 import { CHANNELS, type Clock, realClock } from "../capture/engine.ts";
@@ -1407,6 +1407,20 @@ export interface FinalCall {
   readonly dir: string;
   record(draft: EventDraft): LogEvent | null;
   holdWriter(): () => void;
+  /** The call's live fold, which knows each line's latest revision (the controller's view). */
+  readonly view?: CallView;
+}
+
+/**
+ * The pass builds its retractions from the log as it was when it started, minutes before it writes
+ * them. A line edited meanwhile (a speaker relabel writes rev + 1) already has that rev, and the
+ * fold drops a revision that is not above the current one, so the old line would stay beside the
+ * new layer. A retraction is written above whatever revision the line has now.
+ */
+function aboveLatest(draft: EventDraft, view: CallView | undefined): EventDraft {
+  if (draft.type !== "seg" || draft.text !== null || !view) return draft;
+  const cur = view.segment(draft.id);
+  return cur && draft.rev <= cur.rev ? { ...draft, rev: cur.rev + 1 } : draft;
 }
 
 export interface FinalizeOptions {
@@ -1573,7 +1587,7 @@ export async function finalizeCall(
       // Nothing the pass sends after its end (a timeout) reaches the log.
       const onReply = (r: FromFinal) => {
         if (settled) return;
-        if (r.type === "event") call.record(r.draft);
+        if (r.type === "event") call.record(aboveLatest(r.draft, call.view));
         else if (r.type === "log") o.onLog?.(r.level, r.msg);
         else if (r.type === "progress") o.onProgress?.(r.done_s, r.total_s, r.step);
         else if (r.type === "child") {

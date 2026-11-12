@@ -421,6 +421,10 @@ const OUT = {
     path: z.string().optional().describe("The vocabulary file written."),
     approved: z.array(z.string()).optional().describe("The terms approved."),
     rejected: z.array(z.string()).optional().describe("The terms rejected."),
+    unmatched: z
+      .array(z.string())
+      .optional()
+      .describe("The terms to approve that were not waiting there; they are still unapproved."),
   }),
   enhancedPut: z.looseObject({
     call: z.string().describe("The call the notes were saved on."),
@@ -1578,6 +1582,14 @@ export function createMcpServer(o: McpOptions): McpServer {
       },
       async (a) => {
         const r = await req("POST", `/vocab/${action}`, { body: a });
+        // An approval that found none of its words approved nothing: say so, never a bare ok
+        // (VOC-A1). Some found: the answer lists the rest under `unmatched`.
+        const missed: string[] = r.status === 200 ? (r.body?.unmatched ?? []) : [];
+        if (missed.length > 0 && (r.body?.approved ?? []).length === 0) {
+          return errorText(
+            `not_found: nothing approved; no word waiting named ${missed.join(", ")} in ${r.body?.path}. Pass the \`call\` it was proposed with, or check the spelling.`,
+          );
+        }
         return asResult(r, compact);
       },
     );
@@ -1862,7 +1874,12 @@ export function createMcpServer(o: McpOptions): McpServer {
           .max(1000)
           .default(20)
           .describe("The most calls to return, newest first, 1 to 1000."),
-        failed: z.boolean().optional().describe("Also the calls whose capture failed."),
+        failed: z
+          .boolean()
+          .optional()
+          .describe(
+            "Only the calls whose start failed (nothing was recorded), instead of the others. A call whose final pass failed is not one.",
+          ),
       }),
       outputSchema: OUT.calls,
     },
@@ -1989,8 +2006,16 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ call: CALL_REF }),
       outputSchema: OUT.exported,
     },
-    async (a) => {
-      const r = await req("POST", `/calls/${id(a.call)}/export`);
+    async (a, ctx) => {
+      // Queued behind the call's hand-off hooks (up to 600 s each), so the CLI's deadline, not the
+      // client's 60 s default (MCP-X1).
+      const stop = progressBeat(ctx, "Exporting the call");
+      let r: ApiResponse;
+      try {
+        r = await req("POST", `/calls/${id(a.call)}/export`, { timeoutMs: 60 * 60_000 });
+      } finally {
+        stop();
+      }
       return asResult(r, compact);
     },
   );

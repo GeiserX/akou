@@ -36,6 +36,8 @@ export const ERROR_CODES = {
   callback_not_allowed: "The callback URL's host is not on this key's callback host list.",
   cancelled: "The request or the work it waited on was stopped before it finished.",
   capture_failed: "The capture helper could not start; `stage` says where.",
+  config_file_invalid:
+    "config.json is not a JSON object, so a save would overwrite it; fix or remove the file first.",
   cursor_stale: "The cursor is older than what the call still holds; read again from the start.",
   decode_failed: "The audio could not be decoded.",
   devices_unavailable: "The capture helper cannot list the devices; `helper` says why.",

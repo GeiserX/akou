@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
 import { renderExport } from "../src/main/handoff/export.ts";
@@ -353,6 +353,47 @@ describe("the page server: the window in a browser, with a session of its own", 
     },
     LONG,
   );
+
+  test("[known bug] A window-only setting set through the browser page: refused, as for any HTTP client", async () => {
+    const file = rig.app.config().paths.configFile;
+    const read = () => (existsSync(file) ? readFileSync(file, "utf8") : null);
+    const before = read();
+    // The page's session comes from `POST /v1/window`, which the API token alone can ask for.
+    const s = await session();
+    const res = await fetch(`${page.origin}/api/v1/config`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${s}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        "provider.baseUrl": "https://elsewhere.example/v1",
+        "network.enabled": true,
+        "network.bind": "0.0.0.0",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; errors: string[] };
+    expect(body.error).toBe("bad_setting");
+    expect(body.errors.length).toBe(3);
+    expect(read()).toBe(before);
+    expect(rig.app.config().settings["provider.baseUrl"]).toBe("");
+    // A key the API may write still goes through the page.
+    const ok = await fetch(`${page.origin}/api/v1/config`, {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${s}`, "content-type": "application/json" },
+      body: JSON.stringify({ "user.name": "Page" }),
+    });
+    expect(ok.status).toBe(200);
+    // Positive control: the desktop window's own bridge, in process, may set the same key.
+    const bridge = new Bridge(rig.app);
+    const set = await bridge.json("PATCH", "/config", {
+      "provider.baseUrl": "https://llm.example/v1",
+    });
+    expect(set.status).toBe(200);
+    expect(rig.app.config().settings["provider.baseUrl"]).toBe("https://llm.example/v1");
+    expect(
+      (await bridge.json("PATCH", "/config", { "provider.baseUrl": null, "user.name": null }))
+        .status,
+    ).toBe(200);
+  });
 
   test("the bridge refuses paths that are not API paths", () => {
     for (const bad of ["calls", "//evil/x", "/calls/../status", "/./x"]) {

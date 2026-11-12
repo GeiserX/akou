@@ -421,6 +421,7 @@ export class PageServer {
         body,
         signal: streaming ? this.stream(req) : req.signal,
         headers: pass,
+        browser: true,
       });
       return new Response(res.body, { status: res.status, headers: res.headers });
     }

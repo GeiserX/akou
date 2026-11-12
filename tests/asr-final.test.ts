@@ -644,4 +644,45 @@ describe("after Stop, through the call's writer", () => {
     expect(created.length).toBe(before + 1);
     expect(created.at(-1)?.releases).toBe(1);
   });
+
+  test("[LG-1] a line relabelled while a re-run decodes is still replaced, never shown twice", async () => {
+    const r = callRig();
+    r.engine.onStart = (s) => s.capturing();
+    const res = await r.mgr.start({ workspace: "work" });
+    if (!res.ok) throw new Error(res.error);
+    await r.mgr.stop();
+    const c = r.mgr.controller(res.call);
+    if (!c) throw new Error("no controller");
+    const heard = () => concat(silence(0.4), speak(["hello"]), silence(0.4));
+    const audio = {
+      kind: "module" as const,
+      path: FAKE,
+      options: { parts: { 1: { mic: heard(), call: heard() } } },
+    };
+    expect((await finalizeCall(c, { models: spec(), audio, inThread: true })).ok).toBe(true);
+    const first = c.view.lines("final").map((l) => l.id);
+    expect(first).toHaveLength(2);
+    const old = first[1] as string;
+    // The re-run read the log at its start; the user relabels an old line while it decodes.
+    let relabelled = false;
+    const out = await finalizeCall(c, {
+      models: spec(),
+      audio,
+      inThread: true,
+      onProgress: () => {
+        if (relabelled) return;
+        relabelled = true;
+        const l = c.view.segment(old);
+        if (!l) throw new Error("no old line");
+        c.record({ type: "seg", id: old, rev: l.rev + 1, spk: "c9", by: "user" });
+      },
+    });
+    expect(out.ok).toBe(true);
+    // The check can fail: the edit landed inside the pass, between its read and its retraction.
+    expect(relabelled).toBe(true);
+    expect(c.view.segment(old)?.text).toBeNull();
+    const now = c.view.lines("final");
+    expect(now).toHaveLength(2);
+    expect(now.some((l) => first.includes(l.id))).toBe(false);
+  });
 });

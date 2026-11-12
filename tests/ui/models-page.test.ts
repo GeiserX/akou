@@ -419,6 +419,37 @@ describe("the Models page", () => {
   );
 
   test(
+    "[SV-M3] a download that gave up says why under its row and offers Try again",
+    async () => {
+      // Positive control: a missing model with no failure reads as before.
+      await page.click("#models-open");
+      await page.waitForSelector(`${QWEN}[data-state="missing"] [data-action="download"]`);
+      expect(await page.$(`${QWEN} [data-stopped]`)).toBeNull();
+      expect(await page.textContent(`${QWEN} [data-action="download"]`)).toBe("Download");
+      await page.route("**/api/v1/models", async (r) => {
+        const res = await r.fetch();
+        const body = (await res.json()) as { models: { id: string; error?: string }[] };
+        for (const m of body.models)
+          if (m.id === QWEN_ASR) m.error = "download of http://127.0.0.1/q.gguf failed: HTTP 500";
+        await r.fulfill({ response: res, json: body });
+      });
+      try {
+        await page.click("#models-open");
+        await page.waitForSelector(`${QWEN} [data-stopped]`);
+        expect(await page.textContent(`${QWEN} [data-stopped]`)).toBe(
+          "The download stopped: the network failed. Files already verified are kept.",
+        );
+        expect(await page.textContent(`${QWEN} [data-action="download"]`)).toBe("Try again");
+      } finally {
+        await page.unroute("**/api/v1/models");
+      }
+      await page.click("#models-open");
+      await page.waitForSelector(`${QWEN}:not(:has([data-stopped])) [data-action="download"]`);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "the default draws no Remove and its size says why; Remove asks once more, on that choice's model only",
     async () => {
       await page.hover(AFTER);

@@ -22,6 +22,7 @@ import { BUNDLED_CLI, installCli, nodeOps } from "./install-cli.ts";
 import { loginProgram, setLoginItem } from "./login-item.ts";
 import { electrobunUi } from "./native.ts";
 import { appForShell, Shell } from "./shell.ts";
+import { reportStartFailure } from "./start-failure.ts";
 import { fileState } from "./state.ts";
 
 installTrust();
@@ -86,6 +87,11 @@ try {
     ui.quit();
   } else {
     console.error(`akou: cannot start: ${(err as Error).message}`);
+    // Nobody reads this process's stderr: the reason goes to app.log and a notification.
+    reportStartFailure(err, {
+      configDir: () => loadConfig(process.env).paths.configDir,
+      notify: (n) => ui.showNotification(n),
+    });
     ui.quit();
   }
 }

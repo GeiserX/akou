@@ -107,7 +107,7 @@ flowchart LR
 ```
 
 - The app runs on Macs with Apple silicon and macOS 14.4 or later. The `akou` command line also runs on Linux and Windows, where it manages models and settings and drives a remote akou, but cannot record.
-- The speech models are one download of about 3.0 GB into Application Support, each file checked against a pinned SHA-256.
+- The speech models are one download of about 3.0 to 3.7 GB, by what the Mac runs, into Application Support, each file checked against a pinned SHA-256.
 - The final pass runs in its own worker and frees its memory when it ends; a long call does not leave the app large.
 - The server image is `drumsergio/akou`, on linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants. There is no `latest` tag.
 - Every action the window has also exists on the local API, so an agent can do anything you can. See [How it works](how-it-works.md).
