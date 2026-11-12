@@ -66,19 +66,17 @@ function zeros(dir: string, name: string, bytes: number): string {
   return path;
 }
 
-/** Peak memory in bytes: `maxRSS` is bytes on some systems and KiB on others. */
-const asBytes = (maxRSS: number) => (maxRSS > 4 * MiB ? maxRSS : maxRSS * 1024);
-
-/** Writes the child's own peak memory to a file when it exits. */
+/** Writes the child's own peak memory, in bytes, to a file when it exits. */
 const PEAK_PRELOAD = join(import.meta.dir, "fixtures", "peak-rss.ts");
 /** Below this, a bun process's peak is not a real measurement. */
 const MIN_PEAK = 8 * MiB;
 let peaks = 0;
 
 /**
- * The child's peak memory, in bytes, as the child reports it on exit. The parent's
- * `Subprocess.resourceUsage()` is not used: in the full suite on Linux it gave the same peak for a
- * 1 KiB and a 256 MiB FormData upload, which measured 17 MB and 551 MB on their own.
+ * The child's peak memory, in bytes, as the child reports it on exit. Neither the parent's
+ * `Subprocess.resourceUsage()` nor the child's own `maxRSS` will do on Linux: both count the test
+ * runner's resident size at the spawn, so in the full suite a 1 KiB and a 256 MiB upload read the
+ * same peak (fixtures/peak-rss.ts).
  */
 async function peak(argv: string[], env: Record<string, string>, dir: string): Promise<number> {
   const out = join(dir, `peak-${++peaks}.txt`);
@@ -89,7 +87,7 @@ async function peak(argv: string[], env: Record<string, string>, dir: string): P
     stderr: "ignore",
   });
   await proc.exited;
-  const bytes = asBytes(Number(readFileSync(out, "utf8")));
+  const bytes = Number(readFileSync(out, "utf8"));
   expect(bytes).toBeGreaterThan(MIN_PEAK);
   return bytes;
 }
@@ -125,7 +123,8 @@ describe("[UPL-1] An upload held in memory whole", () => {
       // The whole file went out, with the length the body declared.
       expect(uploads[1]?.received).toBeGreaterThan(BIG);
       expect(Number(uploads[1]?.length)).toBe(uploads[1]?.received as number);
-      expect(big - small).toBeLessThan(MAX_GROWTH);
+      // Compared as peaks, so a failure prints both.
+      expect(big).toBeLessThan(small + MAX_GROWTH);
     });
   }
 
@@ -142,7 +141,7 @@ describe("[UPL-1] An upload held in memory whole", () => {
     const small = await peak(send(zeros(t.dir, "small.wav", 1024)), e, t.dir);
     const big = await peak(send(zeros(t.dir, "big.wav", BIG)), e, t.dir);
     expect(seen.filter((s) => s.path === "/v1/jobs")).toHaveLength(2);
-    expect(big - small).toBeGreaterThan(MAX_GROWTH);
+    expect(big).toBeGreaterThan(small + MAX_GROWTH);
   });
 });
 
