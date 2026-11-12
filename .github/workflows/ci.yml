@@ -48,6 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # The pull request's merge commit and its first parent, the base branch.
           fetch-depth: 2
       - id: diff
@@ -55,9 +56,7 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           if [ "$EVENT" != pull_request ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "diarize=true" >> "$GITHUB_OUTPUT"
-            echo "gpu=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' code=true diarize=true gpu=true >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git diff --name-only HEAD^1 HEAD > changed.txt
@@ -88,6 +87,8 @@ jobs:
     timeout-minutes: ${{ inputs.repeat > 1 && 180 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -173,6 +174,8 @@ jobs:
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -220,7 +223,7 @@ jobs:
             echo
             echo "Every parity screen, dark and light: $URL"
             echo
-            ls ui-shots | sed 's/^/- /'
+            for shot in ui-shots/*.png; do echo "- ${shot#ui-shots/}"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
@@ -245,6 +248,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Rust 1.97.1
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
@@ -964,6 +969,8 @@ jobs:
       TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Rust 1.97.1
         run: |
           rustup toolchain install 1.97.1 --profile minimal
@@ -1042,7 +1049,10 @@ jobs:
           command -v setfacl >/dev/null || sudo apt-get install -y -qq acl
           mkfifo kb.fifo mouse.fifo
           exec 4<>kb.fifo 5<>mouse.fifo
+          # This user's shell opens the fifos and the output files; only the device writer is root.
+          # shellcheck disable=SC2024
           sudo python3 uinput.py keyboard <kb.fifo >kb.out &
+          # shellcheck disable=SC2024
           sudo python3 uinput.py mouse <mouse.fifo >mouse.out &
           node() {
             for d in /sys/class/input/event*; do
@@ -1081,6 +1091,8 @@ jobs:
             cat "$1.err"
           }
           check() { if ! eval "$1"; then echo "FAILED: $2"; exit 1; fi; }
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check '! test -r "$kb"' "the virtual keyboard is readable before the ACL; the control proves nothing"
           hold control RightControl 4 97
           check '! grep -q "\"type\":\"session.started\"" control.err' "a session started with the keyboard unreadable"
@@ -1091,6 +1103,8 @@ jobs:
           hold keys RightControl 4 97
           check 'grep -q "\"type\":\"session.started\"" keys.err' "a held Right Control started no session"
           check 'grep -q "\"type\":\"session.ended\",\"id\":\"[^\"]*\",\"reason\":\"release\"" keys.err' "the release did not end the session"
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check '[ "$(head -c 4 keys.akp)" = AKP1 ]' "no audio packets on stdout"
           check 'grep -q "\"type\":\"key\",\"name\":\"A\"" keys.err' "the recorder did not report A"
           hold mouse Mouse4 5 275
@@ -1177,9 +1191,13 @@ jobs:
           check '[ ! -s music.out ] && [ ! -s podcast.out ]' "a player was touched with pause_media never sent"
           run paused '{"type":"pause_media","on":true}' '{"type":"session.start"}' '{"type":"session.stop"}' '{"type":"stop"}'
           check 'grep -q "after {\"type\":\"session.start\"}: Pause $" paused.log' "the playing player was not paused while listening"
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check '[ "$(tr "\n" " " < music.out)" = "Pause Play " ]' "the playing player was not given back once at the end"
           check '[ ! -s podcast.out ]' "the paused player was touched"
           run stopped '{"type":"pause_media","on":true}' '{"type":"session.start"}' '{"type":"stop"}'
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check '[ "$(tr "\n" " " < music.out)" = "Pause Play " ]' "stop during a session did not give the player back"
           kill "$music" "$podcast" 2>/dev/null || true
           {
@@ -1296,6 +1314,8 @@ jobs:
           pid=$!
           sleep 1.5
           check 'grep -q "^bind .* dictate CTRL+SHIFT+space$" portal.out' "the default chord was not bound through the portal"
+          # Read by a check() below, inside the string it evals.
+          # shellcheck disable=SC2034
           first=$(grep '^bind ' portal.out | head -1 | cut -d' ' -f2)
           echo 'activate other' >&6
           sleep 1
@@ -1321,8 +1341,12 @@ jobs:
           check 'grep -q "^register io.github.geiserx.akou$" portal.out' "the helper did not register its app id"
           check 'grep -q "\"type\":\"session.started\"" helper.err' "Activated started no session"
           check 'grep -q "\"type\":\"session.ended\",\"id\":\"[^\"]*\",\"reason\":\"release\"" helper.err' "Deactivated did not end the session"
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check '[ "$(grep -c "\"type\":\"session.started\"" helper.err)" = 1 ]' "more than one session started"
           check 'grep -q "^bind .* dictate CTRL+ALT+d$" portal.out' "the rebind did not bind the new chord"
+          # check() evals this string, so it is single-quoted on purpose.
+          # shellcheck disable=SC2016
           check 'grep -q "^close $first$" portal.out' "the first portal session was not closed on the rebind"
           check 'grep -q "\"type\":\"rebound\",\"hotkey\":\"Control+Alt+D\"" helper.err' "the rebind to a chord was not answered rebound"
           check 'grep -q "\"type\":\"rebind.failed\",\"hotkey\":\"RightControl\"" helper.err' "a lone modifier with no readable keyboard was not refused"
@@ -1381,6 +1405,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Rust 1.97.1
         run: |
           rustup toolchain install 1.97.1 --profile minimal
@@ -1480,6 +1506,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Under the runner's temp directory: actions/cache refuses a path with `..`, so a models
       # folder beside the workspace never saved. The runner context is not readable in a job's env.
       - name: the models and data folders
@@ -1515,16 +1543,18 @@ jobs:
           code=0
           docker run --rm -v "$scratch:/data" -v "$MODELS:/models" akou:ci > refused.log 2>&1 || code=$?
           cat refused.log
-          [ "$code" = 78 ] && grep -q 'server.behind_proxy' refused.log \
-            || { echo "want: exited 78 naming server.behind_proxy; got $code"; exit 1; }
+          if ! { [ "$code" = 78 ] && grep -q 'server.behind_proxy' refused.log; }; then
+            echo "want: exited 78 naming server.behind_proxy; got $code"; exit 1
+          fi
           # A folder Docker makes for a bind mount belongs to root; the image runs as uid 1000.
           locked=$(mktemp -d)
           sudo chown root:root "$locked"
           code=0
           docker run --rm -e AKOU_BEHIND_PROXY=true -v "$scratch:/data" -v "$locked:/models" akou:ci > locked.log 2>&1 || code=$?
           cat locked.log
-          [ "$code" = 77 ] && grep -q '/models is not writable by uid 1000' locked.log \
-            || { echo "want: exited 77 naming /models and uid 1000; got $code"; exit 1; }
+          if ! { [ "$code" = 77 ] && grep -q '/models is not writable by uid 1000' locked.log; }; then
+            echo "want: exited 77 naming /models and uid 1000; got $code"; exit 1
+          fi
       - name: start the server with only AKOU_BEHIND_PROXY and an empty data folder (SV-P5, SV-P11)
         run: |
           mkdir -p "$DATA"
@@ -1579,7 +1609,7 @@ jobs:
           # on a Linux box with no sound server. It prints the transcript, or the step fails.
           docker run --rm --network host -e AKOU_URL=http://127.0.0.1:8476 -e AKOU_API_KEY \
             -v "$work:/work" akou:ci transcribe /work/note.ogg | tee "$work/transcribe.txt"
-          tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
+          tr '[:upper:]' '[:lower:]' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
       # SV-T4: Home Assistant's own Wyoming client, the `wyoming` package it pins, against the image.
       # The container runs with AKOU_WYOMING=true, so a false capability is a bug, not a skip. The
       # clip is 24 kHz; Home Assistant always sends 16000 Hz, 16-bit, mono, so the step resamples it
@@ -1596,7 +1626,7 @@ jobs:
           "$RUNNER_TEMP/wy/bin/pip" install --require-hashes -r scripts/ci/wyoming/requirements.txt
           "$RUNNER_TEMP/wy/bin/python" -I scripts/ci/wyoming/probe.py --host 127.0.0.1 --port 10300 --language en --wav "$wy/en16.wav" | tee wyoming.txt
           head -n1 wyoming.txt | jq -e '.asr[0].name == "akou" and ([.asr[0].models[].name] | index("fast") != null)'
-          tail -n1 wyoming.txt | tr 'A-Z' 'a-z' | tr -cd 'a-z \n' | grep -q "ask not what your country"
+          tail -n1 wyoming.txt | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z \n' | grep -q "ask not what your country"
       - name: the server's log
         if: always()
         run: docker logs akou 2>&1 | tail -n 200 || true
@@ -1638,7 +1668,7 @@ jobs:
           test "$(head -n1 asr.srt | tr -d '\r')" = "1"
           sed -n 2p asr.srt | grep -q -- ' --> '
           # Cues hold 42 characters at most, so the phrase may span two: join the cue text first.
-          tr 'A-Z' 'a-z' < asr.srt | tr -cd 'a-z \n' | tr -s ' \n' ' ' | grep -q "ask not what your country"
+          tr '[:upper:]' '[:lower:]' < asr.srt | tr -cd 'a-z \n' | tr -s ' \n' ' ' | grep -q "ask not what your country"
 
   # SI-8 (docs/research/service-interface.md): `akou serve` natively on macOS arm64, from a source
   # checkout with no Docker, since Docker on a Mac has no Metal. A Mac mini serving this way is the
@@ -1653,6 +1683,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: macOS arm64
         run: |
           test "$(uname -m)" = arm64 || { echo "this runner is $(uname -m), not arm64"; exit 1; }
@@ -1736,7 +1768,7 @@ jobs:
           export AKOU_API_KEY AKOU_WEBHOOK_SECRET
           AKOU_URL=http://127.0.0.1:8476 CALLBACK_HOST=127.0.0.1 bun scripts/server-roundtrip.ts "$work/note.ogg"
           AKOU_URL=http://127.0.0.1:8476 bun src/main/cli/cli.ts transcribe "$work/note.ogg" | tee "$work/transcribe.txt"
-          tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
+          tr '[:upper:]' '[:lower:]' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
       - name: the server's log
         if: always()
         run: tail -n 200 "$RUNNER_TEMP/serve.log" || true
@@ -1833,6 +1865,8 @@ jobs:
       VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: build the ${{ matrix.variant }} image
         run: docker build --build-arg ACCELERATOR="$VARIANT" -t "akou:$VARIANT" .
       - name: its llama-server runs
@@ -1890,6 +1924,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -1907,6 +1943,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -1914,13 +1952,48 @@ jobs:
         with:
           pattern: junit-*
           path: junit
-      - run: bun scripts/trap-coverage.ts $(find junit -name '.junit-*.xml' | sort)
+      - run: |
+          mapfile -t files < <(find junit -name '.junit-*.xml' | sort)
+          bun scripts/trap-coverage.ts "${files[@]}"
+
+  # The workflows themselves (docs/CI-CD.md CI-16), on every run: actionlint with ShellCheck over
+  # every run block, then zizmor's security audits at medium or above, with every action pinned by
+  # its commit (.github/zizmor.yml). The three tools are release binaries checked against their
+  # SHA-256 before they run.
+  workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint 1.7.12, ShellCheck 0.11.0 and zizmor 1.32.0
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/workflow-lint"
+          mkdir -p "$bin"
+          fetch() {
+            curl -fsSL --retry 3 -o "$bin/$1" "$2"
+            echo "$3  $bin/$1" | sha256sum -c -
+          }
+          fetch actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          fetch shellcheck.tar.gz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.gz b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+          fetch zizmor.tar.gz https://github.com/zizmorcore/zizmor/releases/download/v1.32.0/zizmor-x86_64-unknown-linux-gnu.tar.gz bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+          tar -xzf "$bin/actionlint.tar.gz" -C "$bin" actionlint
+          tar -xzf "$bin/shellcheck.tar.gz" -C "$bin" --strip-components=1 shellcheck-v0.11.0/shellcheck
+          tar -xzf "$bin/zizmor.tar.gz" -C "$bin" zizmor
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: actionlint, with ShellCheck over every run block
+        run: actionlint -color -shellcheck "$RUNNER_TEMP/workflow-lint/shellcheck"
+      # Offline: the audits read only this tree, so the result never moves with GitHub's API.
+      - name: zizmor, every action pinned by its commit
+        run: zizmor --offline --min-severity medium --config .github/zizmor.yml .
 
   # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, server-macos, diarize, gpu-image, executor, traps]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, server-macos, diarize, gpu-image, executor, traps, workflows]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

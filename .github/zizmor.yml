@@ -1,0 +1,13 @@
+# zizmor's settings for the `workflows` job of ci.yml (docs/CI-CD.md CI-16). Every action is pinned
+# by its full commit SHA, the official ones included: an action referenced by a tag or a branch
+# fails the job.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin
+  # How soon Dependabot proposes a new release is the update policy of CI-13, which
+  # tests/dependabot.test.ts holds, not a property of the workflows this job lints.
+  dependabot-cooldown:
+    ignore:
+      - dependabot.yml

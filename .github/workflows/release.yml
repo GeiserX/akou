@@ -99,6 +99,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
+          no-cache: true
       - run: bun install --frozen-lockfile
       - name: every version string equals the tag
         env:
@@ -210,24 +211,17 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
+          no-cache: true
       - run: bun install --frozen-lockfile
-      - name: Hutch and the ElectroBun runtime, cached by their pins
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.hutch
-          key: hutch-macos-arm64-electrobun-2.0.1-hutch-0.24.3
+      # No cache is restored in a job whose build is published (docs/CI-CD.md CI-16): a cache can be
+      # written by any run on main, so Hutch, the runtime and the recognizer are downloaded and
+      # checked against their pins here every time.
       - name: build the app (helper, pages, Workers, ElectroBun through Hutch)
         run: bun scripts/build-app.ts ${HELPER_FLAG:+"$HELPER_FLAG"}
       - name: check the built app without opening it
         run: bun scripts/smoke-app.ts ${HELPER_FLAG:+"$HELPER_FLAG"}
       - name: the update feed is for this app and this version (docs/CI-CD.md CI-23)
         run: bun scripts/check-feed.ts --dir dist/release
-      - name: the recognizer, cached by its pins
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: eval-models
-          key: recognizer-${{ hashFiles('src/main/asr/models.ts') }}
-          enableCrossOsArchive: true
       # Prereleases never wait on a gate (ROADMAP M0), so here the result is recorded, not enforced.
       # continue-on-error absorbs a failure but not a stall: a slow model download must not push
       # this release job into its own limit.
@@ -354,12 +348,13 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
           cargo --version
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # This job's builds are never published (see above), so its caches cannot reach a user.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0 # zizmor: ignore[cache-poisoning]
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
       - name: Hutch and the ElectroBun runtime, cached by their pins
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 # zizmor: ignore[cache-poisoning]
         with:
           path: ~/.hutch
           key: hutch-${{ runner.os }}-x64-electrobun-2.0.1-hutch-0.24.3
@@ -370,7 +365,7 @@ jobs:
       # The recognizer's files are checked against their pins in src/main/asr/models.ts on every
       # use, so a stale cache costs a download, never a wrong model. The nightly shares this cache.
       - name: the recognizer, cached by its pins
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 # zizmor: ignore[cache-poisoning]
         with:
           path: eval-models
           key: recognizer-${{ hashFiles('src/main/asr/models.ts') }}
@@ -440,6 +435,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
+          no-cache: true
       - run: bun install --frozen-lockfile
       - name: build the CLI (bun build --compile)
         run: bun scripts/build-cli.ts
@@ -589,6 +585,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
+          no-cache: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
@@ -678,6 +675,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
+          no-cache: true
       - name: push the cask bump to the tap
         env:
           GH_TOKEN: ${{ github.token }}
