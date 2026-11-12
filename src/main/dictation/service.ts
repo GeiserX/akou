@@ -427,6 +427,21 @@ export class DictationService {
     if (r.truncated > 0)
       o.onLog?.("warn", `dictation log: a torn last line was cut (${r.truncated} bytes)`);
     if (r.invalidLines > 0) o.onLog?.("warn", `dictation log: ${r.invalidLines} bad lines skipped`);
+    // A dictation left mid-decode or mid-insert by a quit or a crash never settles by itself: it
+    // fails now, before any session runs, so retention and the audio sweep can let it go (T4.40).
+    // A write that throws (a full disk) leaves it for the next start; it never stops this one.
+    for (const it of this.log.items()) {
+      if (FINAL.has(it.state)) continue;
+      try {
+        this.log.append({
+          type: "dictation.failed",
+          id: it.id,
+          error: "akou stopped before this dictation finished",
+        });
+      } catch (err) {
+        o.onLog?.("error", `dictation log: ${(err as Error).message}`);
+      }
+    }
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
@@ -449,7 +464,12 @@ export class DictationService {
     let gone: string[] = [];
     try {
       if (days !== undefined) {
-        gone = this.forget(expiredDictations(this.log.items(), this.o.now(), days));
+        // The draft box's dictation still waits for the user: its Retry and a refused insert
+        // need it, so it goes at a sweep after the box answers (T4.42).
+        const held = this.draft.holding();
+        gone = this.forget(
+          expiredDictations(this.log.items(), this.o.now(), days).filter((id) => id !== held),
+        );
         if (gone.length > 0)
           this.o.onLog?.("info", `dictation: ${gone.length} past retention deleted`);
       }
