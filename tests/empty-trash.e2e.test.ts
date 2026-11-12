@@ -86,7 +86,11 @@ afterAll(async () => {
 describe("[TRASH-1] Empty trash deletes trashed calls for good, now, and nothing else", () => {
   test("GET /trash lists the trash, newest first; DELETE /trash empties it at once", async () => {
     for (const id of [GONE_A, GONE_B]) {
-      expect((await rig.api("DELETE", `/calls/${id}`)).status).toBe(200);
+      expect((await rig.api("DELETE", `/calls/${id}`)).body).toEqual({
+        ok: true,
+        call: id,
+        trashed: true,
+      });
     }
     const trash = (await rig.api("GET", "/trash")).body.calls as {
       id: string;

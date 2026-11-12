@@ -24,7 +24,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -38,6 +37,7 @@ import { legacyLive } from "../asr/live-setups.ts";
 import { type CaptureEngine, type Clock, realClock } from "../capture/engine.ts";
 import type { IngestOptions, PartIngest } from "../capture/ingest.ts";
 import type { Packet } from "../capture/protocol.ts";
+import { renameReplacing } from "../vocab/files.ts";
 import { CallController, type CaptureChoice, type StartOk } from "./call.ts";
 import { checkWorkspace, createCallFolderAsync, ulid } from "./folder.ts";
 import {
@@ -685,7 +685,9 @@ export class CallManager {
     }
     mkdirSync(parent, { recursive: true });
     try {
-      renameSync(s.dir, dir);
+      // On Windows a folder does not move while a reader (the start's final catch-up, a GET) has
+      // a file in it open; that lasts a moment, so the rename is retried as a file replace is.
+      await renameReplacing(s.dir, dir);
     } catch (err) {
       return fail(409, "busy", `the call's folder cannot move now: ${(err as Error).message}`, {
         call: id,
@@ -741,7 +743,7 @@ export class CallManager {
     const dir = join(this.o.root, t.workspace, basename(t.dir));
     if (existsSync(dir)) return fail(409, "folder_taken", `${dir} already exists`, { call: id });
     mkdirSync(join(this.o.root, t.workspace), { recursive: true });
-    renameSync(t.dir, dir);
+    await renameReplacing(t.dir, dir);
     rmSync(`${t.dir}.json`, { force: true });
     await this.reindex(dir, t.workspace);
     return { ok: true, dir, workspace: t.workspace };
