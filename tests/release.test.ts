@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import config, {
@@ -623,6 +623,7 @@ function releaseWorkflow(): {
     {
       needs?: string | string[];
       if?: string;
+      environment?: string;
       permissions?: Record<string, string>;
       steps?: {
         name?: string;
@@ -665,6 +666,161 @@ describe("[CI-16] no release checkout leaves the job token for later steps", () 
     const co = wf.jobs.release?.steps?.find((s) => s.uses?.startsWith("actions/checkout@"));
     delete co?.with?.["persist-credentials"];
     expect(keepingToken(wf)).toEqual(["release"]);
+  });
+});
+
+describe("[WFS-1] a release secret is read only inside the release environment", () => {
+  type Workflow = ReturnType<typeof releaseWorkflow>;
+  /** The gate of every secret a job reads: `X` in `X && secrets.NAME`, "" when it has none. */
+  const gatesOf = (job: Workflow["jobs"][string]): string[] =>
+    [...JSON.stringify(job).matchAll(/\$\{\{\s*(?:([^}]*?)\s*&&\s*)?secrets\.(\w+)/g)]
+      .filter((m) => m[2] !== "GITHUB_TOKEN")
+      .map((m) => (m[1] ?? "").trim());
+  /**
+   * Every secret read that can happen outside the `release` environment: the job names no
+   * environment, or names it behind another gate than the read's own. The environment is what
+   * limits a secret to the refs its deployment policy allows; a gate in the workflow file holds
+   * only for the file of the ref that runs.
+   */
+  const outsideRelease = (wf: Workflow): string[] =>
+    Object.entries(wf.jobs).flatMap(([name, job]) =>
+      gatesOf(job)
+        .filter(
+          (gate) =>
+            job.environment !== "release" &&
+            job.environment !== `$${"{{"} ${gate} && 'release' || '' }}`,
+        )
+        .map((gate) => `${name}: ${gate || "always"}`),
+    );
+
+  test("every job that reads a secret runs in the release environment whenever it can read it", () => {
+    const wf = releaseWorkflow();
+    // The check is not empty: these four jobs read the signing, Docker Hub and tap secrets.
+    expect(
+      Object.entries(wf.jobs)
+        .filter(([, job]) => gatesOf(job).length > 0)
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual(["app", "cask", "image", "image-manifest"]);
+    expect(outsideRelease(wf)).toEqual([]);
+    // A pull request's dry run builds unsigned and pushes nothing, so it never needs the
+    // environment, whose policy would refuse a pull request's ref.
+    expect(wf.jobs.app?.environment).toBe(
+      `$${"{{"} github.event_name != 'pull_request' && 'release' || '' }}`,
+    );
+    expect(wf.jobs.image?.environment).toBe(
+      `$${"{{"} github.event_name == 'push' && 'release' || '' }}`,
+    );
+  });
+
+  test("positive control: a job without the environment, or behind a looser gate, is caught", () => {
+    const wf = releaseWorkflow();
+    const cask = wf.jobs.cask;
+    if (cask) delete cask.environment;
+    expect(outsideRelease(wf)).toEqual(["cask: github.event_name == 'push'"]);
+    const app = releaseWorkflow();
+    // The app reads its secrets on a dispatch too; an environment only on a push leaves that out.
+    const job = app.jobs.app;
+    if (job) job.environment = `$${"{{"} github.event_name == 'push' && 'release' || '' }}`;
+    expect(outsideRelease(app).every((r) => r.startsWith("app: "))).toBe(true);
+    expect(outsideRelease(app).length).toBeGreaterThan(0);
+  });
+});
+
+describe("[WFS-2] the workflows keep no token, publish nothing from a cache, and are linted", () => {
+  type Workflow = ReturnType<typeof releaseWorkflow>;
+  const WORKFLOWS = join(ROOT, ".github", "workflows");
+  const workflow = (file: string): Workflow =>
+    Bun.YAML.parse(readFileSync(join(WORKFLOWS, file), "utf8")) as never;
+  const files = (): string[] =>
+    readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"));
+
+  /** Every checkout that leaves the job token in the checkout for the steps after it. */
+  const keepingToken = (file: string, wf: Workflow): string[] =>
+    Object.entries(wf.jobs).flatMap(([name, job]) =>
+      (job.steps ?? [])
+        .filter((s) => s.uses?.startsWith("actions/checkout@"))
+        .filter((s) => String(s.with?.["persist-credentials"]) !== "false")
+        .map(() => `${file}: ${name}`),
+    );
+
+  /** The release's own job, every job it needs, and every job that needs it: what is published. */
+  const publishing = (wf: Workflow): Set<string> => {
+    const out = new Set(["release"]);
+    const visit = (name: string) => {
+      for (const n of [wf.jobs[name]?.needs ?? []].flat()) {
+        if (out.has(n)) continue;
+        out.add(n);
+        visit(n);
+      }
+    };
+    visit("release");
+    for (const [name, job] of Object.entries(wf.jobs))
+      if ([job.needs ?? []].flat().includes("release")) out.add(name);
+    return out;
+  };
+
+  /** Every cache a publishing job restores: actions/cache, or setup-bun's own unless no-cache. */
+  const cachesInPublishing = (wf: Workflow): string[] =>
+    [...publishing(wf)].flatMap((name) =>
+      (wf.jobs[name]?.steps ?? [])
+        .filter(
+          (s) =>
+            /^actions\/cache(\/restore)?@/.test(s.uses ?? "") ||
+            (s.uses?.startsWith("oven-sh/setup-bun@") && String(s.with?.["no-cache"]) !== "true"),
+        )
+        .map((s) => `${name}: ${s.name ?? s.uses}`),
+    );
+
+  test("no checkout in any workflow keeps the token: none of them pushes through it", () => {
+    expect(files().length).toBeGreaterThanOrEqual(7);
+    expect(files().flatMap((f) => keepingToken(f, workflow(f)))).toEqual([]);
+    // Positive control: a checkout that keeps it is caught.
+    const ci = workflow("ci.yml");
+    const co = ci.jobs.check?.steps?.find((s) => s.uses?.startsWith("actions/checkout@"));
+    delete co?.with?.["persist-credentials"];
+    expect(keepingToken("ci.yml", ci)).toEqual(["ci.yml: check"]);
+  });
+
+  test("a job whose build is published restores no cache; only the unpublished desktop build may", () => {
+    const wf = releaseWorkflow();
+    expect([...publishing(wf)].sort()).toEqual(
+      ["app", "cask", "cli", "image", "image-manifest", "release", "version"].sort(),
+    );
+    expect(cachesInPublishing(wf)).toEqual([]);
+    // Positive control: setup-bun's own cache, and an actions/cache step, in the release job.
+    const steps = wf.jobs.release?.steps ?? [];
+    const bun = steps.find((s) => s.uses?.startsWith("oven-sh/setup-bun@"));
+    delete bun?.with?.["no-cache"];
+    steps.push({ name: "a cache", uses: "actions/cache@0000000000000000000000000000000000000000" });
+    expect(cachesInPublishing(wf)).toEqual([
+      "release: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
+      "release: a cache",
+    ]);
+  });
+
+  test("ci.yml lints every workflow with pinned actionlint, ShellCheck and zizmor, under ci-ok", () => {
+    const ci = workflow("ci.yml");
+    const job = ci.jobs.workflows;
+    const run = (job?.steps ?? []).map((s) => s.run ?? "").join("\n");
+    // Each tool is a release binary checked against its SHA-256 before it runs.
+    for (const tool of [
+      "actionlint_1.7.12_",
+      "shellcheck-v0.11.0",
+      "zizmor/releases/download/v1.32.0",
+    ])
+      expect(run).toMatch(
+        new RegExp(`${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\S* [0-9a-f]{64}\\n`),
+      );
+    expect(run).toContain("sha256sum -c -");
+    expect(run).toContain('actionlint -color -shellcheck "$RUNNER_TEMP/workflow-lint/shellcheck"');
+    expect(run).toContain("zizmor --offline --min-severity medium --config .github/zizmor.yml .");
+    expect([ci.jobs["ci-ok"]?.needs].flat()).toContain("workflows");
+    // An action referenced by a tag fails: every action, the official ones too, is hash-pinned.
+    const config = Bun.YAML.parse(readFileSync(join(ROOT, ".github", "zizmor.yml"), "utf8")) as {
+      rules: { "unpinned-uses": { config: { policies: Record<string, string> } } };
+    };
+    expect(config.rules["unpinned-uses"].config.policies).toEqual({ "*": "hash-pin" });
   });
 });
 

@@ -175,6 +175,8 @@ jobs:
         run: |
           if [ -n "$SHIFT" ]; then export BUN_OPTIONS="--preload=$PWD/scripts/ci/shift-clock.ts"; fi
           if [ -n "$ZONE" ]; then export TZ="$ZONE"; fi
+          # The ${...} is JavaScript's, for bun to read, not the shell's.
+          # shellcheck disable=SC2016
           bun -e 'console.log(`the clock reads ${new Date().toString()}`)'
           bun test --reporter=junit --reporter-outfile=.junit-check.xml
       # The same suite as check's Linux leg, so the zone runs take check's floor. The year-ahead run
