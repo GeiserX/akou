@@ -40,7 +40,7 @@ afterAll(async () => {
   await rig?.close();
 });
 
-describe("[A follower re-reads the whole log per event] App.events", () => {
+describe("[T1.47] A follower re-reads the whole log per event: App.events", () => {
   test("a poll after the head reads the appended bytes, never the log already read", async () => {
     const written: LogEvent[] = [];
     for (let i = 0; i < 300; i++) written.push(await seg(i, `line ${i} ${"x".repeat(80)}`));
