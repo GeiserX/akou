@@ -16,7 +16,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
-import { type CallState, fold } from "../../core/log/fold.ts";
+import { type CallState, type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE, LockError, LogWriter } from "../../core/log/writer.ts";
 
@@ -128,10 +128,12 @@ export function summarize(
   dir: string,
   workspace: string,
   events: readonly LogEvent[],
+  /** `fold(events)`, when the caller already has it. */
+  folded?: CallView,
 ): CallSummary | null {
   const first = events[0];
   if (first?.type !== "call.created") return null;
-  const view = fold(events);
+  const view = folded ?? fold(events);
   let endedAt: number | null = null;
   if (!view.live) {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -190,11 +192,18 @@ export interface RecoveryOptions {
   writerOptions?: Parameters<typeof LogWriter.open>[1];
 }
 
-/** Closes what a crash left open in one call folder. Skips a folder another writer holds. */
-export async function recoverCall(dir: string, o: RecoveryOptions): Promise<RecoveryAction | null> {
-  const { events } = await readLog(join(dir, EVENTS_FILE));
+/**
+ * Closes what a crash left open in one call folder. Skips a folder another writer holds. `read` is
+ * the folder's log and its fold, when the caller has already read them.
+ */
+export async function recoverCall(
+  dir: string,
+  o: RecoveryOptions,
+  read?: { events: readonly LogEvent[]; view: CallView },
+): Promise<RecoveryAction | null> {
+  const events = read?.events ?? (await readLog(join(dir, EVENTS_FILE))).events;
   if (events.length === 0) return null;
-  const view = fold(events);
+  const view = read?.view ?? fold(events);
   const drafts: EventDraft[] = [];
   for (const p of view.openParts()) {
     const fromFile = opusDurationSeconds(join(dir, p.file));

@@ -154,7 +154,7 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: join(home, "Recordings", "akou"),
-    doc: "Folder that holds a subfolder per workspace, each holding one folder per call.",
+    doc: "Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them.",
   },
   "user.name": {
     type: "string",
