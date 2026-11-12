@@ -778,7 +778,8 @@ describe("[ECHO-1] Mic hears the call", () => {
 
   for (const [name, micWords] of [
     ["the mic line closes first", remote.slice(0, 4)],
-    ["the call line closes first", remote],
+    // The user says two words of their own after the echo: 8 of 10 words are the call's.
+    ["the call line closes first", [...remote, "ok", "great"]],
   ] as const) {
     test(`${name}: the mic line gets an echo revision, stays in the log and leaves the view`, async () => {
       const { s, view } = await play([...micWords], remote);
