@@ -123,6 +123,15 @@ export interface SettingSpec {
    * where their audio goes (`dictation.remote.url`).
    */
   windowWritable?: boolean;
+  /**
+   * False for a setting that decides where calls or transcripts are written (`recordings.root`,
+   * `export.dir`): over the API only the user on this computer sets it, with the app's own token
+   * on the desktop app's loopback listener (`akou config set`) or in the window (the desktop
+   * window, or its page in a browser on the app's loopback page server). An `ak_` key, the network
+   * listener and server mode are refused, so a key cannot send every later call to a folder or
+   * share it chose.
+   */
+  keyWritable?: boolean;
   /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
   secret?: boolean;
   /** A rule the type cannot say: the error, or null when the value is good. */
@@ -154,7 +163,8 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: join(home, "Recordings", "akou"),
-    doc: "Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them.",
+    keyWritable: false,
+    doc: "Folder that holds a subfolder per workspace, each holding one folder per call. Applies at the next start; calls already recorded stay in the old folder until you move them. Set in the window, the file or with `akou config set` on this computer; an API key cannot set it, since it decides where your calls are recorded.",
   },
   "user.name": {
     type: "string",
@@ -701,7 +711,8 @@ export const SETTINGS = {
   "export.dir": {
     type: "string",
     default: "",
-    doc: "Folder finished calls are exported into, one subfolder per workspace: Markdown with frontmatter, the event log and the audio. Empty: no export until you set it.",
+    keyWritable: false,
+    doc: "Folder finished calls are exported into, one subfolder per workspace: Markdown with frontmatter, the event log and the audio. Empty: no export until you set it. Set in the window, the file or with `akou config set` on this computer; an API key cannot set it, since it decides where your transcripts are written.",
   },
   "export.audio": {
     type: "string",
@@ -1472,13 +1483,15 @@ export function loadConfig(
 /**
  * Validates a `PATCH /config` body: `{key: value}` to set, `{key: null}` to go back to the default.
  * Returns the new file contents, or every error at once. Settings that name a program are refused;
- * a `windowWritable` one is taken only `inProcess`, from the desktop window.
+ * a `windowWritable` one is taken only `inProcess`, from the desktop window; a `keyWritable: false`
+ * one only in process or from the `local` user (the app's own token on the desktop app's loopback,
+ * or the window's page in a browser on the app's loopback page server).
  */
 export function patchConfig(
   current: Partial<Record<SettingKey, SettingValue>>,
   patch: Record<string, unknown>,
   paths: Paths,
-  o: { inProcess?: boolean } = {},
+  o: { inProcess?: boolean; local?: boolean } = {},
 ): { ok: true; file: Partial<Record<SettingKey, SettingValue>> } | { ok: false; errors: string[] } {
   const next = { ...current };
   const errors: string[] = [];
@@ -1492,6 +1505,12 @@ export function patchConfig(
         continue;
       }
       errors.push(`${key}: set it in config.json; it is not writable over the API`);
+      continue;
+    }
+    if (spec?.keyWritable === false && !(o.inProcess || o.local)) {
+      errors.push(
+        `${key}: set it in the akou window, config.json or with \`akou config set\` on this computer; an API key cannot set it`,
+      );
       continue;
     }
     if (value === null) {

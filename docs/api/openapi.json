@@ -6573,7 +6573,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Export an ended call as Markdown with frontmatter into the export folder, or into the absolute folder `to` names. Answers the file written, and whether it went beside a copy the user edited.",
+        "description": "Export an ended call as Markdown with frontmatter into the export folder, or into the absolute folder `to` names; `to` is taken only from akou on this computer (the app's token or the window), never from an API key. Answers the file written, and whether it went beside a copy the user edited.",
         "parameters": [
           {
             "name": "id",

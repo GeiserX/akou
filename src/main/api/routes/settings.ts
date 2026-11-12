@@ -20,6 +20,7 @@ import {
 } from "../../config/schema.ts";
 import { STORED_SECRETS } from "../../config/secrets.ts";
 import { fillPreset, type Preset, usesSpeaker } from "../../notes/presets.ts";
+import { isLocalUser } from "../caller.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -110,7 +111,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       );
       // Made from the file as the save before it left it: saves run one at a time.
       const change = (current: typeof cfg.file) => {
-        const res = patchConfig(current, body, cfg.paths, { inProcess });
+        const res = patchConfig(current, body, cfg.paths, { inProcess, local: isLocalUser(c) });
         if (!res.ok)
           throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
         return res.file;

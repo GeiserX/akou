@@ -2,7 +2,7 @@
  * The hand-off and the import (docs/DESIGN.md sections 6.1, 6.2 and 8.2).
  *
  * - `POST /calls/{id}/export {to?}`: exports a finished call into `export.dir`, or into the
- *   absolute folder `to` names. `last` is accepted. Answers the file, whether anything was written,
+ *   absolute folder `to` names (akou on this computer only, never an API key). `last` is accepted. Answers the file, whether anything was written,
  *   and whether it went beside a file the user edited.
  * - `POST /calls/{id}/hooks {stage?}`: runs the hooks again (`akou hooks run`), waiting for them.
  *   Without `stage`, every stage the call has reached. The export and the webhook are not re-run.
@@ -11,6 +11,7 @@
 
 import { isAbsolute } from "node:path";
 import { HOOK_STAGES, type HookStage } from "../../config/schema.ts";
+import { isLocalUser } from "../caller.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -22,7 +23,7 @@ export function handoffRoutes(r: Router<ApiApp>): void {
     "/calls/:id/export",
     {
       id: "calls.export",
-      doc: "Export an ended call as Markdown with frontmatter into the export folder, or into the absolute folder `to` names. Answers the file written, and whether it went beside a copy the user edited.",
+      doc: "Export an ended call as Markdown with frontmatter into the export folder, or into the absolute folder `to` names; `to` is taken only from akou on this computer (the app's token or the window), never from an API key. Answers the file written, and whether it went beside a copy the user edited.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -36,6 +37,14 @@ export function handoffRoutes(r: Router<ApiApp>): void {
       const b = await c.body<{ to?: string }>();
       if (b.to !== undefined && !isAbsolute(b.to)) {
         throw new HttpError(400, "bad_field", "`to` must be an absolute folder");
+      }
+      // Where a transcript is written is the user's choice, as `export.dir` is: never a key's.
+      if (b.to !== undefined && !isLocalUser(c)) {
+        throw new HttpError(
+          400,
+          "bad_field",
+          "`to` is taken only from akou on this computer; an API key exports into export.dir",
+        );
       }
       const id = callId(c, { allowLast: true });
       // The export waits behind the call's earlier hand-off work, hooks included.
