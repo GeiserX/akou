@@ -202,7 +202,11 @@ describe("[UPL-1] The streamed body through the server's multipart reader", () =
       expect(out.fields.preset).toEqual(["fast"]);
       expect(out.fields["keywords[]"]).toEqual(["Ñandú", "akou"]);
       expect(out.files).toHaveLength(1);
-      expect(out.files[0]).toMatchObject({ name: "ñote %221%22.wav", size: bytes.length, sha256: sha });
+      expect(out.files[0]).toMatchObject({
+        name: "ñote %221%22.wav",
+        size: bytes.length,
+        sha256: sha,
+      });
       expect(out.files[0]?.type).toStartWith("audio/");
     });
   }
