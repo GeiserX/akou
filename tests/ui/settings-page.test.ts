@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { RECOGNIZER } from "../../src/main/asr/models.ts";
@@ -170,12 +170,39 @@ describe("the Settings page", () => {
   );
 
   test(
+    "[CF-2] an issue no row shows is a banner on the page, and a save after the file is fixed clears it",
+    async () => {
+      let home = "";
+      await withRig(
+        { settings: { "retired.key": 1 }, seed: (dir) => (home = dir) },
+        async (rig) => {
+          const page = await rig.open();
+          await openSettings(page);
+          await page.waitForSelector("#settings-file-issues");
+          expect(await page.textContent("#settings-file-issues")).toContain(
+            "retired.key: unknown setting",
+          );
+          // Fixed by hand: the next save reads the file as it is now, and its answer has no issue.
+          const file = join(home, ".config", "akou", "config.json");
+          const { "retired.key": _gone, ...kept } = JSON.parse(readFileSync(file, "utf8"));
+          writeFileSync(file, JSON.stringify(kept));
+          await page.click("#set-app-openAtLogin");
+          await page.waitForSelector("#settings-file-issues", { state: "detached" });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "each change saves that key alone; a refusal shows under its row; typing then leaving saves",
     async () => {
       await withRig({}, async (rig) => {
         const page = await rig.open();
         const sent = patches(page);
         await openSettings(page);
+        // [CF-2] positive control: a file with no issue a row cannot show draws no banner.
+        expect(await page.$("#settings-file-issues")).toBeNull();
         // A switch.
         await page.click("#set-app-openAtLogin");
         await until(() => sent.length === 1, 5000, "the switch's save");
