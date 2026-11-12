@@ -977,7 +977,9 @@ describe("[DSK-F2] a remote whose disk is under its floor", () => {
       });
       expect(r.configured()).toBe(true);
       const job = { id: "job_1", audio, language: "auto", keywords: [], languages: [] };
-      return (await r.submit(url, { ...job, diarize: false }).catch((e: unknown) => e)) as RemoteError;
+      return (await r
+        .submit(url, { ...job, diarize: false })
+        .catch((e: unknown) => e)) as RemoteError;
     };
     const full = await upload(507);
     expect(full).toBeInstanceOf(RemoteError);

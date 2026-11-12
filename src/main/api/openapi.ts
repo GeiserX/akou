@@ -121,8 +121,7 @@ export function sharedErrors(method: string, d: RouteDoc): RouteErrors {
     if (multipart) {
       add(400, "bad_multipart");
       add(507, "insufficient_storage");
-    }
-    else {
+    } else {
       const fields = Object.keys(d.body);
       add(400, "bad_json");
       if (d.body !== OPEN_BODY) add(400, "unknown_field");
