@@ -809,7 +809,7 @@ describe("[WFS-2] the workflows keep no token, publish nothing from a cache, and
       "shellcheck-v0.11.0",
       "zizmor/releases/download/v1.32.0",
     ])
-      expect(run).toMatch(new RegExp(`${tool.replace(/[.]/g, "\\.")}\\S* [0-9a-f]{64}\\n`));
+      expect(run).toMatch(new RegExp(`${tool.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\S* [0-9a-f]{64}\\n`));
     expect(run).toContain("sha256sum -c -");
     expect(run).toContain('actionlint -color -shellcheck "$RUNNER_TEMP/workflow-lint/shellcheck"');
     expect(run).toContain("zizmor --offline --min-severity medium --config .github/zizmor.yml .");
