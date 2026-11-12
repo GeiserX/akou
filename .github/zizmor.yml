@@ -1,0 +1,7 @@
+# zizmor's settings for the workflow-lint job (CI-16 in docs/CI-CD.md).
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Every action by a full commit SHA, never a tag or a branch.
+        "*": hash-pin

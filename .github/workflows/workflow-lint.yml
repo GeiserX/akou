@@ -1,0 +1,64 @@
+name: Workflow lint
+
+# CI-16 (docs/CI-CD.md): actionlint and zizmor over the workflows, on any change under .github/.
+# zizmor fails at medium severity or above, and its unpinned-uses audit holds every action to a
+# full commit SHA (.github/zizmor.yml). This is not a required check yet: its first runs show what
+# the current workflows trip, and it joins ci-ok once they pass. The path filter is safe only
+# while it stays out of the required checks, since a skipped required check stays Pending.
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/**'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    name: workflow lint
+    # Public repo: GitHub-hosted runners are free here, and the job runs on pull requests.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job never pushes.
+          persist-credentials: false
+
+      - name: Install actionlint and zizmor, pinned and checksummed
+        env:
+          ACTIONLINT: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ZIZMOR: 1.32.0
+          ZIZMOR_SHA256: bb110cc765eca9cd7efb2e284a956be5974c60027b0970f16397d86208a9957b
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lint-bin"
+          cd "$RUNNER_TEMP/lint-bin"
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT}/actionlint_${ACTIONLINT}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          curl -fsSL -o zizmor.tar.gz \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZIZMOR_SHA256}  zizmor.tar.gz" | sha256sum -c -
+          tar -xzf zizmor.tar.gz zizmor
+          rm actionlint.tar.gz zizmor.tar.gz
+          echo "$RUNNER_TEMP/lint-bin" >> "$GITHUB_PATH"
+
+      - name: actionlint
+        run: actionlint -color
+
+      - name: zizmor
+        # Offline: the audits that call the GitHub API need a token this job does not hold.
+        run: zizmor --offline --min-severity medium --config .github/zizmor.yml .github/workflows
