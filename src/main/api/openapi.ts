@@ -93,6 +93,7 @@ const ERROR_STATUS_TEXT: Record<number, string> = {
   500: "Internal error",
   501: "Not implemented",
   503: "Unavailable",
+  507: "Insufficient storage",
 };
 
 /**
@@ -117,7 +118,10 @@ export function sharedErrors(method: string, d: RouteDoc): RouteErrors {
   const multipart = d.body !== undefined && isMultipart(d.body);
   if (changes) add(415, multipart ? "multipart_required" : "json_required");
   if (changes && d.body) {
-    if (multipart) add(400, "bad_multipart");
+    if (multipart) {
+      add(400, "bad_multipart");
+      add(507, "insufficient_storage");
+    }
     else {
       const fields = Object.keys(d.body);
       add(400, "bad_json");
