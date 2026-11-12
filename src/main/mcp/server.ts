@@ -2585,7 +2585,10 @@ function answerBeforeEof(wire: StdioServerTransport, input: PassThrough): void {
     configurable: true,
     get: () => (m: Message) => {
       const r = m as { id?: string | number; method?: string; params?: { requestId?: unknown } };
-      if (r.method !== undefined && r.id !== undefined) pending.add(r.id);
+      // A 2026-07-28 `subscriptions/listen` is answered only when the server closes, so waiting
+      // for its answer would hold every subscribed client's exit for the whole bound.
+      if (r.method !== undefined && r.id !== undefined && r.method !== "subscriptions/listen")
+        pending.add(r.id);
       if (r.method === "notifications/cancelled") forget(r.params?.requestId);
       inner?.(m);
     },

@@ -88,4 +88,45 @@ describe("[MCP-E1] Requests sent before stdin closes are answered", () => {
     expect(answers.find((a) => a.id === 2)?.result?.isError).not.toBe(true);
     expect(code).toBe(0);
   }, 40_000);
+
+  test("a 2026-07-28 client that subscribed with subscriptions/listen and closes stdin sees the server exit at once", async () => {
+    const envelope = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+    };
+    const lines = [
+      { jsonrpc: "2.0", id: 1, method: "server/discover", params: { _meta: envelope } },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "subscriptions/listen",
+        params: { _meta: envelope, notifications: { toolsListChanged: true } },
+      },
+    ];
+    const proc = Bun.spawn([process.execPath, CLI, "mcp"], {
+      env: {
+        ...(process.env as Record<string, string>),
+        AKOU_HOME: box.dir,
+        AKOU_URL: `http://127.0.0.1:${fake.port}`,
+        AKOU_API_KEY: "ak_test",
+      },
+      stdin: new TextEncoder().encode(lines.map((l) => `${JSON.stringify(l)}\n`).join("")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // clock: a bound on the child; the listen subscription must not hold it to the 10-minute bound.
+    const killer = setTimeout(() => proc.kill(), 30_000);
+    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    clearTimeout(killer);
+    const answers = out
+      .split("\n")
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as { id?: number; method?: string });
+    // The control: discover is answered and the subscription is acknowledged.
+    expect(answers.some((a) => a.id === 1)).toBe(true);
+    expect(answers.some((a) => a.method === "notifications/subscriptions/acknowledged")).toBe(true);
+    // The rule: the server exits by itself, not by the killer's signal.
+    expect([code, proc.signalCode]).toEqual([0, null]);
+  }, 40_000);
 });
