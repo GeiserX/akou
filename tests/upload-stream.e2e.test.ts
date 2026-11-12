@@ -12,7 +12,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { truncateSync, writeFileSync } from "node:fs";
+import { readFileSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readMultipart } from "../src/main/api/multipart.ts";
 import { uploadBody, uploadFile } from "../src/main/cli/upload-body.ts";
@@ -69,18 +69,29 @@ function zeros(dir: string, name: string, bytes: number): string {
 /** Peak memory in bytes: `maxRSS` is bytes on some systems and KiB on others. */
 const asBytes = (maxRSS: number) => (maxRSS > 4 * MiB ? maxRSS : maxRSS * 1024);
 
-/** The child's peak memory, in bytes, once it has exited. */
-async function peak(argv: string[], env: Record<string, string>): Promise<number> {
-  const proc = Bun.spawn([process.execPath, ...argv], {
-    env,
+/** Writes the child's own peak memory to a file when it exits. */
+const PEAK_PRELOAD = join(import.meta.dir, "fixtures", "peak-rss.ts");
+/** Below this, a bun process's peak is not a real measurement. */
+const MIN_PEAK = 8 * MiB;
+let peaks = 0;
+
+/**
+ * The child's peak memory, in bytes, as the child reports it on exit. The parent's
+ * `Subprocess.resourceUsage()` is not used: in the full suite on Linux it gave the same peak for a
+ * 1 KiB and a 256 MiB FormData upload, which measured 17 MB and 551 MB on their own.
+ */
+async function peak(argv: string[], env: Record<string, string>, dir: string): Promise<number> {
+  const out = join(dir, `peak-${++peaks}.txt`);
+  const proc = Bun.spawn([process.execPath, "--preload", PEAK_PRELOAD, ...argv], {
+    env: { ...env, AKOU_TEST_PEAK_FILE: out },
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
   });
   await proc.exited;
-  const usage = proc.resourceUsage();
-  if (!usage) throw new Error("no resource usage for the child");
-  return asBytes(usage.maxRSS);
+  const bytes = asBytes(Number(readFileSync(out, "utf8")));
+  expect(bytes).toBeGreaterThan(MIN_PEAK);
+  return bytes;
 }
 
 function env(home: string, base: string): Record<string, string> {
@@ -107,8 +118,8 @@ describe("[UPL-1] An upload held in memory whole", () => {
       cleanups.push(t.cleanup);
       const { base, seen } = fakeServer();
       const e = env(t.dir, base);
-      const small = await peak([CLI, command, zeros(t.dir, "small.wav", 1024)], e);
-      const big = await peak([CLI, command, zeros(t.dir, "big.wav", BIG)], e);
+      const small = await peak([CLI, command, zeros(t.dir, "small.wav", 1024)], e, t.dir);
+      const big = await peak([CLI, command, zeros(t.dir, "big.wav", BIG)], e, t.dir);
       const uploads = seen.filter((s) => s.path === route);
       expect(uploads).toHaveLength(2);
       // The whole file went out, with the length the body declared.
@@ -128,8 +139,8 @@ describe("[UPL-1] An upload held in memory whole", () => {
       `const f = new FormData(); f.append("file", Bun.file(${JSON.stringify(path)}), "a.wav");` +
         `await fetch(${JSON.stringify(`${base}/v1/jobs`)}, { method: "POST", body: f });`,
     ];
-    const small = await peak(send(zeros(t.dir, "small.wav", 1024)), e);
-    const big = await peak(send(zeros(t.dir, "big.wav", BIG)), e);
+    const small = await peak(send(zeros(t.dir, "small.wav", 1024)), e, t.dir);
+    const big = await peak(send(zeros(t.dir, "big.wav", BIG)), e, t.dir);
     expect(seen.filter((s) => s.path === "/v1/jobs")).toHaveLength(2);
     expect(big - small).toBeGreaterThan(MAX_GROWTH);
   });
