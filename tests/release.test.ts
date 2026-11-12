@@ -623,6 +623,7 @@ function releaseWorkflow(): {
     {
       needs?: string | string[];
       if?: string;
+      environment?: string;
       permissions?: Record<string, string>;
       steps?: {
         name?: string;
@@ -665,6 +666,64 @@ describe("[CI-16] no release checkout leaves the job token for later steps", () 
     const co = wf.jobs.release?.steps?.find((s) => s.uses?.startsWith("actions/checkout@"));
     delete co?.with?.["persist-credentials"];
     expect(keepingToken(wf)).toEqual(["release"]);
+  });
+});
+
+describe("[WFS-1] a release secret is read only inside the release environment", () => {
+  type Workflow = ReturnType<typeof releaseWorkflow>;
+  /** The gate of every secret a job reads: `X` in `X && secrets.NAME`, "" when it has none. */
+  const gatesOf = (job: Workflow["jobs"][string]): string[] =>
+    [...JSON.stringify(job).matchAll(/\$\{\{\s*(?:(.*?)\s*&&\s*)?secrets\.(\w+)/g)]
+      .filter((m) => m[2] !== "GITHUB_TOKEN")
+      .map((m) => (m[1] ?? "").trim());
+  /**
+   * Every secret read that can happen outside the `release` environment: the job names no
+   * environment, or names it behind another gate than the read's own. The environment is what
+   * limits a secret to the refs its deployment policy allows; a gate in the workflow file holds
+   * only for the file of the ref that runs.
+   */
+  const outsideRelease = (wf: Workflow): string[] =>
+    Object.entries(wf.jobs).flatMap(([name, job]) =>
+      gatesOf(job)
+        .filter(
+          (gate) =>
+            job.environment !== "release" &&
+            job.environment !== `$${"{{"} ${gate} && 'release' || '' }}`,
+        )
+        .map((gate) => `${name}: ${gate || "always"}`),
+    );
+
+  test("every job that reads a secret runs in the release environment whenever it can read it", () => {
+    const wf = releaseWorkflow();
+    // The check is not empty: these four jobs read the signing, Docker Hub and tap secrets.
+    expect(
+      Object.entries(wf.jobs)
+        .filter(([, job]) => gatesOf(job).length > 0)
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual(["app", "cask", "image", "image-manifest"]);
+    expect(outsideRelease(wf)).toEqual([]);
+    // A pull request's dry run builds unsigned and pushes nothing, so it never needs the
+    // environment, whose policy would refuse a pull request's ref.
+    expect(wf.jobs.app?.environment).toBe(
+      `$${"{{"} github.event_name != 'pull_request' && 'release' || '' }}`,
+    );
+    expect(wf.jobs.image?.environment).toBe(
+      `$${"{{"} github.event_name == 'push' && 'release' || '' }}`,
+    );
+  });
+
+  test("positive control: a job without the environment, or behind a looser gate, is caught", () => {
+    const wf = releaseWorkflow();
+    const cask = wf.jobs.cask;
+    if (cask) delete cask.environment;
+    expect(outsideRelease(wf)).toEqual(["cask: github.event_name == 'push'"]);
+    const app = releaseWorkflow();
+    // The app reads its secrets on a dispatch too; an environment only on a push leaves that out.
+    const job = app.jobs.app;
+    if (job) job.environment = `$${"{{"} github.event_name == 'push' && 'release' || '' }}`;
+    expect(outsideRelease(app).every((r) => r.startsWith("app: "))).toBe(true);
+    expect(outsideRelease(app).length).toBeGreaterThan(0);
   });
 });
 

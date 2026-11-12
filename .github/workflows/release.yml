@@ -21,6 +21,11 @@ name: release
 # ELECTROBUN_APPLEIDPASS) and fails when one is missing. Hutch signs the app with the Developer ID
 # and notarizes it, build-cli.ts does the same for the CLI and build-app.ts for the akou-diarize
 # archive, and the job checks all three before upload.
+#
+# Every job that reads a secret (app, image on a push, image-manifest, cask) runs in the `release`
+# environment when it can read one (docs/CI-CD.md CI-16). The environment's deployment policy, set
+# in the repository settings, decides which refs may reach its secrets; a gate in this file holds
+# only for the copy of the file on the ref that runs.
 
 on:
   push:
@@ -138,6 +143,10 @@ jobs:
     needs: version
     runs-on: macos-latest
     timeout-minutes: 45
+    # The signing secrets are read only inside the `release` environment (docs/CI-CD.md CI-16),
+    # whose deployment policy names the refs that may sign. A pull request's dry run reads none and
+    # builds ad-hoc, so it runs outside it.
+    environment: ${{ github.event_name != 'pull_request' && 'release' || '' }}
     env:
       # Hutch signs the app with the Developer ID and notarizes it; build-cli.ts does the same for
       # the CLI, build-app.ts for the akou-diarize archive. A pushed tag (this workflow's only push trigger is v* tags) or a dispatch by hand
@@ -475,6 +484,8 @@ jobs:
             variant: cuda
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    # Docker Hub's secrets only inside the `release` environment, on the push path (CI-16).
+    environment: ${{ github.event_name == 'push' && 'release' || '' }}
     env:
       PUSH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
       PLATFORM: ${{ matrix.platform }}
@@ -523,6 +534,7 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    environment: release
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -656,6 +668,7 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment: release
     permissions:
       contents: read
     steps:
