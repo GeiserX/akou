@@ -1,11 +1,13 @@
 /**
- * The keys file an edit must not wipe (docs/TRAPS.md SV-K2).
+ * The keys file an edit must not wipe (docs/TRAPS.md SV-K2), and the private file write that must
+ * not rename a cut file over a secret (T4.43).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writePrivateFile } from "../src/main/api/guard.ts";
 import { KeyError, KeyStore } from "../src/main/api/keys.ts";
 
 const dirs: string[] = [];
@@ -60,5 +62,31 @@ describe("[SV-K2] A key edit over a keys file that does not read", () => {
     const d = dir();
     new KeyStore(d).create({ name: "first" });
     expect(new KeyStore(d).list()).toHaveLength(1);
+  });
+});
+
+describe("[T4.43] A short write renamed over a private file", () => {
+  const text = `${JSON.stringify({ version: 1, keys: [], pad: "x".repeat(10_000) })}\n`;
+
+  test("[T4.43] every byte goes, over as many short writes as the disk takes", () => {
+    const d = dir();
+    const path = join(d, "keys.json");
+    // At most 1000 bytes a call, as a disk filling up and then freeing would take them.
+    const write = (fd: number, b: Uint8Array) => writeSync(fd, b.subarray(0, 1000));
+    expect(writePrivateFile(path, text, true, write)).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(text);
+  });
+
+  test("[T4.43] a full disk throws, keeps the old file and leaves no temporary file", () => {
+    const d = dir();
+    const path = join(d, "keys.json");
+    writeFileSync(path, "old\n");
+    let calls = 0;
+    // The first call takes half, the next nothing: the disk is full.
+    const write = (fd: number, b: Uint8Array) =>
+      calls++ === 0 ? writeSync(fd, b.subarray(0, b.length >> 1)) : 0;
+    expect(() => writePrivateFile(path, text, true, write)).toThrow(/short write/);
+    expect(readFileSync(path, "utf8")).toBe("old\n");
+    expect(readdirSync(d)).toEqual(["keys.json"]);
   });
 });

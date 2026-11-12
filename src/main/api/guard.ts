@@ -38,10 +38,10 @@ import {
   rmSync,
   statSync,
   unlinkSync,
-  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeAll } from "../dictation/store.ts";
 import { APP_IDENTITY, accessLabel, allows, type GuardRoute, type Identity } from "./access.ts";
 
 export const TOKEN_FILE = "token";
@@ -295,9 +295,16 @@ function writeTokenFile(path: string, token: string, replace: boolean): boolean 
 /**
  * The token file's atomic, private write for any secret file (the keys file too, SV-K2): `text`
  * lands whole with mode 0600 (or a user-only ACL) from its creation, or not at all. With `replace`
- * false it is created only if absent, and false says another writer won.
+ * false it is created only if absent, and false says another writer won. Every byte is written or
+ * it throws (T4.43): a short write on a full disk is never renamed over the file. `write` is the
+ * syscall, injected by tests.
  */
-export function writePrivateFile(path: string, text: string, replace: boolean): boolean {
+export function writePrivateFile(
+  path: string,
+  text: string,
+  replace: boolean,
+  write?: (fd: number, b: Uint8Array) => number,
+): boolean {
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
   try {
@@ -306,7 +313,7 @@ export function writePrivateFile(path: string, text: string, replace: boolean): 
       if (process.platform === "win32" && !restrictToUser(tmp)) {
         throw new Error(`could not restrict ${tmp} to the current user`);
       }
-      writeSync(fd, text);
+      writeAll(fd, text, write);
     } finally {
       closeSync(fd);
     }
