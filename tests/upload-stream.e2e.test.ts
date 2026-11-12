@@ -174,10 +174,11 @@ describe("[UPL-1] The streamed body through the server's multipart reader", () =
       cleanups.push(t.cleanup);
       const path = join(t.dir, "note.wav");
       writeFileSync(path, bytes);
-      const media = uploadFile(path);
-      if (typeof media === "string") throw new Error(media);
+      const disk = Bun.file(path);
       const form = new FormData();
-      form.append("file", media, 'ñote "1".wav');
+      // The part's filename is the File's own: Bun's `FormData.entries()` drops the one `append`
+      // is given, so every caller names its File (`mediaFile`).
+      form.append("file", new File([disk], 'ñote "1".wav', { type: disk.type }));
       form.append("preset", "fast");
       form.append("keywords[]", "Ñandú");
       form.append("keywords[]", "akou");

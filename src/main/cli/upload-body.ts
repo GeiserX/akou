@@ -24,7 +24,11 @@ function quoted(s: string): string {
   return s.replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/"/g, "%22");
 }
 
-/** `form` as a streamed `multipart/form-data` body. A fresh call reads every file again. */
+/**
+ * `form` as a streamed `multipart/form-data` body. A fresh call reads every file again. A file
+ * part's filename is its `File`'s own name: Bun's `FormData.entries()` drops the filename given to
+ * `append`, so name the `File` itself (`mediaFile`).
+ */
 export function uploadBody(form: FormData): UploadBody {
   const enc = new TextEncoder();
   const boundary = `akou-${crypto.randomUUID()}`;
