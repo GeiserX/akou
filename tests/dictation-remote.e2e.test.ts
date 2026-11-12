@@ -659,6 +659,23 @@ describe("DC-R3: a remote down three dictations in a row is probed", () => {
     }
   });
 
+  test("[DSK-F2] a remote whose disk is under its floor (507) is up: it never starts the probe", async () => {
+    const fake = await fakeRemote({ status: 507 });
+    const e = engine({ url: `http://127.0.0.1:${fake.port}` }, { probeMs: 20 });
+    try {
+      for (let i = 0; i < REMOTE_DOWN_AFTER + 1; i++) {
+        // Each dictation still falls back with the remote's reason, and never says it is down.
+        const r = await e.decode(HELLO);
+        expect(r.remote_error).toContain("507");
+        expect(r.notice).toBe("remote disk full, used fast");
+      }
+      expect(e.health()).toMatchObject({ down: false, failures: 0, probing: false });
+    } finally {
+      e.close();
+      fake.stop();
+    }
+  });
+
   test("a dictation the remote answers resets the count", async () => {
     const f = flaky();
     const e = engine({ url: f.url }, { probeMs: 60_000 });

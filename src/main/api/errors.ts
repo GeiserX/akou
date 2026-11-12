@@ -56,6 +56,8 @@ export const ERROR_CODES = {
   forbidden: "The key's scope does not reach this route.",
   gone: "The job was deleted, or passed the `retain_days` akou keeps one from its creation.",
   idempotency_conflict: "The Idempotency-Key was used with another file or other options.",
+  insufficient_storage:
+    "The server's disk is under the free space it keeps, so it takes no upload now; retrying does not help until space is freed.",
   internal: "An unexpected failure inside akou.",
   interrupted: "The job was running when the server stopped.",
   json_required: "A request that changes something needs `Content-Type: application/json`.",

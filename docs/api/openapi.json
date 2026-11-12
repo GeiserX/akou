@@ -5295,6 +5295,9 @@
           "503": {
             "$ref": "#/components/responses/503.models_missing"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7011,6 +7014,9 @@
           "503": {
             "$ref": "#/components/responses/503.no_engine"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -7972,6 +7978,9 @@
           "503": {
             "$ref": "#/components/responses/503.no_engine"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -8072,6 +8081,9 @@
           },
           "503": {
             "$ref": "#/components/responses/503.no_engine"
+          },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -8256,6 +8268,9 @@
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
           },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -8377,6 +8392,9 @@
           },
           "500": {
             "$ref": "#/components/responses/500.diarize_unavailable.engine_unavailable.internal.interrupted.model_download_failed.models_missing.remote_refused.transcription_failed"
+          },
+          "507": {
+            "$ref": "#/components/responses/507.insufficient_storage"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -11151,6 +11169,29 @@
             }
           }
         }
+      },
+      "507.insufficient_storage": {
+        "description": "Insufficient storage",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "insufficient_storage"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -11350,6 +11391,10 @@
           {
             "const": "idempotency_conflict",
             "description": "The Idempotency-Key was used with another file or other options."
+          },
+          {
+            "const": "insufficient_storage",
+            "description": "The server's disk is under the free space it keeps, so it takes no upload now; retrying does not help until space is freed."
           },
           {
             "const": "internal",

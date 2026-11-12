@@ -1280,6 +1280,10 @@ export class AkouApp implements ApiApp {
    * (`asr/models.ts`), and answers at once; `models()` reports the progress. When it finishes the
    * recognizer starts on the new files.
    */
+  freeBytes(dir: string): number {
+    return (this.o.jobs?.modelStore?.freeBytes ?? freeOf)(dir);
+  }
+
   pullModels(): ModelsStatus {
     const now = this.models();
     if (now.state === "ready" || now.state === "downloading") return now;

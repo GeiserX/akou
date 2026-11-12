@@ -11,6 +11,11 @@
  * it. Each is written to its own `<uuid>.upload` in the folder the caller names, which is the job
  * queue's upload folder, whose orphans are deleted when the server starts. The caller owns every
  * spooled file: it keeps the one it needs and calls `discard` for the rest, on every path.
+ *
+ * The volume keeps a floor of free space (`UploadRoom`): an upload is refused with 507
+ * `insufficient_storage` before its first byte when the volume is under the floor, and cut, its
+ * files deleted, when it falls under the floor while the body arrives. The check before the body
+ * cannot see the uploads already in flight; the one every `SPACE_CHECK_BYTES` can.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -22,6 +27,29 @@ import { HttpError } from "./http.ts";
 export const MAX_TEXT_BYTES = 64 * 1024;
 /** One part's header block. */
 const MAX_HEADER_BYTES = 16 * 1024;
+/** The file bytes written between two looks at the volume's free space. */
+export const SPACE_CHECK_BYTES = 16 * 1024 * 1024;
+
+/** The free space an upload must leave on the volume of its folder. */
+export interface UploadRoom {
+  /** The bytes free on the volume now. */
+  free(): number;
+  /** Under this many bytes free, the upload is refused or cut. */
+  floor: number;
+  /** The file bytes between two looks; `SPACE_CHECK_BYTES` by default. */
+  every?: number;
+}
+
+function checkRoom(room: UploadRoom): void {
+  const free = room.free();
+  if (free >= room.floor) return;
+  throw new HttpError(
+    507,
+    "insufficient_storage",
+    `the server has ${free} bytes free and keeps ${room.floor} free, so it takes no upload now`,
+    { free_bytes: free, floor_bytes: room.floor },
+  );
+}
 
 /** A file part, on disk. */
 export interface SpooledFile {
@@ -109,12 +137,14 @@ function parseHead(block: string): PartHead {
 
 /**
  * Reads a `multipart/form-data` body, writing each file part into `dir` as it arrives. On any
- * error the files spooled so far are deleted before it throws.
+ * error the files spooled so far are deleted before it throws. With `room`, the volume's free
+ * space is checked before the first byte and every `room.every` file bytes (507).
  */
 export async function readMultipart(
   body: ReadableStream<Uint8Array> | null,
   contentType: string | null,
   dir: string,
+  room?: UploadRoom,
 ): Promise<StreamedForm> {
   const boundary = boundaryOf(contentType);
   if (!boundary || !body) throw badBody("the body is not multipart/form-data with a boundary");
@@ -126,6 +156,8 @@ export async function readMultipart(
   let buf: Buffer = Buffer.alloc(0);
   let ended = false;
   let text = 0;
+  /** The file bytes written since the last look at the free space. */
+  let unchecked = 0;
 
   /** Reads more of the body into `buf`; false once the body has ended. */
   const more = async (): Promise<boolean> => {
@@ -163,6 +195,8 @@ export async function readMultipart(
   };
 
   try {
+    // Before the first byte: a volume already under the floor takes nothing.
+    if (room) checkRoom(room);
     // The preamble, up to the first boundary.
     for (;;) {
       const at = buf.indexOf(first);
@@ -218,6 +252,12 @@ export async function readMultipart(
       form.add(head.name, spooled);
       try {
         await partBody(async (chunk) => {
+          // Uploads in flight together pass the first check together; this one sees them.
+          unchecked += chunk.length;
+          if (room && unchecked >= (room.every ?? SPACE_CHECK_BYTES)) {
+            unchecked = 0;
+            checkRoom(room);
+          }
           hash.update(chunk);
           size += chunk.length;
           await file.write(chunk);
