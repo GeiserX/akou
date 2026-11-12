@@ -673,7 +673,7 @@ describe("[WFS-1] a release secret is read only inside the release environment",
   type Workflow = ReturnType<typeof releaseWorkflow>;
   /** The gate of every secret a job reads: `X` in `X && secrets.NAME`, "" when it has none. */
   const gatesOf = (job: Workflow["jobs"][string]): string[] =>
-    [...JSON.stringify(job).matchAll(/\$\{\{\s*(?:(.*?)\s*&&\s*)?secrets\.(\w+)/g)]
+    [...JSON.stringify(job).matchAll(/\$\{\{\s*(?:([^}]*?)\s*&&\s*)?secrets\.(\w+)/g)]
       .filter((m) => m[2] !== "GITHUB_TOKEN")
       .map((m) => (m[1] ?? "").trim());
   /**
