@@ -357,3 +357,19 @@ describe("[ASR-7] the old asr.live upgrade", () => {
     expect(validateSetting("asr.review.model", "whisper").ok).toBe(false);
   });
 });
+
+describe("[known bug] The models folder set over the API", () => {
+  test("asr.modelsDir is refused over HTTP and taken from the window, since akou runs the llama-server build found there", () => {
+    const paths = resolvePaths({ AKOU_HOME: "/t" });
+    const patch = { "asr.modelsDir": "/elsewhere/models" };
+    const http = patchConfig({}, patch, paths);
+    expect(http).toMatchObject({ ok: false });
+    expect((http as { errors: string[] }).errors[0]).toContain("akou window");
+    expect(patchConfig({}, patch, paths, { inProcess: true })).toMatchObject({
+      ok: true,
+      file: patch,
+    });
+    // Positive control: a speech setting that names no program is still written over HTTP.
+    expect(patchConfig({}, { "asr.threads": 4 }, paths).ok).toBe(true);
+  });
+});

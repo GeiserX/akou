@@ -134,8 +134,13 @@ async function primary(o: {
   return { ...rig, key: r.json.key };
 }
 
+/** `GET /v1/server` with the client's key: `remotes` is listed only to a caller with a key. */
 async function serverInfo(p: Primary): Promise<Body> {
-  return (await (await fetch(`http://127.0.0.1:${p.port}/v1/server`)).json()) as Body;
+  return (await (
+    await fetch(`http://127.0.0.1:${p.port}/v1/server`, {
+      headers: { authorization: `Bearer ${p.key}` },
+    })
+  ).json()) as Body;
 }
 
 async function submit(p: Primary): Promise<number> {
