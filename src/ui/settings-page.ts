@@ -41,6 +41,7 @@ import {
   pageHead,
   row,
   section,
+  sectionWith,
   segmented,
   selectBox,
   toggle,
@@ -409,6 +410,8 @@ export class SettingsPage {
   private schema: Record<string, SchemaEntry> = {};
   private settings: Record<string, unknown> = {};
   private issues = new Map<string, string>();
+  /** The banner of the config file's issues no row shows, while one is on screen. */
+  private fileBanner: HTMLElement | null = null;
   private shown: Record<string, string> = {};
   private status: Status = {};
   private live: LiveReply["live"] | null = null;
@@ -594,11 +597,41 @@ export class SettingsPage {
       })
       .filter((x): x is HTMLElement => x !== null);
     if (this.hooks.only) return sections;
+    this.fileBanner = this.issueBanner();
     return [
       pageHead("Settings", { right: [find] }),
+      this.fileBanner,
       ...sections,
       this.hooks.server ? null : this.foot(),
     ].filter((x): x is HTMLElement => x !== null);
+  }
+
+  /**
+   * The config file's issues that no row can show (CF-2): a file not read at all, so every setting
+   * is at its default, or a key this version does not know. Null when there are none.
+   */
+  private issueBanner(): HTMLElement | null {
+    const lines = [...this.issues].filter(([k]) => !(k in this.schema)).map(([, m]) => m);
+    if (lines.length === 0) return null;
+    const banner = sectionWith(
+      "",
+      null,
+      row(
+        { label: "Part of your config file was not used", help: lines.join("; ") },
+        this.hooks.server ? null : this.openConfigButton(),
+      ),
+    );
+    banner.id = "settings-file-issues";
+    banner.setAttribute("role", "alert");
+    return banner;
+  }
+
+  /** Draws the banner again from the issues a save answered, so a fixed file clears it. */
+  private refreshBanner(): void {
+    const next = this.fileBanner ? this.issueBanner() : null;
+    if (next) this.fileBanner?.replaceWith(next);
+    else this.fileBanner?.remove();
+    this.fileBanner = next;
   }
 
   private drawSub(p: SubPage): HTMLElement[] {
@@ -1526,10 +1559,19 @@ export class SettingsPage {
     const patch = changedSettings(r, this.schema, this.shown);
     const keys = Object.keys(patch);
     if (keys.length === 0) return;
-    const res = await this.t.request<{ note?: string }>("PATCH", "/config", patch);
+    const res = await this.t.request<{ note?: string; issues?: ConfigReply["issues"] }>(
+      "PATCH",
+      "/config",
+      patch,
+    );
     if (res.status >= 400) {
       this.refused(r, keys, res.body);
       return;
+    }
+    // The save read the file as it is now: an issue fixed there by hand is gone from the answer.
+    if (Array.isArray(res.body?.issues)) {
+      this.issues = new Map(res.body.issues.map((i) => [i.key, i.message]));
+      this.refreshBanner();
     }
     for (const [k, v] of Object.entries(patch)) {
       const spec = this.schema[k];

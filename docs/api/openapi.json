@@ -7617,7 +7617,7 @@
             "$ref": "#/components/responses/404.not_found"
           },
           "409": {
-            "$ref": "#/components/responses/409.key_exists.keys_busy"
+            "$ref": "#/components/responses/409.key_exists.keys_busy.keys_file_invalid"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -7705,7 +7705,7 @@
             "$ref": "#/components/responses/404.not_found"
           },
           "409": {
-            "$ref": "#/components/responses/409.key_exists.keys_busy"
+            "$ref": "#/components/responses/409.key_exists.keys_busy.keys_file_invalid"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -7766,7 +7766,7 @@
             "$ref": "#/components/responses/404.not_found"
           },
           "409": {
-            "$ref": "#/components/responses/409.key_exists.keys_busy"
+            "$ref": "#/components/responses/409.key_exists.keys_busy.keys_file_invalid"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -9781,7 +9781,7 @@
           }
         }
       },
-      "409.key_exists.keys_busy": {
+      "409.key_exists.keys_busy.keys_file_invalid": {
         "description": "Conflict",
         "content": {
           "application/json": {
@@ -9795,7 +9795,8 @@
                     "error": {
                       "enum": [
                         "key_exists",
-                        "keys_busy"
+                        "keys_busy",
+                        "keys_file_invalid"
                       ]
                     }
                   }
@@ -11250,6 +11251,10 @@
           {
             "const": "keys_busy",
             "description": "The key store is busy; retry."
+          },
+          {
+            "const": "keys_file_invalid",
+            "description": "keys.json does not read as a keys file, so an edit would drop its keys; fix or remove it first."
           },
           {
             "const": "last_refused",
