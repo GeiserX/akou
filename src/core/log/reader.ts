@@ -11,6 +11,7 @@
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { type LogEvent, validateEvent } from "./events.ts";
 
 export interface TornTail {
@@ -232,6 +233,52 @@ export function tail(path: string, cursor: TailCursor = START_CURSOR): TailResul
           }
         : null,
   };
+}
+
+/**
+ * Answers "the committed events after seq N" again and again for one log, as a long poll asks it,
+ * reading only the bytes appended since its last read: a 3-hour log is not parsed again for each
+ * new event. A request older than its cursor, a file that shrank below it, or a file that was
+ * replaced reads the whole log, as `readLog` + `eventsAfter` would. Every answer equals theirs.
+ */
+export class LogFollower {
+  /** Bytes read so far, to prove a follower reads only what was appended. */
+  readonly stats = { bytes: 0 };
+  private cursor: TailCursor | null = null;
+  private ino = -1;
+
+  constructor(readonly path: string) {}
+
+  async after(afterSeq: number): Promise<LogEvent[]> {
+    let st: { size: number; ino: number };
+    try {
+      st = await stat(this.path);
+    } catch {
+      this.cursor = null;
+      return [];
+    }
+    const c = this.cursor;
+    if (c && afterSeq >= c.seq && st.ino === this.ino && st.size >= c.offset) {
+      const r = tail(this.path, c);
+      this.stats.bytes += r.cursor.offset - c.offset + (r.pending?.bytes ?? 0);
+      // `tail` keeps the last seq it delivered; the cursor keeps the highest.
+      this.cursor = { ...r.cursor, seq: Math.max(c.seq, r.cursor.seq) };
+      return eventsAfter(r.events, afterSeq);
+    }
+    const bytes = new Uint8Array(await Bun.file(this.path).arrayBuffer());
+    this.stats.bytes += bytes.length;
+    const r = parseLog(bytes);
+    let seq = 0;
+    for (const e of r.events) seq = Math.max(seq, e.seq);
+    // A torn last line is not consumed: the writer's next open truncates it to `committedBytes`.
+    this.cursor = {
+      offset: r.committedBytes,
+      seq,
+      line: 1 + countNewlines(bytes.subarray(0, r.committedBytes)),
+    };
+    this.ino = st.ino;
+    return eventsAfter(r.events, afterSeq);
+  }
 }
 
 function countNewlines(b: Uint8Array): number {
