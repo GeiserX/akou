@@ -288,6 +288,13 @@ if (import.meta.main) {
   process.stdout.on("error", (e: NodeJS.ErrnoException) => {
     if (e.code === "EPIPE") process.exit(EXIT.ok);
   });
+  // Which streams got output, so only those are ended before the exit (below).
+  let wroteOut = false;
+  let wroteErr = false;
+  const toStdout = (t: string) => {
+    wroteOut = true;
+    return process.stdout.write(t);
+  };
   const ac = new AbortController();
   process.on("SIGINT", () => {
     if (ac.signal.aborted) process.exit(130);
@@ -295,9 +302,12 @@ if (import.meta.main) {
   });
   const code = await runCli(process.argv.slice(2), {
     env: process.env,
-    out: (t) => process.stdout.write(`${t}\n`),
-    err: (t) => process.stderr.write(`${t}\n`),
-    write: (t) => process.stdout.write(t),
+    out: (t) => toStdout(`${t}\n`),
+    err: (t) => {
+      wroteErr = true;
+      process.stderr.write(`${t}\n`);
+    },
+    write: (t) => toStdout(t),
     signal: ac.signal,
     tty: process.stdout.isTTY === true,
     readStdin: () => Bun.stdin.text(),
@@ -306,8 +316,11 @@ if (import.meta.main) {
   });
   // A pipe holds about 64 KiB, and `process.exit` drops whatever is still queued for a slow reader
   // (`akou show | (sleep 1; jq)`). Bun calls an empty write back at once, so only `end` waits until
-  // everything before it is written (TRAPS akou-3vx.1).
+  // everything before it is written (TRAPS akou-3vx.1). A stream with nothing written is left
+  // alone, and the two are ended one after the other: with `2>&1` on Windows both are one pipe, and
+  // ending both at once there never called back.
   const drained = (s: NodeJS.WriteStream) => new Promise<void>((r) => s.end(() => r()));
-  await Promise.all([drained(process.stdout), drained(process.stderr)]);
+  if (wroteOut) await drained(process.stdout);
+  if (wroteErr) await drained(process.stderr);
   process.exit(code);
 }
