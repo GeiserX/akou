@@ -813,7 +813,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_ENGINES,
     default: "auto",
-    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: what `dictation.final` names (`live` by default: the streaming model's words); `remote`: another akou (`dictation.remote.url`), with no local model needed.",
   },
   "dictation.final": {
     type: "string",
