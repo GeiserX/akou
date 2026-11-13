@@ -460,10 +460,8 @@ struct CallOpen {
 /// The default render devices for the console and communications roles, in that order. They are
 /// one device unless the machine sets them apart.
 fn default_renders(en: &DeviceEnumerator) -> [Option<Device>; 2] {
-    [Role::Console, Role::Communications].map(|role| {
-        en.get_default_device_for_role(Direction::Render, role)
-            .ok()
-    })
+    [Role::Console, Role::Communications]
+        .map(|role| en.get_default_device_for_role(Direction::Render, role).ok())
 }
 
 /// What the call side's device watch follows (see `wasapi_rules::render_watch`).
