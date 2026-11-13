@@ -182,7 +182,7 @@ fn device_id(d: &Device) -> Option<DeviceId> {
 /// The active devices of one direction. `DeviceCollection`'s own iterator panics on an error,
 /// and a panic here aborts the helper, so this walks it by index.
 fn active(en: &DeviceEnumerator, dir: Direction) -> Vec<Device> {
-    let Ok(c) = en.get_device_collection(&dir) else {
+    let Ok(c) = en.get_device_collection(dir) else {
         return vec![];
     };
     let n = c.get_nbr_devices().unwrap_or(0);
@@ -206,12 +206,12 @@ impl Stream {
     /// Starts `client` capturing 32-bit float at `rate` and `channels`, event-driven, with WASAPI
     /// converting from the device's own format when it differs (it never changes the device).
     fn start(mut client: AudioClient, rate: u32, channels: usize) -> Result<Stream, WasapiError> {
-        let fmt = WaveFormat::new(32, 32, &SampleType::Float, rate as usize, channels, None);
+        let fmt = WaveFormat::new(32, 32, SampleType::Float, rate as usize, channels, None);
         let mode = StreamMode::EventsShared {
             autoconvert: true,
             buffer_duration_hns: BUFFER_HNS,
         };
-        client.initialize_client(&fmt, &Direction::Capture, &mode)?;
+        client.initialize_client(&fmt, Direction::Capture, mode, None)?;
         let event = client.set_get_eventhandle()?;
         let capture = client.get_audiocaptureclient()?;
         client.start_stream()?;
@@ -410,7 +410,7 @@ fn open_mic(
         .iter()
         .filter_map(|d| d.get_id().ok())
         .collect();
-    let default = || en.get_default_device_for_role(&Direction::Capture, &Role::Communications);
+    let default = || en.get_default_device_for_role(Direction::Capture, Role::Communications);
     let device = match mic_target(requested, &ids) {
         MicTarget::Pinned(id) => en.get_device(&id),
         MicTarget::Default => default(),
@@ -460,10 +460,8 @@ struct CallOpen {
 /// The default render devices for the console and communications roles, in that order. They are
 /// one device unless the machine sets them apart.
 fn default_renders(en: &DeviceEnumerator) -> [Option<Device>; 2] {
-    [Role::Console, Role::Communications].map(|role| {
-        en.get_default_device_for_role(&Direction::Render, &role)
-            .ok()
-    })
+    [Role::Console, Role::Communications]
+        .map(|role| en.get_default_device_for_role(Direction::Render, role).ok())
 }
 
 /// What the call side's device watch follows (see `wasapi_rules::render_watch`).
@@ -478,7 +476,7 @@ fn render_device(en: &DeviceEnumerator) -> Option<DeviceId> {
 /// Loopback of the default communications output, the one call apps play to, with its name.
 fn open_endpoint() -> Result<(Stream, u32, String), OpenError> {
     let device = DeviceEnumerator::new()
-        .and_then(|en| en.get_default_device_for_role(&Direction::Render, &Role::Communications))
+        .and_then(|en| en.get_default_device_for_role(Direction::Render, Role::Communications))
         .map_err(|e| OpenError::no_device(format!("no output device: {e}")))?;
     let name = device
         .get_friendlyname()
@@ -639,8 +637,8 @@ impl Control {
                             st.default_output = render_device(en);
                             st.default_input = en
                                 .get_default_device_for_role(
-                                    &Direction::Capture,
-                                    &Role::Communications,
+                                    Direction::Capture,
+                                    Role::Communications,
                                 )
                                 .ok()
                                 .and_then(|d| device_id(&d));
@@ -907,7 +905,7 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
             let en = DeviceEnumerator::new().map_err(|e| err("the device list", e))?;
             let side = |dir: Direction, role: Role| {
                 let default = en
-                    .get_default_device_for_role(&dir, &role)
+                    .get_default_device_for_role(dir, role)
                     .ok()
                     .and_then(|d| d.get_id().ok());
                 active(&en, dir)
