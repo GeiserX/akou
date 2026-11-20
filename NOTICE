@@ -104,7 +104,7 @@ its source package at the repository given.
   proc-macro2 v1.0.107           MIT OR Apache-2.0                  https://github.com/dtolnay/proc-macro2
   pulseaudio v0.3.2              MIT                                https://github.com/colinmarc/pulseaudio-rs
   quote v1.0.47                  MIT OR Apache-2.0                  https://github.com/dtolnay/quote
-  rubato v5.0.1                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
+  rubato v5.1.0                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
   rustix v1.1.5                  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/bytecodealliance/rustix
   serde v1.0.229                 MIT OR Apache-2.0                  https://github.com/serde-rs/serde
   serde_core v1.0.229            MIT OR Apache-2.0                  https://github.com/serde-rs/serde
