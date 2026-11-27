@@ -37,11 +37,11 @@ import { stat } from "node:fs/promises";
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { decodeVec } from "../asr/speakers.ts";
-import { type LabelCentroid, lessonFor } from "./learn.ts";
+import { type LabelCentroid, lessonFor, TEACHERS } from "./learn.ts";
 import { type LabelState, matchVoice } from "./match.ts";
 import type { Person, VoiceStore, VoiceSummary } from "./store.ts";
 import type { VoiceThresholds } from "./thresholds.ts";
-import { VoiceTombstones } from "./tombstones.ts";
+import { type Tombstone, VoiceTombstones } from "./tombstones.ts";
 
 /** The live speaker embedder: every `speaker.centroid` is TitaNet-small's. */
 export const LIVE_EMBEDDER = "titanet-small";
@@ -74,6 +74,8 @@ export interface VoiceHostOptions {
    * known now: a tombstone older than it leaves. Absent: none ever leaves.
    */
   oldestCall?: () => Promise<number | null>;
+  /** The ids of the calls loaded now; a forget by name looks for the name in them. */
+  loaded?: () => Iterable<string>;
 }
 
 /**
@@ -202,6 +204,22 @@ export class VoiceHost {
       e.type !== "speaker.unmerge"
     )
       return;
+    // A name reaches the Host only as it is written, so it is newer than every stamp so far: when
+    // the clock reads at or before one, it is lifted past them [VO-12].
+    if (e.type === "speaker.name" && this.tombstones.behind(e.t)) {
+      const lift: Tombstone = {
+        kind: "lift",
+        call,
+        seq: e.seq,
+        at: this.tombstones.stamp(this.now()),
+      };
+      this.run(async () => {
+        if (!(await this.tombstones.keep(lift)))
+          this.o.log("warn", "voices: a name given after a clock change could not be saved");
+        await this.handle(call, e);
+      });
+      return;
+    }
     this.run(() => this.handle(call, e));
   }
 
@@ -216,53 +234,87 @@ export class VoiceHost {
   }
 
   /**
-   * Forgets voices, after every step queued before it, and leaves a tombstone timed now, when it
-   * is asked for: a name given before it that it covers never teaches again, and one given after
-   * it, even while this waits in the queue, is newer [VO-12]. False when the file held nothing in
-   * that scope; `all` is always true.
+   * Forgets voices, after every step queued before it, and leaves a tombstone stamped when it is
+   * asked for: a name given before it that it covers never teaches again, and one given after it,
+   * even while this waits in the queue, is newer [VO-12]. The tombstone is kept even when the file
+   * held nothing, since a call may still hold the name under MIN_LEARN_SEC, or not loaded. `gone`:
+   * the file held something in that scope (`all` always); `held`: a loaded call has a teaching
+   * name in that scope. Throws `TombstonesError`, with nothing changed, when the tombstone cannot
+   * be saved.
    */
-  forget(scope: ForgetScope): Promise<boolean> {
-    const at = this.now();
+  forget(scope: ForgetScope): Promise<{ gone: boolean; held: boolean }> {
+    const at = this.tombstones.stamp(this.now());
     return this.exclusive(async () => {
       const name = "name" in scope ? scope.name : undefined;
       const call = "call" in scope ? scope.call : undefined;
+      const t: Tombstone =
+        "all" in scope
+          ? { kind: "forget", all: true, at }
+          : {
+              kind: "forget",
+              ...(name !== undefined ? { name } : {}),
+              ...(call !== undefined ? { call } : {}),
+              at,
+            };
+      // Saved before the file is edited, so a forget that is answered always holds.
+      await this.tombstones.add(t);
       let gone = true;
-      if ("all" in scope) await this.o.store.forgetAll();
-      else if (name === undefined) gone = (await this.o.store.forgetCall(call as string)) > 0;
-      else if (call === undefined) gone = await this.o.store.forget(name);
-      else gone = (await this.o.store.forgetPersonCall(name, call)) > 0;
-      if (gone) {
-        this.tombstones.add(
-          "all" in scope
-            ? { kind: "forget", all: true, at }
-            : {
-                kind: "forget",
-                ...(name !== undefined ? { name } : {}),
-                ...(call !== undefined ? { call } : {}),
-                at,
-              },
-        );
-        await this.pruneNow();
+      try {
+        if ("all" in scope) await this.o.store.forgetAll();
+        else if (name === undefined) gone = (await this.o.store.forgetCall(call as string)) > 0;
+        else if (call === undefined) gone = await this.o.store.forget(name);
+        else gone = (await this.o.store.forgetPersonCall(name, call)) > 0;
+      } catch (err) {
+        await this.tombstones.remove(t).catch(() => {});
+        throw err;
       }
-      return gone;
+      const held = "all" in scope || this.held(name, call);
+      await this.pruneNow();
+      return { gone, held };
     });
   }
 
   /**
-   * Renames a person, after every step queued before it, and leaves a tombstone timed now: a name
-   * `from` given before it teaches `to` from now on [VO-12]. Null when akou knows no `from`.
+   * Renames a person, after every step queued before it, and leaves a tombstone stamped when it
+   * is asked for: a name `from` given before it teaches `to` from now on [VO-12]. Null when akou
+   * knows no `from`. Throws `TombstonesError`, with nothing changed, when the tombstone cannot be
+   * saved.
    */
   rename(from: string, to: string): Promise<{ dropped: number } | null> {
-    const at = this.now();
+    const at = this.tombstones.stamp(this.now());
     return this.exclusive(async () => {
-      const out = await this.o.store.rename(from, to);
-      if (out === null) return null;
-      if (from.trim() !== to.trim()) {
-        this.tombstones.add({ kind: "rename", from: from.trim(), to: to.trim(), at });
-        await this.pruneNow();
+      const t: Tombstone = { kind: "rename", from: from.trim(), to: to.trim(), at };
+      const moves = t.from !== t.to;
+      if (moves) await this.tombstones.add(t);
+      let out: { dropped: number } | null;
+      try {
+        out = await this.o.store.rename(from, to);
+      } catch (err) {
+        if (moves) await this.tombstones.remove(t).catch(() => {});
+        throw err;
       }
+      if (out === null) {
+        if (moves) await this.tombstones.remove(t);
+        return null;
+      }
+      if (moves) await this.pruneNow();
       return out;
     });
+  }
+
+  /** Whether a loaded call has a teaching name in the scope: `name`, of call `call`, or both. */
+  private held(name: string | undefined, call: string | undefined): boolean {
+    const ids = call !== undefined ? [call] : [...(this.o.loaded?.() ?? [])];
+    for (const id of ids) {
+      const c = this.o.call(id);
+      if (!c) continue;
+      for (const r of c.view.roster()) {
+        if (r.mergedInto || !r.name || r.byVoice || !r.namedBy || !TEACHERS.has(r.namedBy))
+          continue;
+        if (name === undefined || r.name.trim() === name.trim()) return true;
+      }
+    }
+    return false;
   }
 
   /** Drops the tombstones no kept call can need, on the queue (a call was deleted for good). */
@@ -273,7 +325,7 @@ export class VoiceHost {
   private async pruneNow(): Promise<void> {
     const oldest = await this.o.oldestCall?.();
     if (oldest === undefined || oldest === null) return;
-    const n = this.tombstones.prune(oldest);
+    const n = await this.tombstones.prune(oldest);
     if (n > 0) this.o.log("info", `voices: dropped ${n} tombstone(s) no kept call needs`);
   }
 
@@ -411,10 +463,10 @@ export class VoiceHost {
       at: new Date(t).toISOString(),
     });
     // A forget or a rename the user asked for after this name was given wins over it [VO-12].
-    const given = c.view.nameAt(spk);
+    const n = c.view.nameAt(spk);
     const name =
-      lesson && given !== undefined
-        ? this.tombstones.teaches(lesson.name, call, given)
+      lesson && n
+        ? this.tombstones.teaches(lesson.name, call, this.tombstones.lifted(call, n.seq) ?? n.t)
         : lesson?.name;
     try {
       if (lesson && name) await this.o.store.upsert(name, lesson.exemplar);

@@ -22,6 +22,7 @@
 import { shownVoices } from "../../query/render.ts";
 import type { ForgetScope, VoiceHost } from "../../voices/host.ts";
 import { cleanName, MAX_NAME_LENGTH, VoicesError } from "../../voices/store.ts";
+import { TombstonesError } from "../../voices/tombstones.ts";
 import { isLocalUser } from "../caller.ts";
 import { errorsOf, type RouteErrors } from "../errors.ts";
 import { HttpError, json, type RouteContext, type RouteDoc, type Router } from "../http.ts";
@@ -67,12 +68,16 @@ function door(c: RouteContext<ApiApp>, on: boolean): VoiceHost {
   return host;
 }
 
-/** A store edit, with a file akou cannot read answered as 409 `voices_file_invalid`. */
+/**
+ * A store edit, with a file akou cannot read answered as 409 `voices_file_invalid`, and a
+ * tombstone that could not be saved as 500 `voices_not_saved` (nothing was changed).
+ */
 async function edit<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
     if (err instanceof VoicesError) throw new HttpError(409, "voices_file_invalid", err.message);
+    if (err instanceof TombstonesError) throw new HttpError(500, "voices_not_saved", err.message);
     throw err;
   }
 }
@@ -154,7 +159,12 @@ export function voiceRoutes(r: Router<ApiApp>): void {
           dropped: { type: "integer" },
         },
       },
-      errors: { 400: ["bad_field"], 404: ["not_found"], 409: ["voices_file_invalid"] },
+      errors: {
+        400: ["bad_field"],
+        404: ["not_found"],
+        409: ["voices_file_invalid"],
+        500: ["voices_not_saved"],
+      },
     }),
     async (c) => {
       const host = door(c, true);
@@ -174,13 +184,14 @@ export function voiceRoutes(r: Router<ApiApp>): void {
     "/voices/forget",
     doc({
       id: "voices.forget",
-      doc: "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. akou keeps a note of the forget (the name or the call, and the time; never a voiceprint) while a call older than it is kept, so a name given before it never teaches the voice back; a name given later teaches as usual. Names already shown in calls stay as they are there.",
+      doc: "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. A forget holds even when voices.yaml held nothing yet (a name given with too little speech to learn from): a call akou keeps, or a name on a speaker of a loaded call, answers 200; a name akou finds nowhere answers 404. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. akou keeps a note of the forget (the name or the call, and the time; never a voiceprint) while a call older than it is kept, so a name given before it never teaches the voice back; a name given later teaches as usual. Names already shown in calls stay as they are there.",
       body: { "name?": "string", "call?": "string", "all?": "boolean" },
       ok: 200,
       errors: {
         400: ["bad_field"],
         404: ["no_calls", "no_live_call", "not_found"],
         409: ["voices_file_invalid"],
+        500: ["voices_not_saved"],
       },
     }),
     async (c) => {
@@ -218,9 +229,12 @@ export function voiceRoutes(r: Router<ApiApp>): void {
           : call === undefined
             ? { name }
             : { name, call };
-      if (!(await edit(() => host.forget(scope)))) {
-        // A call akou does not know answers 404 with `call`, so the CLI exits 3.
+      const out = await edit(() => host.forget(scope));
+      if (!out.gone && !out.held) {
+        // A call akou does not know answers 404 with `call`, so the CLI exits 3. A call it keeps
+        // may still hold names that teach later: its tombstone is kept, and that is a forget.
         if (call !== undefined) resolveRef(c.app, call, { allowLast: true });
+        if (name === undefined) return json(200, { ok: true, call });
         const what =
           name === undefined
             ? "no voice was learned from that call"

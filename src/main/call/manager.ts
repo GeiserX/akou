@@ -148,6 +148,8 @@ export class CallManager {
   private readonly clock: Clock;
   private readonly budgets: CallBudgets;
   private readonly controllers = new Map<string, CallController>();
+  /** Calls moving out of the trash, between the folder's move and their index entry. */
+  private readonly restoring = new Set<string>();
   /** Calls being read from disk for a restart, so two restarts of one call share one controller. */
   private readonly loading = new Map<string, Promise<CallController>>();
   private readonly index = new Map<string, CallSummary>();
@@ -728,10 +730,16 @@ export class CallManager {
    */
   async oldestCall(): Promise<number | null> {
     await this.init();
-    if (this.trashed().length > 0) return null;
+    // A call being restored is in neither the trash nor the index until it is indexed again.
+    if (this.restoring.size > 0 || this.trashed().length > 0) return null;
     let oldest = Number.POSITIVE_INFINITY;
     for (const c of this.index.values()) oldest = Math.min(oldest, c.createdAt);
     return oldest;
+  }
+
+  /** The ids of the calls loaded now: live ones and those opened since the start. */
+  loaded(): string[] {
+    return [...this.controllers.keys()];
   }
 
   /** The trashed calls, each with its folder in the trash. */
@@ -762,9 +770,14 @@ export class CallManager {
     const dir = join(this.o.root, t.workspace, basename(t.dir));
     if (existsSync(dir)) return fail(409, "folder_taken", `${dir} already exists`, { call: id });
     mkdirSync(join(this.o.root, t.workspace), { recursive: true });
-    await renameReplacing(t.dir, dir);
-    rmSync(`${t.dir}.json`, { force: true });
-    await this.reindex(dir, t.workspace);
+    this.restoring.add(id);
+    try {
+      await renameReplacing(t.dir, dir);
+      rmSync(`${t.dir}.json`, { force: true });
+      await this.reindex(dir, t.workspace);
+    } finally {
+      this.restoring.delete(id);
+    }
     return { ok: true, dir, workspace: t.workspace };
   }
 

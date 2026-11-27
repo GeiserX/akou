@@ -6,7 +6,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { encodeVec } from "../src/main/asr/speakers.ts";
 import { ApiClient } from "../src/main/cli/client.ts";
@@ -615,6 +616,75 @@ describe("[VO-12] a forget or a rename during a live call holds", () => {
     expect((await cli(env(r), ["name", spk, name])).code).toBe(0);
     await r.app.voices?.idle();
   }
+
+  test(
+    "a forget early in a live call, before akou learned the voice, answers 200 and holds",
+    async () => {
+      await store(rig).forgetAll();
+      const id = await rig.startCall();
+      try {
+        // c2 is named with 5 s of speech: under MIN_LEARN_SEC, so voices.yaml holds nothing yet.
+        await speak(rig, id, "c2", 1, at(0));
+        await rig.app.write(id, {
+          type: "speaker.centroid",
+          spk: "c2",
+          vec: encodeVec(at(0)),
+          secs: 5,
+          cons: 0.8,
+        });
+        await nameAgain(rig, "c2", "Ben");
+        expect(await names()).toEqual([]);
+        const byCall = await cli(env(), ["voices", "forget", "--call", "live"]);
+        expect([byCall.code, byCall.out]).toEqual([0, `Forgot what call ${id} taught`]);
+        expect((await rig.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
+        // A name nobody gave stays 404.
+        const nobody = await rig.api("POST", "/voices/forget", { name: "Zed" });
+        expect([nobody.status, nobody.body.error]).toEqual([404, "not_found"]);
+        await speak(rig, id, "c2", 2, at(0));
+        expect(await names()).toEqual([]);
+        // The positive control: naming the speaker again teaches.
+        await nameAgain(rig, "c2", "Ben");
+        expect(await names()).toEqual(["Ben"]);
+      } finally {
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+      // A call akou keeps that taught nothing and names no one: still a forget, never a 404.
+      const quiet = await rig.startCall();
+      await rig.api("POST", "/calls/live/stop");
+      const q = await rig.api("POST", "/voices/forget", { call: quiet });
+      expect([q.status, q.body]).toEqual([200, { ok: true, call: quiet }]);
+    },
+    LONG,
+  );
+
+  test(
+    "a tombstone that cannot be saved answers 500 voices_not_saved and forgets nothing",
+    async () => {
+      await taught();
+      const file = `${voicesPath(rig.app.configDir)}.tombstones`;
+      try {
+        // A folder with a file in it where the tombstones go: no rename can replace it. The
+        // tombstones already kept stay in memory and are written again by the next save.
+        rmSync(file, { force: true });
+        mkdirSync(join(file, "x"), { recursive: true });
+        const f = await rig.api("POST", "/voices/forget", { name: "Ben" });
+        expect([f.status, f.body.error]).toEqual([500, "voices_not_saved"]);
+        const n = await rig.api("POST", "/voices/rename", { from: "Ben", to: "Ben Ortiz" });
+        expect([n.status, n.body.error]).toEqual([500, "voices_not_saved"]);
+        expect(await names()).toEqual(["Ben"]);
+        // The positive control: once it can be written, the same forget answers 200.
+        rmSync(file, { recursive: true, force: true });
+        expect((await rig.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
+        expect(await names()).toEqual([]);
+      } finally {
+        rmSync(file, { recursive: true, force: true });
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+    },
+    LONG,
+  );
 
   test(
     "a merge of the forgotten label into an unnamed one teaches nothing",
