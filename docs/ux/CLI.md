@@ -64,7 +64,7 @@ These are the contract. Each has a check that runs over the whole command regist
 
 ## 4. The command tree
 
-The tree stays flat: one verb per action, with subcommands only where a noun has several actions (`vocab`, `models`, `config`, `share`, `calls`). "Today" says what exists; **new** marks a command this file or a sibling adds.
+The tree stays flat: one verb per action, with subcommands only where a noun has several actions (`vocab`, `voices`, `models`, `config`, `share`, `calls`). "Today" says what exists; **new** marks a command this file or a sibling adds.
 
 | Group | Commands | Today |
 |---|---|---|
@@ -73,6 +73,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `ask --preset NAME [--speaker NAME]` and `presets list` (PG-F2) · `search "Q" [-k N]` · `events [-f] [--type T,…] [--client NAME]` (PG-S3) · `answer ASK "TEXT"`, the agent following the call answering the ask box · `wait --for STAGE [--timeout 30m]` (PG-S5) | has |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
+| Voices | `voices [list]` · `voices rename OLD NEW` · `voices forget NAME [--call ID]\|--all` · `voices refuse SPK [-c CALL]` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls empty-trash [--yes]` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `workspaces` · `workspace add NAME` · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
@@ -395,6 +396,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Ask presets | `presets list`, `ask --preset` | `GET /presets` | MCP prompts, one per preset file (PG-M7) | the ask box's menu | none |
 | Search one call | `search` | `GET …/search` | `akou_search` | none | window find is in [WINDOW.md](WINDOW.md) |
 | Speakers | `name` | `POST …/speakers…` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | speaker chip | none |
+| Voices | `voices` | `GET /voices`, `POST /voices/rename`, `POST /voices/forget`, `POST …/speakers/refuse` | `akou_voices_list`, `akou_voice_forget`, `akou_voice_refuse` | none yet | MCP has no rename: who akou names by voice stays the user's to change |
 | Notes | `note` | `POST/PATCH/DELETE …/notes` | `akou_add_note`, `akou_get_notes`, `akou_edit_note`, `akou_delete_note` | notepad | none |
 | Mark a moment | `mark` | notes route | `akou_add_note` | mark key | `mark` missing (CLI-34) |
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |

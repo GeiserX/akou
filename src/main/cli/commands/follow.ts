@@ -8,6 +8,7 @@ import { mentions, nameWords } from "../../../core/mention.ts";
 import { type LearnedItem, learnedNote } from "../../../core/vocab/learned.ts";
 import { readSse } from "../../llm/provider.ts";
 import { contextCommand } from "../../query/handoff.ts";
+import { voiceLabel } from "../../query/render.ts";
 import type { Parsed } from "../args.ts";
 import { bool, duration, int, str } from "../args.ts";
 import { type ApiResponse, EXIT } from "../client.ts";
@@ -21,8 +22,10 @@ type Format = "txt" | "md" | "json";
 export function lineText(l: Body, format: Format, colors?: SpeakerColors): string {
   if (format === "json") return JSON.stringify(l);
   const text = l.annotated ?? l.text;
-  if (format === "md") return `**${l.time} ${l.speaker}:** ${text}`;
-  const who = colors ? colors.name(l.spk ?? l.speaker, l.speaker) : l.speaker;
+  // `Ben (voice)` or `Speaker 2 (Ben?)`: a name akou found by voice is never shown as a given one.
+  const speaker = voiceLabel(l.speaker, l.voice);
+  if (format === "md") return `**${l.time} ${speaker}:** ${text}`;
+  const who = colors ? colors.name(l.spk ?? l.speaker, speaker) : speaker;
   return `${l.time} ${who}: ${text}`;
 }
 

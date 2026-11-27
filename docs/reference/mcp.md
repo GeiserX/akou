@@ -1044,7 +1044,7 @@ Parameters: none.
 
 **Name a speaker**
 
-Name a speaker the moment the user says who a voice is ("Speaker 2 is Ben"). `speaker` is the id from the transcript: you, c2, c3...
+Name a speaker the moment the user says who a voice is ("Speaker 2 is Ben"). `speaker` is the id from the transcript: you, c2, c3... Naming a speaker akou recognised by voice ("Ben (voice)") with that same name confirms the match. A name given here does not teach akou the voice for later calls; to teach it, the user names the speaker in akou's window, or a shell runs `akou name c2 Ben`. Never name a speaker from a guess.
 
 Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`.
 
@@ -2117,6 +2117,105 @@ Annotations: `readOnlyHint: true`, `openWorldHint: false`.
       "maximum": 200
     }
   },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_voice_forget
+
+**Forget a voice**
+
+Forget a voice akou recognises, only when the user asks: `name` forgets that person, `name` with `call` only what that call taught, `call` alone what that call taught about anyone, `all: true` everyone. It cannot be undone.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `name` | `string` | no | The person's name as akou_voices_list gives it. |
+| `call` | `string` | no | A call id: forget only what this call taught. |
+| `all` | `boolean` | no | Forget every voice; send it alone. |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "The person's name as akou_voices_list gives it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "call": {
+      "description": "A call id: forget only what this call taught.",
+      "type": "string",
+      "minLength": 1
+    },
+    "all": {
+      "description": "Forget every voice; send it alone.",
+      "type": "boolean"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_voice_refuse
+
+**Refuse a name found by voice**
+
+Refuse the name akou found by voice for a speaker of the live call, when the user says it is wrong ("c2 is not Ben"): the speaker shows its own label again and akou does not offer that name for it again in this call. When the user says who it is instead, call akou_name_speaker.
+
+Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: false`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `speaker` | `string` | yes | The speaker id, such as "c2". |
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "speaker": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The speaker id, such as \"c2\"."
+    }
+  },
+  "required": [
+    "speaker"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+</details>
+
+## akou_voices_list
+
+**List the voices akou knows**
+
+The people akou recognises by voice across calls: each name, how many calls taught it, and when akou last heard it. Never a voiceprint.
+
+Annotations: `readOnlyHint: true`, `openWorldHint: false`.
+
+Parameters: none.
+
+<details markdown>
+<summary>Input schema</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {},
   "$schema": "https://json-schema.org/draft/2020-12/schema"
 }
 ```

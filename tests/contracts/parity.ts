@@ -190,6 +190,37 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Voices: list the people akou recognises by voice",
+    cli: ["voices"],
+    api: ["GET /voices"],
+    mcp: ["akou_voices_list"],
+    window: { none: "the Voices list in Settings is not built yet" },
+  },
+  {
+    action: "Voices: rename a person",
+    cli: ["voices"],
+    api: ["POST /voices/rename"],
+    mcp: {
+      none: "a rename changes who akou names by voice in every later call, so like teaching a voice it stays with the user at the CLI and the window; an agent may infer a name wrongly",
+    },
+    window: { none: "the Voices list in Settings is not built yet" },
+  },
+  {
+    action: "Voices: forget a person, what one call taught, or everyone",
+    cli: ["voices"],
+    api: ["POST /voices/forget"],
+    mcp: ["akou_voice_forget"],
+    window: { none: "the Voices list in Settings is not built yet" },
+  },
+  {
+    action: "Refuse a name found by voice",
+    cli: ["voices"],
+    api: ["POST /calls/:id/speakers/refuse"],
+    mcp: ["akou_voice_refuse"],
+    window: { none: "the speaker popover's Not Ben button is not built yet" },
+    note: "Confirming a name found by voice is naming the speaker with that name (`name`, `akou_name_speaker`).",
+  },
+  {
     action: "Add and read notes",
     cli: ["note"],
     api: ["POST /calls/:id/notes", "GET /calls/:id/notes"],

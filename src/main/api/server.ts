@@ -60,6 +60,7 @@ import { queryRoutes } from "./routes/query.ts";
 import { rootRoutes, serverRoutes } from "./routes/server.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { vocabRoutes } from "./routes/vocab.ts";
+import { voiceRoutes } from "./routes/voices.ts";
 import { workspaceRoutes } from "./routes/workspaces.ts";
 
 export const API_PREFIX = "/v1";
@@ -155,6 +156,11 @@ export interface ApiApp {
   readonly listeners?: import("../query/listeners.ts").Listeners;
   levels(id: string): Levels | null;
   config(): LoadedConfig;
+  /**
+   * The voices file (`voices.yaml`), for the voices routes; null in server mode, which keeps no
+   * voices. Absent: the same as null.
+   */
+  voiceStore?(): import("../voices/store.ts").VoiceStore | null;
   /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
   secretStore?(): "keychain" | null;
   /** The capture helper's device query (`GET /devices`, `GET /apps`). Throws `DevicesRefused`. */
@@ -320,6 +326,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   queryRoutes(r);
   answerRoutes(r);
   notesRoutes(r);
+  voiceRoutes(r);
   vocabRoutes(r);
   fixRoutes(r);
   dictationRoutes(r);

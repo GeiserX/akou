@@ -72,6 +72,9 @@
       "name": "memo"
     },
     {
+      "name": "voices"
+    },
+    {
       "name": "callVocab"
     },
     {
@@ -4024,6 +4027,305 @@
           },
           "409": {
             "$ref": "#/components/responses/409.locked.log_closed"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/voices": {
+      "get": {
+        "operationId": "voices.list",
+        "tags": [
+          "voices"
+        ],
+        "description": "The people akou recognises by voice, each with the calls that taught their voice (newest first), the seconds of speech it learned from, and when it last heard them. Never a voiceprint: those stay in voices.yaml on this computer.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "voices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "calls": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "secs": {
+                            "type": "number"
+                          },
+                          "lastSeen": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.local_only"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.voices_file_invalid.voices_off"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/voices/rename": {
+      "post": {
+        "operationId": "voices.rename",
+        "tags": [
+          "voices"
+        ],
+        "description": "Rename a person akou recognises by voice, for every later call: `from` is the name now, `to` the new one. Renaming onto a name akou already knows makes the two one person. A name already shown in a call stays as it is there.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.missing_field.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.local_only"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.voices_file_invalid.voices_off"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/voices/forget": {
+      "post": {
+        "operationId": "voices.forget",
+        "tags": [
+          "voices"
+        ],
+        "description": "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. The voiceprints leave the file at once and nothing keeps a copy. Names already shown in calls stay as they are there.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "all": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.local_only"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.voices_file_invalid.voices_off"
+          },
+          "413": {
+            "$ref": "#/components/responses/413.body_too_large"
+          },
+          "415": {
+            "$ref": "#/components/responses/415.json_required"
+          },
+          "500": {
+            "$ref": "#/components/responses/500.internal"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/speakers/refuse": {
+      "post": {
+        "operationId": "speakers.refuse",
+        "tags": [
+          "speakers"
+        ],
+        "description": "Refuse the name akou found by voice for a speaker of the call (`spk`, such as `c2`): the speaker shows its own label again, and akou does not offer that name for it again in this call. To confirm the name instead, name the speaker with it (`POST /calls/{id}/speakers`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spk": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spk"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/400.bad_field.bad_json.bad_speaker.last_refused.missing_field.refused.unknown_field"
+          },
+          "401": {
+            "$ref": "#/components/responses/401.unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.local_only"
+          },
+          "404": {
+            "$ref": "#/components/responses/404.no_live_call.not_found"
+          },
+          "409": {
+            "$ref": "#/components/responses/409.locked.log_closed.no_voice.voices_off"
           },
           "413": {
             "$ref": "#/components/responses/413.body_too_large"
@@ -9500,6 +9802,32 @@
           }
         }
       },
+      "403.bad_host.browser_request.forbidden.local_only": {
+        "description": "Forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "bad_host",
+                        "browser_request",
+                        "forbidden",
+                        "local_only"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "403.bad_host.browser_request.forbidden.permission": {
         "description": "Forbidden",
         "content": {
@@ -10074,6 +10402,32 @@
           }
         }
       },
+      "409.locked.log_closed.no_voice.voices_off": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "locked",
+                        "log_closed",
+                        "no_voice",
+                        "voices_off"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       "409.locked.log_closed.not_ended.pass_running": {
         "description": "Conflict",
         "content": {
@@ -10498,6 +10852,30 @@
                     "error": {
                       "enum": [
                         "vocab_file_invalid"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "409.voices_file_invalid.voices_off": {
+        "description": "Conflict",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "properties": {
+                    "error": {
+                      "enum": [
+                        "voices_file_invalid",
+                        "voices_off"
                       ]
                     }
                   }
@@ -11537,6 +11915,10 @@
             "description": "The call is recording; stop it first."
           },
           {
+            "const": "local_only",
+            "description": "Voices are reached only from this computer: the window or the akou CLI, never a key."
+          },
+          {
             "const": "locked",
             "description": "Another writer holds the call's log."
           },
@@ -11619,6 +12001,10 @@
           {
             "const": "no_text",
             "description": "The dictation has no text."
+          },
+          {
+            "const": "no_voice",
+            "description": "The speaker has no name found by voice to refuse."
           },
           {
             "const": "not_dictating",
@@ -11755,6 +12141,14 @@
           {
             "const": "vocab_file_invalid",
             "description": "The vocabulary file could not be read."
+          },
+          {
+            "const": "voices_file_invalid",
+            "description": "voices.yaml could not be read; fix or delete it by hand."
+          },
+          {
+            "const": "voices_off",
+            "description": "Voice recognition is off (`voices.enabled`), or this is a server, which has none."
           },
           {
             "const": "workspace_not_folder",

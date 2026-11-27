@@ -439,6 +439,20 @@ export class VoiceStore {
     });
   }
 
+  /** Forgets what one call taught about one person. Returns how many left the file. */
+  forgetPersonCall(name: string, call: string): Promise<number> {
+    return this.edit((all) => {
+      let n = 0;
+      const people = all.map((p) => {
+        if (p.name !== name) return p;
+        const left = p.exemplars.filter((e) => e.call !== call);
+        n += p.exemplars.length - left.length;
+        return { name: p.name, exemplars: left };
+      });
+      return { people, result: n, changed: n > 0 };
+    });
+  }
+
   /** Forgets everyone: deletes the file. False when there was no file. */
   forgetAll(): Promise<boolean> {
     return locked(this.path, async () => {
