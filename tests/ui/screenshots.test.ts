@@ -1,14 +1,29 @@
 /**
  * Screenshots for review (docs/TESTING.md TS-15c): with `AKOU_UI_SHOTS` set, a rig saves every page
  * its test left open in both themes as it closes. Never compared, so never a gate; this proves the
- * files are written, that each theme really took, and that the page is handed back to the system's.
+ * files are written, that each theme really took, that no shot is taken while the theme's colours
+ * are still fading in, and that the page is handed back to the system's.
  */
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Page } from "playwright-core";
 import { tempDir } from "../helpers.ts";
-import { screenshots, UI_TIMEOUT, uiRig } from "./rig.ts";
+import { screenshots, seedCall, settle, standardCall, UI_TIMEOUT, uiRig } from "./rig.ts";
+
+/** The page's animations and transitions that end and are running now. */
+const fading = (page: Page) =>
+  page.evaluate(
+    () =>
+      document
+        .getAnimations()
+        .filter(
+          (a) =>
+            a.playState === "running" &&
+            a.effect?.getComputedTiming().iterations !== Number.POSITIVE_INFINITY,
+        ).length,
+  );
 
 /** The PNG's width and height, from its IHDR chunk. */
 const size = (png: Buffer) => [png.readUInt32BE(16), png.readUInt32BE(20)];
@@ -34,6 +49,38 @@ describe("[TS-15c] every UI run saves screenshots for review", () => {
         // Positive control: the same screen in the other theme is another picture.
         expect(Buffer.compare(d as Buffer, l as Buffer)).not.toBe(0);
         expect(await dark()).toBe(before);
+      } finally {
+        await rig.close();
+        t.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "each shot waits until the theme's colours have finished fading in",
+    async () => {
+      const t = tempDir("akou-ui-");
+      const id = seedCall(t.dir, (b) => standardCall(b, "01J8Z6Q4M2VX0K7B3D4E5SHOTS")).id;
+      const rig = await uiRig({ home: t.dir });
+      try {
+        const page = await rig.open(id);
+        await page.waitForSelector("#lines .row >> nth=3");
+        await settle(page);
+        // Positive control: a theme switch starts the rows' colour transition, so a shot taken
+        // at once would catch it.
+        await page.emulateMedia({ colorScheme: "dark" });
+        expect(await fading(page)).toBeGreaterThan(0);
+        await page.emulateMedia({ colorScheme: "light" });
+        await settle(page);
+        const atShot: number[] = [];
+        const shoot = page.screenshot.bind(page);
+        page.screenshot = async (o) => {
+          atShot.push(await fading(page));
+          return shoot(o);
+        };
+        await screenshots(page, join(t.dir, "shots"), "rows");
+        expect(atShot).toEqual([0, 0]);
       } finally {
         await rig.close();
         t.cleanup();

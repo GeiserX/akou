@@ -2907,12 +2907,6 @@ dialog {
 #people li.voice {
   border-style: dashed;
 }
-/* --dim on the light People strip's panel is 4.4:1; a shade darker passes 4.5:1. */
-@media (prefers-color-scheme: light) {
-  #people .who .offer {
-    color: #5c6169;
-  }
-}
 /* The share viewer's chips do nothing, but they say who spoke: drawn at full strength, never
    greyed like a disabled control. */
 .row .who:disabled {
@@ -2931,6 +2925,15 @@ dialog {
 .pop-voice .pop-note,
 p.pop-note {
   color: var(--dim);
+}
+/* In light, --dim is 4.4:1 on the panel and 4.3:1 on the played line's fill. One shade darker
+   passes 4.5:1 on every surface an offer or a popover note sits on. */
+@media (prefers-color-scheme: light) {
+  .who .offer,
+  .pop-voice .pop-note,
+  p.pop-note {
+    color: #5c6169;
+  }
 }
 
 /* The line being played (W5.6): a neutral fill, never the accent. */
