@@ -326,7 +326,9 @@ export class VoiceHost {
     const t = this.o.thresholds(this.model);
     const spk = e.spk;
     if (e.type === "speaker.name") {
-      await this.relearn(c0, call, spk, e.t, false);
+      // A name on a merged member is the group's name when its root has none: the root teaches it
+      // now, not at its next centroid.
+      await this.relearn(c0, call, c0.view.resolveSpeaker(spk), e.t, false);
       return;
     }
     const centroid: LabelCentroid = { vec: decodeVec(e.vec), secs: e.secs, cons: e.cons };

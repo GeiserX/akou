@@ -303,6 +303,63 @@ describe("the voices doors", () => {
   );
 
   test(
+    "after a merge, refuse takes the name the label shows, from the route and the CLI",
+    async () => {
+      const env = { ...process.env, ...rig.env };
+      for (const via of ["route", "cli"] as const) {
+        await store(rig).forgetAll();
+        await store(rig).upsert("Ben", exemplar("earlier", at(0)));
+        await store(rig).upsert("Cy", exemplar("earlier", at(90), "c2"));
+        const id = await rig.startCall();
+        try {
+          await speak(rig, id, "c1", 1, at(2));
+          await speak(rig, id, "c2", 2, at(140));
+          expect((await voiceEvents(rig, id)).map((e) => [e.spk, e.name, e.status])).toEqual([
+            ["c1", "Ben", "named"],
+            ["c2", "Cy", "offered"],
+          ]);
+          const m = await rig.api("POST", `/calls/${id}/speakers/merge`, {
+            from: "c2",
+            into: "c1",
+          });
+          expect(m.status).toBe(200);
+          await rig.app.voices?.idle();
+          const c1 = (await rig.api("GET", `/calls/${id}`)).body.roster.find(
+            (r: { spk: string }) => r.spk === "c1",
+          );
+          expect([c1.label, c1.byVoice]).toEqual(["Ben", true]);
+          // The positive control: the group's newest voice event is c2's offer, not what shows.
+          const call = await rig.app.call(id);
+          expect(call.view.voiceFor("c1")?.name).toBe("Cy");
+          const seq = (await rig.app.events(id, 0)).length;
+          if (via === "route") {
+            const r = await rig.api("POST", `/calls/${id}/speakers/refuse`, { spk: "c1" });
+            expect([r.status, r.body.name]).toEqual([200, "Ben"]);
+          } else {
+            const r = await cli(env, ["voices", "refuse", "c1"]);
+            expect([r.code, r.out]).toEqual([0, "c1 is not Ben"]);
+          }
+          await rig.app.voices?.idle();
+          const added = (await rig.app.events(id, 0))
+            .slice(seq)
+            .filter((e) => e.type === "speaker.voice");
+          expect(added).toEqual([
+            expect.objectContaining({ spk: "c1", name: "Ben", status: "refused" }),
+          ]);
+          const after = (await rig.api("GET", `/calls/${id}`)).body.roster.find(
+            (r: { spk: string }) => r.spk === "c1",
+          );
+          expect(after.label).not.toBe("Ben");
+        } finally {
+          await rig.api("POST", "/calls/live/stop");
+        }
+      }
+      await store(rig).forgetAll();
+    },
+    LONG,
+  );
+
+  test(
     "a typed name carries no voice in the roster, and refuse on it answers 409 no_voice",
     async () => {
       await store(rig).forgetAll();
@@ -574,9 +631,10 @@ describe("[VO-12] a forget or a rename during a live call holds", () => {
           expect.objectContaining({ spk: "c5", name: "Ben" }),
         );
         expect(await names()).toEqual([]);
-        // The positive control: naming the group again teaches its voice. (Naming the merged member
-        // c2 teaches the group only at the root's next centroid, as before this change.)
-        await nameAgain(rig, "c5", "Ben");
+        // The positive control: naming the merged member again teaches the group's voice at once.
+        await nameAgain(rig, "c2", "Ben");
+        expect(await names()).toEqual(["Ben"]);
+        expect((await store(rig).list())[0]?.calls).toEqual([id]);
         expect(await names()).toEqual(["Ben"]);
       } finally {
         await rig.api("POST", "/calls/live/stop");

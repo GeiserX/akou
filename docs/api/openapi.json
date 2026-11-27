@@ -4284,7 +4284,7 @@
         "tags": [
           "speakers"
         ],
-        "description": "Refuse the name akou found by voice for a speaker of the call (`spk`, such as `c2`): the speaker shows its own label again, and akou does not offer that name for it again in this call. To confirm the name instead, name the speaker with it (`POST /calls/{id}/speakers`).",
+        "description": "Refuse the name akou found by voice that a speaker of the call shows (`spk`, such as `c2`; after a merge, the group's, as the window shows it): the speaker shows its own label again, and akou does not offer that name for it again in this call. To confirm the name instead, name the speaker with it (`POST /calls/{id}/speakers`).",
         "parameters": [
           {
             "name": "id",
