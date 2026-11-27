@@ -280,9 +280,10 @@ describe("traps", () => {
   test("null thresholds do nothing", () => {
     expect(run([ANA, BO], at(0), {}, { ...NO_THRESHOLDS })).toEqual({ kind: "none" });
     expect(run([ANA, BO], at(0), {}, thresholdsFor("no-such-model"))).toEqual({ kind: "none" });
-    // The shipped gate file: every value null for every model, so akou does nothing by voice.
-    for (const model of ["titanet-small", "campplus-zh-en-advanced"])
-      expect(run([ANA, BO], at(0), {}, thresholdsFor(model))).toEqual({ kind: "none" });
+    // The shipped gate file: CAM++ was not picked, so its values are null and akou does nothing by voice.
+    expect(run([ANA, BO], at(0), {}, thresholdsFor("campplus-zh-en-advanced"))).toEqual({
+      kind: "none",
+    });
     // A shown name is not withdrawn either.
     expect(
       run([BO], at(0), { voice: { name: "Ana", status: "named" } }, { ...NO_THRESHOLDS }),

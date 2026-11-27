@@ -1,10 +1,10 @@
 {
   "titanet-small": {
-    "accept": null,
+    "accept": 0.82,
     "offer": null,
-    "margin": null,
-    "minMatchSec": null,
-    "minLearnSec": null,
+    "margin": 0.1,
+    "minMatchSec": 10,
+    "minLearnSec": 10,
     "score": "best"
   },
   "campplus-zh-en-advanced": {
