@@ -240,6 +240,7 @@ export function noVoicesClaims(text: string): string[] {
     /the (one|only) thing that carries[^.]*vocabulary/i,
     /speakers are named per call/i,
     /speaker names? (stay|are) per call/i,
+    /\bno (command|answer|route|door)s?\b[^.]*\b(prints?|carr(y|ies)|returns?)\b[^.]*voice ?prints?/i,
   ];
   return text.split("\n").filter((l) => stale.some((re) => re.test(l)));
 }
@@ -273,6 +274,7 @@ export function voiceLegalWording(text: string): string[] {
 /** Every Markdown file under `dir`, relative to the repository, outside the folders `skip` names. */
 function markdownUnder(dir: string, skip: readonly string[] = []): string[] {
   return readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
+    .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => f.endsWith(".md") && !skip.some((s) => f.startsWith(s)))
     .map((f) => `${dir}/${f}`);
 }
@@ -382,6 +384,8 @@ describe("[T1.39] Docs drift from code: the voices akou keeps across calls", () 
       "The one thing that carries across calls is the vocabulary.",
       "| Voiceprints across calls | heed | Speakers are named per call |",
       "Speaker names stay per call.",
+      "voices (exit 78). A voices.yaml akou cannot read exits 78 too. No command prints a voiceprint.",
+      "No answer carries a voiceprint or a score: the call roster's `voice` is the name and its status.",
     ])
       expect(noVoicesClaims(old)).toHaveLength(1);
     expect(noVoicesClaims("akou keeps a voiceprint per person you named.")).toEqual([]);

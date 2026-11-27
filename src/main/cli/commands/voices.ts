@@ -10,7 +10,7 @@
  * `akou name c2 Ben` names a speaker and teaches akou that voice; these commands look after what it
  * learned. They reach the app on this computer only: an `ak_` key is refused (exit 77). With
  * `voices.enabled` off, list and forget still work and rename and refuse exit 78; a server keeps no
- * voices (exit 78). A voices.yaml akou cannot read exits 78 too. No command prints a voiceprint.
+ * voices (exit 78). A voices.yaml akou cannot read exits 78 too. No voices command prints a voiceprint.
  */
 
 import { formatLocalDate, formatWall } from "../../../core/log/clock.ts";
