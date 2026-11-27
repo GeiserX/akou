@@ -19,10 +19,11 @@
  *   `voices.yaml.forget` and applied at the next step that can.
  *
  * - **Forget and rename** (`forget`, `rename`, the voices routes) run on the same queue, so they
- *   keep their order against teaching in flight. A typed label of a loaded call that a forget
- *   emptied teaches nothing again, and one whose person was renamed teaches the new name, until a
- *   newer teaching `speaker.name` lands on it [VO-12]: else its next centroid would put back what
- *   the user was just told is gone.
+ *   keep their order against teaching in flight, and each leaves a tombstone (`tombstones.ts`),
+ *   timed when it was asked for. A name given before a forget that covers it teaches nothing, and
+ *   one given before a rename teaches the new name, in every call, after a merge, an unmerge or a
+ *   restart [VO-12]: else the label's next centroid would put back what the user was just told is
+ *   gone. A newer name lifts them.
  *
  * Every step runs on one queue, so decisions keep the order of the events. A decision reads the
  * fold and writes in the same turn, with nothing awaited in between, so it never acts on a fold a
@@ -36,10 +37,11 @@ import { stat } from "node:fs/promises";
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { decodeVec } from "../asr/speakers.ts";
-import { type LabelCentroid, lessonFor, TEACHERS } from "./learn.ts";
+import { type LabelCentroid, lessonFor } from "./learn.ts";
 import { type LabelState, matchVoice } from "./match.ts";
 import type { Person, VoiceStore, VoiceSummary } from "./store.ts";
 import type { VoiceThresholds } from "./thresholds.ts";
+import { VoiceTombstones } from "./tombstones.ts";
 
 /** The live speaker embedder: every `speaker.centroid` is TitaNet-small's. */
 export const LIVE_EMBEDDER = "titanet-small";
@@ -63,6 +65,15 @@ export interface VoiceHostOptions {
   model?: string;
   /** The purges still owed to the file, applied before each step. */
   purge?: VoicePurge;
+  /** The forgets and renames; by default read from beside the voices file. */
+  tombstones?: VoiceTombstones;
+  /** The wall clock the call logs stamp `t` with; `Date.now` by default. */
+  now?: () => number;
+  /**
+   * When the oldest call akou keeps was created (Infinity with none), or null when that is not
+   * known now: a tombstone older than it leaves. Absent: none ever leaves.
+   */
+  oldestCall?: () => Promise<number | null>;
 }
 
 /**
@@ -166,33 +177,24 @@ const round2 = (x: number): number => Math.round(x * 100) / 100;
 /** What a forget takes: one person, one call, one person's lessons from one call, or everyone. */
 export type ForgetScope = { all: true } | { name: string; call?: string } | { call: string };
 
-/**
- * A typed label whose teaching a forget or a rename overrode: while the name in force on it is at
- * log position `upTo` or older, it teaches `to`, or nothing when `to` is null.
- */
-interface Override {
-  upTo: number;
-  to: string | null;
-}
-
 export class VoiceHost {
   readonly model: string;
   private queue: Promise<void> = Promise.resolve();
   /** The people of the file as last read, by the file's identity and the embedding size. */
   private cache: { key: string; dim: number; people: Person[] } | null = null;
   private readFailed: string | null = null;
-  /** The calls this Host saw events of; the loaded ones are those `o.call` still finds. */
-  private readonly calls = new Set<string>();
-  /** By `call spk`: labels a forget or a rename overrode [VO-12]. */
-  private readonly overrides = new Map<string, Override>();
+  /** What the user forgot or renamed [VO-12]. */
+  readonly tombstones: VoiceTombstones;
+  private readonly now: () => number;
 
   constructor(private readonly o: VoiceHostOptions) {
     this.model = o.model ?? LIVE_EMBEDDER;
+    this.tombstones = o.tombstones ?? new VoiceTombstones(o.store.path, o.log);
+    this.now = o.now ?? Date.now;
   }
 
   /** Every event of every call; only names, merges and centroids do anything. */
   onEvent(call: string, e: LogEvent): void {
-    this.calls.add(call);
     if (
       e.type !== "speaker.centroid" &&
       e.type !== "speaker.name" &&
@@ -214,67 +216,65 @@ export class VoiceHost {
   }
 
   /**
-   * Forgets voices, after every step queued before it. The typed labels of loaded calls that it
-   * empties teach nothing again until a newer teaching name lands on them [VO-12]. False when the
-   * file held nothing in that scope; `all` is always true.
+   * Forgets voices, after every step queued before it, and leaves a tombstone timed now, when it
+   * is asked for: a name given before it that it covers never teaches again, and one given after
+   * it, even while this waits in the queue, is newer [VO-12]. False when the file held nothing in
+   * that scope; `all` is always true.
    */
   forget(scope: ForgetScope): Promise<boolean> {
+    const at = this.now();
     return this.exclusive(async () => {
       const name = "name" in scope ? scope.name : undefined;
       const call = "call" in scope ? scope.call : undefined;
-      // Read before the edit: a name typed while the file is written is newer, and teaches.
-      const hit = this.labels((l) => {
-        if (call !== undefined && l.call !== call) return false;
-        return name === undefined || l.name === name;
-      });
       let gone = true;
       if ("all" in scope) await this.o.store.forgetAll();
       else if (name === undefined) gone = (await this.o.store.forgetCall(call as string)) > 0;
       else if (call === undefined) gone = await this.o.store.forget(name);
       else gone = (await this.o.store.forgetPersonCall(name, call)) > 0;
-      for (const l of hit) this.overrides.set(l.key, { upTo: l.seq, to: null });
-      return gone || hit.length > 0;
+      if (gone) {
+        this.tombstones.add(
+          "all" in scope
+            ? { kind: "forget", all: true, at }
+            : {
+                kind: "forget",
+                ...(name !== undefined ? { name } : {}),
+                ...(call !== undefined ? { call } : {}),
+                at,
+              },
+        );
+        await this.pruneNow();
+      }
+      return gone;
     });
   }
 
   /**
-   * Renames a person, after every step queued before it. A typed label of a loaded call that
-   * teaches `from` teaches `to` from now on, until a newer teaching name lands on it [VO-12].
-   * Null when akou knows no `from`.
+   * Renames a person, after every step queued before it, and leaves a tombstone timed now: a name
+   * `from` given before it teaches `to` from now on [VO-12]. Null when akou knows no `from`.
    */
   rename(from: string, to: string): Promise<{ dropped: number } | null> {
+    const at = this.now();
     return this.exclusive(async () => {
-      const hit = this.labels((l) => l.name === from);
       const out = await this.o.store.rename(from, to);
-      if (out === null && hit.length === 0) return null;
-      for (const l of hit) this.overrides.set(l.key, { upTo: l.seq, to: to.trim() });
-      return out ?? { dropped: 0 };
+      if (out === null) return null;
+      if (from.trim() !== to.trim()) {
+        this.tombstones.add({ kind: "rename", from: from.trim(), to: to.trim(), at });
+        await this.pruneNow();
+      }
+      return out;
     });
   }
 
-  /**
-   * Every typed label of a loaded call that teaches, with the name it teaches now (an override
-   * first) and the position of the name in force, that `match` takes.
-   */
-  private labels(
-    match: (l: { call: string; spk: string; name: string }) => boolean,
-  ): { key: string; seq: number }[] {
-    const out: { key: string; seq: number }[] = [];
-    for (const call of this.calls) {
-      const c = this.o.call(call);
-      if (!c) continue;
-      for (const r of c.view.roster()) {
-        if (r.mergedInto || !/^c\d+$/.test(r.spk)) continue;
-        if (!r.name || r.byVoice || !r.namedBy || !TEACHERS.has(r.namedBy)) continue;
-        const seq = c.view.nameSeq(r.spk);
-        if (seq === undefined) continue;
-        const key = `${call} ${r.spk}`;
-        const o = this.overrides.get(key);
-        const name = o && seq <= o.upTo ? o.to : r.name;
-        if (name !== null && match({ call, spk: r.spk, name })) out.push({ key, seq });
-      }
-    }
-    return out;
+  /** Drops the tombstones no kept call can need, on the queue (a call was deleted for good). */
+  prune(): void {
+    this.run(() => this.pruneNow());
+  }
+
+  private async pruneNow(): Promise<void> {
+    const oldest = await this.o.oldestCall?.();
+    if (oldest === undefined || oldest === null) return;
+    const n = this.tombstones.prune(oldest);
+    if (n > 0) this.o.log("info", `voices: dropped ${n} tombstone(s) no kept call needs`);
   }
 
   /** Runs `fn` on the queue after every step before it, and answers with what it returns. */
@@ -408,10 +408,12 @@ export class VoiceHost {
       minLearnSec: this.o.thresholds(this.model).minLearnSec,
       at: new Date(t).toISOString(),
     });
-    // A forget or a rename overrode this label until a newer typed name lands on it [VO-12].
-    const o = this.overrides.get(`${call} ${spk}`);
-    const seq = c.view.nameSeq(spk);
-    const name = o && seq !== undefined && seq <= o.upTo ? o.to : lesson?.name;
+    // A forget or a rename the user asked for after this name was given wins over it [VO-12].
+    const given = c.view.nameAt(spk);
+    const name =
+      lesson && given !== undefined
+        ? this.tombstones.teaches(lesson.name, call, given)
+        : lesson?.name;
     try {
       if (lesson && name) await this.o.store.upsert(name, lesson.exemplar);
       else if (drop) await this.o.store.removeExemplar(call, spk);

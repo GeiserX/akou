@@ -6,7 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { encodeVec } from "../src/main/asr/speakers.ts";
 import { ApiClient } from "../src/main/cli/client.ts";
@@ -18,6 +18,7 @@ import { VoiceStore, voicesPath } from "../src/main/voices/store.ts";
 import type { VoiceThresholds } from "../src/main/voices/thresholds.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
+import { tempDir } from "./helpers.ts";
 import { mcpClient } from "./mcp-helpers.ts";
 
 const LONG = 30_000;
@@ -537,20 +538,134 @@ describe("the voices doors", () => {
 });
 
 describe("[VO-12] a forget or a rename during a live call holds", () => {
-  const env = () => ({ ...process.env, ...rig.env });
-  const names = async (): Promise<string[]> =>
-    (await rig.api("GET", "/voices")).body.voices.map((v: { name: string }) => v.name);
+  const env = (r = rig) => ({ ...process.env, ...r.env });
+  const names = async (r = rig): Promise<string[]> =>
+    (await r.api("GET", "/voices")).body.voices.map((v: { name: string }) => v.name);
 
   /** A live call whose c2 the user named Ben from the CLI, which teaches the voice. */
-  async function taught(): Promise<string> {
-    await store(rig).forgetAll();
-    const id = await rig.startCall();
-    await speak(rig, id, "c2", 1, at(0));
-    expect((await cli(env(), ["name", "c2", "Ben"])).code).toBe(0);
-    await rig.app.voices?.idle();
-    expect(await names()).toEqual(["Ben"]);
+  async function taught(r = rig): Promise<string> {
+    await store(r).forgetAll();
+    const id = await r.startCall();
+    await speak(r, id, "c2", 1, at(0));
+    expect((await cli(env(r), ["name", "c2", "Ben"])).code).toBe(0);
+    await r.app.voices?.idle();
+    expect(await names(r)).toEqual(["Ben"]);
     return id;
   }
+
+  /** Names the speaker again from the CLI, as the user would, and lets the Host learn it. */
+  async function nameAgain(r: AppRig, spk: string, name: string): Promise<void> {
+    expect((await cli(env(r), ["name", spk, name])).code).toBe(0);
+    await r.app.voices?.idle();
+  }
+
+  test(
+    "a merge of the forgotten label into an unnamed one teaches nothing",
+    async () => {
+      const id = await taught();
+      try {
+        await speak(rig, id, "c5", 2, at(90));
+        expect((await rig.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
+        const m = await rig.api("POST", `/calls/${id}/speakers/merge`, { from: "c2", into: "c5" });
+        expect(m.status).toBe(200);
+        await rig.app.voices?.idle();
+        // The group shows c2's name, given before the forget.
+        expect((await rig.api("GET", `/calls/${id}`)).body.roster).toContainEqual(
+          expect.objectContaining({ spk: "c5", name: "Ben" }),
+        );
+        expect(await names()).toEqual([]);
+        // The positive control: naming the group again teaches its voice. (Naming the merged member
+        // c2 teaches the group only at the root's next centroid, as before this change.)
+        await nameAgain(rig, "c5", "Ben");
+        expect(await names()).toEqual(["Ben"]);
+      } finally {
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "an unmerge after a forget made while merged teaches nothing",
+    async () => {
+      const id = await taught();
+      try {
+        await speak(rig, id, "c5", 2, at(90));
+        await rig.api("POST", `/calls/${id}/speakers/merge`, { from: "c2", into: "c5" });
+        await rig.app.voices?.idle();
+        expect(await names()).toEqual(["Ben"]);
+        expect((await rig.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
+        const u = await rig.api("POST", `/calls/${id}/speakers/unmerge`, { spk: "c2" });
+        expect(u.status).toBe(200);
+        await rig.app.voices?.idle();
+        expect(await names()).toEqual([]);
+        await nameAgain(rig, "c2", "Ben");
+        expect(await names()).toEqual(["Ben"]);
+      } finally {
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a forget and a rename hold after the app restarts and the call records again, and a forget by call needs no loaded call",
+    async () => {
+      const home = tempDir("akou-voices-tomb-");
+      const open = () => appRig({ home: home.dir, voiceThresholds: () => T });
+      let r = await open();
+      try {
+        // Forget by name, quit, reopen, record the call again.
+        const a = await taught(r);
+        await r.api("POST", "/calls/live/stop");
+        expect((await r.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
+        const tombs = `${voicesPath(r.app.configDir)}.tombstones`;
+        expect(statSync(tombs).mode & 0o777).toBe(0o600);
+        await r.close();
+        r = await open();
+        expect((await r.api("POST", `/calls/${a}/restart`, {})).status).toBe(200);
+        await speak(r, a, "c2", 2, at(0));
+        expect(await names(r)).toEqual([]);
+        await nameAgain(r, "c2", "Ben");
+        expect(await names(r)).toEqual(["Ben"]);
+        await r.api("POST", "/calls/live/stop");
+
+        // Rename, quit, reopen: the label teaches the new name.
+        const b = await taught(r);
+        await r.api("POST", "/calls/live/stop");
+        expect(
+          (await r.api("POST", "/voices/rename", { from: "Ben", to: "Ben Ortiz" })).status,
+        ).toBe(200);
+        await r.close();
+        r = await open();
+        expect((await r.api("POST", `/calls/${b}/restart`, {})).status).toBe(200);
+        await speak(r, b, "c2", 2, at(0));
+        expect(await names(r)).toEqual(["Ben Ortiz"]);
+        await r.api("POST", "/calls/live/stop");
+
+        // A forget by call, with the call not loaded since the reopen.
+        const c = await taught(r);
+        await r.api("POST", "/calls/live/stop");
+        await r.close();
+        r = await open();
+        expect(r.app.manager.controller(c)).toBeUndefined();
+        expect((await r.api("POST", "/voices/forget", { call: c })).status).toBe(200);
+        expect((await r.api("POST", `/calls/${c}/restart`, {})).status).toBe(200);
+        await speak(r, c, "c2", 2, at(0));
+        expect(await names(r)).toEqual([]);
+        await nameAgain(r, "c2", "Ben");
+        expect(await names(r)).toEqual(["Ben"]);
+        await r.api("POST", "/calls/live/stop");
+        expect(existsSync(tombs)).toBe(true);
+      } finally {
+        await r.close();
+        home.cleanup();
+      }
+    },
+    LONG * 2,
+  );
 
   const forms: [string, (id: string) => Promise<number>][] = [
     ["name", async () => (await rig.api("POST", "/voices/forget", { name: "Ben" })).status],

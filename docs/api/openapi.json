@@ -4210,7 +4210,7 @@
         "tags": [
           "voices"
         ],
-        "description": "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. Names already shown in calls stay as they are there.",
+        "description": "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. akou keeps a note of the forget (the name or the call, and the time; never a voiceprint) while a call older than it is kept, so a name given before it never teaches the voice back; a name given later teaches as usual. Names already shown in calls stay as they are there.",
         "requestBody": {
           "required": false,
           "content": {
