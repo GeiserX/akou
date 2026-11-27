@@ -19,6 +19,7 @@
  * (`POST /calls/{id}/speakers`), one event.
  */
 
+import { shownVoices } from "../../query/render.ts";
 import type { ForgetScope, VoiceHost } from "../../voices/host.ts";
 import { cleanName, MAX_NAME_LENGTH, VoicesError } from "../../voices/store.ts";
 import { isLocalUser } from "../caller.ts";
@@ -241,7 +242,7 @@ export function voiceRoutes(r: Router<ApiApp>): void {
     "/calls/:id/speakers/refuse",
     doc({
       id: "speakers.refuse",
-      doc: "Refuse the name akou found by voice for a speaker of the call (`spk`, such as `c2`): the speaker shows its own label again, and akou does not offer that name for it again in this call. To confirm the name instead, name the speaker with it (`POST /calls/{id}/speakers`).",
+      doc: "Refuse the name akou found by voice that a speaker of the call shows (`spk`, such as `c2`; after a merge, the group's, as the window shows it): the speaker shows its own label again, and akou does not offer that name for it again in this call. To confirm the name instead, name the speaker with it (`POST /calls/{id}/speakers`).",
       params: { id: CALL_ID },
       body: { spk: "string" },
       ok: 200,
@@ -263,9 +264,10 @@ export function voiceRoutes(r: Router<ApiApp>): void {
       const id = callId(c);
       const e = await c.app.write(id, (call) => {
         const spk = call.view.resolveSpeaker(b.spk);
-        const me = call.view.roster().find((r) => r.spk === spk);
-        // A typed name wins over a voice [VO-1]: the label shows no voice, so there is none to refuse.
-        const voice = me?.name && !me.byVoice ? undefined : call.view.voiceFor(spk);
+        // What the label shows, as the window and the CLI show it: after a merge the group's newest
+        // voice event may be another member's offer, not the name on screen. A typed name shows no
+        // voice [VO-1], so there is none to refuse.
+        const voice = shownVoices(call.view.roster()).get(spk);
         if (!voice) {
           throw new HttpError(409, "no_voice", `${b.spk} has no name found by voice to refuse`, {
             spk: b.spk,
