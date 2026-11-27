@@ -130,6 +130,8 @@ export const ERROR_CODES = {
   upgrade_required: "The route is a WebSocket; send `Upgrade: websocket`.",
   vocab_file_invalid: "The vocabulary file could not be read.",
   voices_file_invalid: "voices.yaml could not be read; fix or delete it by hand.",
+  voices_not_saved:
+    "What was forgotten or renamed could not be saved beside voices.yaml (its tombstones file); nothing was changed.",
   voices_off: "Voice recognition is off (`voices.enabled`), or this is a server, which has none.",
   workspace_not_folder: "The workspace's name is taken by something that is not a folder.",
 } as const satisfies Record<string, string>;

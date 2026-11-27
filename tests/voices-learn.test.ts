@@ -5,7 +5,15 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { type Ranked, simulate } from "../scripts/eval/voices.ts";
 import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
@@ -18,7 +26,7 @@ import { lessonFor } from "../src/main/voices/learn.ts";
 import { rankPeople } from "../src/main/voices/match.ts";
 import { type Exemplar, type Person, VoiceStore } from "../src/main/voices/store.ts";
 import type { VoiceThresholds } from "../src/main/voices/thresholds.ts";
-import { VoiceTombstones } from "../src/main/voices/tombstones.ts";
+import { TombstonesError, VoiceTombstones } from "../src/main/voices/tombstones.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
 const MODEL = LIVE_EMBEDDER;
@@ -55,7 +63,8 @@ class Rig {
   readonly view = new CallView();
   readonly written: LogEvent[] = [];
   readonly store: VoiceStore;
-  readonly host: VoiceHost;
+  host: VoiceHost;
+  private readonly thresholds: VoiceThresholds;
   enabled = true;
   closed = false;
   /** The Host's wall clock; null is the real one. */
@@ -68,19 +77,32 @@ class Rig {
       new VoiceStore(path, { now: () => T0, log: () => {} }),
   ) {
     this.store = makeStore(join(dir, "voices.yaml"));
-    this.host = new VoiceHost({
+    this.thresholds = thresholds;
+    this.host = this.newHost();
+    this.add(this.b.created() as unknown as EventDraft, true);
+    this.add(this.b.partStarted(1, T0) as unknown as EventDraft, true);
+  }
+
+  /** A Host as the app makes one at start: it reads the tombstones from beside the file. */
+  newHost(): VoiceHost {
+    return new VoiceHost({
       store: this.store,
       enabled: () => this.enabled,
-      thresholds: () => thresholds,
+      thresholds: () => this.thresholds,
       call: (id) =>
         id === CALL
           ? { view: this.view, append: (d) => (this.closed ? null : this.add(d)) }
           : undefined,
       log: () => {},
       now: () => this.clock ?? Date.now(),
+      loaded: () => [CALL],
     });
-    this.add(this.b.created() as unknown as EventDraft, true);
-    this.add(this.b.partStarted(1, T0) as unknown as EventDraft, true);
+  }
+
+  /** The app quits and starts again: a new Host over the same file and the same call. */
+  async restart(): Promise<void> {
+    await this.host.idle();
+    this.host = this.newHost();
   }
 
   /** Appends one event and hands it to the Host, as the app's watchers are. */
@@ -685,6 +707,17 @@ describe("[VO-12] forgets and renames as tombstones", () => {
     }
   }
 
+  /** A rig whose c2 the user named Ben, taught from 30 s of speech. */
+  async function taught(): Promise<Rig> {
+    const r = rig();
+    r.speakers("c2");
+    r.add(centroid("c2", at(0), 30));
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" });
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    return r;
+  }
+
   test("a name typed while the forget waits in the queue is newer, and teaches", async () => {
     const r = rig(T, (path) => new Gated(path, { now: () => T0, log: () => {} }));
     const store = r.store as Gated;
@@ -706,31 +739,107 @@ describe("[VO-12] forgets and renames as tombstones", () => {
     r.clock = T0 + 30_000;
     store.gate = null;
     release();
-    expect(await forgot).toBe(true);
+    expect(await forgot).toEqual({ gone: true, held: true });
     await r.settle();
     expect(Object.keys(await r.names())).toEqual(["Ben"]);
     // The positive control: with no name after it, the same forget leaves nothing.
     r.clock = T0 + 40_000;
-    expect(await r.host.forget({ name: "Ben" })).toBe(true);
+    expect((await r.host.forget({ name: "Ben" })).gone).toBe(true);
     r.add(centroid("c2", at(2), 32));
     await r.settle();
     expect(await r.names()).toEqual({});
   });
 
-  test("the file: kept with mode 0600, read back, unreadable lines left out, pruned by the oldest kept call", () => {
+  test("the clock set back an hour after a forget: a name typed then teaches, after a restart too", async () => {
+    const r = await taught();
+    r.clock = T0 + 3_600_000;
+    expect((await r.host.forget({ name: "Ben" })).gone).toBe(true);
+    // The control: the name given before the forget still teaches nothing.
+    r.add(centroid("c2", at(1), 31), false, T0 + 3_600_100);
+    await r.settle();
+    expect(await r.names()).toEqual({});
+    // The clock goes back an hour; the user names c2 again.
+    r.clock = T0 + 200;
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" }, false, T0 + 200);
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    // After a restart the name still counts as given after the forget.
+    await r.restart();
+    await r.store.forget("Ben");
+    r.add(centroid("c2", at(2), 32), false, T0 + 300);
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+  });
+
+  test("forget all with the clock a day ahead, then corrected: a name typed now teaches, and a later forget still covers it", async () => {
+    const r = await taught();
+    r.clock = T0 + 86_400_000;
+    expect((await r.host.forget({ all: true })).gone).toBe(true);
+    r.clock = T0 + 1000;
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" }, false, T0 + 1000);
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    // The control: a forget asked for now is stamped after that name, so it covers it.
+    expect((await r.host.forget({ name: "Ben" })).gone).toBe(true);
+    r.add(centroid("c2", at(1), 31), false, T0 + 2000);
+    await r.settle();
+    expect(await r.names()).toEqual({});
+  });
+
+  test("a forget that finds nothing in the file still holds for a name under MIN_LEARN_SEC", async () => {
+    const r = rig();
+    r.speakers("c2");
+    r.add(centroid("c2", at(0), 5));
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" });
+    await r.settle();
+    expect(await r.names()).toEqual({});
+    r.clock = Date.now() + 1000;
+    expect(await r.host.forget({ name: "Ben" })).toEqual({ gone: false, held: true });
+    r.add(centroid("c2", at(1), 30));
+    await r.settle();
+    expect(await r.names()).toEqual({});
+    // The control: a name nobody gave is neither in the file nor on a speaker.
+    expect(await r.host.forget({ name: "Zed" })).toEqual({ gone: false, held: false });
+  });
+
+  test("a tombstone that cannot be saved: forget and rename fail and change nothing", async () => {
+    const r = await taught();
+    const file = `${r.store.path}.tombstones`;
+    // A folder with a file in it where the tombstones go: no rename can replace it.
+    mkdirSync(join(file, "x"), { recursive: true });
+    await expect(r.host.forget({ name: "Ben" })).rejects.toThrow(TombstonesError);
+    await expect(r.host.rename("Ben", "Ben Ortiz")).rejects.toThrow(TombstonesError);
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    expect(r.host.tombstones.all()).toEqual([]);
+    // The positive control: once the file can be written, the same forget works.
+    rmSync(file, { recursive: true, force: true });
+    expect((await r.host.forget({ name: "Ben" })).gone).toBe(true);
+    expect(await r.names()).toEqual({});
+  });
+
+  test("the file: kept with mode 0600, read back, unreadable lines left out, pruned by the oldest kept call", async () => {
     const d = tempDir("akou-tombstones-");
     dirs.push(d);
     const file = join(d.dir, "voices.yaml");
     const warned: string[] = [];
     const a = new VoiceTombstones(file, (_l, m) => warned.push(m));
-    a.add({ kind: "forget", name: "Ben", at: 2000 });
-    a.add({ kind: "rename", from: "Cy", to: "Cy Ortiz", at: 1000 });
-    a.add({ kind: "forget", call: "X", at: 3000 });
+    await a.add({ kind: "forget", name: "Ben", at: 2000 });
+    await a.add({ kind: "rename", from: "Cy", to: "Cy Ortiz", at: 1000 });
+    await a.add({ kind: "forget", call: "X", at: 3000 });
+    await a.add({ kind: "lift", call: "Y", seq: 7, at: 3500 });
     expect(statSync(a.file).mode & 0o777).toBe(0o600);
     writeFileSync(a.file, `${readFileSync(a.file, "utf8")}not json\n{"kind":"forget","at":5}\n`);
+    // A temporary file a write of a process that is gone left behind.
+    writeFileSync(`${a.file}.999999999.tmp`, "");
     const b = new VoiceTombstones(file, (_l, m) => warned.push(m));
-    expect(b.all().map((x) => x.at)).toEqual([1000, 2000, 3000]);
+    expect(b.all().map((x) => x.at)).toEqual([1000, 2000, 3000, 3500]);
     expect(warned).toEqual(["voices: 2 unreadable line(s) in the tombstones file"]);
+    expect(existsSync(`${a.file}.999999999.tmp`)).toBe(false);
+    expect(b.lifted("Y", 7)).toBe(3500);
+    // Stamps only grow, across a restart too.
+    expect(b.stamp(100)).toBe(3501);
+    expect(b.behind(3501)).toBe(true);
+    expect(b.behind(3502)).toBe(false);
     // Older names: Ben forgotten, Cy renamed, anything of X forgotten; a newer name is itself.
     expect(b.teaches("Ben", "Y", 1500)).toBeNull();
     expect(b.teaches("Cy", "Y", 500)).toBe("Cy Ortiz");
@@ -740,9 +849,9 @@ describe("[VO-12] forgets and renames as tombstones", () => {
     // The same millisecond counts as older: the forget wins.
     expect(b.teaches("Ben", "Y", 2000)).toBeNull();
     // A tombstone leaves only once every kept call was created after it.
-    expect(b.prune(2000)).toBe(1);
-    expect(new VoiceTombstones(file, () => {}).all().map((x) => x.at)).toEqual([2000, 3000]);
-    expect(b.prune(Number.POSITIVE_INFINITY)).toBe(2);
+    expect(await b.prune(2000)).toBe(1);
+    expect(new VoiceTombstones(file, () => {}).all().map((x) => x.at)).toEqual([2000, 3000, 3500]);
+    expect(await b.prune(Number.POSITIVE_INFINITY)).toBe(3);
     expect(existsSync(b.file)).toBe(false);
   });
 
@@ -761,7 +870,7 @@ describe("[VO-12] forgets and renames as tombstones", () => {
       now: () => now,
       oldestCall: async () => oldest,
     });
-    expect(await host.forget({ all: true })).toBe(true);
+    expect((await host.forget({ all: true })).gone).toBe(true);
     host.prune();
     await host.idle();
     expect(host.tombstones.all()).toHaveLength(1);
@@ -789,5 +898,36 @@ describe("[VO-12] forgets and renames as tombstones", () => {
     const trashedAt = Date.now();
     writeFileSync(`${dir}.json`, JSON.stringify({ id: "A", workspace: "work", trashedAt }));
     expect(await mgr().oldestCall()).toBeNull();
+  });
+
+  test("the oldest kept call is unknown while a call is being restored from the trash", async () => {
+    const d = tempDir("akou-tombstones-restore-");
+    dirs.push(d);
+    const b = new LogBuilder();
+    const trashed = join(d.dir, TRASH_DIR, "work", "call-a");
+    mkdirSync(trashed, { recursive: true });
+    writeFileSync(join(trashed, "events.jsonl"), `${JSON.stringify(b.created())}\n`);
+    const trashedAt = Date.now();
+    writeFileSync(`${trashed}.json`, JSON.stringify({ id: CALL, workspace: "work", trashedAt }));
+    const mgr = new CallManager({ root: d.dir, engine: {} as CaptureEngine });
+    expect(await mgr.oldestCall()).toBeNull();
+    // Hold the restore between the folder's move and its index entry.
+    let release = () => {};
+    const gate = new Promise<void>((ok) => {
+      release = ok;
+    });
+    const m = mgr as unknown as { reindex: (dir: string, ws: string) => Promise<unknown> };
+    const reindex = m.reindex.bind(mgr);
+    m.reindex = async (dir, ws) => {
+      await gate;
+      return reindex(dir, ws);
+    };
+    const restoring = mgr.restore(CALL);
+    while (existsSync(trashed)) await new Promise((ok) => setTimeout(ok, 5));
+    expect(await mgr.oldestCall()).toBeNull();
+    release();
+    expect((await restoring).ok).toBe(true);
+    // The positive control: once indexed, the oldest call is the restored one.
+    expect(await mgr.oldestCall()).toBe(b.events[0]?.t ?? Number.NaN);
   });
 });

@@ -1075,11 +1075,12 @@ export class CallView {
   }
 
   /**
-   * When the name in force for a speaker's group was given (the event's wall time), typed or found
-   * by voice. A merged group with an unnamed root takes its member's name, and its time.
+   * The log position and the wall time of the name in force for a speaker's group, typed or found
+   * by voice. A merged group with an unnamed root takes its member's name, and its event.
    */
-  nameAt(spk: string): number | undefined {
-    return this.nameOf(this.resolveSpeaker(spk))?.t;
+  nameAt(spk: string): { seq: number; t: number } | undefined {
+    const n = this.nameOf(this.resolveSpeaker(spk));
+    return n && { seq: n.seq, t: n.t };
   }
 
   /** The voice name in force for a speaker (already resolved or not): named or offered. */

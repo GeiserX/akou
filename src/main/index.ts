@@ -901,6 +901,7 @@ export class AkouApp implements ApiApp {
             log: (level, m) => this.log(level, m),
             now: () => this.clock.now(),
             oldestCall: () => this.manager.oldestCall(),
+            loaded: () => this.manager.loaded(),
           })
         : null;
     if (this.voices) {
