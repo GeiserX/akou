@@ -5,7 +5,15 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 
@@ -219,6 +227,87 @@ describe("[SV-P1] the server image", () => {
     for (const out of ["node_modules", ".git", "tests", "native/akou-capture"]) {
       expect(ignored).toContain(out);
     }
+  });
+});
+
+/** What the image copies whole: a file `src/` imports from here is in the image already. */
+const COPIED_WHOLE = ["src/", "skills/"];
+
+/** Every file outside `src/` and `skills/` that a value import in `src/` reaches, POSIX paths. */
+export function importedFromOutside(files: ReadonlyMap<string, string>): string[] {
+  const out = new Set<string>();
+  for (const [file, text] of files) {
+    const specs = [
+      ...text.matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(\.[^"]+)"/gm),
+      ...text.matchAll(/\bimport\(\s*"(\.[^"]+)"\s*\)/g),
+    ].map((m) => m[1] as string);
+    for (const spec of specs) {
+      const target = posix.normalize(posix.join(posix.dirname(file), spec));
+      if (!COPIED_WHOLE.some((d) => target.startsWith(d))) out.add(target);
+    }
+  }
+  return [...out].sort();
+}
+
+/**
+ * Why the server image would miss a file `src/` imports, or [] when it would not: the last stage
+ * must COPY it, and `.dockerignore` must not leave it out of the build context.
+ */
+export function imageGaps(needed: readonly string[], dockerfile: string, ignore: string): string[] {
+  const copies = finalStage(dockerfile)
+    .filter((x) => x.op === "COPY" && !x.args.startsWith("--from"))
+    .flatMap((x) => x.args.split(/\s+/).slice(0, -1));
+  const rules = ignore
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("#"));
+  const gaps: string[] = [];
+  for (const file of needed) {
+    if (!copies.some((c) => c === file || file.startsWith(c.endsWith("/") ? c : `${c}/`)))
+      gaps.push(`${file} is not copied into the image`);
+    // The last rule that matches wins, as Docker reads the file.
+    let left = false;
+    for (const r of rules) {
+      const neg = r.startsWith("!");
+      const pat = (neg ? r.slice(1) : r).replace(/\/$/, "");
+      if (file === pat || file.startsWith(`${pat}/`)) left = !neg;
+    }
+    if (left) gaps.push(`${file} is left out of the build context`);
+  }
+  return gaps;
+}
+
+describe("[#554] a file the app imports from outside src/ is in the server image", () => {
+  const files = new Map<string, string>();
+  for (const f of readdirSync(join(ROOT, "src"), { recursive: true }) as string[]) {
+    const file = posix.join("src", f.split("\\").join("/"));
+    if (/\.(ts|tsx)$/.test(file)) files.set(file, read(file));
+  }
+  const needed = importedFromOutside(files);
+  const dockerfile = read("Dockerfile");
+  const ignore = read(".dockerignore");
+
+  test("every gate file src/ imports is copied and in the build context", () => {
+    expect(needed).toContain("docs/gates/dictation-latency.json");
+    expect(needed).toContain("docs/gates/voices.json");
+    expect(imageGaps(needed, dockerfile, ignore)).toEqual([]);
+  });
+
+  test("the positive control: an image without voices.json fails the check both ways", () => {
+    const noCopy = dockerfile.replace("COPY docs/gates/voices.json docs/gates/\n", "");
+    expect(noCopy).not.toBe(dockerfile);
+    expect(imageGaps(needed, noCopy, ignore)).toEqual([
+      "docs/gates/voices.json is not copied into the image",
+    ]);
+    const noException = ignore.replace("!docs/gates/voices.json\n", "");
+    expect(noException).not.toBe(ignore);
+    expect(imageGaps(needed, dockerfile, noException)).toEqual([
+      "docs/gates/voices.json is left out of the build context",
+    ]);
+    // A new import of a file outside src/ is found.
+    const more = new Map(files);
+    more.set("src/main/x.ts", 'import t from "../../docs/gates/new.json" with { type: "json" };');
+    expect(importedFromOutside(more)).toContain("docs/gates/new.json");
   });
 });
 
