@@ -34,6 +34,7 @@ import { knowsPair, learnPair, unlearnPair } from "../../dictation/vocab.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import { reasonText } from "../../query/ask.ts";
 import { STOPWORDS } from "../../query/bm25.ts";
+import { shownVoices, voiceLabel } from "../../query/render.ts";
 import {
   callEntries,
   checkApiEntry,
@@ -183,6 +184,8 @@ async function vocabState(app: ApiApp, view: CallView) {
 /** The words to review for a call: its open proposals with the lines they rest on. */
 function reviewList(view: CallView, unconfirmed: readonly VocabEntry[]) {
   const tz = view.call?.tz ?? "UTC";
+  // A name akou found by voice reads `Ben (voice)`, as in every text a person reads.
+  const voices = shownVoices(view.roster());
   return {
     proposals: view.proposals("proposed").map((p) => {
       const ev = (p.evidence ?? {}) as { lines?: unknown; why?: unknown };
@@ -196,7 +199,14 @@ function reviewList(view: CallView, unconfirmed: readonly VocabEntry[]) {
         lines: (ids as string[]).flatMap((id) => {
           const l = view.resolve(id);
           if (!l || l.retracted) return [];
-          return [{ id, time: formatWall(l.w0, tz), speaker: l.speaker, text: l.raw ?? l.text }];
+          return [
+            {
+              id,
+              time: formatWall(l.w0, tz),
+              speaker: voiceLabel(l.speaker, voices.get(l.spk)),
+              text: l.raw ?? l.text,
+            },
+          ];
         }),
       };
     }),

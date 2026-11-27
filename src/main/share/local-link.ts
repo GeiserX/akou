@@ -164,6 +164,18 @@ export function sharedLine(l: Line, tz: string, voice?: ShownVoice): SharedLine 
   };
 }
 
+/**
+ * The names found by voice a viewer sees, by speaker id: only names akou showed on a speaker,
+ * marked as found by voice. An offer is a guess the user never confirmed, and it never leaves the
+ * window: the viewer sees the speaker's own label.
+ */
+export function sharedVoices(v: CallView): Map<string, ShownVoice> {
+  const out = new Map<string, ShownVoice>();
+  for (const [spk, voice] of shownVoices(v.roster()))
+    if (voice.status === "named") out.set(spk, voice);
+  return out;
+}
+
 export function sharedNotes(v: CallView, tz: string): SharedNote[] {
   return v.notes().map((n) => ({
     id: n.id,
@@ -368,11 +380,11 @@ export class LocalLink implements ShareTransport {
         let cursor = 0;
         const sent = new Map<string, string>();
         // What akou found by voice, read again before each batch: a voice event renders every line.
-        let voices = shownVoices(v.roster());
+        let voices = sharedVoices(v);
         const render = (l: Line) => sharedLine(l, tz, voices.get(l.spk));
         const snapshot = () => {
           sent.clear();
-          voices = shownVoices(v.roster());
+          voices = sharedVoices(v);
           const lines = v.lines("best").map(render);
           for (const l of lines) sent.set(l.id, JSON.stringify(l));
           cursor = v.changesSince(Number.MAX_SAFE_INTEGER).cursor;
@@ -395,7 +407,7 @@ export class LocalLink implements ShareTransport {
         const delta = (seq: number) => {
           const ch = v.changesSince(cursor);
           cursor = ch.cursor;
-          if (ch.all) voices = shownVoices(v.roster());
+          if (ch.all) voices = sharedVoices(v);
           const ids = ch.all
             ? [...new Set([...sent.keys(), ...v.lines("best").map((l) => l.id)])]
             : ch.ids;
