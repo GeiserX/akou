@@ -14,14 +14,16 @@
  * changes, never becomes a row, and is gone 3 s after its last update.
  *
  * A live cluster's chip is a guess until it is named or the final pass is done (WINDOW W4.2): it
- * reads `c3?` and is dashed. While audio plays, the line being played is lit and kept in view
+ * reads `c3?` and is dashed. A name akou found by voice is a guess too until someone confirms it:
+ * dashed, with a voice mark; an offer keeps `c3?` and adds a muted "Ben?". While audio plays, the line being played is lit and kept in view
  * (W5.6); a scroll by hand stops that until Follow is pressed.
  */
 
 import { formatWall } from "../core/log/clock.ts";
 import { type CallView, type Line, PROVISIONAL_TTL_MS } from "../core/log/fold.ts";
+import type { ShownVoice } from "../main/query/render.ts";
 import { byId, h, replace } from "./dom.ts";
-import { formatDuration, speakerChip } from "./model.ts";
+import { callVoices, formatDuration, speakerChip, speakerText, voiceWords } from "./model.ts";
 import type { PartialLine, ReadLine } from "./protocol.ts";
 
 export const SCROLL_PIN_PX = 80;
@@ -44,6 +46,39 @@ export interface TranscriptDeps {
     selected: string,
     near?: { at: number; rect: DOMRect },
   ): void;
+}
+
+const SVG = "http://www.w3.org/2000/svg";
+
+/** The voice mark beside a name akou found by voice: three bars, drawn, never text. */
+export function voiceMark(): SVGSVGElement {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "vmark");
+  svg.setAttribute("viewBox", "0 0 12 12");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [x, y0, y1] of [
+    [2, 4.5, 7.5],
+    [6, 2, 10],
+    [10, 4.5, 7.5],
+  ] as const) {
+    const p = document.createElementNS(SVG, "path");
+    p.setAttribute("d", `M${x} ${y0}V${y1}`);
+    svg.append(p);
+  }
+  return svg;
+}
+
+/**
+ * A speaker chip's content: the label, then the voice mark for a name akou found by voice, or a
+ * muted "Ben?" for an offer. The mark is drawn, so the chip's text stays the label.
+ */
+export function fillWho(el: HTMLElement, label: string, voice?: ShownVoice): void {
+  if (voice?.status === "named") el.replaceChildren(label, voiceMark());
+  else if (voice) el.replaceChildren(label, h("span", { class: "offer" }, `${voice.name}?`));
+  else el.textContent = label;
+  el.classList.toggle("voice", voice?.status === "named");
+  if (voice) el.title = voice.status === "named" ? "Recognised by voice, not confirmed" : "";
+  else el.removeAttribute("title");
 }
 
 /** One transcript row. Everything from the line goes in as text. */
@@ -76,6 +111,8 @@ export function fillRow(
     /** A live label still a guess (W4.2): `speaker` reads `c3?`, `who` is the full label. */
     provisional?: boolean;
     who?: string;
+    /** What akou found by voice for the speaker: a name not yet confirmed, or an offer. */
+    voice?: ShownVoice;
   },
   hue: number,
 ): void {
@@ -88,14 +125,16 @@ export function fillRow(
   time.textContent = l.time;
   if (l.timeTitle) time.title = l.timeTitle;
   const who = body.querySelector(".who") as HTMLElement;
-  who.textContent = l.speaker;
+  fillWho(who, l.speaker, l.voice);
   who.dataset.spk = l.spk;
   who.classList.toggle("provisional", !!l.provisional);
   who.setAttribute(
     "aria-label",
-    l.provisional
-      ? `${l.speaker} (${l.who ?? l.speaker}, a guess until the final pass): rename, merge or unmerge`
-      : `${l.speaker}: rename, merge or unmerge`,
+    l.voice?.status === "named"
+      ? `${voiceWords(l.voice)}: confirm, rename, merge or unmerge`
+      : l.provisional
+        ? `${l.speaker} (${l.who ?? l.speaker}, a guess until the final pass${l.voice ? `, ${voiceWords(l.voice)}` : ""}): rename, merge or unmerge`
+        : `${l.speaker}${l.voice ? ` (${voiceWords(l.voice)})` : ""}: rename, merge or unmerge`,
   );
   const text = body.querySelector(".text") as HTMLElement;
   // Only a text that changed is set: setting the same one replaces its node, and a word the user
@@ -301,6 +340,7 @@ export class TranscriptPane {
           .map((s) => s.spk),
       ),
       finalDoneSeq: v.final.done?.seq,
+      voices: callVoices(v),
     };
     for (const id of ids) {
       const line = v.visibleIn(id, "best") ? v.resolve(id) : null;
@@ -344,7 +384,11 @@ export class TranscriptPane {
     row: HTMLElement,
     l: Line,
     v: CallView,
-    chips: { named: ReadonlySet<string>; finalDoneSeq?: number },
+    chips: {
+      named: ReadonlySet<string>;
+      finalDoneSeq?: number;
+      voices: ReadonlyMap<string, ShownVoice>;
+    },
   ): void {
     const tz = v.call?.tz ?? "UTC";
     const shown = this.shownText(l);
@@ -352,6 +396,7 @@ export class TranscriptPane {
     const chip = speakerChip(l, {
       named: chips.named.has(l.spk),
       finalDoneSeq: chips.finalDoneSeq,
+      voice: chips.voices.get(l.spk),
     });
     fillRow(
       row,
@@ -363,6 +408,7 @@ export class TranscriptPane {
         speaker: chip.label,
         who: l.speaker,
         provisional: chip.provisional,
+        voice: chip.voice,
         text: shown.text,
         heard: shown.heard,
         ch: l.ch,
@@ -430,14 +476,17 @@ export class TranscriptPane {
     return app && app.rev === l.rev ? app : l;
   }
 
-  /** A line as shown: its wall time, its speaker's full label and its text, for copying. */
+  /**
+   * A line as shown: its wall time, its speaker's full label and its text, for copying. A name
+   * found by voice reads `Ben (voice)`, as in every text that leaves the window.
+   */
   shown(id: string): { time: string; speaker: string; text: string } | null {
     const v = this.d.view();
     const l = v?.visibleIn(id, "best") ? v.resolve(id) : null;
     if (!v || !l) return null;
     return {
       time: formatWall(l.w0, v.call?.tz ?? "UTC"),
-      speaker: l.speaker,
+      speaker: speakerText(l, callVoices(v)),
       text: this.shownText(l).text,
     };
   }
@@ -557,6 +606,7 @@ export class TranscriptPane {
         .filter((s) => s.name)
         .map((s) => s.spk),
     );
+    const voices = callVoices(v);
     replace(
       box,
       ...lines.map((p) => {
@@ -567,7 +617,7 @@ export class TranscriptPane {
         const root = v.resolveSpeaker(spk);
         const chip = speakerChip(
           { layer: "live", ch: p.ch, spk: root, speaker },
-          { named: named.has(root), finalDoneSeq: v.final.done?.seq },
+          { named: named.has(root), finalDoneSeq: v.final.done?.seq, voice: voices.get(root) },
         );
         fillRow(
           r,
@@ -578,6 +628,7 @@ export class TranscriptPane {
             speaker: chip.label,
             who: speaker,
             provisional: chip.provisional,
+            voice: chip.voice,
             text: p.text,
             ch: p.ch,
           },

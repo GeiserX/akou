@@ -287,7 +287,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "share.port": { label: "Share link port", help: "0 picks a free one." },
   "voices.enabled": {
     label: "Recognise voices across calls",
-    help: "Remembers the voices of people you name and names them in later calls. Kept on this computer.",
+    help: "Remembers the voices of people you name, to name them later. Voiceprints stay in voices.yaml on this computer.",
   },
   "network.enabled": {
     label: "Let my devices read this app's history",

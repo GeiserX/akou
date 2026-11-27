@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { formatWall } from "../src/core/log/clock.ts";
-import { fold } from "../src/core/log/fold.ts";
+import { fold, type Line } from "../src/core/log/fold.ts";
 import { AnthropicProvider } from "../src/main/llm/anthropic.ts";
 import { pickHarness } from "../src/main/llm/harness.ts";
 import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
@@ -17,6 +17,7 @@ import {
   type CallSummary,
   callHeadMeta,
   callMeta,
+  callVoices,
   dayLabel,
   defaultWorkspace,
   FELL_BACK_FOR_MS,
@@ -40,12 +41,14 @@ import {
   restoreRate,
   seekBy,
   speakerChip,
+  speakerText,
   speakerTotals,
   splitCitations,
   stateLabel,
   stepRate,
   suggestReopen,
   talkTime,
+  voiceWords,
   workspaceNameProblem,
   workspaceNames,
   YOU_HUE,
@@ -793,6 +796,112 @@ describe("[W4.2] live speaker labels look provisional until named or final", () 
       label: "Ana",
       provisional: false,
     });
+  });
+});
+
+describe("names found by voice read as not confirmed until someone confirms them", () => {
+  const done = (extra: (b: LogBuilder) => void = () => {}) => {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    b.seg({ id: "l000001", spk: "c1", w0: T0 + 1000, w1: T0 + 4000, text: "hello" });
+    b.seg({ id: "l000002", spk: "c2", w0: T0 + 5000, w1: T0 + 6000, text: "hi" });
+    b.seg({ id: "l000003", spk: "c3", w0: T0 + 7000, w1: T0 + 8000, text: "hey" });
+    b.add({
+      type: "speaker.voice",
+      spk: "c1",
+      name: "Ben",
+      status: "named",
+      score: 0.9,
+      by: "app",
+    });
+    b.add({
+      type: "speaker.voice",
+      spk: "c2",
+      name: "Cy",
+      status: "offered",
+      score: 0.7,
+      by: "app",
+    });
+    // c3 was named by voice, then typed: the typed name wins and shows no voice.
+    b.add({ type: "speaker.voice", spk: "c3", name: "Di", status: "named", score: 0.9, by: "app" });
+    b.add({ type: "speaker.name", spk: "c3", name: "Di", by: "user" });
+    extra(b);
+    return fold(b.events);
+  };
+  const chipOf = (v: ReturnType<typeof fold>, id: string) => {
+    const l = v.resolve(id);
+    if (!l) throw new Error(`no line ${id}`);
+    const named = new Set(
+      v
+        .roster()
+        .filter((s) => s.name)
+        .map((s) => s.spk),
+    );
+    return speakerChip(l, {
+      named: named.has(l.spk),
+      finalDoneSeq: v.final.done?.seq,
+      voice: callVoices(v).get(l.spk),
+    });
+  };
+
+  test("a name found by voice is drawn provisional with its voice, even after the final pass", () => {
+    const v = done();
+    expect(chipOf(v, "l000001")).toEqual({
+      label: "Ben",
+      provisional: true,
+      voice: { name: "Ben", status: "named" },
+    });
+    const passed = done((x) => {
+      x.add({ type: "final.started", pid: 1 });
+      x.add({ type: "final.done", parts: [], skipped: [1] });
+    });
+    expect(chipOf(passed, "l000001").provisional).toBe(true);
+    expect(voiceWords(chipOf(v, "l000001").voice)).toBe("Ben, recognised by voice, not confirmed");
+  });
+
+  test("an offer keeps c2? and carries the name it sounds like", () => {
+    expect(chipOf(done(), "l000002")).toEqual({
+      label: "c2?",
+      provisional: true,
+      voice: { name: "Cy", status: "offered" },
+    });
+    expect(voiceWords({ name: "Cy", status: "offered" })).toBe("sounds like Cy");
+  });
+
+  test("positive control: a typed name is solid with no voice mark", () => {
+    expect(chipOf(done(), "l000003")).toEqual({ label: "Di", provisional: false });
+    // Confirming Ben (naming with the same name) makes it solid too.
+    const confirmed = done((x) =>
+      x.add({ type: "speaker.name", spk: "c1", name: "Ben", by: "user" }),
+    );
+    expect(chipOf(confirmed, "l000001")).toEqual({ label: "Ben", provisional: false });
+  });
+
+  test("the People strip and copied text mark the same voices", () => {
+    const v = done();
+    const named = new Set(
+      v
+        .roster()
+        .filter((s) => s.name)
+        .map((s) => s.spk),
+    );
+    const totals = speakerTotals(v.lines(), {
+      named,
+      finalDoneSeq: v.final.done?.seq,
+      voices: callVoices(v),
+    });
+    expect(totals.map((t) => [t.label, t.voice?.status ?? null])).toEqual([
+      ["Ben", "named"],
+      ["c2?", "offered"],
+      ["Di", null],
+    ]);
+    const text = (id: string) => speakerText(v.resolve(id) as Line, callVoices(v));
+    expect([text("l000001"), text("l000002"), text("l000003")]).toEqual([
+      "Ben (voice)",
+      "Speaker 2 (Cy?)",
+      "Di",
+    ]);
   });
 });
 
