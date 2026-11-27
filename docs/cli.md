@@ -506,9 +506,9 @@ example: akou remember "Ben owns the deploy"
 ```text
 akou voices: The voices akou recognises across calls: list, rename, forget, refuse a match
 
-usage: akou voices [list] | akou voices rename OLD NEW | akou voices forget NAME [--call ID] | --all | akou voices refuse SPK [-c CALL]   [--json]
+usage: akou voices [list] | akou voices rename OLD NEW | akou voices forget NAME [--call ID] | --call ID | --all | akou voices refuse SPK [-c CALL]   [--json]
 
-  -c, --call CALL  forget: only what this call id taught; refuse: live or a call id (default: live)
+  -c, --call CALL  forget: only what this call taught (a call id, live or last); refuse: live or a call id (default: live)
       --all        forget: every voice, and delete voices.yaml
       --json       print the answer as JSON, errors included
   -h, --help       show this help
@@ -521,6 +521,7 @@ example: akou voices
 example: akou voices rename Ben "Ben Ortiz"
 example: akou voices forget Ben
 example: akou voices forget Ben --call 01J8Z6Q4M2VX0K7B3D4E5F6G7H
+example: akou voices forget --call last
 example: akou voices forget --all
 example: akou voices refuse c2
 ```

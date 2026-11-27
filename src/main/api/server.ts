@@ -157,10 +157,11 @@ export interface ApiApp {
   levels(id: string): Levels | null;
   config(): LoadedConfig;
   /**
-   * The voices file (`voices.yaml`), for the voices routes; null in server mode, which keeps no
-   * voices. Absent: the same as null.
+   * The voices Host, for the voices routes: its edits of `voices.yaml` keep their order against
+   * the teaching in flight [VO-12]. Null in server mode, which keeps no voices. Absent: the same as
+   * null.
    */
-  voiceStore?(): import("../voices/store.ts").VoiceStore | null;
+  voiceHost?(): import("../voices/host.ts").VoiceHost | null;
   /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
   secretStore?(): "keychain" | null;
   /** The capture helper's device query (`GET /devices`, `GET /apps`). Throws `DevicesRefused`. */

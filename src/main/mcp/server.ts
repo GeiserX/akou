@@ -1348,7 +1348,7 @@ export function createMcpServer(o: McpOptions): McpServer {
           .string()
           .min(1)
           .optional()
-          .describe("A call id: forget only what this call taught."),
+          .describe("A call id, live or last: forget only what this call taught."),
         all: z.boolean().optional().describe("Forget every voice; send it alone."),
       }),
       outputSchema: OUT.forget,
@@ -1364,7 +1364,9 @@ export function createMcpServer(o: McpOptions): McpServer {
       return asResult(r, (b) => ({
         text: b.all
           ? "Forgot every voice"
-          : `Forgot ${b.name ?? "every voice"}${b.call ? ` from call ${b.call}` : ""}`,
+          : b.name === undefined
+            ? `Forgot what call ${b.call} taught`
+            : `Forgot ${b.name}${b.call ? ` from call ${b.call}` : ""}`,
         data: { name: b.name ?? null, call: b.call ?? null, all: b.all === true },
       }));
     },
