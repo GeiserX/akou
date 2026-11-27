@@ -221,3 +221,119 @@ describe("[T1.39] Docs drift from code: the default model with both on disk", ()
     ).toHaveLength(1);
   });
 });
+
+/**
+ * The lines that say akou keeps no voiceprint across calls, or that the vocabulary is the one
+ * thing that carries over. akou keeps a voiceprint per person the user named in `voices.yaml`
+ * (src/main/voices/store.ts) and names that voice in a later call (DESIGN 3.5).
+ */
+export function noVoicesClaims(text: string): string[] {
+  return text
+    .split("\n")
+    .filter((l) =>
+      /no voiceprints?( kept)? across calls|keeps? no voiceprints?|keeps nothing across calls|vocabulary is the (one|only) thing that carr(y|ies)|speakers are named per call/i.test(
+        l,
+      ),
+    );
+}
+
+/**
+ * The lines that put legal or consent wording on the voices: the voices are described like any
+ * other setting (what akou keeps, where, and how to remove it), with no notice about biometric
+ * data, GDPR, BIPA or consent.
+ */
+export function voiceLegalWording(text: string): string[] {
+  return text
+    .split("\n")
+    .filter((l) => /gdpr|bipa|biometric|consent/i.test(l) && /voice|speaker/i.test(l));
+}
+
+/** Every Markdown file under `dir`, relative to the repository. */
+function markdownUnder(dir: string): string[] {
+  return readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => `${dir}/${f}`);
+}
+
+/**
+ * What a person reads about the voices: README, every page under docs/ and the skills, the
+ * Unreleased part of the changelog (the released entries are history), and the source files that
+ * hold the window's, the Models page's and the settings' words.
+ */
+function voicePages(): [string, string][] {
+  const changelog = read("CHANGELOG.md").split(/^## (?!Unreleased)/m)[0] ?? "";
+  const settings = Object.values(SETTINGS)
+    .map((s) => s.doc)
+    .join("\n");
+  return [
+    ...["README.md", ...markdownUnder("docs"), ...markdownUnder("skills")].map(
+      (f): [string, string] => [f, read(f)],
+    ),
+    ["CHANGELOG.md (Unreleased)", changelog],
+    ["src/main/config/schema.ts (setting docs)", settings],
+    ...["src/main/asr/models.ts", "src/ui/models-rows.ts", "src/ui/settings-labels.ts"].map(
+      (f): [string, string] => [f, read(f)],
+    ),
+  ];
+}
+
+describe("[T1.39] Docs drift from code: the voices akou keeps across calls", () => {
+  test("no page says akou keeps no voiceprints, or that only the vocabulary carries over", () => {
+    const stale = voicePages().flatMap(([f, text]) =>
+      noVoicesClaims(text).map((l) => `${f}: ${l}`),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  test("no page puts biometric, GDPR, BIPA or consent wording on the voices", () => {
+    const legal = voicePages().flatMap(([f, text]) =>
+      voiceLegalWording(text).map((l) => `${f}: ${l}`),
+    );
+    expect(legal).toEqual([]);
+  });
+
+  test("the pages say plainly what akou keeps and how to forget it", () => {
+    for (const f of ["docs/how-it-works.md", "docs/faq.md", "docs/DESIGN.md"]) {
+      const page = read(f);
+      expect(page).toContain("voices.yaml");
+      expect(page).toContain("150 people");
+      expect(page).toMatch(/3.year/);
+    }
+    const how = read("docs/how-it-works.md");
+    expect(how).toContain("## Voices you named");
+    for (const door of [
+      "`akou voices forget --all`",
+      "`POST /v1/voices/forget`",
+      "`akou_voice_forget`",
+    ])
+      expect(how).toContain(door);
+  });
+
+  test("positive control: the old sentences are caught", () => {
+    expect(
+      noVoicesClaims(
+        "akou keeps no cross-meeting library, no weekly rollups, no voiceprints kept across calls.",
+      ),
+    ).toHaveLength(1);
+    expect(noVoicesClaims("## The vocabulary is the one thing that carries over")).toHaveLength(1);
+    expect(
+      noVoicesClaims("The vocabulary is the one thing that carries across calls, and nothing"),
+    ).toHaveLength(1);
+    expect(
+      noVoicesClaims("and keeps nothing across calls that would compete with them"),
+    ).toHaveLength(1);
+    expect(noVoicesClaims("akou keeps a voiceprint per person you named.")).toEqual([]);
+  });
+
+  test("positive control: legal wording about voices is caught", () => {
+    expect(
+      voiceLegalWording("Voiceprints are biometric data (GDPR art. 9; Illinois BIPA)."),
+    ).toHaveLength(1);
+    expect(
+      voiceLegalWording(
+        "Tell the people you record, and get their consent before akou keeps their voice.",
+      ),
+    ).toHaveLength(1);
+    expect(voiceLegalWording("Tell the others you are recording.")).toEqual([]);
+  });
+});
