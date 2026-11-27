@@ -11,6 +11,7 @@
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { type FinalStep, finalText } from "../main/asr/final-text.ts";
+import { type ShownVoice, shownVoices, voiceLabel } from "../main/query/render.ts";
 import { hotkeyLabel } from "../main/window/hotkey.ts";
 import type { AppStatus } from "./protocol.ts";
 
@@ -549,13 +550,43 @@ export function noteKind(text: string): "text" | "bullet" | "action" | "question
  */
 export function speakerChip(
   line: { layer: "live" | "final"; ch: "mic" | "call"; spk: string; speaker: string; seq?: number },
-  o: { named: boolean; finalDoneSeq?: number },
-): { label: string; provisional: boolean } {
+  o: { named: boolean; finalDoneSeq?: number; voice?: ShownVoice },
+): { label: string; provisional: boolean; voice?: ShownVoice } {
+  const voice = line.ch === "call" ? o.voice : undefined;
+  // A name akou found by voice is a guess until someone confirms it, whatever the final pass did.
+  if (voice?.status === "named") return { label: line.speaker, provisional: true, voice };
   const passed =
     o.finalDoneSeq !== undefined && line.seq !== undefined && line.seq < o.finalDoneSeq;
   const provisional = line.ch === "call" && line.layer === "live" && !o.named && !passed;
-  if (!provisional) return { label: line.speaker, provisional };
-  return { label: line.spk.endsWith("?") ? line.spk : `${line.spk}?`, provisional };
+  const label = !provisional ? line.speaker : line.spk.endsWith("?") ? line.spk : `${line.spk}?`;
+  return { label, provisional, ...(voice ? { voice } : {}) };
+}
+
+/**
+ * What a chip says to a screen reader about a name found by voice: `Ben, recognised by voice, not
+ * confirmed`, or, for an offer, that it sounds like Ben. Empty with no voice.
+ */
+export function voiceWords(voice: ShownVoice | undefined): string {
+  if (!voice) return "";
+  return voice.status === "named"
+    ? `${voice.name}, recognised by voice, not confirmed`
+    : `sounds like ${voice.name}`;
+}
+
+/** What akou found by voice for each speaker of the call, by speaker id (see `shownVoices`). */
+export function callVoices(v: CallView): Map<string, ShownVoice> {
+  return shownVoices(v.roster());
+}
+
+/**
+ * A line's speaker as text that leaves the chip (a citation, a copied line): `Ben (voice)` for a
+ * name found by voice, `Speaker 2 (Ben?)` for an offer, the label as it is otherwise.
+ */
+export function speakerText(
+  l: { spk: string; speaker: string },
+  voices: ReadonlyMap<string, ShownVoice>,
+): string {
+  return voiceLabel(l.speaker, voices.get(l.spk));
 }
 
 // ---------------------------------------------------------------------------
@@ -845,6 +876,8 @@ export interface SpeakerTotal {
   spk: string;
   label: string;
   seconds: number;
+  /** What akou found by voice for this speaker, when it shows. */
+  voice?: ShownVoice;
 }
 
 /**
@@ -862,18 +895,31 @@ export function speakerTotals(
     ch?: "mic" | "call";
     seq?: number;
   }[],
-  chips?: { named: ReadonlySet<string>; finalDoneSeq?: number },
+  chips?: {
+    named: ReadonlySet<string>;
+    finalDoneSeq?: number;
+    voices?: ReadonlyMap<string, ShownVoice>;
+  },
 ): SpeakerTotal[] {
   const by = new Map<string, SpeakerTotal>();
   for (const l of lines) {
-    const label =
+    const chip =
       chips && l.layer && l.ch
         ? speakerChip(
             { ...l, layer: l.layer, ch: l.ch },
-            { named: chips.named.has(l.spk), finalDoneSeq: chips.finalDoneSeq },
-          ).label
-        : l.speaker;
-    const t = by.get(l.spk) ?? { spk: l.spk, label, seconds: 0 };
+            {
+              named: chips.named.has(l.spk),
+              finalDoneSeq: chips.finalDoneSeq,
+              voice: chips.voices?.get(l.spk),
+            },
+          )
+        : { label: l.speaker };
+    const t = by.get(l.spk) ?? {
+      spk: l.spk,
+      label: chip.label,
+      seconds: 0,
+      ...("voice" in chip && chip.voice ? { voice: chip.voice } : {}),
+    };
     t.seconds += Math.max(0, l.w1 - l.w0) / 1000;
     by.set(l.spk, t);
   }

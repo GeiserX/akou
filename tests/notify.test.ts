@@ -337,4 +337,87 @@ describe("notifications carry no call content", () => {
     },
     LONG,
   );
+
+  test(
+    "[VO-9] no notification carries a name akou found by voice, named or offered",
+    async () => {
+      const rig = await appRig({ settings: { "share.bind": "127.0.0.1", "share.port": 0 } });
+      const { shell, f } = await shellOn(rig);
+      const named = "Quorra Voicemark";
+      const offered = "Tron Offermark";
+      const r = await rig.api("POST", "/calls", { title: "a call" });
+      expect(r.status).toBe(201);
+      const id = r.body.call as string;
+      // The roster shows both: a name found by voice on c1 and an offer on c2.
+      for (const [n, spk] of [
+        [1, "c1"],
+        [2, "c2"],
+      ] as const) {
+        const w = Date.now();
+        await rig.app.write(id, {
+          type: "seg",
+          id: `l00000${n}`,
+          rev: 1,
+          layer: "live",
+          part: 1,
+          ch: "call",
+          spk,
+          a0: n,
+          a1: n + 1,
+          w0: w,
+          w1: w + 1000,
+          text: "we ship on friday",
+          lang: "en",
+          model: "parakeet-tdt-0.6b-v3-fp32",
+        });
+      }
+      await rig.app.write(id, {
+        type: "speaker.voice",
+        spk: "c1",
+        name: named,
+        status: "named",
+        score: 0.91,
+        by: "app",
+      });
+      await rig.app.write(id, {
+        type: "speaker.voice",
+        spk: "c2",
+        name: offered,
+        status: "offered",
+        score: 0.7,
+        by: "app",
+      });
+      const roster = (await rig.api("GET", `/calls/${id}`)).body.roster as {
+        spk: string;
+        voice?: { name: string };
+      }[];
+      expect(
+        roster
+          .map((s) => s.voice?.name)
+          .filter(Boolean)
+          .sort(),
+      ).toEqual([named, offered].sort());
+      // Every row a call with voices can reach after the start: refused, shared.
+      expect((await rig.api("POST", "/calls", {})).status).toBe(409);
+      expect((await rig.api("POST", "/share", {})).status).toBe(201);
+      await until(() => f.notices.length >= 3, 5000, "a notification per row");
+      expect(new Set(f.notices.map((n) => n.title))).toEqual(
+        new Set(["Recording started", "Could not start recording", "This call is shared live"]),
+      );
+      const markers = [named, offered, "Quorra", "Offermark"];
+      expect(leaks(f.notices, markers)).toEqual([]);
+      // Positive control: a notification that named the voice is caught.
+      expect(
+        leaks(
+          [...f.notices, { title: "This call is shared live", body: `with ${named}` }],
+          markers,
+        ),
+      ).toEqual([named, "Quorra"]);
+      await rig.api("DELETE", "/share", {});
+      await rig.api("POST", "/calls/live/stop");
+      await shell.close();
+      await rig.close();
+    },
+    LONG,
+  );
 });

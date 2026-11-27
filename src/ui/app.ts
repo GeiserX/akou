@@ -41,6 +41,7 @@ import {
   type CallSummary,
   callHeadMeta,
   callMeta,
+  callVoices,
   finalNote,
   formatDuration,
   groupCalls,
@@ -53,6 +54,7 @@ import {
   stateLabel,
   suggestReopen,
   talkTime,
+  voiceWords,
 } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { ModelsPage } from "./models-page.ts";
@@ -62,9 +64,10 @@ import { Pages } from "./pages.ts";
 import { Player } from "./player.ts";
 import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
+import { twoStep } from "./server-common.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { SetupWizard } from "./setup-wizard.ts";
-import { jumpText, TranscriptPane } from "./transcript.ts";
+import { fillWho, jumpText, TranscriptPane } from "./transcript.ts";
 import { WorkspacePicker } from "./workspaces.ts";
 
 /** The answer of `POST /calls/{id}/fix`: what each changed word did, and how to take it back. */
@@ -321,6 +324,7 @@ class App {
     const openWords = () => void this.pages.show("dictation", WORDS);
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
+      call: (id) => this.calls.find((c) => c.id === id),
       openModels,
       openDictionary: openWords,
       runSetup,
@@ -752,6 +756,7 @@ class App {
               .map((s) => s.spk),
           ),
           finalDoneSeq: v.final.done?.seq,
+          voices: callVoices(v),
         })
       : [];
     const people = byId("people");
@@ -761,11 +766,19 @@ class App {
       ...totals.map((t) => {
         const dot = h("i", { attrs: { "aria-hidden": "true" } });
         dot.style.setProperty("--h", String(this.hues.hue(t.spk)));
+        const who = h("span", { class: "who" });
+        fillWho(who, t.label, t.voice);
+        // A name found by voice reads as one, unconfirmed; an offer says who it sounds like.
+        if (t.voice)
+          who.setAttribute(
+            "aria-label",
+            t.voice.status === "named" ? voiceWords(t.voice) : `${t.label}, ${voiceWords(t.voice)}`,
+          );
         return h(
           "li",
-          { attrs: { "data-spk": t.spk } },
+          { attrs: { "data-spk": t.spk }, class: t.voice?.status === "named" ? "voice" : "" },
           dot,
-          h("span", { class: "who" }, t.label),
+          who,
           h("span", { class: "len" }, talkTime(t.seconds)),
         );
       }),
@@ -1717,7 +1730,114 @@ class App {
         `Split off ${m.spk.replace(/^c(\d+)$/, "Speaker $1")} (${m.spk})`,
       ),
     );
-    this.openPopover(anchor, `${label} (${spk})`, rename, ...(merge ? [merge] : []), ...unmerge);
+    const title = `${label} (${spk})`;
+    const voice = this.voiceRows(call, spk, after);
+    this.openPopover(anchor, title, rename, ...voice, ...(merge ? [merge] : []), ...unmerge);
+    const me = roster.find((s) => s.spk === spk);
+    // A name an MCP agent gave teaches akou nothing (it may be a guess): the user can say it is
+    // right, which names the speaker again as the user. Offered only while akou learns voices.
+    if (me?.name && !me.byVoice && me.namedBy?.startsWith("agent:") && me.namedBy !== "agent:cli")
+      void this.rememberRow(call, spk, me.name, title, after);
+  }
+
+  /**
+   * What akou found by voice for a speaker, in its popover, after the name field and its one
+   * submit button: "Sounds like Ben", Yes, which names the speaker Ben (one `speaker.name`, as a
+   * typed name), and Not Ben, which asks once more and then refuses the name for this speaker.
+   */
+  private voiceRows(
+    call: string,
+    spk: string,
+    after: (p: Promise<{ status: number; body: unknown }>) => Promise<void>,
+  ): HTMLElement[] {
+    const v = this.view();
+    const voice = v ? callVoices(v).get(v.resolveSpeaker(spk)) : undefined;
+    if (!voice) return [];
+    const yes = h(
+      "button",
+      {
+        type: "button",
+        class: "go voice-yes",
+        on: {
+          click: () =>
+            void after(
+              this.t.request("POST", `/calls/${call}/speakers`, { spk, name: voice.name }),
+            ),
+        },
+      },
+      "Yes",
+    );
+    const no = twoStep(
+      {
+        class: "voice-no",
+        label: `Not ${voice.name}`,
+        confirm: `Not ${voice.name}: sure?`,
+        id: `${call}:${spk}`,
+        armed: new Map(),
+      },
+      () => void after(this.t.request("POST", `/calls/${call}/speakers/refuse`, { spk })),
+    );
+    return [
+      h(
+        "div",
+        { class: "pop-voice" },
+        h(
+          "p",
+          {},
+          `Sounds like ${voice.name}`,
+          voice.status === "named" ? h("span", { class: "pop-note" }, " (not confirmed)") : null,
+        ),
+        h("div", { class: "pop-row" }, yes, no),
+      ),
+    ];
+  }
+
+  /**
+   * "Remember this voice" under a name an MCP agent gave, once the settings say akou learns
+   * voices: it names the speaker again with the same name, as the user, which teaches the voice.
+   */
+  private async rememberRow(
+    call: string,
+    spk: string,
+    name: string,
+    title: string,
+    after: (p: Promise<{ status: number; body: unknown }>) => Promise<void>,
+  ): Promise<void> {
+    const r = await this.t
+      .request<{ settings?: Record<string, unknown> }>("GET", "/config")
+      .catch(() => null);
+    const pop = byId("popover");
+    if (!r || r.status >= 400 || r.body.settings?.["voices.enabled"] !== true) return;
+    // The popover was closed, or opened on another speaker, meanwhile.
+    if (pop.hidden || pop.getAttribute("aria-label") !== title || this.callId !== call) return;
+    pop.append(
+      h(
+        "div",
+        { class: "pop-voice" },
+        h(
+          "p",
+          { class: "pop-note" },
+          "An agent named this speaker, so akou did not keep the voice.",
+        ),
+        h(
+          "div",
+          { class: "pop-row" },
+          h(
+            "button",
+            {
+              type: "button",
+              class: "voice-remember",
+              on: {
+                click: () =>
+                  void after(this.t.request("POST", `/calls/${call}/speakers`, { spk, name })),
+              },
+            },
+            "Remember this voice",
+          ),
+        ),
+      ),
+    );
+    this.placePopover();
   }
 
   /**

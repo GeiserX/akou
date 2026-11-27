@@ -36,7 +36,13 @@ import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { parseNaming } from "../main/query/classify.ts";
 import { byId, h, replace, toast } from "./dom.ts";
-import { askUnavailable, resolveTimeCitation, splitCitations } from "./model.ts";
+import {
+  askUnavailable,
+  callVoices,
+  resolveTimeCitation,
+  speakerText,
+  splitCitations,
+} from "./model.ts";
 import type { AskAnswer, Transport } from "./protocol.ts";
 
 export interface AskDeps {
@@ -70,7 +76,7 @@ export function citedText(
       const l = view.resolve(p.id);
       if (l) {
         time = formatWall(l.w0, tz, { seconds: false });
-        label = `${time} ${l.speaker}`;
+        label = `${time} ${speakerText(l, callVoices(view))}`;
       }
     } else if (p.kind === "time") label = `${p.time} ${p.speaker}`;
     if (!id) {
