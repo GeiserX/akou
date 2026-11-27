@@ -325,6 +325,7 @@ A voice a person named in one call is named again in later calls. This runs on t
 - **One queue.** Learning and matching run one event at a time. A decision reads the fold and writes its events in the same turn, so it never acts on a fold a later event changed. The file is read again only when it changes on disk.
 - **Purge.** A call deleted for good (Empty trash, or the purge at start after 30 days) loses its exemplars, in every mode; a trash and a restore keep them [VO-4]. When the file cannot be read at that moment, the call's id waits in `voices.yaml.forget` and leaves the file at the next read that works, after a restart too.
 - **The log** gets counts only, never a name or a vector.
+- **Doors** (6.1, 6.2, 6.4). The user lists, renames and forgets voices, forgets what one call taught, and refuses a name found by voice on a speaker; confirming one is naming the speaker with it, one `speaker.name`. Only the user on this computer reaches them: the window and the app's own token, never an `ak_` key [VO-8]. Every answer carries names and statuses only: the call roster's `voice` is `{name, status}`, and no door returns a voiceprint or a score. Text a person reads marks a name found by voice as `Ben (voice)` and an offer as `Speaker 2 (Ben?)`; the pack says `(recognised by voice, unconfirmed)`.
 
 ## 4. The event log
 
@@ -599,6 +600,7 @@ The table below is the design sketch and may lag behind the code. For what the b
 | `akou answer ASK "TEXT" [--call ID] [--client NAME]` | The agent following the call answers a question typed in the ask box (section 5.5); `-` reads the text from stdin |
 | `akou search "Q" [--call ID] [-k N]` | BM25 hits |
 | `akou name <spk> <Name>` · `akou name --merge <a> <b>` · `akou name --unmerge <spk>` | Speakers |
+| `akou voices` · `akou voices rename OLD NEW` · `akou voices forget NAME [--call ID] \| --all` · `akou voices refuse SPK [-c CALL]` | Voices across calls (3.5) |
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
 | `akou vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | The custom vocabulary: entries in force, add a word (mid-call with `--call`), a stated fix applied to the whole call (`fix`), proposals, ranked candidates from a call or text, decode safety of a word, import of older list formats, the post-call pass. |
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force] [--model qwen\|parakeet\|fusion]` | Post-call |
@@ -644,6 +646,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /provider/warm` | `200 {warming, reason?}`. The ask box has focus: the harness provider starts its program now and sends it nothing until a question; other providers do nothing |
 | `GET /calls/{id}/search?q=&k=` | Hits |
 | `POST /calls/{id}/speakers` `{spk, name}` · `POST …/speakers/merge` · `POST …/speakers/unmerge` | Speakers |
+| `GET /voices` · `POST /voices/rename` `{from, to}` · `POST /voices/forget` `{name?, call?, all?}` · `POST /calls/{id}/speakers/refuse` `{spk}` | Voices across calls (3.5): the user on this computer only, 403 `local_only` for a key, 409 `voices_off` when off; app mode only |
 | `POST /calls/{id}/notes` · `PATCH /calls/{id}/notes/{nid}` · `DELETE /calls/{id}/notes/{nid}` · `POST /calls/{id}/remember` · `DELETE /calls/{id}/remember/{rid}` | Notes, memory |
 | `GET /calls/{id}/memo` · `PUT /calls/{id}/memo` `{text, coversSeq}` | Memo |
 | `GET /calls/{id}/vocab` · `POST /calls/{id}/vocab` `{term, heard[], segs?, decode?}` · `DELETE /calls/{id}/vocab/{vid}` · `POST /calls/{id}/vocab/pass` · `POST /calls/{id}/fix` `{line, text}` or `{term, heard[]}` · `POST /calls/{id}/fix/undo` · `POST /calls/{id}/fix/forget` `{learned}` | The list in force for the call, a call-scoped add (`vocab.add`), its retraction, the post-call pass, a fix applied to the whole call (section 5.4), its undo, and forgetting a term a fix learned |
@@ -690,7 +693,8 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_search {query, call = "live", k = 6}` | BM25 hits with wall-time citations |
 | `akou_ask {question, call = "live"}` | Answer with akou's configured provider. Listed only when one is configured, and hidden when the provider is `harness` and the MCP client is that same harness. Its description says: prefer `akou_context`; `akou_ask` spawns another agent run on your subscription |
 | `akou_answer {ask, text, call = "live", model?}` | Answer a question the user typed in the ask box, as the agent following the call (section 5.5). Returns the ask id, the line ids it cites and `others`: what else answered it. 409 `already_answered` when this agent already did |
-| `akou_name_speaker {speaker, name}` · `akou_merge_speakers {a, b}` · `akou_unmerge_speaker {speaker}` | Speakers |
+| `akou_name_speaker {speaker, name}` · `akou_merge_speakers {a, b}` · `akou_unmerge_speaker {speaker}` | Speakers. A name given here does not teach akou the voice (3.5) |
+| `akou_voices_list` · `akou_voice_refuse {speaker}` · `akou_voice_forget {name?, call?, all?}` | Voices across calls (3.5). No rename tool: who akou names by voice in later calls is the user's to change |
 | `akou_add_note {text}` · `akou_get_notes` · `akou_edit_note {id, text, call = "live"}` · `akou_delete_note {id, call = "live"}` · `akou_remember {text}` · `akou_forget {id}` | Notepad, memory, retract a remembered line |
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
@@ -710,7 +714,7 @@ Tool descriptions carry the rules: cite wall time, never quote a draft line as f
 
 1. **Start first.** The first tool call is `akou start --attach -w <workspace> -t "<title>"` (or `akou_start`). No status probe, no planning turn. A call already recording comes back with `attached: true`, and the agent follows it (answers, reads, notes) as if it had started it. Tell the user they can also press the hotkey or type `! akou start`.
 2. **To answer**, call `akou_context` with the user's question verbatim. Never read files under the recordings root. Answer from the pack, cite `[15:41 Ben]`, never present an offset as a time of day, never quote a `DRAFT` line as fact. If the pack says `ENDED`, say the call ended and when.
-3. When the user names someone, call `akou_name_speaker` at once. When the user states how a word is spelled ("it's Vercel, not versal"), call `akou_vocab_add` with `scope: call` at once; if the user wants it kept, add it to the workspace. When you learn something you will need later, call `akou_remember`.
+3. When the user names someone, name the speaker at once: `akou name c2 Ben` with a shell, which teaches akou the voice, or `akou_name_speaker` with MCP only, which does not, so the agent tells the user to name the speaker in the window to teach it. A name found by voice is unconfirmed; never confirm it unless the user says so. When the user states how a word is spelled ("it's Vercel, not versal"), call `akou_vocab_add` with `scope: call` at once; if the user wants it kept, add it to the workspace. When you learn something you will need later, call `akou_remember`.
 3a. Before a call, if the user shares the invite, pass attendee names and title terms as `vocab` to `akou_start`. Never add an inferred word as confirmed; use `akou_vocab_propose`. The `akou-vocab` skill does the wider learning from documents, exports and the web, always ending in a proposal the user approves.
 4. If `memoStale` is set and no provider is configured, write the memo with `akou_memo_put`.
 5. On `health: dead`, tell the user at once; akou is already rebuilding and restarts automatically after 60 s. On `asr.lag` over 30 s, hold heavy work in this session until the call ends.

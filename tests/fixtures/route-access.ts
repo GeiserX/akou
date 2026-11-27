@@ -71,6 +71,11 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/calls/{id}/speakers": "admin",
   "POST /v1/calls/{id}/speakers/merge": "admin",
   "POST /v1/calls/{id}/speakers/unmerge": "admin",
+  // Voices: admin, and the route itself also refuses every `ak_` key with 403 local_only [VO-8].
+  "POST /v1/calls/{id}/speakers/refuse": "admin",
+  "GET /v1/voices": "admin",
+  "POST /v1/voices/rename": "admin",
+  "POST /v1/voices/forget": "admin",
   "GET /v1/calls/{id}/notes": "read",
   "POST /v1/calls/{id}/notes": "admin",
   "PATCH /v1/calls/{id}/notes/{nid}": "admin",

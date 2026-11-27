@@ -198,14 +198,21 @@ describe("[SV-T5] one table of who may call each route", () => {
     // route anonymous they answer 401 themselves, right for those two and wrong once, for the
     // admin token.
     const needsCaller = ["GET /v1/keys/me", "DELETE /v1/models/{id}"];
+    // The voices routes need the user on this computer, so with no caller they answer 403
+    // `local_only` to the admin token too [VO-8].
+    const localOnly = ["GET /v1/voices", "POST /v1/voices/rename", "POST /v1/voices/forget"];
     // The open routes the app-mode walk serves: a server-only one is an unknown path there.
     const open = operations(committed()).filter(
       (o) => TABLE[key(o.method, o.path)] === "open" && o.op["x-akou-modes"].includes("app"),
     ).length;
     expect(r.wrong.length).toBe(
-      (Object.keys(TABLE).length - open - needsCaller.length) * 2 + needsCaller.length,
+      (Object.keys(TABLE).length - open - needsCaller.length - localOnly.length) * 2 +
+        needsCaller.length +
+        localOnly.length * 3,
     );
     for (const k of needsCaller)
       expect(r.wrong).toContain(`${k} with admin: 401, table says allowed`);
+    for (const k of localOnly)
+      expect(r.wrong).toContain(`${k} with admin: 403, table says allowed`);
   });
 });

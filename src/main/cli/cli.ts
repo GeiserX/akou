@@ -34,6 +34,7 @@ import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { transcribeCommand } from "./commands/transcribe.ts";
 import { vocab } from "./commands/vocab.ts";
+import { voicesCommand } from "./commands/voices.ts";
 import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
 import type { Command, Ctx, GrantChecker, Io, Keys } from "./context.ts";
@@ -80,6 +81,7 @@ export const COMMANDS: readonly Command[] = [
   waitCommand,
   watch,
   ...noteCommands,
+  voicesCommand,
   ...handoffCommands,
   jobsCommand,
   vocab,

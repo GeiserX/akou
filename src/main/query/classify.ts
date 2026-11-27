@@ -27,6 +27,8 @@ export interface SpeakerRef {
   spk: string;
   label: string;
   name?: string;
+  /** The name came from a voice match, and nobody confirmed it. */
+  byVoice?: true;
 }
 
 export interface TimeWindow {

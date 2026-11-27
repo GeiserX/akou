@@ -29,7 +29,7 @@ import { EVENT_TYPES, type LogEvent } from "../../../core/log/events.ts";
 import type { Line, View } from "../../../core/log/fold.ts";
 import { learnedItem } from "../../../core/vocab/learned.ts";
 import { renderTranscriptSection } from "../../handoff/export.ts";
-import { estimateTokens, renderLine } from "../../query/render.ts";
+import { estimateTokens, renderLine, shownVoices, voiceLabel } from "../../query/render.ts";
 import { isLocalUser } from "../caller.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, type Query, type Router } from "../http.ts";
@@ -567,11 +567,15 @@ export function followRoutes(r: Router<ApiApp>): void {
           return false;
         return true;
       });
+      // A name akou found by voice is marked in the text, `Ben (voice)` or `Speaker 2 (Ben?)`,
+      // so a reader never takes it for a name someone gave.
+      const voices = shownVoices(v.roster());
+      const who = (l: Line) => voiceLabel(l.speaker, voices.get(l.spk));
       const rendered = (l: Line) =>
         format === "txt"
-          ? `${formatWall(l.w0, tz)} ${l.speaker}: ${l.annotated}`
+          ? `${formatWall(l.w0, tz)} ${who(l)}: ${l.annotated}`
           : format === "md"
-            ? `**${formatWall(l.w0, tz)} ${l.speaker}:** ${l.annotated}`
+            ? `**${formatWall(l.w0, tz)} ${who(l)}:** ${l.annotated}`
             : renderLine(l, { tz });
       const total = lines.length;
       let omitted = 0;
@@ -710,6 +714,8 @@ export function followRoutes(r: Router<ApiApp>): void {
           ch: l.ch,
           spk: l.spk,
           speaker: l.speaker,
+          // What akou found by voice for the speaker, name and status only.
+          ...(voices.has(l.spk) ? { voice: voices.get(l.spk) } : {}),
           text: l.text,
           // With a correction: the raw line, and the line as packs and exports show it,
           // `Hetzner (heard: "hetzna")`.

@@ -17,6 +17,7 @@
 
 import { formatWall } from "../../../core/log/clock.ts";
 import { readSse } from "../../llm/provider.ts";
+import { voiceLabel } from "../../query/render.ts";
 import { EXIT, exitFor } from "../client.ts";
 import { dim, healthWord, paint, SpeakerColors } from "../color.ts";
 import {
@@ -221,7 +222,7 @@ export const watch: Command = {
       ),
     ];
     for (const l of (t.body.lines as Body[]).slice(-BACKLOG)) {
-      names.set(l.spk, l.speaker);
+      names.set(l.spk, voiceLabel(l.speaker, l.voice));
       out.push(lineText(l, "txt", colors));
     }
     write(`${out.join("\r\n")}\r\n`);
@@ -259,7 +260,7 @@ export const watch: Command = {
         if (r?.status !== 200) return;
         lineCursor = r.body.cursor;
         for (const l of r.body.lines as Body[]) {
-          names.set(l.spk, l.speaker);
+          names.set(l.spk, voiceLabel(l.speaker, l.voice));
           above(lineText(l, "txt", colors));
         }
       });

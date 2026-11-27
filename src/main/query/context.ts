@@ -105,6 +105,8 @@ const RECENCY_SHARE: Record<Intent, number> = {
 };
 
 export const SEARCH_K = 6;
+/** How the pack marks a name akou found by voice: the agent must not take it as given. */
+export const BY_VOICE = "(recognised by voice, unconfirmed)";
 /** A hit scoring under this share of the best hit is noise. */
 const MIN_RELATIVE_SCORE = 0.2;
 /** Hits closer than this to an already chosen hit are the same moment. */
@@ -314,6 +316,7 @@ export class CallQuery {
       spk: r.mergedInto ?? r.spk,
       label: r.label,
       name: r.name,
+      ...(r.byVoice ? { byVoice: true as const } : {}),
     }));
   }
 
@@ -530,7 +533,7 @@ export class CallQuery {
       }
       if (seen.has(r.spk)) continue;
       seen.add(r.spk);
-      parts.push(`${r.spk} = ${r.label}`);
+      parts.push(`${r.spk} = ${r.byVoice ? `${r.label} ${BY_VOICE}` : r.label}`);
     }
     return parts.length > 0 ? parts.join(", ") : "none yet";
   }
@@ -599,7 +602,9 @@ export class CallQuery {
       bits.push(`recent from: ${formatWall(windowStart, tz)}`);
     }
     if (cls.speakers.length > 0)
-      bits.push(`speakers: ${cls.speakers.map((s) => s.label).join(", ")}`);
+      bits.push(
+        `speakers: ${cls.speakers.map((s) => (s.byVoice ? `${s.label} ${BY_VOICE}` : s.label)).join(", ")}`,
+      );
     if (cls.terms.length > 0) bits.push(`terms: ${cls.terms.slice(0, 8).join(", ")}`);
     if (cls.naming) bits.push(`naming: ${cls.naming.spk} = ${cls.naming.name}`);
     return `Question analysis: ${bits.join(" · ")}`;

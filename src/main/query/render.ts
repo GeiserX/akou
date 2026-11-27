@@ -58,6 +58,45 @@ export function lineSpeaker(line: Line, opts: RenderOptions): string {
   return opts.speakerIds ? line.spk : line.speaker;
 }
 
+/** What akou found by voice for a speaker, as a line or a roster carries it: never a score. */
+export interface ShownVoice {
+  name: string;
+  status: "named" | "offered";
+}
+
+/**
+ * A speaker's label with what akou found by voice, for text a person reads: `Ben (voice)` when the
+ * name came from a voice match and nobody confirmed it, `Speaker 2 (Ben?)` when akou only thinks
+ * it may be Ben. A typed name, or no voice, is the label as it is.
+ */
+export function voiceLabel(label: string, voice?: ShownVoice | null): string {
+  if (!voice) return label;
+  return voice.status === "named" ? `${label} (voice)` : `${label} (${voice.name}?)`;
+}
+
+/**
+ * The voice to show next to each speaker of a call, by speaker id: a name found by voice that no
+ * one typed, or an offer on a speaker with no name. A typed name shows no voice.
+ */
+export function shownVoices(
+  roster: readonly {
+    spk: string;
+    name?: string;
+    byVoice?: true;
+    mergedInto?: string;
+    voice?: ShownVoice;
+  }[],
+): Map<string, ShownVoice> {
+  const out = new Map<string, ShownVoice>();
+  for (const r of roster) {
+    if (r.mergedInto) continue;
+    if (r.byVoice && r.name) out.set(r.spk, { name: r.name, status: "named" });
+    else if (!r.name && r.voice?.status === "offered")
+      out.set(r.spk, { name: r.voice.name, status: "offered" });
+  }
+  return out;
+}
+
 /**
  * One committed line: `#l000031 15:41:07 Ben: we should move the build to Kubernetes (heard:
  * "kubernetis")`. The text is the annotated form, so a correction is visible to the model.

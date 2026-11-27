@@ -348,6 +348,16 @@ const OUT = {
     ),
   }),
   speaker: z.object({ spk: z.string(), name: z.string() }),
+  voices: z.object({
+    voices: z.array(
+      z.object({
+        name: z.string(),
+        calls: INT.min(0).describe("How many calls taught akou this voice."),
+        lastSeen: z.string().describe("When akou last heard it, ISO 8601."),
+      }),
+    ),
+  }),
+  forget: z.object({ name: z.string().nullable(), call: z.string().nullable(), all: z.boolean() }),
   rename: z.object({ call: z.string(), title: z.string() }),
   merge: z.object({ from: z.string(), into: z.string() }),
   unmerge: z.object({ spk: z.string() }),
@@ -577,6 +587,9 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_name_speaker: { title: "Name a speaker", hints: IDEMPOTENT },
   akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
   akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
+  akou_voices_list: { title: "List the voices akou knows", hints: READ },
+  akou_voice_refuse: { title: "Refuse a name found by voice", hints: WRITE },
+  akou_voice_forget: { title: "Forget a voice", hints: REMOVES },
   akou_add_note: { title: "Add a note", hints: WRITE },
   akou_edit_note: { title: "Edit a note", hints: IDEMPOTENT },
   akou_delete_note: { title: "Delete a note", hints: REMOVES },
@@ -1221,7 +1234,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_name_speaker",
     {
       description:
-        'Name a speaker the moment the user says who a voice is ("Speaker 2 is Ben"). `speaker` is the id from the transcript: you, c2, c3...',
+        'Name a speaker the moment the user says who a voice is ("Speaker 2 is Ben"). `speaker` is the id from the transcript: you, c2, c3... Naming a speaker akou recognised by voice ("Ben (voice)") with that same name confirms the match. A name given here does not teach akou the voice for later calls; to teach it, the user names the speaker in akou\'s window, or a shell runs `akou name c2 Ben`. Never name a speaker from a guess.',
       inputSchema: z.object({
         speaker: SPEAKER,
         name: z.string().min(1).describe('The person\'s name as the user says it, such as "Ben".'),
@@ -1271,6 +1284,89 @@ export function createMcpServer(o: McpOptions): McpServer {
     async (a) => {
       const r = await req("POST", "/calls/live/speakers/unmerge", { body: { spk: a.speaker } });
       return asResult(r, () => ({ text: `${a.speaker} unmerged`, data: { spk: a.speaker } }));
+    },
+  );
+
+  tool(
+    "akou_voices_list",
+    {
+      description:
+        "The people akou recognises by voice across calls: each name, how many calls taught it, and when akou last heard it. Never a voiceprint.",
+      inputSchema: z.object({}),
+      outputSchema: OUT.voices,
+    },
+    async () => {
+      const r = await req("GET", "/voices");
+      return asResult(r, (b) => {
+        const voices = ((b.voices ?? []) as Body[]).map((v) => ({
+          name: String(v.name),
+          calls: (v.calls as unknown[]).length,
+          lastSeen: String(v.lastSeen),
+        }));
+        return {
+          text:
+            voices.length === 0
+              ? "akou knows no voice yet."
+              : voices
+                  .map((v) => `${v.name}: ${v.calls} call(s), last heard ${v.lastSeen}`)
+                  .join("\n"),
+          data: { voices },
+        };
+      });
+    },
+  );
+
+  tool(
+    "akou_voice_refuse",
+    {
+      description:
+        'Refuse the name akou found by voice for a speaker of the live call, when the user says it is wrong ("c2 is not Ben"): the speaker shows its own label again and akou does not offer that name for it again in this call. When the user says who it is instead, call akou_name_speaker.',
+      inputSchema: z.object({ speaker: SPEAKER.describe('The speaker id, such as "c2".') }),
+      outputSchema: OUT.speaker,
+    },
+    async (a) => {
+      const r = await req("POST", "/calls/live/speakers/refuse", { body: { spk: a.speaker } });
+      return asResult(r, (b) => ({
+        text: `${b.spk} is not ${b.name}`,
+        data: { spk: String(b.spk), name: String(b.name) },
+      }));
+    },
+  );
+
+  tool(
+    "akou_voice_forget",
+    {
+      description:
+        "Forget a voice akou recognises, only when the user asks: `name` forgets that person, `name` with `call` only what that call taught, `call` alone what that call taught about anyone, `all: true` everyone. It cannot be undone.",
+      inputSchema: z.object({
+        name: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("The person's name as akou_voices_list gives it."),
+        call: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A call id: forget only what this call taught."),
+        all: z.boolean().optional().describe("Forget every voice; send it alone."),
+      }),
+      outputSchema: OUT.forget,
+    },
+    async (a) => {
+      const r = await req("POST", "/voices/forget", {
+        body: {
+          ...(a.name !== undefined ? { name: a.name } : {}),
+          ...(a.call !== undefined ? { call: a.call } : {}),
+          ...(a.all !== undefined ? { all: a.all } : {}),
+        },
+      });
+      return asResult(r, (b) => ({
+        text: b.all
+          ? "Forgot every voice"
+          : `Forgot ${b.name ?? "every voice"}${b.call ? ` from call ${b.call}` : ""}`,
+        data: { name: b.name ?? null, call: b.call ?? null, all: b.all === true },
+      }));
     },
   );
 

@@ -69,6 +69,8 @@ export const ERROR_CODES = {
   last_refused: "`last` is not accepted here; name the call or use `live`.",
   line_changed: "The line changed while it was being fixed.",
   live_call: "The call is recording; stop it first.",
+  local_only:
+    "Voices are reached only from this computer: the window or the akou CLI, never a key.",
   locked: "Another writer holds the call's log.",
   log_closed: "The call's log is closed.",
   method_not_allowed: "The path exists, with other methods.",
@@ -91,6 +93,7 @@ export const ERROR_CODES = {
   no_tailnet: "This machine is not on a tailnet.",
   no_target: "There is no field to put the text into.",
   no_text: "The dictation has no text.",
+  no_voice: "The speaker has no name found by voice to refuse.",
   not_dictating: "No dictation is listening.",
   not_done: "The job has not finished; `status` says where it is.",
   not_ended: "The call is still recording.",
@@ -126,6 +129,8 @@ export const ERROR_CODES = {
     "A `languages[]` code is one no engine here can choose; `codes` names them.",
   upgrade_required: "The route is a WebSocket; send `Upgrade: websocket`.",
   vocab_file_invalid: "The vocabulary file could not be read.",
+  voices_file_invalid: "voices.yaml could not be read; fix or delete it by hand.",
+  voices_off: "Voice recognition is off (`voices.enabled`), or this is a server, which has none.",
   workspace_not_folder: "The workspace's name is taken by something that is not a folder.",
 } as const satisfies Record<string, string>;
 

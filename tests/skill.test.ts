@@ -129,6 +129,41 @@ describe("the skill text", () => {
     });
   });
 
+  test("[VO-5] a name the user gives goes through the CLI, which teaches; MCP names say they do not; a voice name stays unconfirmed", () => {
+    const rules = (text: string) => {
+      const naming = text.split("\n").find((l) => l.includes('("Speaker 2 is Ben")')) ?? "";
+      const voice = text.split("\n").find((l) => l.includes("found by voice")) ?? "";
+      return {
+        cli: naming.includes("`akou name c2 Ben`") && /teaches akou the voice/.test(naming),
+        mcpNoTeach: /`akou_name_speaker[^`]*`: it names the speaker but does not teach/.test(
+          naming,
+        ),
+        window: /name the speaker in akou's window/.test(naming),
+        noGuess: /never from a guess/.test(naming),
+        unconfirmed:
+          /unconfirmed/.test(voice) && /never confirm it unless the user says so/.test(voice),
+      };
+    };
+    const all = { cli: true, mcpNoTeach: true, window: true, noGuess: true, unconfirmed: true };
+    expect(rules(SKILL)).toEqual(all);
+    // Positive control: the rule as it was, MCP only and silent on voices, fails.
+    const before = SKILL.split("\n")
+      .filter((l) => !l.includes("found by voice"))
+      .map((l) =>
+        l.includes('("Speaker 2 is Ben")')
+          ? '- The user says who a voice is ("Speaker 2 is Ben"): call `akou_name_speaker {speaker: "c2", name: "Ben"}` straight away.'
+          : l,
+      )
+      .join("\n");
+    expect(rules(before)).toEqual({
+      cli: false,
+      mcpNoTeach: false,
+      window: false,
+      noGuess: false,
+      unconfirmed: false,
+    });
+  });
+
   test("its version is the app's version, which is package.json's", () => {
     expect(skillVersion(SKILL)).toBe(APP_VERSION);
     expect(APP_VERSION).toBe(PKG.version);

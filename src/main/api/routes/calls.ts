@@ -95,7 +95,11 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
       gaps: p.gaps.length,
       finalDone: p.finalDone,
     })),
-    roster: v.roster(),
+    // A name found by voice comes with its status only: never its score or a voiceprint.
+    roster: v.roster().map(({ voice, ...r }) => ({
+      ...r,
+      ...(voice ? { voice: { name: voice.name, status: voice.status } } : {}),
+    })),
     health: v.health().map((h) => ({
       part: h.part,
       ch: h.ch,
