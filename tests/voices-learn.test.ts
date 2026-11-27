@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Ranked, simulate } from "../scripts/eval/voices.ts";
 import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
@@ -16,8 +16,9 @@ import type { CaptureEngine } from "../src/main/capture/engine.ts";
 import { LIVE_EMBEDDER, VoiceHost, VoicePurge } from "../src/main/voices/host.ts";
 import { lessonFor } from "../src/main/voices/learn.ts";
 import { rankPeople } from "../src/main/voices/match.ts";
-import { type Person, VoiceStore } from "../src/main/voices/store.ts";
+import { type Exemplar, type Person, VoiceStore } from "../src/main/voices/store.ts";
 import type { VoiceThresholds } from "../src/main/voices/thresholds.ts";
+import { VoiceTombstones } from "../src/main/voices/tombstones.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
 const MODEL = LIVE_EMBEDDER;
@@ -57,6 +58,8 @@ class Rig {
   readonly host: VoiceHost;
   enabled = true;
   closed = false;
+  /** The Host's wall clock; null is the real one. */
+  clock: number | null = null;
 
   constructor(
     readonly dir: string,
@@ -74,14 +77,15 @@ class Rig {
           ? { view: this.view, append: (d) => (this.closed ? null : this.add(d)) }
           : undefined,
       log: () => {},
+      now: () => this.clock ?? Date.now(),
     });
     this.add(this.b.created() as unknown as EventDraft, true);
     this.add(this.b.partStarted(1, T0) as unknown as EventDraft, true);
   }
 
   /** Appends one event and hands it to the Host, as the app's watchers are. */
-  add(draft: EventDraft, built = false): LogEvent {
-    const e = built ? (draft as unknown as LogEvent) : this.b.add(draft);
+  add(draft: EventDraft, built = false, at?: number): LogEvent {
+    const e = built ? (draft as unknown as LogEvent) : this.b.add(draft, at);
     this.view.apply(e);
     if (!built) this.written.push(e);
     this.host.onEvent(CALL, e);
@@ -668,5 +672,122 @@ describe("[VO-4] a purge the file cannot take now", () => {
     const left = purged.length === 0 ? 1 : 0;
     expect(await mgr.emptyTrash()).toBe(left);
     expect(purged).toEqual(["A"]);
+  });
+});
+
+describe("[VO-12] forgets and renames as tombstones", () => {
+  /** A store whose writes wait for `gate`, so a step holds the Host's queue. */
+  class Gated extends VoiceStore {
+    gate: Promise<void> | null = null;
+    override async upsert(name: string, exemplar: Exemplar): Promise<void> {
+      await this.gate;
+      return super.upsert(name, exemplar);
+    }
+  }
+
+  test("a name typed while the forget waits in the queue is newer, and teaches", async () => {
+    const r = rig(T, (path) => new Gated(path, { now: () => T0, log: () => {} }));
+    const store = r.store as Gated;
+    r.speakers("c2");
+    r.add(centroid("c2", at(0), 30));
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" });
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    // A centroid whose write is held keeps the queue busy.
+    let release = () => {};
+    store.gate = new Promise((ok) => {
+      release = ok;
+    });
+    r.add(centroid("c2", at(1), 31));
+    r.clock = T0 + 10_000;
+    const forgot = r.host.forget({ name: "Ben" });
+    // The user names c2 again before the forget's turn comes; time moves on while it waits.
+    r.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" }, false, T0 + 20_000);
+    r.clock = T0 + 30_000;
+    store.gate = null;
+    release();
+    expect(await forgot).toBe(true);
+    await r.settle();
+    expect(Object.keys(await r.names())).toEqual(["Ben"]);
+    // The positive control: with no name after it, the same forget leaves nothing.
+    r.clock = T0 + 40_000;
+    expect(await r.host.forget({ name: "Ben" })).toBe(true);
+    r.add(centroid("c2", at(2), 32));
+    await r.settle();
+    expect(await r.names()).toEqual({});
+  });
+
+  test("the file: kept with mode 0600, read back, unreadable lines left out, pruned by the oldest kept call", () => {
+    const d = tempDir("akou-tombstones-");
+    dirs.push(d);
+    const file = join(d.dir, "voices.yaml");
+    const warned: string[] = [];
+    const a = new VoiceTombstones(file, (_l, m) => warned.push(m));
+    a.add({ kind: "forget", name: "Ben", at: 2000 });
+    a.add({ kind: "rename", from: "Cy", to: "Cy Ortiz", at: 1000 });
+    a.add({ kind: "forget", call: "X", at: 3000 });
+    expect(statSync(a.file).mode & 0o777).toBe(0o600);
+    writeFileSync(a.file, `${readFileSync(a.file, "utf8")}not json\n{"kind":"forget","at":5}\n`);
+    const b = new VoiceTombstones(file, (_l, m) => warned.push(m));
+    expect(b.all().map((x) => x.at)).toEqual([1000, 2000, 3000]);
+    expect(warned).toEqual(["voices: 2 unreadable line(s) in the tombstones file"]);
+    // Older names: Ben forgotten, Cy renamed, anything of X forgotten; a newer name is itself.
+    expect(b.teaches("Ben", "Y", 1500)).toBeNull();
+    expect(b.teaches("Cy", "Y", 500)).toBe("Cy Ortiz");
+    expect(b.teaches("Dan", "X", 2500)).toBeNull();
+    expect(b.teaches("Dan", "Y", 2500)).toBe("Dan");
+    expect(b.teaches("Ben", "Y", 2001)).toBe("Ben");
+    // The same millisecond counts as older: the forget wins.
+    expect(b.teaches("Ben", "Y", 2000)).toBeNull();
+    // A tombstone leaves only once every kept call was created after it.
+    expect(b.prune(2000)).toBe(1);
+    expect(new VoiceTombstones(file, () => {}).all().map((x) => x.at)).toEqual([2000, 3000]);
+    expect(b.prune(Number.POSITIVE_INFINITY)).toBe(2);
+    expect(existsSync(b.file)).toBe(false);
+  });
+
+  test("the Host prunes only what no kept call can need, and never while the oldest is unknown", async () => {
+    const d = tempDir("akou-tombstones-host-");
+    dirs.push(d);
+    const store = new VoiceStore(join(d.dir, "voices.yaml"), { now: () => T0, log: () => {} });
+    let oldest: number | null = null;
+    let now = 5000;
+    const host = new VoiceHost({
+      store,
+      enabled: () => true,
+      thresholds: () => T,
+      call: () => undefined,
+      log: () => {},
+      now: () => now,
+      oldestCall: async () => oldest,
+    });
+    expect(await host.forget({ all: true })).toBe(true);
+    host.prune();
+    await host.idle();
+    expect(host.tombstones.all()).toHaveLength(1);
+    // A kept call created before the forget still needs it.
+    oldest = 4000;
+    host.prune();
+    await host.idle();
+    expect(host.tombstones.all()).toHaveLength(1);
+    oldest = 6000;
+    now = 7000;
+    host.prune();
+    await host.idle();
+    expect(host.tombstones.all()).toEqual([]);
+  });
+
+  test("the oldest kept call is unknown while the trash holds a call, and Infinity with none", async () => {
+    const d = tempDir("akou-tombstones-oldest-");
+    dirs.push(d);
+    const mgr = () => new CallManager({ root: d.dir, engine: {} as CaptureEngine });
+    expect(await mgr().oldestCall()).toBe(Number.POSITIVE_INFINITY);
+    const dir = join(d.dir, TRASH_DIR, "work", "call-a");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "events.jsonl"), "");
+    // Trashed now, so the 30-day purge at start keeps it.
+    const trashedAt = Date.now();
+    writeFileSync(`${dir}.json`, JSON.stringify({ id: "A", workspace: "work", trashedAt }));
+    expect(await mgr().oldestCall()).toBeNull();
   });
 });

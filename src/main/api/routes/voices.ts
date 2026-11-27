@@ -8,8 +8,9 @@
  *   admin one on the network listener, gets 403 `local_only` [VO-8].
  * - With `voices.enabled` off, list and forget still work, so the user can see and remove what akou
  *   kept; rename and refuse answer 409 `voices_off`, and the file stays as it is.
- * - Forget and rename run on the voices Host's queue, in order with the teaching in flight: a live
- *   call's next centroid never puts back what the user was just told is gone [VO-12].
+ * - Forget and rename run on the voices Host's queue, in order with the teaching in flight, and each
+ *   leaves a tombstone timed when it was asked for: a name given before it never teaches back what
+ *   the user was just told is gone, in any call, after a restart too [VO-12].
  * - Never a voiceprint: a person is a name, the calls that taught them, seconds of speech and the
  *   last time heard.
  *
@@ -172,7 +173,7 @@ export function voiceRoutes(r: Router<ApiApp>): void {
     "/voices/forget",
     doc({
       id: "voices.forget",
-      doc: "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. Names already shown in calls stay as they are there.",
+      doc: "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. akou keeps a note of the forget (the name or the call, and the time; never a voiceprint) while a call older than it is kept, so a name given before it never teaches the voice back; a name given later teaches as usual. Names already shown in calls stay as they are there.",
       body: { "name?": "string", "call?": "string", "all?": "boolean" },
       ok: 200,
       errors: {
