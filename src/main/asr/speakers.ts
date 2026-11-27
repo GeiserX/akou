@@ -45,8 +45,8 @@ export const MAP_OVERLAP = 0.6;
 const RESTORED_WEIGHT = 10;
 /**
  * Seconds of speech after which a cluster's centroid is written at once, not at the next
- * five-minute write, so a voice can be matched early. The real value comes from
- * docs/gates/voices.json in a later change.
+ * five-minute write, so a voice can be matched early. The thresholds in docs/gates/voices.json
+ * were measured with this write at 20 s: change it only with a new measurement.
  */
 export const FIRST_MATCH_SEC = 20;
 
