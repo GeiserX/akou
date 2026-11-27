@@ -49,6 +49,7 @@ import {
 } from "./rows.ts";
 import { type ConfigReply, changedSettings, type SchemaEntry, shownValue } from "./settings.ts";
 import { inWords, type SettingWords, wordsFor } from "./settings-labels.ts";
+import { VoicesList } from "./voices-page.ts";
 
 /** A page an Advanced row leads to, and what it holds. */
 interface SubPage {
@@ -67,6 +68,8 @@ const YOUR_WORDS = "#your-words";
 const ASSISTANT_USE = "#assistant-use";
 /** "Run the setup again": the first-run setup, with what is set now (`setup-wizard.ts`). */
 const SETUP = "#setup";
+/** The voices akou knows, a section of its own under Speakers (`voices-page.ts`). */
+const VOICES = "#voices";
 
 /** Ollama's OpenAI-compatible address on this computer: what "Local model (Ollama)" sets. */
 export const OLLAMA_URL = "http://127.0.0.1:11434/v1";
@@ -114,6 +117,7 @@ const MAIN: Layout = [
     ],
   },
   { title: "Speakers", items: ["voices.enabled"] },
+  { title: "Voices", items: [VOICES] },
   {
     title: "Notes and AI",
     items: [
@@ -383,6 +387,8 @@ interface SearchItem {
 export interface SettingsPageHooks {
   /** The workspaces the calls list knows, for the Workspaces row. */
   workspaces?: () => string[];
+  /** A call as the calls list knows it, for the Voices list's rows. */
+  call?: (id: string) => { title: string; createdAt: number } | undefined;
   /** Opens the Models page, where the live transcript is chosen; on `key`, at that setting. */
   openModels?: (key?: string) => void;
   /** Opens the dictionary of your words (DC-U5). */
@@ -439,6 +445,7 @@ export class SettingsPage {
   });
   private found: SearchItem[] = [];
   private pick = 0;
+  private readonly voices: VoicesList;
 
   constructor(
     private readonly t: Transport,
@@ -448,6 +455,7 @@ export class SettingsPage {
       this.root.id = hooks.only.id;
       this.root.classList.remove("pg");
     }
+    this.voices = new VoicesList(t, { call: (id) => hooks.call?.(id) });
     this.root.append(this.col);
     this.root.addEventListener("change", (e) => {
       const el = e.target as HTMLElement;
@@ -483,6 +491,16 @@ export class SettingsPage {
     this.sub = key ? this.pageOf(key) : null;
     this.draw();
     if (key) this.goTo(key);
+    if (this.hasVoices) void this.voices.load();
+  }
+
+  /** The Voices list is on the page: the app's window, on a config that has the setting. */
+  private get hasVoices(): boolean {
+    return (
+      !this.hooks.server &&
+      this.main.some((s) => s.items.includes(VOICES)) &&
+      "voices.enabled" in this.schema
+    );
   }
 
   /** The page is left: what is still typed into a field is saved; a key recording stops. */
@@ -593,6 +611,11 @@ export class SettingsPage {
     );
     const sections = this.main
       .map((s) => {
+        if (s.items.includes(VOICES)) {
+          if (!this.hasVoices) return null;
+          this.voices.setEnabled(this.settings["voices.enabled"] === true);
+          return this.voices.root;
+        }
         const rows = s.items.flatMap((item) => this.item(item, subs) ?? []);
         return rows.length > 0 ? section(s.title, ...rows) : null;
       })
@@ -1591,6 +1614,9 @@ export class SettingsPage {
     r.classList.remove("refused");
     r.querySelector(".issue")?.remove();
     toast(this.savedNote(keys, res.body?.note), "info");
+    // The Voices list says at once whether akou learns and names voices.
+    if (keys.includes("voices.enabled"))
+      this.voices.setEnabled(this.settings["voices.enabled"] === true);
     // What the agent is, and which details apply, follow the kind and the harness.
     if (keys.some((k) => k.startsWith("provider.")) && this.root.isConnected) {
       const st = await this.t.request<Status>("GET", "/status");
