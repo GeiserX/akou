@@ -515,7 +515,7 @@ usage: akou voices [list] | akou voices rename OLD NEW | akou voices forget NAME
       --restart    if akou takes the connection and never answers, restart it first, even for a command that only reads
 
 `akou name c2 Ben` names a speaker and teaches akou the voice; a name akou finds by voice in a later call shows as `Ben (voice)` until someone confirms it by naming the speaker the same way.
-Voiceprints stay in voices.yaml in akou's config folder on this computer; no command prints one.
+Voiceprints stay in voices.yaml in akou's config folder on this computer; no voices command prints one. A call's own event log also holds its speakers' centroids, which only `akou events` on this computer shows.
 
 example: akou voices
 example: akou voices rename Ben "Ben Ortiz"
@@ -950,10 +950,10 @@ example: akou serve
 | Ask presets | `presets`, `ask` | `GET /presets` | none: the presets are MCP prompts, not tools: prompts/list and prompts/get (PG-M7) | `src/ui/ask.ts` |
 | Search one call | `search` | `GET /calls/:id/search` | `akou_search` | none: find in the call is designed in docs/ux/WINDOW.md and not built |
 | Name, merge and unmerge speakers | `name` | `POST /calls/:id/speakers`, `POST /calls/:id/speakers/merge`, `POST /calls/:id/speakers/unmerge` | `akou_name_speaker`, `akou_merge_speakers`, `akou_unmerge_speaker` | `src/ui/app.ts` |
-| Voices: list the people akou recognises by voice | `voices` | `GET /voices` | `akou_voices_list` | none: the Voices list in Settings is not built yet |
-| Voices: rename a person | `voices` | `POST /voices/rename` | none: a rename changes who akou names by voice in every later call, so like teaching a voice it stays with the user at the CLI and the window; an agent may infer a name wrongly | none: the Voices list in Settings is not built yet |
-| Voices: forget a person, what one call taught, or everyone | `voices` | `POST /voices/forget` | `akou_voice_forget` | none: the Voices list in Settings is not built yet |
-| Refuse a name found by voice | `voices` | `POST /calls/:id/speakers/refuse` | `akou_voice_refuse` | none: the speaker popover's Not Ben button is not built yet |
+| Voices: list the people akou recognises by voice | `voices` | `GET /voices` | `akou_voices_list` | `src/ui/voices-page.ts` |
+| Voices: rename a person | `voices` | `POST /voices/rename` | none: a rename changes who akou names by voice in every later call, so like teaching a voice it stays with the user at the CLI and the window; an agent may infer a name wrongly | `src/ui/voices-page.ts` |
+| Voices: forget a person, what one call taught, or everyone | `voices` | `POST /voices/forget` | `akou_voice_forget` | `src/ui/voices-page.ts` |
+| Refuse a name found by voice | `voices` | `POST /calls/:id/speakers/refuse` | `akou_voice_refuse` | `src/ui/app.ts` |
 | Add and read notes | `note` | `POST /calls/:id/notes`, `GET /calls/:id/notes` | `akou_add_note`, `akou_get_notes` | `src/ui/notepad.ts` |
 | Edit and delete a note | `note` | `PATCH /calls/:id/notes/:nid`, `DELETE /calls/:id/notes/:nid` | `akou_edit_note`, `akou_delete_note` | `src/ui/notepad.ts` |
 | Memory | `remember` | `POST /calls/:id/remember`, `DELETE /calls/:id/remember/:rid` | `akou_remember`, `akou_forget` | none: no row for it in docs/ux/WINDOW.md yet |

@@ -2,7 +2,7 @@
 
 akou also runs as a self-hosted transcription server: one Docker image on linux/amd64 and linux/arm64, running the same core as the desktop app. A program uploads an audio file, gets a job id back at once, and reads one result with text, language, words, segments and the engine that made it, by long-poll, by an event feed, or by a signed webhook. The server also speaks the OpenAI transcription endpoint, `POST /v1/audio/transcriptions`, so a program written for OpenAI's speech-to-text can point at it instead. It also speaks the Wyoming protocol, for Home Assistant Assist, and Bazarr's `/asr`, each one setting away ([Home Assistant](#home-assistant), [Bazarr](#bazarr)). There is no akou cloud and no relay: the server is your own box, reached by your own programs.
 
-You do not need server mode to transcribe a file on your own Mac: the desktop app takes `akou transcribe FILE` with its own token ([Usage](usage.md#transcribing-a-file)). Server mode is for other programs and other machines, with keys.
+You do not need server mode to transcribe a file on your own Mac: the desktop app takes `akou transcribe FILE` with its own token ([Usage](usage.md#transcribing-a-file)). Server mode is for other programs and other machines, with keys. It has no voice recognition: it never learns or names a voice.
 
 The steps below cover the image, the models, the first start and the keys. [GPUs and presets](server-hardware.md) covers the GPU images, the `best` preset and a large backlog.
 

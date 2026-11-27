@@ -225,13 +225,35 @@ describe("[T1.39] Docs drift from code: the default model with both on disk", ()
 /**
  * The lines that say akou keeps no voiceprint across calls, or that the vocabulary is the one
  * thing that carries over. akou keeps a voiceprint per person the user named in `voices.yaml`
- * (src/main/voices/store.ts) and names that voice in a later call (DESIGN 3.5).
+ * (src/main/voices/store.ts) and names that voice in a later call (DESIGN 3.5). A bare "names
+ * stay per call" is not one: attendee names do stay per call.
  */
 export function noVoicesClaims(text: string): string[] {
+  const stale = [
+    /no voice ?prints?( kept)? across calls/i,
+    /keeps? no voice ?prints?/i,
+    /voice ?prints? (are|is) not kept/i,
+    /keeps nothing across calls/i,
+    /nothing carries (over|across)/i,
+    /vocabulary is the (one|only) thing that carr(y|ies)/i,
+    /only (the|your) vocabulary carr/i,
+    /the (one|only) thing that carries[^.]*vocabulary/i,
+    /speakers are named per call/i,
+    /speaker names? (stay|are) per call/i,
+  ];
+  return text.split("\n").filter((l) => stale.some((re) => re.test(l)));
+}
+
+/**
+ * The lines that say the voices do nothing yet, or that their window doors are not built. The
+ * gate file names voices with TitaNet-small (docs/gates/voices.json), and the window has the
+ * Voices list (src/ui/voices-page.ts) and the popover's "Not Ben" (src/ui/app.ts).
+ */
+export function voicesDoNothingClaims(text: string): string[] {
   return text
     .split("\n")
     .filter((l) =>
-      /no voiceprints?( kept)? across calls|keeps? no voiceprints?|keeps nothing across calls|vocabulary is the (one|only) thing that carr(y|ies)|speakers are named per call/i.test(
+      /nothing learns or matches voices|(learns|matches) voices yet|holds no value yet|voices list in settings is not built|not ben button is not built/i.test(
         l,
       ),
     );
@@ -248,17 +270,33 @@ export function voiceLegalWording(text: string): string[] {
     .filter((l) => /gdpr|bipa|biometric|consent/i.test(l) && /voice|speaker/i.test(l));
 }
 
-/** Every Markdown file under `dir`, relative to the repository. */
-function markdownUnder(dir: string): string[] {
+/** Every Markdown file under `dir`, relative to the repository, outside the folders `skip` names. */
+function markdownUnder(dir: string, skip: readonly string[] = []): string[] {
   return readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
-    .filter((f) => f.endsWith(".md"))
+    .filter((f) => f.endsWith(".md") && !skip.some((s) => f.startsWith(s)))
     .map((f) => `${dir}/${f}`);
 }
 
+/** Every `description` string in the API file, one per line. */
+function openapiDescriptions(): string {
+  const out: string[] = [];
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) for (const x of v) walk(x);
+    else if (v && typeof v === "object")
+      for (const [k, x] of Object.entries(v)) {
+        if (k === "description" && typeof x === "string") out.push(x.replaceAll("\n", " "));
+        else walk(x);
+      }
+  };
+  walk(JSON.parse(read("docs/api/openapi.json")));
+  return out.join("\n");
+}
+
 /**
- * What a person reads about the voices: README, every page under docs/ and the skills, the
- * Unreleased part of the changelog (the released entries are history), and the source files that
- * hold the window's, the Models page's and the settings' words.
+ * What a person reads about the voices: README, the pages under docs/ (not the research notes or
+ * the gate records) and the skills, the Unreleased part of the changelog (the released entries are
+ * history), the API file's descriptions, and the source files that hold the window's, the Models
+ * page's and the settings' words.
  */
 function voicePages(): [string, string][] {
   const changelog = read("CHANGELOG.md").split(/^## (?!Unreleased)/m)[0] ?? "";
@@ -266,14 +304,22 @@ function voicePages(): [string, string][] {
     .map((s) => s.doc)
     .join("\n");
   return [
-    ...["README.md", ...markdownUnder("docs"), ...markdownUnder("skills")].map(
-      (f): [string, string] => [f, read(f)],
-    ),
+    ...[
+      "README.md",
+      ...markdownUnder("docs", ["research/", "gates/"]),
+      ...markdownUnder("skills"),
+    ].map((f): [string, string] => [f, read(f)]),
     ["CHANGELOG.md (Unreleased)", changelog],
+    ["docs/api/openapi.json (descriptions)", openapiDescriptions()],
     ["src/main/config/schema.ts (setting docs)", settings],
-    ...["src/main/asr/models.ts", "src/ui/models-rows.ts", "src/ui/settings-labels.ts"].map(
-      (f): [string, string] => [f, read(f)],
-    ),
+    ...[
+      "src/main/asr/models.ts",
+      "src/ui/models-rows.ts",
+      "src/ui/settings-labels.ts",
+      "src/ui/voices-page.ts",
+      "src/ui/app.ts",
+      "src/ui/transcript.ts",
+    ].map((f): [string, string] => [f, read(f)]),
   ];
 }
 
@@ -281,6 +327,13 @@ describe("[T1.39] Docs drift from code: the voices akou keeps across calls", () 
   test("no page says akou keeps no voiceprints, or that only the vocabulary carries over", () => {
     const stale = voicePages().flatMap(([f, text]) =>
       noVoicesClaims(text).map((l) => `${f}: ${l}`),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  test("no page says the voices do nothing yet, or that their window doors are not built", () => {
+    const stale = voicePages().flatMap(([f, text]) =>
+      voicesDoNothingClaims(text).map((l) => `${f}: ${l}`),
     );
     expect(stale).toEqual([]);
   });
@@ -300,29 +353,61 @@ describe("[T1.39] Docs drift from code: the voices akou keeps across calls", () 
       expect(page).toMatch(/3.year/);
     }
     const how = read("docs/how-it-works.md");
-    expect(how).toContain("## Voices you named");
-    for (const door of [
+    for (const said of [
+      "## Voices you named",
       "`akou voices forget --all`",
       "`POST /v1/voices/forget`",
       "`akou_voice_forget`",
+      "Nowhere. akou computes the voiceprints on this computer and keeps them there.",
+      "No voices command, route or tool returns a voiceprint.",
+      "An `ak_` key never gets them",
+      "A name from an MCP agent, a name sent with an `ak_` key",
+      "an `ak_` key gets 403",
+      "(`voices.enabled`) is on by default. Off, akou stops learning and matching voices and keeps `voices.yaml`",
+      "**Server mode** has no voice recognition.",
     ])
-      expect(how).toContain(door);
+      expect(how).toContain(said);
   });
 
   test("positive control: the old sentences are caught", () => {
-    expect(
-      noVoicesClaims(
-        "akou keeps no cross-meeting library, no weekly rollups, no voiceprints kept across calls.",
-      ),
-    ).toHaveLength(1);
-    expect(noVoicesClaims("## The vocabulary is the one thing that carries over")).toHaveLength(1);
-    expect(
-      noVoicesClaims("The vocabulary is the one thing that carries across calls, and nothing"),
-    ).toHaveLength(1);
-    expect(
-      noVoicesClaims("and keeps nothing across calls that would compete with them"),
-    ).toHaveLength(1);
+    for (const old of [
+      "akou keeps no cross-meeting library, no weekly rollups, no voiceprints kept across calls.",
+      "akou keeps no voiceprints of anyone.",
+      "Voice prints are not kept after the call.",
+      "## The vocabulary is the one thing that carries over",
+      "The vocabulary is the one thing that carries across calls, and nothing",
+      "and keeps nothing across calls that would compete with them",
+      "Nothing carries over from one call to the next but the words.",
+      "Only your vocabulary carries over.",
+      "The one thing that carries across calls is the vocabulary.",
+      "| Voiceprints across calls | heed | Speakers are named per call |",
+      "Speaker names stay per call.",
+    ])
+      expect(noVoicesClaims(old)).toHaveLength(1);
     expect(noVoicesClaims("akou keeps a voiceprint per person you named.")).toEqual([]);
+    expect(
+      noVoicesClaims("| People and company directories | Granola | Attendee names stay per call |"),
+    ).toEqual([]);
+  });
+
+  test("positive control: the old does-nothing-yet sentences are caught", () => {
+    for (const old of [
+      "Only the window or the config file sets the switch. Nothing learns or matches voices yet.",
+      "akou learns voices yet only in tests.",
+      "[gates/voices.json](gates/voices.json) holds no value yet, so akou names no one by voice |",
+      'window: { none: "the Voices list in Settings is not built yet" },',
+      'window: { none: "the speaker popover\'s Not Ben button is not built yet" },',
+    ])
+      expect(voicesDoNothingClaims(old)).toHaveLength(1);
+    // DESIGN 3.5's rule for a model with no numbers, and the CAM++ line, are true as they stand.
+    expect(
+      voicesDoNothingClaims(
+        "While its entry has no numbers, nothing learns and nothing is named: naming a speaker saves no voice.",
+      ),
+    ).toEqual([]);
+    expect(
+      voicesDoNothingClaims("CAM++ has none, so akou names no one by voice with it |"),
+    ).toEqual([]);
   });
 
   test("positive control: legal wording about voices is caught", () => {
