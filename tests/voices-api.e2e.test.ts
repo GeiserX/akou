@@ -6,6 +6,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { encodeVec } from "../src/main/asr/speakers.ts";
 import { ApiClient } from "../src/main/cli/client.ts";
@@ -180,7 +181,7 @@ describe("the voices doors", () => {
       expect(Object.keys(r.body.voices[0]).sort()).toEqual(["calls", "lastSeen", "name", "secs"]);
 
       const renamed = await rig.api("POST", "/voices/rename", { from: "Cy", to: "Cy Ortiz" });
-      expect(renamed.body).toEqual({ ok: true, from: "Cy", to: "Cy Ortiz" });
+      expect(renamed.body).toEqual({ ok: true, from: "Cy", to: "Cy Ortiz", dropped: 0 });
       expect((await rig.api("POST", "/voices/rename", { from: "Nobody", to: "X" })).status).toBe(
         404,
       );
@@ -199,6 +200,152 @@ describe("the voices doors", () => {
       expect((await rig.api("POST", "/voices/forget", {})).body.error).toBe("bad_field");
       expect((await rig.api("POST", "/voices/forget", { all: true })).status).toBe(200);
       expect((await rig.api("GET", "/voices")).body).toEqual({ voices: [] });
+    },
+    LONG,
+  );
+
+  test(
+    "forget by call alone, and by name and call, from the route, the CLI and MCP",
+    async () => {
+      const env = { ...process.env, ...rig.env };
+      const fill = async () => {
+        await store(rig).forgetAll();
+        await store(rig).upsert("Ben", exemplar("call-a", at(0)));
+        await store(rig).upsert("Ben", exemplar("call-b", at(1)));
+        await store(rig).upsert("Cy", exemplar("call-b", at(90), "c2"));
+      };
+      const left = async () =>
+        (await rig.api("GET", "/voices")).body.voices.map(
+          (v: { name: string; calls: string[] }) => [v.name, v.calls],
+        );
+      // The route: call-b alone takes Ben's lesson from it and all of Cy, a call akou never had.
+      await fill();
+      const r = await rig.api("POST", "/voices/forget", { call: "call-b" });
+      expect([r.status, r.body]).toEqual([200, { ok: true, call: "call-b" }]);
+      expect(await left()).toEqual([["Ben", ["call-a"]]]);
+      // Nothing left from it: a call akou does not know is 404 with `call`.
+      const again = await rig.api("POST", "/voices/forget", { call: "call-b" });
+      expect([again.status, again.body.error, again.body.call]).toEqual([
+        404,
+        "not_found",
+        "call-b",
+      ]);
+      // The CLI: --call alone, then a name with --call, which keeps the rest of that person.
+      await fill();
+      const byCall = await cli(env, ["voices", "forget", "--call", "call-b"]);
+      expect([byCall.code, byCall.out]).toEqual([0, "Forgot what call call-b taught"]);
+      expect(await left()).toEqual([["Ben", ["call-a"]]]);
+      await fill();
+      const both = await cli(env, ["voices", "forget", "Ben", "--call", "call-b"]);
+      expect([both.code, both.out]).toEqual([0, "Forgot what call call-b taught about Ben"]);
+      expect(await left()).toEqual([
+        ["Ben", ["call-a"]],
+        ["Cy", ["call-b"]],
+      ]);
+      // An unknown call exits 3, as `-c` does everywhere.
+      const unknown = await cli(env, ["voices", "forget", "--call", "no-such-call"]);
+      expect(unknown.code).toBe(3);
+      // `last` is the newest call.
+      await fill();
+      const id = await rig.startCall();
+      await rig.api("POST", "/calls/live/stop");
+      await store(rig).upsert("Dan", exemplar(id, at(45), "c3"));
+      const last = await cli(env, ["voices", "forget", "--call", "last", "--json"]);
+      expect([last.code, last.json]).toEqual([0, { ok: true, call: id }]);
+      expect((await left()).map(([n]: [string]) => n)).toEqual(["Ben", "Cy"]);
+
+      // MCP: all forgets everyone.
+      const mcp = await mcpClient(
+        new ApiClient({ env, client: "mcp", launch: null }),
+        "claude-code",
+      );
+      try {
+        const all = await mcp.call("akou_voice_forget", { all: true });
+        expect(all.isError).toBe(false);
+        expect(all.structured).toMatchObject({ all: true });
+        expect(await left()).toEqual([]);
+      } finally {
+        await mcp.close();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "rename onto a name akou knows makes one person and says how many older voiceprints left",
+    async () => {
+      await store(rig).forgetAll();
+      for (let i = 0; i < 5; i++) {
+        await store(rig).upsert("Ben", exemplar(`b${i}`, at(i)));
+        await store(rig).upsert("Benjamin", exemplar(`j${i}`, at(i + 0.5)));
+      }
+      const r = await rig.api("POST", "/voices/rename", { from: "Benjamin", to: "Ben" });
+      expect(r.body).toEqual({ ok: true, from: "Benjamin", to: "Ben", dropped: 2 });
+      const voices = (await rig.api("GET", "/voices")).body.voices;
+      expect(
+        voices.map((v: { name: string; calls: string[] }) => [v.name, v.calls.length]),
+      ).toEqual([["Ben", 8]]);
+      await store(rig).upsert("Cy", exemplar("c0", at(90)));
+      const env = { ...process.env, ...rig.env };
+      const cliRename = await cli(env, ["voices", "rename", "Cy", "Ben"]);
+      expect([cliRename.code, cliRename.out]).toEqual([
+        0,
+        "Cy is Ben from now on (1 older voiceprint left out: a person keeps only the newest)",
+      ]);
+      // The positive control: a rename that joins nobody says nothing more.
+      expect((await cli(env, ["voices", "rename", "Ben", "Ben Ortiz"])).out).toBe(
+        "Ben is Ben Ortiz from now on",
+      );
+      await store(rig).forgetAll();
+    },
+    LONG,
+  );
+
+  test(
+    "a typed name carries no voice in the roster, and refuse on it answers 409 no_voice",
+    async () => {
+      await store(rig).forgetAll();
+      await store(rig).upsert("Ben", exemplar("earlier", at(0)));
+      const id = await rig.startCall();
+      try {
+        await speak(rig, id, "c5", 1, at(2));
+        const roster = async () => (await rig.api("GET", `/calls/${id}`)).body.roster;
+        const c5 = (await roster()).find((r: { spk: string }) => r.spk === "c5");
+        expect(c5.voice).toEqual({ name: "Ben", status: "named" });
+        expect(
+          (await rig.api("POST", `/calls/${id}/speakers`, { spk: "c5", name: "Dan" })).status,
+        ).toBe(200);
+        await rig.app.voices?.idle();
+        // The fold still holds the voice found before the name: the route leaves it out.
+        const call = await rig.app.call(id);
+        expect(call.view.voiceFor("c5")?.name).toBe("Ben");
+        const typed = (await roster()).find((r: { spk: string }) => r.spk === "c5");
+        expect([typed.name, typed.voice]).toEqual(["Dan", undefined]);
+        const refused = await rig.api("POST", `/calls/${id}/speakers/refuse`, { spk: "c5" });
+        expect([refused.status, refused.body.error]).toEqual([409, "no_voice"]);
+      } finally {
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+    },
+    LONG,
+  );
+
+  test(
+    "a voices.yaml akou cannot read exits 78 and says forget --all removes it",
+    async () => {
+      const env = { ...process.env, ...rig.env };
+      writeFileSync(voicesPath(rig.app.configDir), "version: [\n");
+      try {
+        const bad = await cli(env, ["voices"]);
+        expect(bad.code).toBe(78);
+        expect(bad.err).toContain("akou voices forget --all removes the file");
+        expect((await cli(env, ["voices", "forget", "--all"])).code).toBe(0);
+        // The positive control: with the file gone the same command answers.
+        expect((await cli(env, ["voices"])).code).toBe(0);
+      } finally {
+        await store(rig).forgetAll();
+      }
     },
     LONG,
   );
@@ -389,9 +536,86 @@ describe("the voices doors", () => {
   );
 });
 
+describe("[VO-12] a forget or a rename during a live call holds", () => {
+  const env = () => ({ ...process.env, ...rig.env });
+  const names = async (): Promise<string[]> =>
+    (await rig.api("GET", "/voices")).body.voices.map((v: { name: string }) => v.name);
+
+  /** A live call whose c2 the user named Ben from the CLI, which teaches the voice. */
+  async function taught(): Promise<string> {
+    await store(rig).forgetAll();
+    const id = await rig.startCall();
+    await speak(rig, id, "c2", 1, at(0));
+    expect((await cli(env(), ["name", "c2", "Ben"])).code).toBe(0);
+    await rig.app.voices?.idle();
+    expect(await names()).toEqual(["Ben"]);
+    return id;
+  }
+
+  const forms: [string, (id: string) => Promise<number>][] = [
+    ["name", async () => (await rig.api("POST", "/voices/forget", { name: "Ben" })).status],
+    ["all", async () => (await rig.api("POST", "/voices/forget", { all: true })).status],
+    ["call", async (id) => (await rig.api("POST", "/voices/forget", { call: id })).status],
+    [
+      "name and call",
+      async (id) => (await rig.api("POST", "/voices/forget", { name: "Ben", call: id })).status,
+    ],
+    [
+      "the CLI by name",
+      async () => ((await cli(env(), ["voices", "forget", "Ben"])).code ? 0 : 200),
+    ],
+    [
+      "the CLI by --call live",
+      async () => ((await cli(env(), ["voices", "forget", "--call", "live"])).code ? 0 : 200),
+    ],
+  ];
+  for (const [form, forget] of forms) {
+    test(
+      `a forget by ${form} stays forgotten after the label's next centroid`,
+      async () => {
+        const id = await taught();
+        try {
+          expect(await forget(id)).toBe(200);
+          expect(await names()).toEqual([]);
+          await speak(rig, id, "c2", 2, at(0));
+          expect(await names()).toEqual([]);
+          // The positive control: the user names the speaker again, and that teaches.
+          expect((await cli(env(), ["name", "c2", "Ben"])).code).toBe(0);
+          await rig.app.voices?.idle();
+          expect(await names()).toEqual(["Ben"]);
+        } finally {
+          await rig.api("POST", "/calls/live/stop");
+          await store(rig).forgetAll();
+        }
+      },
+      LONG,
+    );
+  }
+
+  test(
+    "a rename sticks after the label's next centroid, until the user names the speaker again",
+    async () => {
+      const id = await taught();
+      try {
+        expect((await cli(env(), ["voices", "rename", "Ben", "Ben Ortiz"])).code).toBe(0);
+        await speak(rig, id, "c2", 2, at(0));
+        expect(await names()).toEqual(["Ben Ortiz"]);
+        // The positive control: a name typed after the rename teaches that name.
+        expect((await cli(env(), ["name", "c2", "Benjamin"])).code).toBe(0);
+        await rig.app.voices?.idle();
+        expect(await names()).toEqual(["Benjamin"]);
+      } finally {
+        await rig.api("POST", "/calls/live/stop");
+        await store(rig).forgetAll();
+      }
+    },
+    LONG,
+  );
+});
+
 describe("[VO-8] server mode and the switch", () => {
   test(
-    "server mode lists no voices routes and refuses them; with voices.enabled off they answer 409 voices_off",
+    "server mode lists no voices routes and refuses them; with voices.enabled off list and forget work, rename and refuse answer 409",
     async () => {
       const server = await appRig({
         settings: { "server.enabled": true, "api.bind": "127.0.0.1" },
@@ -407,6 +631,9 @@ describe("[VO-8] server mode and the switch", () => {
         // Reached anyway, a voices route refuses there: server mode keeps no voices.
         const there = await server.api("GET", "/voices");
         expect([there.status, there.body.error]).toEqual([409, "voices_off"]);
+        const onServer = await cli({ ...process.env, ...server.env }, ["voices"]);
+        expect(onServer.code).toBe(78);
+        expect(onServer.err).toContain("a server keeps no voices");
         // The positive control: the desktop app serves them.
         expect((await voicePaths(rig)).sort()).toEqual([
           "/v1/calls/{id}/speakers/refuse",
@@ -415,13 +642,36 @@ describe("[VO-8] server mode and the switch", () => {
           "/v1/voices/rename",
         ]);
 
-        const r = await off.api("GET", "/voices");
+        // Off: the user still sees and removes what akou kept.
+        await store(off).upsert("Ben", exemplar("call-a", at(0)));
+        const offEnv = { ...process.env, ...off.env };
+        const listed = await cli(offEnv, ["voices", "--json"]);
+        expect([listed.code, listed.json.voices.map((v: { name: string }) => v.name)]).toEqual([
+          0,
+          ["Ben"],
+        ]);
+        const r = await off.api("POST", "/voices/rename", { from: "Ben", to: "Ben Ortiz" });
         expect([r.status, r.body.error]).toEqual([409, "voices_off"]);
-        const c = await cli({ ...process.env, ...off.env }, ["voices"]);
+        const id = await off.startCall();
+        try {
+          const refused = await off.api("POST", `/calls/${id}/speakers/refuse`, { spk: "c2" });
+          expect([refused.status, refused.body.error]).toEqual([409, "voices_off"]);
+        } finally {
+          await off.api("POST", "/calls/live/stop");
+        }
+        const c = await cli(offEnv, ["voices", "rename", "Ben", "Ben Ortiz"]);
         expect(c.code).toBe(78);
-        expect(c.err).toContain("voices.enabled");
-        // The positive control: with it on, the same request answers.
-        expect((await rig.api("GET", "/voices")).status).toBe(200);
+        expect(c.err).toContain("Settings > Speakers or in config.json");
+        // `akou config set` refuses voices.enabled, so the hint never offers it.
+        expect(c.err).not.toContain("config set");
+        expect((await cli(offEnv, ["voices", "forget", "Ben"])).code).toBe(0);
+        expect((await off.api("GET", "/voices")).body).toEqual({ voices: [] });
+        // The positive control: with it on, the same rename answers.
+        await store(rig).upsert("Ben", exemplar("call-a", at(0)));
+        expect(
+          (await rig.api("POST", "/voices/rename", { from: "Ben", to: "Ben Ortiz" })).status,
+        ).toBe(200);
+        await store(rig).forgetAll();
       } finally {
         await server.close();
         await off.close();

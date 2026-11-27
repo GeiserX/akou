@@ -391,9 +391,10 @@ export class VoiceStore {
 
   /**
    * Renames a person. When `to` is already a person, the two become one, keeping the newest
-   * `MAX_EXEMPLARS` of both. False when there is no `from`.
+   * `MAX_EXEMPLARS` of both; `dropped` counts the older exemplars that did not fit. Null when
+   * there is no `from`.
    */
-  rename(from: string, to: string): Promise<boolean> {
+  rename(from: string, to: string): Promise<{ dropped: number } | null> {
     const dest = cleanName(to);
     if (dest === null)
       return Promise.reject(
@@ -401,19 +402,23 @@ export class VoiceStore {
       );
     return this.edit((all) => {
       const src = all.find((p) => p.name === from);
-      if (!src) return { people: all, result: false, changed: false };
-      if (dest === from) return { people: all, result: true, changed: false };
+      if (!src) return { people: all, result: null, changed: false };
+      if (dest === from) return { people: all, result: { dropped: 0 }, changed: false };
       const target = all.find((p) => p.name === dest);
       const people: Person[] = [];
+      let dropped = 0;
       for (const p of all) {
         if (p === src) {
           // Joining: the person keeps the place of `to`; else `from`'s place under the new name.
           if (!target) people.push({ name: dest, exemplars: p.exemplars });
         } else if (p === target) {
-          people.push({ name: dest, exemplars: capped([...p.exemplars, ...src.exemplars]) });
+          const both = [...p.exemplars, ...src.exemplars];
+          const kept = capped(both);
+          dropped = both.length - kept.length;
+          people.push({ name: dest, exemplars: kept });
         } else people.push(p);
       }
-      return { people, result: true, changed: true };
+      return { people, result: { dropped }, changed: true };
     });
   }
 

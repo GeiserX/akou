@@ -4,11 +4,13 @@
  *   akou voices [list]
  *   akou voices rename OLD NEW
  *   akou voices forget NAME [--call ID]  |  akou voices forget --call ID  |  akou voices forget --all
+ *     (ID: a call id, live or last)
  *   akou voices refuse SPK [-c CALL]
  *
  * `akou name c2 Ben` names a speaker and teaches akou that voice; these commands look after what it
- * learned. They reach the app on this computer only: an `ak_` key is refused (exit 77), and with
- * `voices.enabled` off they exit 78. No command prints a voiceprint.
+ * learned. They reach the app on this computer only: an `ak_` key is refused (exit 77). With
+ * `voices.enabled` off, list and forget still work and rename and refuse exit 78; a server keeps no
+ * voices (exit 78). A voices.yaml akou cannot read exits 78 too. No command prints a voiceprint.
  */
 
 import { formatLocalDate, formatWall } from "../../../core/log/clock.ts";
@@ -42,12 +44,20 @@ function listText(b: Body): string {
     .join("\n");
 }
 
-/** `finish`, with voice recognition turned off said plainly and exit 78. */
+/**
+ * `finish`, with exit 78 for what the settings or the file refuse: voice recognition off, a server
+ * (which keeps no voices), or a voices.yaml akou cannot read.
+ */
 function done(ctx: Ctx, r: ApiResponse, human: (b: Body) => string): number {
-  if (r.body?.error === "voices_off") {
+  const error = r.body?.error;
+  if (error === "voices_off" || error === "voices_file_invalid") {
     const message =
-      "voice recognition is off: turn on voices.enabled (Settings > Speakers, or akou config set voices.enabled true)";
-    if (ctx.json) ctx.io.out(JSON.stringify({ error: "voices_off", message }));
+      error === "voices_file_invalid"
+        ? `${String(r.body?.message ?? "voices.yaml cannot be read")}; akou voices forget --all removes the file`
+        : r.body?.mode === "server"
+          ? "a server keeps no voices; voices live in the akou app"
+          : "voice recognition is off: turn it on in Settings > Speakers or in config.json (voices.enabled)";
+    if (ctx.json) ctx.io.out(JSON.stringify({ error, message }));
     else ctx.io.err(`akou: ${message}`);
     return EXIT.config;
   }
@@ -58,13 +68,13 @@ export const voicesCommand: Command = {
   name: "voices",
   summary: "The voices akou recognises across calls: list, rename, forget, refuse a match",
   usage:
-    "akou voices [list] | akou voices rename OLD NEW | akou voices forget NAME [--call ID] | --all | akou voices refuse SPK [-c CALL]   [--json]",
+    "akou voices [list] | akou voices rename OLD NEW | akou voices forget NAME [--call ID] | --call ID | --all | akou voices refuse SPK [-c CALL]   [--json]",
   flags: {
     call: {
       type: "string",
       short: "c",
       value: "CALL",
-      desc: "forget: only what this call id taught; refuse: live or a call id (default: live)",
+      desc: "forget: only what this call taught (a call id, live or last); refuse: live or a call id (default: live)",
     },
     all: { type: "boolean", desc: "forget: every voice, and delete voices.yaml" },
   },
@@ -77,6 +87,7 @@ export const voicesCommand: Command = {
     'akou voices rename Ben "Ben Ortiz"',
     "akou voices forget Ben",
     "akou voices forget Ben --call 01J8Z6Q4M2VX0K7B3D4E5F6G7H",
+    "akou voices forget --call last",
     "akou voices forget --all",
     "akou voices refuse c2",
   ],
@@ -96,7 +107,14 @@ export const voicesCommand: Command = {
         if (!from || !to || args.length > 2)
           return usage(ctx, 'voices rename needs the old and the new name: rename Ben "Ben Ortiz"');
         const r = await api(ctx, "POST", "/voices/rename", { body: { from, to } });
-        return done(ctx, r, (b) => `${b.from} is ${b.to} from now on`);
+        return done(ctx, r, (b) => {
+          const n = Number(b.dropped ?? 0);
+          const left =
+            n > 0
+              ? ` (${n} older voiceprint${n === 1 ? "" : "s"} left out: a person keeps only the newest)`
+              : "";
+          return `${b.from} is ${b.to} from now on${left}`;
+        });
       }
       case "forget": {
         const name = args.join(" ").trim();
@@ -111,12 +129,12 @@ export const voicesCommand: Command = {
         const r = await api(ctx, "POST", "/voices/forget", {
           body: { ...(name !== "" ? { name } : {}), ...(call !== undefined ? { call } : {}) },
         });
-        return done(ctx, r, () =>
+        return done(ctx, r, (b) =>
           name === ""
-            ? `Forgot what call ${call} taught`
+            ? `Forgot what call ${b.call} taught`
             : call === undefined
               ? `Forgot ${name}`
-              : `Forgot what call ${call} taught about ${name}`,
+              : `Forgot what call ${b.call} taught about ${name}`,
         );
       }
       case "refuse": {

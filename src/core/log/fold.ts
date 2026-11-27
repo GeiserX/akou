@@ -1072,6 +1072,11 @@ export class CallView {
     return best;
   }
 
+  /** The log position of the name in force for a speaker's group, typed or found by voice. */
+  nameSeq(spk: string): number | undefined {
+    return this.nameOf(this.resolveSpeaker(spk))?.seq;
+  }
+
   /** The voice name in force for a speaker (already resolved or not): named or offered. */
   voiceFor(spk: string): VoiceView | undefined {
     const v = this.liveVoice(this.resolveSpeaker(spk), "named", "offered");

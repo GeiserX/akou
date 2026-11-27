@@ -191,14 +191,15 @@ describe("voices store", () => {
     for (let i = 0; i < 5; i++) await r.store.upsert("Ben O", ex({ call: `o${i}` }, 20 - i));
     for (let i = 0; i < 5; i++) await r.store.upsert("Ben", ex({ call: `b${i}` }, 10 - i));
     await r.store.upsert("Ana", ex({ call: "z" }));
-    expect(await r.store.rename("Ben O", "Ben")).toBe(true);
+    // Ten exemplars meet a cap of 8: the two oldest are dropped and counted.
+    expect(await r.store.rename("Ben O", "Ben")).toEqual({ dropped: 2 });
     const list = await r.store.list();
     expect(list.map((p) => p.name)).toEqual(["Ben", "Ana"]);
     expect(list[0]?.calls).toEqual(["b4", "b3", "b2", "b1", "b0", "o4", "o3", "o2"]);
     // A plain rename keeps the place; an unknown name changes nothing.
-    expect(await r.store.rename("Ana", "Ana Ruiz")).toBe(true);
+    expect(await r.store.rename("Ana", "Ana Ruiz")).toEqual({ dropped: 0 });
     expect(await names(r.store)).toEqual(["Ben", "Ana Ruiz"]);
-    expect(await r.store.rename("Nobody", "X")).toBe(false);
+    expect(await r.store.rename("Nobody", "X")).toBeNull();
     await expect(r.store.rename("Ben", "  ")).rejects.toThrow(VoicesError);
     r.cleanup();
   });

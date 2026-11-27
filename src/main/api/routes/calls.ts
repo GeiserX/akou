@@ -95,10 +95,13 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
       gaps: p.gaps.length,
       finalDone: p.finalDone,
     })),
-    // A name found by voice comes with its status only: never its score or a voiceprint.
+    // A name found by voice comes with its status only: never its score or a voiceprint. A typed
+    // name wins over a voice [VO-1], so a typed label carries none.
     roster: v.roster().map(({ voice, ...r }) => ({
       ...r,
-      ...(voice ? { voice: { name: voice.name, status: voice.status } } : {}),
+      ...(voice && !(r.name && !r.byVoice)
+        ? { voice: { name: voice.name, status: voice.status } }
+        : {}),
     })),
     health: v.health().map((h) => ({
       part: h.part,

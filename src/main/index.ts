@@ -800,7 +800,6 @@ export class AkouApp implements ApiApp {
   /** A call deleted for good leaves the voices file, in every mode [VO-4]. */
   readonly voicePurge: VoicePurge;
   /** `<config>/voices.yaml`. */
-  private readonly voiceFile: VoiceStore;
 
   constructor(
     private readonly o: AppOptions,
@@ -887,7 +886,6 @@ export class AkouApp implements ApiApp {
       now: () => this.clock.now(),
       log: (m) => this.log("info", m),
     });
-    this.voiceFile = voiceStore;
     this.voicePurge = new VoicePurge(voiceStore, (level, m) => this.log(level, m));
     this.voices =
       this.runMode === "app"
@@ -2570,9 +2568,9 @@ export class AkouApp implements ApiApp {
     }
   }
 
-  /** The voices file for the voices routes; null in server mode, which keeps no voices [VO-8]. */
-  voiceStore(): VoiceStore | null {
-    return this.voices ? this.voiceFile : null;
+  /** The voices Host for the voices routes; null in server mode, which keeps no voices [VO-8]. */
+  voiceHost(): VoiceHost | null {
+    return this.voices;
   }
 
   /** A loaded call as the voices Host reads and writes it: each write is made at once. */

@@ -2134,7 +2134,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `name` | `string` | no | The person's name as akou_voices_list gives it. |
-| `call` | `string` | no | A call id: forget only what this call taught. |
+| `call` | `string` | no | A call id, live or last: forget only what this call taught. |
 | `all` | `boolean` | no | Forget every voice; send it alone. |
 
 <details markdown>
@@ -2150,7 +2150,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: fa
       "minLength": 1
     },
     "call": {
-      "description": "A call id: forget only what this call taught.",
+      "description": "A call id, live or last: forget only what this call taught.",
       "type": "string",
       "minLength": 1
     },

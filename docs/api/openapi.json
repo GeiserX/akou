@@ -4121,7 +4121,7 @@
         "tags": [
           "voices"
         ],
-        "description": "Rename a person akou recognises by voice, for every later call: `from` is the name now, `to` the new one. Renaming onto a name akou already knows makes the two one person. A name already shown in a call stays as it is there.",
+        "description": "Rename a person akou recognises by voice, for every later call: `from` is the name now, `to` the new one. Renaming onto a name akou already knows makes the two one person, who keeps the newest voiceprints up to the cap; `dropped` counts the older ones left out. A name akou showed by voice in an ended call stays as it is there; in a live call it follows at that speaker's next update. A name someone typed stays as typed, and teaches the new name.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4151,7 +4151,21 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dropped": {
+                      "type": "integer"
+                    }
+                  }
                 }
               }
             }
@@ -4196,7 +4210,7 @@
         "tags": [
           "voices"
         ],
-        "description": "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. The voiceprints leave the file at once and nothing keeps a copy. Names already shown in calls stay as they are there.",
+        "description": "Forget voices: `name` forgets that person; `name` with `call` forgets only what that call taught about them; `call` alone forgets what that call taught about anyone; `all: true` forgets everyone and deletes voices.yaml. `call` is a call id, `live` or `last`; an unknown call answers 404 `not_found` with `call`. Works with `voices.enabled` off too. The voiceprints leave the file at once and nothing keeps a copy. Names already shown in calls stay as they are there.",
         "requestBody": {
           "required": false,
           "content": {
@@ -4240,7 +4254,7 @@
             "$ref": "#/components/responses/403.bad_host.browser_request.forbidden.local_only"
           },
           "404": {
-            "$ref": "#/components/responses/404.not_found"
+            "$ref": "#/components/responses/404.no_calls.no_live_call.not_found"
           },
           "409": {
             "$ref": "#/components/responses/409.voices_file_invalid.voices_off"
