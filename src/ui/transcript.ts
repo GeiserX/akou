@@ -113,6 +113,8 @@ export function fillRow(
     who?: string;
     /** What akou found by voice for the speaker: a name not yet confirmed, or an offer. */
     voice?: ShownVoice;
+    /** A chip that does nothing (the share viewer): it says who, not what a press would do. */
+    readOnly?: boolean;
   },
   hue: number,
 ): void {
@@ -128,13 +130,18 @@ export function fillRow(
   fillWho(who, l.speaker, l.voice);
   who.dataset.spk = l.spk;
   who.classList.toggle("provisional", !!l.provisional);
+  const what = l.readOnly
+    ? ""
+    : l.voice?.status === "named"
+      ? ": confirm, rename, merge or unmerge"
+      : ": rename, merge or unmerge";
   who.setAttribute(
     "aria-label",
     l.voice?.status === "named"
-      ? `${voiceWords(l.voice)}: confirm, rename, merge or unmerge`
+      ? `${voiceWords(l.voice)}${what}`
       : l.provisional
-        ? `${l.speaker} (${l.who ?? l.speaker}, a guess until the final pass${l.voice ? `, ${voiceWords(l.voice)}` : ""}): rename, merge or unmerge`
-        : `${l.speaker}${l.voice ? ` (${voiceWords(l.voice)})` : ""}: rename, merge or unmerge`,
+        ? `${l.speaker} (${l.who ?? l.speaker}, a guess until the final pass${l.voice ? `, ${voiceWords(l.voice)}` : ""})${what}`
+        : `${l.speaker}${l.voice ? ` (${voiceWords(l.voice)})` : ""}${what}`,
   );
   const text = body.querySelector(".text") as HTMLElement;
   // Only a text that changed is set: setting the same one replaces its node, and a word the user
