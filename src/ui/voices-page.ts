@@ -47,6 +47,16 @@ export function voiceFacts(v: Voice, now: number, tz: string): string {
   return `${calls} · ${talkTime(v.secs)} of speech${last}`;
 }
 
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** When a call id (a ULID) was made, in epoch ms, from its first 10 characters; null if it is not one. */
+export function ulidTime(id: string): number | null {
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/i.test(id)) return null;
+  let t = 0;
+  for (const ch of id.slice(0, 10).toUpperCase()) t = t * 32 + CROCKFORD.indexOf(ch);
+  return t;
+}
+
 /** Whether two names are the same person's: the store compares them without case. */
 function sameName(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -61,6 +71,8 @@ export class VoicesList {
   /** Null until the first read lands. */
   private voices: Voice[] | null = null;
   private error: string | null = null;
+  /** The file is there but akou cannot read it: Forget all still deletes it. */
+  private unreadable = false;
   private enabled = true;
   /** The person whose row is open. */
   private opened: string | null = null;
@@ -88,8 +100,11 @@ export class VoicesList {
     if (read !== this.reads) return;
     if (!r || r.status >= 400) {
       this.error = message(r?.body, "akou did not answer");
+      this.unreadable =
+        (r?.body as { error?: string } | undefined)?.error === "voices_file_invalid";
     } else {
       this.error = null;
+      this.unreadable = false;
       this.voices = r.body.voices ?? [];
       if (this.opened && !this.voices.some((v) => v.name === this.opened)) this.opened = null;
     }
@@ -104,6 +119,7 @@ export class VoicesList {
     const items: HTMLElement[] = [];
     if (this.error !== null) {
       items.push(h("li", {}, row({ label: "The voices could not be read", help: this.error })));
+      if (this.unreadable) items.push(this.forgetAllRow());
     } else if (this.voices === null) {
       items.push(h("li", {}, row({ label: "Reading the voices…" })));
     } else if (n === 0) {
@@ -180,7 +196,7 @@ export class VoicesList {
           {
             class: "pg-btn forget",
             label: "Forget",
-            confirm: "Forget for good?",
+            confirm: "Forget: sure?",
             id: `person:${v.name}`,
             armed: this.armed,
           },
@@ -242,17 +258,19 @@ export class VoicesList {
   /** One call that taught the voice, by its title as the calls list shows it. */
   private callRow(v: Voice, call: string, now: number): HTMLElement {
     const known = this.hooks.call?.(call);
+    // A call the window has not loaded is never named by its id: its day comes from the id.
+    const at = known?.createdAt ?? ulidTime(call);
     const label = known
       ? `Learned in ${known.title || "Untitled call"}`
-      : "Learned in a call not in the list";
-    const help = known ? dayLabel(known.createdAt, now, localZone()) : call;
+      : "Learned in an older call";
+    const help = at === null ? undefined : dayLabel(at, now, localZone());
     const r = row(
       { label, help },
       twoStep(
         {
           class: "pg-btn forget-call",
           label: "Forget this call",
-          confirm: "Forget: sure?",
+          confirm: "Forget this call: sure?",
           id: `call:${v.name}:${call}`,
           armed: this.armed,
         },
@@ -276,7 +294,7 @@ export class VoicesList {
           {
             class: "pg-btn forget-all",
             label: "Forget all",
-            confirm: "Forget all for good?",
+            confirm: "Forget all: sure?",
             id: "all",
             armed: this.armed,
           },

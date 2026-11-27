@@ -20,6 +20,7 @@ import {
 } from "../../config/schema.ts";
 import { STORED_SECRETS } from "../../config/secrets.ts";
 import { fillPreset, type Preset, usesSpeaker } from "../../notes/presets.ts";
+import { shownVoices, voiceLabel } from "../../query/render.ts";
 import { isLocalUser } from "../caller.ts";
 import { errorsOf } from "../errors.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
@@ -193,18 +194,22 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       await c.app.manager.init();
       const view = (await c.app.call(resolveRef(c.app, ref, { allowLast: true }))).view;
       const one = c.query.raw("speaker")?.trim();
+      const roster = view.roster();
+      // A name akou found by voice is marked in the menu's label, `What did Ben (voice) say?`;
+      // the question asks about Ben, and the pack tells the model the name is unconfirmed.
+      const voices = shownVoices(roster);
       const speakers = one
-        ? [one]
-        : view
-            .roster()
+        ? [{ name: one, shown: one }]
+        : roster
             .filter((s) => s.spk !== "you" && !s.mergedInto && s.name)
-            .map((s) => s.label);
+            .map((s) => ({ name: s.label, shown: voiceLabel(s.label, voices.get(s.spk)) }));
       const base = { user: c.app.config().settings["user.name"], title: view.call?.title ?? "" };
-      const filled = (p: Preset, speaker?: string) => {
+      const filled = (p: Preset, who?: { name: string; shown: string }) => {
+        const speaker = who?.name;
         const v = { ...base, speaker };
         return {
           name: p.name,
-          label: fillPreset(p.label, v),
+          label: fillPreset(p.label, { ...base, speaker: who?.shown }),
           order: p.order,
           question: fillPreset(p.question, v),
           usesSpeaker: speaker !== undefined,

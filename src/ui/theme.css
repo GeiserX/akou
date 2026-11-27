@@ -2900,12 +2900,24 @@ dialog {
 }
 .who .offer {
   margin-left: 0.4em;
-  color: var(--faint);
+  color: var(--dim);
   font-weight: 400;
   text-transform: none;
 }
 #people li.voice {
   border-style: dashed;
+}
+/* --dim on the light People strip's panel is 4.4:1; a shade darker passes 4.5:1. */
+@media (prefers-color-scheme: light) {
+  #people .who .offer {
+    color: #5c6169;
+  }
+}
+/* The share viewer's chips do nothing, but they say who spoke: drawn at full strength, never
+   greyed like a disabled control. */
+.row .who:disabled {
+  opacity: 1;
+  cursor: default;
 }
 .pop-voice {
   display: grid;
@@ -2919,10 +2931,6 @@ dialog {
 .pop-voice .pop-note,
 p.pop-note {
   color: var(--dim);
-}
-/* The press that refuses, once the first one asked. */
-#popover button.armed {
-  color: var(--rec);
 }
 
 /* The line being played (W5.6): a neutral fill, never the accent. */
