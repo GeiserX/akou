@@ -74,6 +74,12 @@ export interface CallManagerOptions {
    * app sets the view's read-time vocabulary here.
    */
   onOpen?(c: CallController): void;
+  /**
+   * A trashed call was deleted for good (the 30-day purge or Empty trash): the app drops what it
+   * keeps of that call outside its folder, its voiceprints [VO-4]. Never called for a trash or a
+   * restore.
+   */
+  onPurged?(callId: string): void;
   /** Tests: awaited inside a start's folder stage, where a slow disk makes it wait. */
   folderStall?(): Promise<void> | void;
 }
@@ -777,7 +783,10 @@ export class CallManager {
         rmSync(t.dir, { recursive: true, force: true });
         rmSync(`${t.dir}.json`, { force: true });
         n++;
-      } catch {}
+      } catch {
+        continue;
+      }
+      this.o.onPurged?.(t.id);
     }
     return n;
   }

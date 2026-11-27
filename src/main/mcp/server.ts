@@ -123,10 +123,14 @@ export function askListed(provider: Body, clientName: string | undefined): boole
   return provider?.state === "available" && !sameHarness(provider, clientName);
 }
 
-/** `X-Akou-Client` from the MCP client's name: `claude-code` stays, odd names become `mcp`. */
+/**
+ * `X-Akou-Client` from the MCP client's name: `claude-code` stays, odd names become `mcp`. So does
+ * `cli`: that name is akou's own CLI, whose names teach the voices file, and an MCP client's names
+ * never do [VO-5].
+ */
 export function clientTag(name: string | undefined): string {
   const n = (name ?? "").trim().toLowerCase();
-  return /^[a-z0-9][a-z0-9._-]{0,39}$/.test(n) ? n : "mcp";
+  return /^[a-z0-9][a-z0-9._-]{0,39}$/.test(n) && n !== "cli" ? n : "mcp";
 }
 
 type Data = Record<string, unknown>;

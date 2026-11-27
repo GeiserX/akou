@@ -663,6 +663,22 @@ describe("the fold: names found by voice", () => {
     expect(v.resolve("l000002")?.speaker).toBe("Speaker 1");
   });
 
+  test("[VO-10] refusedVoices lists every name refused on a speaker's merge group, and only those", () => {
+    const b = basicCall();
+    b.add(voice("c1", "Bea", "named", 0.9));
+    b.add(voice("c2", "Cleo", "offered", 0.7));
+    // The positive control: a name or an offer alone is not refused.
+    expect(fold(b.events).refusedVoices("c1")).toEqual(new Set());
+    b.add(voice("c1", "Bea", "refused"));
+    b.add(voice("c2", "Cleo", "refused"));
+    expect(fold(b.events).refusedVoices("c1")).toEqual(new Set(["Bea"]));
+    // A member's refusal counts for its group's root, and the root's for the member.
+    b.add({ type: "speaker.merge", from: "c2", into: "c1" });
+    const v = fold(b.events);
+    expect(v.refusedVoices("c1")).toEqual(new Set(["Bea", "Cleo"]));
+    expect(v.refusedVoices("c2")).toEqual(new Set(["Bea", "Cleo"]));
+  });
+
   test("[VO-7] a name found by voice never enters the read-time rules or the decode list", () => {
     const b = basicCall();
     b.seg({ id: "l000004", w0: T0 + 4 * S, text: "thanks siobahn" });

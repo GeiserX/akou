@@ -4,7 +4,7 @@
  */
 
 import type { Outcome } from "../call/state.ts";
-import type { Identity, RouteMeta } from "./access.ts";
+import { APP_IDENTITY, type Identity, type RouteMeta } from "./access.ts";
 import type { RouteErrors } from "./errors.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
@@ -510,9 +510,13 @@ export class Router<A> {
  * makes a request the user's, `user` included: any token holder can send any header, and `by:
  * "user"` would hide an agent's start and share from the notices and pass its notes off as the
  * user's (PRINCIPLES 4 and 10). Only the window, in process, writes as the user.
+ *
+ * `cli` is the CLI on this computer, whose names teach the voices file [VO-5]: only the app's own
+ * token may claim it. Any other caller (an `ak_` key) sending `cli` writes as `agent:api`.
  */
-export function authorOf(req: Request): string {
+export function authorOf(req: Request, identity?: Identity | null): string {
   const raw = (req.headers.get("x-akou-client") ?? "").trim().toLowerCase();
-  const client = /^[a-z0-9][a-z0-9._-]{0,39}$/.test(raw) ? raw : "api";
+  let client = /^[a-z0-9][a-z0-9._-]{0,39}$/.test(raw) ? raw : "api";
+  if (client === "cli" && identity !== undefined && identity !== APP_IDENTITY) client = "api";
   return `agent:${client}`;
 }

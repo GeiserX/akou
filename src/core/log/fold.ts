@@ -1080,6 +1080,20 @@ export class CallView {
     return { name: v.name, ...(v.score !== undefined ? { score: v.score } : {}), status };
   }
 
+  /**
+   * Every name refused for a speaker's merge group, by a person or withdrawn by akou: the voice
+   * matcher never offers these to that speaker again in this call [VO-10].
+   */
+  refusedVoices(spk: string): Set<string> {
+    const root = this.resolveSpeaker(spk);
+    const out = new Set<string>();
+    for (const [s, byName] of this.voices) {
+      if (this.resolveSpeaker(s) !== root) continue;
+      for (const v of byName.values()) if (v.status === "refused") out.add(v.name);
+    }
+    return out;
+  }
+
   /** Display label for a speaker id (already resolved or not). */
   speakerLabel(spk: string): string {
     const root = this.resolveSpeaker(spk);

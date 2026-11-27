@@ -279,6 +279,9 @@ import {
   type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
+import { type VoiceCall, VoiceHost, VoicePurge } from "./voices/host.ts";
+import { VoiceStore, voicesPath } from "./voices/store.ts";
+import { thresholdsFor, type VoiceThresholds } from "./voices/thresholds.ts";
 import { appBundle, relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
@@ -493,6 +496,11 @@ export interface AppOptions {
   quitStepMs?: number;
   /** The macOS bundle this app runs from, or null; by default read from the running program. */
   bundle?: string | null;
+  /**
+   * The voice thresholds per speaker embedder, instead of `docs/gates/voices.json`. Tests only, so
+   * no test depends on the measured values.
+   */
+  voiceThresholds?: (model: string) => VoiceThresholds;
 }
 
 export { NotWritable };
@@ -787,6 +795,10 @@ export class AkouApp implements ApiApp {
   private liveQwen: { server: LlamaServer; key: string } | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
+  /** Voices across calls (`src/main/voices/host.ts`); null in server mode, which never has them. */
+  readonly voices: VoiceHost | null;
+  /** A call deleted for good leaves the voices file, in every mode [VO-4]. */
+  readonly voicePurge: VoicePurge;
 
   constructor(
     private readonly o: AppOptions,
@@ -867,7 +879,28 @@ export class AkouApp implements ApiApp {
       },
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
       onOpen: (c) => void this.readyRead(c),
+      onPurged: (id) => this.voicePurge.purged(id),
     });
+    const voiceStore = new VoiceStore(voicesPath(this.configDir), {
+      now: () => this.clock.now(),
+      log: (m) => this.log("info", m),
+    });
+    this.voicePurge = new VoicePurge(voiceStore, (level, m) => this.log(level, m));
+    this.voices =
+      this.runMode === "app"
+        ? new VoiceHost({
+            store: voiceStore,
+            purge: this.voicePurge,
+            enabled: () => this.cfg.settings["voices.enabled"],
+            thresholds: o.voiceThresholds ?? ((model) => thresholdsFor(model)),
+            call: (id) => this.voiceCall(id),
+            log: (level, m) => this.log(level, m),
+          })
+        : null;
+    if (this.voices) {
+      const voices = this.voices;
+      this.watch((id, e) => voices.onEvent(id, e));
+    }
     this.sharing = new LocalLink({
       app: this,
       bundle: buildUi,
@@ -2532,6 +2565,31 @@ export class AkouApp implements ApiApp {
     } finally {
       release();
     }
+  }
+
+  /** A loaded call as the voices Host reads and writes it: each write is made at once. */
+  private voiceCall(id: string): VoiceCall | undefined {
+    const c = this.manager.controller(id);
+    if (!c) return undefined;
+    return {
+      view: c.view,
+      append: (draft) => {
+        let release: () => void;
+        try {
+          release = c.holdWriter();
+        } catch {
+          return null;
+        }
+        try {
+          return c.record(draft);
+        } catch {
+          this.log("warn", `call ${id}: a voice match was not written`);
+          return null;
+        } finally {
+          release();
+        }
+      },
+    };
   }
 
   async events(id: string, after: number): Promise<LogEvent[]> {
@@ -4594,6 +4652,8 @@ export class AkouApp implements ApiApp {
       this.liveQwen = null;
       await this.quitStep("the live Qwen server", () => liveQwen?.server.stop());
       await this.quitStep("the live recognizer", () => this.asr?.close());
+      // After the recognizer: no centroid is left to learn from or match.
+      await this.quitStep("the voices file", () => this.voices?.idle() ?? this.voicePurge.idle());
       await this.quitStep("the page server", () => this.page?.stop());
       // Before the API server: no Wyoming session holds the store when the job service closes.
       await this.quitStep("the Wyoming listener", () => this.wyoming?.stop());

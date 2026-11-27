@@ -479,7 +479,7 @@ export function startApiServer(o: ServerOptions): ApiServer {
         "refused" in g
           ? g.refused
           : await routeRequest(router, o.app, req, {
-              by: authorOf(req),
+              by: authorOf(req, g.identity),
               timeout: (seconds) => srv.timeout(req, seconds),
               upgrade: (socket) => {
                 upgraded = srv.upgrade(req, { data: socket });

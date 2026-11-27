@@ -111,6 +111,8 @@ export interface RigOptions {
   realModels?: boolean;
   /** The single-file CLI's server: no speech engine, with this reason (#436). */
   noEngine?: string;
+  /** The voice thresholds, instead of the measured ones in `docs/gates/voices.json`. */
+  voiceThresholds?: AppOptions["voiceThresholds"];
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -186,6 +188,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.bundle !== undefined ? { bundle: o.bundle } : {}),
     ...(o.interfaces ? { interfaces: o.interfaces } : {}),
     ...(o.noEngine ? { noEngine: o.noEngine } : {}),
+    ...(o.voiceThresholds ? { voiceThresholds: o.voiceThresholds } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;
