@@ -49,7 +49,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Why.** The live pass is fast and sometimes mishears a name or a term.
 
-**Fix.** Open the line's menu, choose **Fix this line…**, change what akou got wrong and press Enter. A name or term is fixed on every line of the call at once, and learned for the workspace too; other words are fixed on that line only. After the call, the accurate final pass runs on the whole recording. To prepare names before a call, see [The vocabulary is the one thing that carries over](knowledge-handoff.md#the-vocabulary-is-the-one-thing-that-carries-over).
+**Fix.** Open the line's menu, choose **Fix this line…**, change what akou got wrong and press Enter. A name or term is fixed on every line of the call at once, and learned for the workspace too; other words are fixed on that line only. After the call, the accurate final pass runs on the whole recording. To prepare names before a call, see [Your vocabulary carries over](knowledge-handoff.md#your-vocabulary-carries-over).
 
 ## The first lines of a call show up late
 

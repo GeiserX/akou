@@ -24,7 +24,7 @@ Each principle has a check. If we cannot write the check, the principle is too v
 
 6. **The brain is your own harness.** By default akou asks Claude Code or Codex, run locally on the subscription you already pay for. A local model or an API key work the same way. There is no akou cloud and no key is required. *Check:* a fresh install with a harness on PATH answers a question with no key configured.
 
-7. **Integration, not a knowledge base.** akou knows the current call, or one past call you name. It hands every finished call to your own system in open formats: Markdown with frontmatter, the event log, the audio, hooks, a signed webhook, and pull over API and MCP. It never grows a library, cross-call search, people pages or weekly rollups. That is the line we hold against Granola and Minutes. *Check:* no route, tool or screen reads or searches across calls.
+7. **Integration, not a knowledge base.** akou knows the current call, or one past call you name. It hands every finished call to your own system in open formats: Markdown with frontmatter, the event log, the audio, hooks, a signed webhook, and pull over API and MCP. It never grows a library, cross-call search, people pages or weekly rollups. That is the line we hold against Granola and Minutes. *Check:* no route, tool or screen reads or searches across call content; besides the vocabulary, the only thing that crosses calls is the user's own list of named voices.
 
 8. **The log is the truth.** Nothing about a call lives only in an agent's chat or only in the window. Raw heard text is never overwritten. Corrections, names and edits are new events. *Check:* deleting every cache and replaying the log reproduces the same transcript, names and notes.
 
@@ -97,7 +97,7 @@ Each principle has a check. If we cannot write the check, the principle is too v
 
 ## Non-goals
 
-- No built-in knowledge base: no library, no cross-call search, no people or company pages, no pre-meeting briefs built from past calls, no voiceprints kept across calls. The harness does these over the user's own system.
+- No built-in knowledge base: no library, no cross-call search, no people or company pages, no pre-meeting briefs built from past calls. The harness does these over the user's own system.
 - No akou cloud and no required API key.
 - No meeting bot. akou hears what the computer hears.
 - No auto-recording by default. A per-app opt-in is a setting, off until chosen, and the prompt itself is open decision 1. Auto-stop rules are also opt-in, and each one counts down with a Cancel button, so none of them stops a recording silently (principle 1).

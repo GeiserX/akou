@@ -11,7 +11,7 @@ The contracts already built are in [DESIGN.md](../DESIGN.md) sections 6 and 8 an
 - **The live stream is the log.** A program that follows a call reads the event log after a cursor, over SSE or a long poll. It never reads call folders and never needs a second format.
 - **Files are the extension point.** Templates, ask presets, vocabulary and hook commands are plain files the user owns. There is no plugin runtime inside akou.
 
-The moat decides the shape. akou gives the user's own agent and the user's own knowledge system the best possible live and finished call, and keeps nothing across calls that would compete with them ([POSITIONING.md](../POSITIONING.md), DESIGN 8.1).
+The moat decides the shape. akou gives the user's own agent and the user's own knowledge system the best possible live and finished call, and carries nothing from one call to the next that would compete with them: besides the vocabulary, only the voices the user named, which name a speaker again and hold no call content ([POSITIONING.md](../POSITIONING.md), DESIGN 3.5 and 8.1).
 
 ```mermaid
 flowchart LR

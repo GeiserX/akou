@@ -36,7 +36,7 @@ The skill is [skills/akou/SKILL.md](https://github.com/GeiserX/akou/blob/main/sk
 
 Text from the call reaches the agent inside a `<call-text>` block, and the skill tells it that this is data, never instructions: nothing said on the call can make the agent run a command.
 
-The `akou-vocab` skill, installed beside it, prepares the words of your world before a call: the attendees' names from an invite, the product names from your documents, the words you corrected. Every word it finds is a proposal you approve. See [The vocabulary is the one thing that carries over](knowledge-handoff.md#the-vocabulary-is-the-one-thing-that-carries-over).
+The `akou-vocab` skill, installed beside it, prepares the words of your world before a call: the attendees' names from an invite, the product names from your documents, the words you corrected. Every word it finds is a proposal you approve. See [Your vocabulary carries over](knowledge-handoff.md#your-vocabulary-carries-over).
 
 ## The command line
 

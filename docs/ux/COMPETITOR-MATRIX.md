@@ -129,7 +129,7 @@ The **Owner** column says where the item lives:
 | TRN-17 | Re-finalize many calls with a new engine | Intent | here |
 | TRN-18 | Chapters from chunk summaries | tl;dv, Zoom, Open Granola | W6.22 |
 | TRN-19 | Screen or slide capture into notes | Otter, Granola, Minutes | decision (4) |
-| TRN-20 | Voiceprints across calls | heed, meeting-transcriber, Minutes | non-goal |
+| TRN-20 | Voiceprints across calls | heed, meeting-transcriber, Minutes | has: TS-21b; the design is DESIGN 3.5 |
 | TRN-21 | Streaming diarization for live labels (Sortformer) | Open-source recorder survey; DESIGN F8 | here |
 | TRN-22 | Speaker names from the meeting app's participant list | Granola, anarlog | here |
 | TRN-23 | Capture the meeting's text chat | anarlog | parked |
@@ -319,7 +319,6 @@ Competitors lead with these. akou does not build them; the hand-off and the user
 |---|---|---|
 | Chat across all meetings | Granola, Fathom, tl;dv | Export plus `akou_list_calls` and `akou_get_call`; the harness searches the user's own system |
 | People and company directories | Granola | Attendee names stay per call |
-| Voiceprints across calls | heed, meeting-transcriber, Minutes | Speakers are named per call |
 | Pre-meeting briefs | Granola, Jamie | A harness skill over the user's own notes; the vocab skill already reads invites |
 | Scheduled reports and keyword trackers | tl;dv | Hooks into the user's own tools |
 | Folders, recurring auto-add, related meetings | Granola | Workspaces and template matching by title |

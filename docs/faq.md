@@ -8,7 +8,7 @@ The questions people ask first. Each answer points at the page with the detail.
 
 ??? question "Does anything leave my Mac?"
 
-    Not unless you turn it on. The audio, the transcript, the notes and the speech models stay on your disk. Ask sends a small excerpt of the call to the provider you picked: your own Claude Code or Codex, a local model (which stays on your machine), or an API with your key. The provider `none` sends nothing. The export folder, hooks and the signed webhook go only where you point them. See [Providers](providers.md) and [Hand-off to your knowledge system](knowledge-handoff.md).
+    Not unless you turn it on. The audio, the transcript, the notes, the voiceprints of the people you named and the speech models stay on your disk. Ask sends a small excerpt of the call to the provider you picked: your own Claude Code or Codex, a local model (which stays on your machine), or an API with your key. The provider `none` sends nothing. The export folder, hooks and the signed webhook go only where you point them. See [Providers](providers.md) and [Hand-off to your knowledge system](knowledge-handoff.md).
 
 ??? question "Does it work on Windows or Linux?"
 
@@ -25,6 +25,10 @@ The questions people ask first. Each answer points at the page with the detail.
 ??? question "Can it search across my calls?"
 
     No, by design. akou records, transcribes and answers questions about one call. Searching across meetings belongs to the system you already keep your knowledge in, an Obsidian vault, a Git repository or a wiki, and akou hands every finished call to it. See [Hand-off to your knowledge system](knowledge-handoff.md).
+
+??? question "Does akou remember people's voices?"
+
+    Yes, the voices of the people you name, so it can name them again in a later call. akou keeps a voiceprint per call in which you named a person, at most 8 per person and 150 people, in `voices.yaml` in the config folder. It computes and keeps them on this computer only: nothing is sent, an export leaves them out, and nothing trains a model. A voiceprint older than 3 years is dropped, and deleting a call for good drops what that call taught; a call in the trash keeps it. `akou voices` lists the people, and Settings > Voices or `akou voices rename` and `akou voices forget` rename one person, forget one person, forget what one call taught or forget them all. "Recognise voices across calls" in Settings > Speakers is on by default. Off, akou stops learning and matching voices and keeps the file. Server mode never recognises voices. See [Voices you named](how-it-works.md#voices-you-named).
 
 ??? question "Does it use my Claude Code subscription?"
 

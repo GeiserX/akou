@@ -319,7 +319,7 @@ Speaker colours stay off the accent's hue, so the accent is only ever the one pr
 
 ## 9. Vocabulary
 
-The vocabulary is the one thing that carries across calls, and nothing enters it without the user's yes ([knowledge-handoff.md](../knowledge-handoff.md)). The window's job is to make adding, approving and removing fast. A call's proposals are answered in its "Words to review" dialog, opened from the pill in the call header. Your own words, the replacements and the words fixed while dictating live on the Words page under Dictation, which Settings' Word lists row also opens, so the settings groups stay the ones DESKTOP DK-S1 defines.
+Two things carry across calls: the vocabulary, and the voices the user named (Settings, Voices; [DESIGN 3.5](../DESIGN.md#35-voices-across-calls)). Nothing enters the vocabulary without the user's yes ([knowledge-handoff.md](../knowledge-handoff.md)). The window's job is to make adding, approving and removing fast. A call's proposals are answered in its "Words to review" dialog, opened from the pill in the call header. Your own words, the replacements and the words fixed while dictating live on the Words page under Dictation, which Settings' Word lists row also opens, so the settings groups stay the ones DESKTOP DK-S1 defines.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|

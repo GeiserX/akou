@@ -57,7 +57,20 @@ A question never sends the whole transcript anywhere. akou first builds a small 
 
 ## The hand-off
 
-akou keeps no library across calls. A finished call leaves through the export folder (Markdown with frontmatter, the event log and the audio), hooks that run your own commands, a signed webhook, or a pull over the API. Each of them is off until you set it up. See [Hand-off to your knowledge system](knowledge-handoff.md).
+akou keeps no library of your calls. From one call to the next it carries only your vocabulary and the voices of the people you named (see [Voices you named](#voices-you-named)). A finished call leaves through the export folder (Markdown with frontmatter, the event log and the audio), hooks that run your own commands, a signed webhook, or a pull over the API. Each of them is off until you set it up. See [Hand-off to your knowledge system](knowledge-handoff.md).
+
+## Voices you named
+
+When you name a speaker in a call, akou keeps a voiceprint of that voice, so it can name the same person in a later call. A voiceprint is a list of numbers that the speaker model, TitaNet, computes from the voice. It is not a recording.
+
+- **What akou keeps.** One voiceprint per call in which you named the person, at most 8 per person and 150 people, in `voices.yaml` in the config folder (`~/.config/akou/`). Only your user can read the file (mode 0600).
+- **Where it goes.** Nowhere. akou computes the voiceprints on this computer and keeps them there. An export leaves them out of the event log, an `ak_` key cannot read them, and no command, route or tool prints one.
+- **What it is for.** Only to name a voice again. Nothing trains a model: akou compares a new voice with the voiceprints in the file, and that is all.
+- **Who teaches it.** A name you give in the window, its ask box or the `akou` command line. A name from an MCP agent, a name akou found by voice and an imported name teach nothing.
+- **How long it stays.** A voiceprint older than 3 years is dropped. Deleting a call for good (Empty trash, or the purge after 30 days in the trash) drops what that call taught. A call in the trash keeps it, so a restore brings it back.
+- **How to see and remove it.** In the window, Settings > Voices lists each person with the calls that taught their voice, and has Rename, Forget, Forget this call and Forget all voices. On the command line, `akou voices` lists them, `akou voices rename OLD NEW` renames one person, `akou voices forget NAME` forgets one person, `akou voices forget --call ID` forgets what one call taught, and `akou voices forget --all` deletes `voices.yaml`. The API has `GET /v1/voices`, `POST /v1/voices/rename` and `POST /v1/voices/forget`, and MCP has `akou_voices_list` and `akou_voice_forget`. Only you, on this computer, reach them: an `ak_` key gets 403.
+- **Turning it off.** "Recognise voices across calls" in Settings > Speakers (`voices.enabled`) is on by default. Off, akou stops learning and matching voices and keeps `voices.yaml`, and you can still list and forget.
+- **Server mode** has no voice recognition. It never learns or names a voice.
 
 ## Security
 
