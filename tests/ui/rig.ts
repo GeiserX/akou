@@ -261,14 +261,38 @@ export async function uiRig(
 }
 
 /**
+ * Waits until every animation and transition that ends has ended, for at most 5 s. A theme switch
+ * starts the rows' colour transition (0.6 s), and a shot taken inside it shows the other theme's
+ * text. The layout read first applies the switch, so its transitions exist before they are
+ * collected. The wait is capped on this side, because a page on Playwright's clock may never fire
+ * its own timers, and a paused animation never ends.
+ */
+export async function settle(page: Page): Promise<void> {
+  const ended = page
+    .evaluate(async () => {
+      void document.body.offsetHeight;
+      await Promise.all(
+        document
+          .getAnimations()
+          .filter((a) => a.effect?.getComputedTiming().iterations !== Number.POSITIVE_INFINITY)
+          .map((a) => a.finished.catch(() => {})),
+      );
+    })
+    .catch(() => {});
+  await Promise.race([ended, Bun.sleep(5000)]);
+}
+
+/**
  * Saves the page as it is now, dark then light, as `<dir>/<name>-dark.png` and `-light.png`
- * (TS-15c), and hands the theme back to the system's. Returns the files written.
+ * (TS-15c), each once the theme's transitions have ended, and hands the theme back to the
+ * system's. Returns the files written.
  */
 export async function screenshots(page: Page, dir: string, name: string): Promise<string[]> {
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   for (const scheme of ["dark", "light"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
+    await settle(page);
     const path = join(dir, `${name}-${scheme}.png`);
     await page.screenshot({ path, fullPage: true });
     files.push(path);

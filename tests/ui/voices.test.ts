@@ -15,6 +15,7 @@ import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { LIVE_EMBEDDER } from "../../src/main/voices/host.ts";
 import { VoiceStore, voicesPath } from "../../src/main/voices/store.ts";
+import { dayLabel } from "../../src/ui/model.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
@@ -23,6 +24,7 @@ import {
   requestLog,
   screenshots,
   seedCall,
+  settle,
   standardCall,
   T0,
   TZ,
@@ -43,8 +45,14 @@ function ulidAt(ms: number): string {
   return `${t}${"0".repeat(16)}`;
 }
 
-/** A call the window has not loaded, made on 1 August at noon UTC. */
-const OLDER = ulidAt(Date.UTC(2026, 7, 1, 12));
+const DAY = 86_400_000;
+/**
+ * A call the window has not loaded, made 40 days before the run. Every date here is counted from
+ * the run's clock, never pinned to the calendar (docs/TESTING.md section 2), and the expected
+ * day comes from `dayLabel` on the page's clock.
+ */
+const OLDER_AT = Date.now() - 40 * DAY;
+const OLDER = ulidAt(OLDER_AT);
 
 async function withRig<T>(
   o: Parameters<typeof uiRig>[0] & { seed?: (home: string) => void },
@@ -84,6 +92,44 @@ function voicedCall(home: string): string {
   }).id;
 }
 
+/**
+ * The WCAG contrast of an element's text on what is drawn behind it: the backgrounds from the
+ * root down, see-through ones (the played line's 6% fill) blended on a 1-pixel canvas, as the
+ * page paints them.
+ */
+async function textContrast(page: Page, selector: string): Promise<number> {
+  return page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`nothing matches ${sel}`);
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+    const paint = (colour: string) => {
+      ctx.fillStyle = "#010203";
+      ctx.fillStyle = colour;
+      // A colour the canvas cannot read leaves the old one: never measure that silently.
+      if (ctx.fillStyle === "#010203") throw new Error(`the canvas cannot read ${colour}`);
+      ctx.fillRect(0, 0, 1, 1);
+      return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+    };
+    const layers: string[] = [];
+    for (let e: Element | null = el; e; e = e.parentElement)
+      layers.unshift(getComputedStyle(e).backgroundColor);
+    let bg = paint("#ffffff");
+    for (const b of layers) bg = paint(b);
+    const fg = paint(getComputedStyle(el).color);
+    const lum = (p: number[]) => {
+      const [r, g, b] = p.map((v) => {
+        const c = v / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      }) as [number, number, number];
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a) as [number, number];
+    return (hi + 0.05) / (lo + 0.05);
+  }, selector);
+}
+
 async function events(rig: UiRig, id: string): Promise<LogEvent[]> {
   return (await rig.api("GET", `/calls/${id}/events`)).body.events;
 }
@@ -99,20 +145,11 @@ function apiCalls(log: ReturnType<typeof requestLog>): { what: string; body: unk
 }
 
 /**
- * Saves the page in both themes when `AKOU_UI_SHOTS` names a folder (docs/TESTING.md TS-15c),
- * once every animation that ends (a row's rise, a fade) has ended.
+ * Saves the page in both themes when `AKOU_UI_SHOTS` names a folder (docs/TESTING.md TS-15c);
+ * `screenshots` waits for each theme's transitions to end.
  */
 async function shoot(page: Page, name: string): Promise<void> {
-  if (!process.env.AKOU_UI_SHOTS) return;
-  await page.evaluate(() =>
-    Promise.all(
-      document
-        .getAnimations()
-        .filter((a) => a.effect?.getComputedTiming().iterations !== Number.POSITIVE_INFINITY)
-        .map((a) => a.finished.catch(() => {})),
-    ),
-  );
-  await screenshots(page, process.env.AKOU_UI_SHOTS, name);
+  if (process.env.AKOU_UI_SHOTS) await screenshots(page, process.env.AKOU_UI_SHOTS, name);
 }
 
 const exemplar = (call: string, secs: number, at: string, spk = "c1") => ({
@@ -126,12 +163,26 @@ const exemplar = (call: string, secs: number, at: string, spk = "c1") => ({
   at,
 });
 
-/** Ben, taught by the seeded call and an older one; Cy, by the older one. */
-async function seedVoices(rig: UiRig): Promise<void> {
+/**
+ * Ben, taught by the seeded call and an older one; Cy, by the older one. Returns when Ben was last
+ * heard.
+ */
+async function seedVoices(rig: UiRig): Promise<number> {
   const store = new VoiceStore(voicesPath(rig.app.configDir), { log: () => {} });
-  await store.upsert("Ben", exemplar(OLDER, 40, "2026-09-01T10:00:00Z"));
-  await store.upsert("Ben", exemplar(CALL, 80, new Date().toISOString()));
-  await store.upsert("Cy", exemplar(OLDER, 30, "2026-09-01T10:00:00Z", "c2"));
+  const older = new Date(OLDER_AT).toISOString();
+  const last = Date.now();
+  await store.upsert("Ben", exemplar(OLDER, 40, older));
+  await store.upsert("Ben", exemplar(CALL, 80, new Date(last).toISOString()));
+  await store.upsert("Cy", exemplar(OLDER, 30, older, "c2"));
+  return last;
+}
+
+/** The day `t` reads as in the page, on the page's own clock and zone. */
+async function pageDay(page: Page, t: number): Promise<string> {
+  const [now, zone] = await page.evaluate(
+    () => [Date.now(), Intl.DateTimeFormat().resolvedOptions().timeZone] as const,
+  );
+  return dayLabel(t, now, zone);
 }
 
 async function openVoices(page: Page): Promise<void> {
@@ -377,6 +428,57 @@ describe("names found by voice in the window", () => {
   );
 
   test(
+    "an offer and the popover's notes read at 4.5:1 or more in both themes, on a played line too",
+    async () => {
+      const AGENT = "01J8Z6Q4M2VX0K7B3D4E5AGENT";
+      let id = "";
+      await withRig(
+        {
+          seed: (home) => {
+            id = voicedCall(home);
+            seedCall(home, (b) => {
+              standardCall(b, AGENT);
+              b.add({ type: "speaker.name", spk: "c2", name: "Eve", by: "agent:mcp" });
+            });
+          },
+        },
+        async (rig) => {
+          const seen: Record<string, number> = {};
+          const measure = async (page: Page, what: string, selector: string) => {
+            for (const scheme of ["dark", "light"] as const) {
+              await page.emulateMedia({ colorScheme: scheme });
+              await settle(page);
+              seen[`${what} ${scheme}`] = await textContrast(page, selector);
+            }
+            await page.emulateMedia({ colorScheme: null });
+          };
+          const page = await rig.open(id);
+          const offer = '#lines .row[data-id="l000003"] .who .offer';
+          await page.waitForSelector(offer);
+          await measure(page, "offer", offer);
+          await measure(page, "offer in People", "#people .who .offer");
+          await page.evaluate(() =>
+            document.querySelector('#lines .row[data-id="l000003"]')?.classList.add("playing"),
+          );
+          await measure(page, "offer on the played line", offer);
+          await page.click('#lines .row[data-id="l000002"] .who');
+          await measure(page, "not confirmed", "#popover .pop-voice .pop-note");
+          await page.keyboard.press("Escape");
+          const agent = await rig.open(AGENT);
+          await agent.waitForSelector("#lines .row >> nth=3");
+          await agent.click('#lines .row[data-id="l000003"] .who');
+          await agent.waitForSelector("#popover[data-remember='shown']");
+          await measure(agent, "agent note", "#popover p.pop-note");
+          expect(Object.keys(seen)).toHaveLength(10);
+          const low = Object.entries(seen).filter(([, r]) => r < 4.5);
+          expect(low.map(([k, r]) => `${k} ${r.toFixed(2)}`)).toEqual([]);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Remember this voice is offered only for an MCP agent's name, and only while akou learns voices",
     async () => {
       const seed = (home: string) =>
@@ -547,12 +649,12 @@ describe("Settings > Voices", () => {
     async () => {
       let id = "";
       await withRig({ seed: (home) => (id = voicedCall(home)) }, async (rig) => {
-        await seedVoices(rig);
+        const last = await seedVoices(rig);
         const page = await rig.open(id);
         await openVoices(page);
         const ben = page.locator('#settings-voices li[data-name="Ben"]');
         expect(await ben.locator(".pg-help").first().textContent()).toBe(
-          "2 calls · 2 min of speech · last heard Today",
+          `2 calls · 2 min of speech · last heard ${await pageDay(page, last)}`,
         );
         expect(await page.locator("#settings-voices li.voice").count()).toBe(2);
         expect(await page.locator("#settings-voices .pg-sechelp").getAttribute("data-voices")).toBe(
@@ -562,7 +664,7 @@ describe("Settings > Voices", () => {
         await page.waitForSelector('#settings-voices li[data-name="Ben"] .voice-rename');
         const older = ben.locator(`.pg-row[data-call="${OLDER}"]`);
         expect(await older.locator(".pg-name").textContent()).toBe("Learned in an older call");
-        expect(await older.locator(".pg-help").textContent()).toBe("1 Aug");
+        expect(await older.locator(".pg-help").textContent()).toBe(await pageDay(page, OLDER_AT));
         // A call id is never shown.
         expect(await page.locator("#settings-voices").textContent()).not.toContain(OLDER);
         await shoot(page, "voices-settings");
