@@ -52,6 +52,8 @@ const TABLE: Readonly<Record<string, ((call?: string) => string[]) | string>> = 
   name: (x) => ["name", "c2", "Ben", ...c(x)],
   note: (x) => ["note", "ship on Friday", ...c(x)],
   remember: (x) => ["remember", "Ben owns the deploy", ...c(x)],
+  // `voices` lists, renames and forgets with no call; `refuse` acts on one.
+  voices: (x) => ["voices", "refuse", "c2", ...c(x)],
   export: (x) => ["export", ...c(x)],
   // `hooks run` takes no `last` (its route refuses it on every app), so the default names `live`.
   hooks: (x) => ["hooks", "run", "-c", x ?? "live"],
