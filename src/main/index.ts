@@ -880,7 +880,10 @@ export class AkouApp implements ApiApp {
       },
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
       onOpen: (c) => void this.readyRead(c),
-      onPurged: (id) => this.voicePurge.purged(id),
+      onPurged: (id) => {
+        this.voicePurge.purged(id);
+        this.voices?.prune();
+      },
     });
     const voiceStore = new VoiceStore(voicesPath(this.configDir), {
       now: () => this.clock.now(),
@@ -896,6 +899,8 @@ export class AkouApp implements ApiApp {
             thresholds: o.voiceThresholds ?? ((model) => thresholdsFor(model)),
             call: (id) => this.voiceCall(id),
             log: (level, m) => this.log(level, m),
+            now: () => this.clock.now(),
+            oldestCall: () => this.manager.oldestCall(),
           })
         : null;
     if (this.voices) {

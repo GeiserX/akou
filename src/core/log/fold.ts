@@ -367,6 +367,8 @@ interface NameEntry {
   name: string;
   by: string;
   seq: number;
+  /** When the name was given: the event's wall time. */
+  t: number;
   /** Set when the name came from a `speaker.voice`, never from a typed `speaker.name`. */
   byVoice?: true;
 }
@@ -602,7 +604,7 @@ export class CallView {
         this.changeLog.push(ALL_LINES);
         break;
       case "speaker.name":
-        this.names.set(e.spk, { name: e.name, by: e.by, seq: e.seq });
+        this.names.set(e.spk, { name: e.name, by: e.by, seq: e.seq, t: e.t });
         this.invalidateNames();
         break;
       case "speaker.voice": {
@@ -1048,7 +1050,7 @@ export class CallView {
     }
     if (best) return best;
     const voice = this.liveVoice(root, "named");
-    return voice && { name: voice.name, by: voice.by, seq: voice.seq, byVoice: true };
+    return voice && { name: voice.name, by: voice.by, seq: voice.seq, t: voice.t, byVoice: true };
   }
 
   /**
@@ -1072,9 +1074,12 @@ export class CallView {
     return best;
   }
 
-  /** The log position of the name in force for a speaker's group, typed or found by voice. */
-  nameSeq(spk: string): number | undefined {
-    return this.nameOf(this.resolveSpeaker(spk))?.seq;
+  /**
+   * When the name in force for a speaker's group was given (the event's wall time), typed or found
+   * by voice. A merged group with an unnamed root takes its member's name, and its time.
+   */
+  nameAt(spk: string): number | undefined {
+    return this.nameOf(this.resolveSpeaker(spk))?.t;
   }
 
   /** The voice name in force for a speaker (already resolved or not): named or offered. */

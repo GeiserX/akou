@@ -721,6 +721,19 @@ export class CallManager {
     return this.relocate(id, null, this.clock.now());
   }
 
+  /**
+   * When the oldest call akou keeps was created, once every folder is read: Infinity with none,
+   * and null while the trash holds a call, whose creation is not at hand. The voices tombstones
+   * older than it leave [VO-12].
+   */
+  async oldestCall(): Promise<number | null> {
+    await this.init();
+    if (this.trashed().length > 0) return null;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const c of this.index.values()) oldest = Math.min(oldest, c.createdAt);
+    return oldest;
+  }
+
   /** The trashed calls, each with its folder in the trash. */
   private trashed(): (Trashed & { dir: string })[] {
     const root = join(this.o.root, TRASH_DIR);
