@@ -827,7 +827,7 @@ describe("[VO-12] forgets and renames as tombstones", () => {
     await a.add({ kind: "rename", from: "Cy", to: "Cy Ortiz", at: 1000 });
     await a.add({ kind: "forget", call: "X", at: 3000 });
     await a.add({ kind: "lift", call: "Y", seq: 7, at: 3500 });
-    expect(statSync(a.file).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(a.file).mode & 0o777).toBe(0o600);
     writeFileSync(a.file, `${readFileSync(a.file, "utf8")}not json\n{"kind":"forget","at":5}\n`);
     // A temporary file a write of a process that is gone left behind.
     writeFileSync(`${a.file}.999999999.tmp`, "");

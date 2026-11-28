@@ -750,7 +750,7 @@ describe("[VO-12] a forget or a rename during a live call holds", () => {
         await r.api("POST", "/calls/live/stop");
         expect((await r.api("POST", "/voices/forget", { name: "Ben" })).status).toBe(200);
         const tombs = `${voicesPath(r.app.configDir)}.tombstones`;
-        expect(statSync(tombs).mode & 0o777).toBe(0o600);
+        if (process.platform !== "win32") expect(statSync(tombs).mode & 0o777).toBe(0o600);
         await r.close();
         r = await open();
         expect((await r.api("POST", `/calls/${a}/restart`, {})).status).toBe(200);
