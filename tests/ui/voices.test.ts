@@ -354,6 +354,36 @@ describe("names found by voice in the window", () => {
   );
 
   test(
+    "Remember this voice goes when the speaker is renamed elsewhere while the popover is open",
+    async () => {
+      let id = "";
+      await withRig(
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b, CALL);
+              b.add({ type: "speaker.name", spk: "c2", name: "Eve", by: "agent:mcp" });
+            }).id),
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click('#lines .row[data-id="l000003"] .who');
+          await page.waitForSelector("#popover[data-remember='shown'] .voice-remember");
+          // Another client renames Eve to Dee: pressing the button would bring Eve back.
+          await rig.write(id, { type: "speaker.name", spk: "c2", name: "Dee", by: "user" });
+          await page.waitForSelector("#popover .voice-remember", { state: "detached" });
+          expect(await page.getAttribute("#popover", "data-remember")).toBe("no");
+          expect(await page.locator("#popover").isVisible()).toBe(true);
+          const names = (await events(rig, id)).filter((e) => e.type === "speaker.name");
+          expect(names.at(-1)).toMatchObject({ spk: "c2", name: "Dee", by: "user" });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "an open popover follows the speaker's voice: a withdrawn name leaves it, a new offer comes in",
     async () => {
       let id = "";

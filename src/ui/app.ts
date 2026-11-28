@@ -1754,7 +1754,7 @@ class App {
     // A name an MCP agent gave teaches akou nothing (it may be a guess): the user can say it is
     // right, which names the speaker again as the user. Offered only while akou learns voices.
     const pop = byId("popover");
-    if (me?.name && !me.byVoice && me.namedBy?.startsWith("agent:") && me.namedBy !== "agent:cli") {
+    if (me?.name && this.agentNamed(call, spk, me.name)) {
       pop.dataset.remember = "reading";
       void this.rememberRow(call, spk, me.name, title, after);
     } else pop.dataset.remember = "no";
@@ -1835,6 +1835,7 @@ class App {
     const p = this.voicePop;
     const pop = byId("popover");
     if (!p || pop.hidden || this.callId !== p.call) return;
+    this.dropStaleRemember(p.call, p.spk);
     const next = this.voiceRows(p.call, p.spk, p.after);
     if (next.key === p.key) return;
     if (p.el?.isConnected) {
@@ -1843,6 +1844,35 @@ class App {
     } else if (next.el) pop.querySelector("form.pop-row")?.after(next.el);
     this.voicePop = { ...p, key: next.key, el: next.el };
     this.placePopover();
+  }
+
+  /**
+   * The speaker still shows `name`, and an MCP agent gave it: only then may "Remember this voice"
+   * name it again as the user. A rename or a name typed elsewhere since the popover opened makes
+   * the button's name stale, and pressing it would bring the old name back and teach it.
+   */
+  private agentNamed(call: string, spk: string, name: string): boolean {
+    if (this.callId !== call) return false;
+    const me = this.view()
+      ?.roster()
+      .find((s) => s.spk === spk);
+    return (
+      me?.name === name &&
+      !me.byVoice &&
+      (me.namedBy?.startsWith("agent:") ?? false) &&
+      me.namedBy !== "agent:cli"
+    );
+  }
+
+  /** The open popover's "Remember this voice" goes when its name is no longer the agent's. */
+  private dropStaleRemember(call: string, spk: string): boolean {
+    const pop = byId("popover");
+    const btn = pop.querySelector<HTMLElement>(".voice-remember");
+    if (!btn || this.agentNamed(call, spk, btn.dataset.name ?? "")) return false;
+    btn.closest(".pop-voice")?.remove();
+    pop.dataset.remember = "no";
+    this.placePopover();
+    return true;
   }
 
   /**
@@ -1885,9 +1915,12 @@ class App {
             {
               type: "button",
               class: "voice-remember",
+              attrs: { "data-name": name },
               on: {
-                click: () =>
-                  void after(this.t.request("POST", `/calls/${call}/speakers`, { spk, name })),
+                click: () => {
+                  if (this.dropStaleRemember(call, spk)) return;
+                  void after(this.t.request("POST", `/calls/${call}/speakers`, { spk, name }));
+                },
               },
             },
             "Remember this voice",

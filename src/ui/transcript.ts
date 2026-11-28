@@ -468,8 +468,10 @@ export class TranscriptPane {
     const only = rows.length === 1 ? rows[0]?.querySelector(".text") : null;
     if (only?.contains(range.startContainer) && only.contains(range.endContainer)) return;
     const lines: string[] = [];
+    const v = this.d.view();
+    const voices = v ? callVoices(v) : undefined;
     for (const r of rows) {
-      const l = this.shown(r.dataset.id ?? "");
+      const l = this.shown(r.dataset.id ?? "", voices);
       if (l) lines.push(`${l.time} ${l.text}`);
     }
     if (lines.length === 0) return;
@@ -487,13 +489,16 @@ export class TranscriptPane {
    * A line as shown: its wall time, its speaker's full label and its text, for copying. A name
    * found by voice reads `Ben (voice)`, as in every text that leaves the window.
    */
-  shown(id: string): { time: string; speaker: string; text: string } | null {
+  shown(
+    id: string,
+    voices?: ReadonlyMap<string, ShownVoice>,
+  ): { time: string; speaker: string; text: string } | null {
     const v = this.d.view();
     const l = v?.visibleIn(id, "best") ? v.resolve(id) : null;
     if (!v || !l) return null;
     return {
       time: formatWall(l.w0, v.call?.tz ?? "UTC"),
-      speaker: speakerText(l, callVoices(v)),
+      speaker: speakerText(l, voices ?? callVoices(v)),
       text: this.shownText(l).text,
     };
   }
