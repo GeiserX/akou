@@ -86,6 +86,7 @@ Hold a key and speak, and akou types the words where your cursor is, in any app.
 - Lets your agent start, follow, question and annotate a call from the terminal, the local API or MCP. See [Agents and the command line](agents.md).
 - Types what you dictate into any app, and learns a word you fix only when you say yes. See [Dictation](dictation.md).
 - Keeps one word list you own, so names and product terms come out right across calls.
+- Names a speaker by voice in a later call once you named them, from voiceprints kept on this Mac and never sent. See [Voices you named](how-it-works.md#voices-you-named).
 - Hands every finished call to your own vault, repository or wiki as Markdown with frontmatter, the event log and the audio, through an export folder, hooks, a signed webhook or the API. See [Hand-off to your knowledge system](knowledge-handoff.md).
 - Runs the same core as a self-hosted transcription server in Docker, with file jobs, an OpenAI-compatible endpoint, and Wyoming (Home Assistant Assist) and Bazarr's `/asr` endpoints, each one setting away. See [Server mode](server.md) and [GPUs and presets](server-hardware.md).
 

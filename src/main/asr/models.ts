@@ -537,7 +537,7 @@ export const MODELS: readonly CatalogEntry[] = [
   },
   {
     id: "titanet-small",
-    job: "speaker embeddings: live clusters, final diarization with pyannote, and names across a restart with Nemotron",
+    job: "speaker embeddings: live clusters, final diarization with pyannote, names across a restart with Nemotron, and the voices akou names in later calls",
     licence: "CC-BY-4.0",
     source: "https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nemo/models/titanet_small",
     serves: ["embedder"],

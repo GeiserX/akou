@@ -194,7 +194,7 @@ export const PARITY: readonly Row[] = [
     cli: ["voices"],
     api: ["GET /voices"],
     mcp: ["akou_voices_list"],
-    window: { none: "the Voices list in Settings is not built yet" },
+    window: [ui("voices-page.ts", '"GET", "/voices"')],
   },
   {
     action: "Voices: rename a person",
@@ -203,21 +203,21 @@ export const PARITY: readonly Row[] = [
     mcp: {
       none: "a rename changes who akou names by voice in every later call, so like teaching a voice it stays with the user at the CLI and the window; an agent may infer a name wrongly",
     },
-    window: { none: "the Voices list in Settings is not built yet" },
+    window: [ui("voices-page.ts", '"POST", "/voices/rename", { from, to }')],
   },
   {
     action: "Voices: forget a person, what one call taught, or everyone",
     cli: ["voices"],
     api: ["POST /voices/forget"],
     mcp: ["akou_voice_forget"],
-    window: { none: "the Voices list in Settings is not built yet" },
+    window: [ui("voices-page.ts", '"POST", "/voices/forget", body')],
   },
   {
     action: "Refuse a name found by voice",
     cli: ["voices"],
     api: ["POST /calls/:id/speakers/refuse"],
     mcp: ["akou_voice_refuse"],
-    window: { none: "the speaker popover's Not Ben button is not built yet" },
+    window: [app("`/calls/#{call}/speakers/refuse`, { spk }")],
     note: "Confirming a name found by voice is naming the speaker with that name (`name`, `akou_name_speaker`).",
   },
   {

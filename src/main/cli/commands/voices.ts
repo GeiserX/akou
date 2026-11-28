@@ -10,7 +10,7 @@
  * `akou name c2 Ben` names a speaker and teaches akou that voice; these commands look after what it
  * learned. They reach the app on this computer only: an `ak_` key is refused (exit 77). With
  * `voices.enabled` off, list and forget still work and rename and refuse exit 78; a server keeps no
- * voices (exit 78). A voices.yaml akou cannot read exits 78 too. No command prints a voiceprint.
+ * voices (exit 78). A voices.yaml akou cannot read exits 78 too. No voices command prints a voiceprint.
  */
 
 import { formatLocalDate, formatWall } from "../../../core/log/clock.ts";
@@ -80,7 +80,7 @@ export const voicesCommand: Command = {
   },
   notes: [
     "`akou name c2 Ben` names a speaker and teaches akou the voice; a name akou finds by voice in a later call shows as `Ben (voice)` until someone confirms it by naming the speaker the same way.",
-    "Voiceprints stay in voices.yaml in akou's config folder on this computer; no command prints one.",
+    "Voiceprints stay in voices.yaml in akou's config folder on this computer; no voices command prints one. A call's own event log also holds its speakers' centroids, which only `akou events` on this computer shows.",
   ],
   examples: [
     "akou voices",

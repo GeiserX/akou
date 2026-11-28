@@ -46,6 +46,8 @@ Right-click a line, or press `Shift+F10` on it, for its menu: **Play from here**
 
 A new voice shows up as `c1?`, `c2?` and so on until you name it. Click a speaker's chip, or pick **Name this speaker…** on one of their lines, to name them; the same menu merges two speakers who are really one person (**Merge into**) and splits them again. Your own side is labelled with the name from Settings (**Your name**). An agent can do the same with `akou name c2 Maya`.
 
+Once you name a speaker, akou keeps a voiceprint of their voice on this Mac and names them by voice in later calls. Such a name shows dashed, with a voice mark, until you confirm it: the speaker's popover says "Sounds like Maya", with **Yes, it is Maya** and **Not Maya**. Settings > Voices lists the voices akou keeps, and renames and forgets them. See [Voices you named](how-it-works.md#voices-you-named).
+
 ## Notes
 
 The note input sits at the foot of the right column. Type a line and press Enter: the note is stamped with the time you wrote it. Four markers set its kind:

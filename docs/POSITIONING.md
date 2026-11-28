@@ -51,7 +51,7 @@ The table reflects public information as of September 2026 and may be out of dat
 
 ## Non-goals
 
-- **No built-in knowledge base.** No library of past meetings, no search across meetings, no people or topic database, no idea lists, no weekly rollups, no voiceprints kept across calls. akou records, transcribes, takes notes and answers about the current call or one past call you name, then hands the result to the system you already use. Integration is the feature.
+- **No built-in knowledge base.** No library of past meetings, no search across meetings, no people or topic database, no idea lists, no weekly rollups. The one thing akou remembers about people is the voice of each person you named, kept on this computer, so it can name them in a later call. akou records, transcribes, takes notes and answers about the current call or one past call you name, then hands the result to the system you already use. Integration is the feature.
 - **No vendor cloud.** Nothing leaves your machine unless you switch on a remote provider, a webhook or a share link, and the app says so when you do.
 - **No meeting bot.** akou never joins a call. It hears what your computer hears.
 - **No API key required.** The default brain is the coding-agent subscription you already have, run locally. Whether a third-party app may drive that tool on your behalf is a terms-of-service question we state openly in the docs and will verify before release.

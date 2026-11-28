@@ -2,7 +2,7 @@
 
 akou records, transcribes and answers questions about a call. It does not keep a library of your calls, search across them, or build a picture of your people and topics. That belongs in the system you already use: an Obsidian or Logseq vault, a Git repository of notes, a wiki, a search index. akou's job is to hand each finished call over quickly, in open formats, and to keep the copy current when you fix it.
 
-Across calls, akou keeps the call folders, a list of calls by date, title and workspace (so you can name one past call), your templates, your settings, and your vocabulary.
+Across calls, akou keeps the call folders, a list of calls by date, title and workspace (so you can name one past call), your templates, your settings, your vocabulary, and the voices of the people you named, so it can name them again in a later call ([Voices you named](how-it-works.md#voices-you-named)).
 
 ## Four ways out
 
@@ -53,7 +53,7 @@ Commands in `config.json` (never settable over the API, because they are program
 ]
 ```
 
-Each gets one JSON document on standard input: the call's frontmatter and folder, the paths of the log, the audio and the export, the transcript as rows (`text` corrected, `heard` the raw text when it differs), the notes, what an agent remembered, and the enhanced notes. `AKOU_CALL_ID`, `AKOU_CALL_DIR` and `AKOU_STAGE` are set too. A hook runs in the call folder in its own process group, its output goes to `logs/hooks.log`, and it is stopped after `timeoutSec` (600 by default). `akou hooks run CALL` runs them again.
+Each gets one JSON document on standard input: the call's frontmatter and folder, the paths of the log (the call's own log, voice centroids included; the export's copy leaves them out), the audio and the export, the transcript as rows (`text` corrected, `heard` the raw text when it differs), the notes, what an agent remembered, and the enhanced notes. `AKOU_CALL_ID`, `AKOU_CALL_DIR` and `AKOU_STAGE` are set too. A hook runs in the call folder in its own process group, its output goes to `logs/hooks.log`, and it is stopped after `timeoutSec` (600 by default). `akou hooks run CALL` runs them again.
 
 Two examples ship in [examples/hooks](https://github.com/GeiserX/akou/tree/main/examples/hooks): committing the export into a Git repository, and posting the enhanced notes to a chat webhook.
 
@@ -65,7 +65,7 @@ Set `webhook.url` and `webhook.secret` in `config.json`. akou `POST`s the same J
 
 `GET /v1/calls` lists calls, and `GET /v1/calls/{id}/transcript` returns one, corrected, as JSON, Markdown or text. Over MCP, `akou_list_calls` and `akou_get_call` do the same for an agent. It returns only a call you name. There is no search across calls.
 
-## The vocabulary is the one thing that carries over
+## Your vocabulary carries over
 
 Names and product terms are what every recognizer gets wrong, so akou keeps one list you own: plain YAML files (`vocabulary.yaml` for everything, `vocabulary/<workspace>.yaml` per workspace), each term with the ways it was misheard. It is a setting, not a knowledge base. It grows only by what you fix and by proposals you approve:
 

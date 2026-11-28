@@ -264,7 +264,7 @@ export function speakersHelp(setting: string, rows: readonly ModelRow[]): string
 export function helperHelp(r: ModelRow): string {
   if (r.id === "silero-vad") return "Finds where someone speaks, for every model.";
   if (r.id === "titanet-small")
-    return "Tells voices apart, live and after the call, whichever way speakers are found.";
+    return "Tells voices apart, live and after the call, and recognises voices you named.";
   if (r.id.startsWith("llama-server")) return "The program Qwen3-ASR runs in.";
   if (r.kind === "speech" && r.streaming && !r.after_call)
     return [accuracyText(r.accuracy), "Writes the live transcript as words are said."]
