@@ -496,7 +496,9 @@ export class LocalLink implements ShareTransport {
         try {
           if (resumeAfter > 0 && resumeAfter <= v.lastSeq) {
             // Resume: only what changed after the viewer's last event, unless a rename touched all.
-            const missed = await app.events(c.id, resumeAfter);
+            // An event that lands during the read is already in the view but maybe not in the
+            // read: it counts as missed too, or the cursor below moves past it unsent.
+            const missed = [...(await app.events(c.id, resumeAfter)), ...held];
             if (missed.some((e) => RENAMING.has(e.type))) snapshot();
             else {
               for (const [id, json] of v

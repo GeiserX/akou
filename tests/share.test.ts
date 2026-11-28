@@ -183,6 +183,53 @@ describe("the share link, end to end over the wire", () => {
     expect(d.lines.map((l: { id: string }) => l.id)).toEqual(["l900003"]);
   });
 
+  test("a viewer that reconnects while a name found by voice is confirmed sees it confirmed", async () => {
+    const url = (await rig.api("GET", "/share")).body.shares[0].url as string;
+    await rig.app.write(id, {
+      type: "seg",
+      id: "l900004",
+      rev: 1,
+      layer: "live",
+      part: 1,
+      ch: "call",
+      spk: "c3",
+      a0: 5,
+      a1: 6,
+      w0: T0 + 4_000_000,
+      w1: T0 + 4_000_900,
+      text: "sounds right to me",
+      model: "fake",
+    } as never);
+    await rig.app.write(id, {
+      type: "speaker.voice",
+      spk: "c3",
+      name: "Cy",
+      status: "named",
+      score: 0.9,
+      by: "app",
+    });
+    const cy = (data: string | undefined) =>
+      (JSON.parse(data ?? "{}").lines ?? []).find((l: { id: string }) => l.id === "l900004");
+    const [snap] = await frames(url, 1);
+    expect(cy(snap?.data)).toMatchObject({ speaker: "Cy", voice: { name: "Cy", status: "named" } });
+    // The user confirms Cy while the reconnecting stream reads the log, after the read.
+    const read = rig.app.events.bind(rig.app);
+    rig.app.events = async (call: string, after: number) => {
+      const got = await read(call, after);
+      await rig.app.write(id, { type: "speaker.name", spk: "c3", name: "Cy", by: "user" });
+      return got;
+    };
+    let got: Awaited<ReturnType<typeof frames>>;
+    try {
+      got = await frames(url, 1, { "last-event-id": snap?.id as string });
+    } finally {
+      rig.app.events = read;
+    }
+    const line = cy(got[0]?.data);
+    expect(line).toMatchObject({ speaker: "Cy" });
+    expect(line.voice).toBeUndefined();
+  });
+
   test("the viewer count follows the open streams", async () => {
     const url = (await rig.api("GET", "/share")).body.shares[0].url as string;
     const ctl = new AbortController();
