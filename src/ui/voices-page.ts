@@ -57,7 +57,11 @@ export function ulidTime(id: string): number | null {
   return t;
 }
 
-/** Whether two names are the same person's: the store compares them without case. */
+/**
+ * Whether a typed name differs from a saved one only by case. The store compares names exactly, so
+ * `Ben` and `ben` are two people there; the window asks once to join such a name onto the saved
+ * spelling, so a name typed in another case does not start a second person by mistake.
+ */
 function sameName(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
