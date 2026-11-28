@@ -792,6 +792,31 @@ describe("Settings > Voices", () => {
   );
 
   test(
+    "a join goes to the saved name typed exactly, when two saved names differ only by case",
+    async () => {
+      await withRig({}, async (rig) => {
+        await seedVoices(rig);
+        const store = new VoiceStore(voicesPath(rig.app.configDir), { log: () => {} });
+        await store.upsert("ben", exemplar(OLDER, 20, new Date(OLDER_AT).toISOString(), "c3"));
+        const page = await rig.open();
+        await openVoices(page);
+        const cy = page.locator('#settings-voices li[data-name="Cy"]');
+        await cy.locator(".pg-link").click();
+        const log = requestLog(page);
+        await cy.locator(".voice-rename input").fill("ben");
+        await cy.locator(".voice-rename .rename").click();
+        expect(await cy.locator(".voice-rename .rename").textContent()).toBe("Join with ben?");
+        await cy.locator(".voice-rename .rename").click();
+        await page.waitForSelector('#settings-voices li[data-name="Cy"]', { state: "detached" });
+        expect(apiCalls(log).filter((c) => c.what.startsWith("POST"))).toEqual([
+          { what: "POST /voices/rename", body: { from: "Cy", to: "ben" } },
+        ]);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "with recognition off the list says akou is not learning or naming voices, and still lists and forgets",
     async () => {
       await withRig({ settings: { "voices.enabled": false } }, async (rig) => {

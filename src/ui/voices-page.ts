@@ -232,7 +232,9 @@ export class VoicesList {
             e.preventDefault();
             const to = input.value.trim();
             if (to === "" || to === v.name) return;
-            const other = (this.voices ?? []).find((x) => x !== v && sameName(x.name, to));
+            // The name as typed first: `Ben` and `ben` can both be saved, as two people.
+            const rest = (this.voices ?? []).filter((x) => x !== v);
+            const other = rest.find((x) => x.name === to) ?? rest.find((x) => sameName(x.name, to));
             // Onto a name akou knows, the two become one person: that is asked once more.
             if (other && joining !== other.name) {
               joining = other.name;
