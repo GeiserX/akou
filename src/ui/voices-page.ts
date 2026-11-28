@@ -159,6 +159,7 @@ export class VoicesList {
 
   private person(v: Voice): HTMLElement {
     const open = this.opened === v.name;
+    // clock: the page's own clock dates "last heard", unless a test hands it one.
     const now = this.hooks.now?.() ?? Date.now();
     const li = h("li", { class: "voice", attrs: { "data-name": v.name } });
     li.append(
