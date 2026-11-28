@@ -770,12 +770,20 @@ class App {
         dot.style.setProperty("--h", String(this.hues.hue(t.spk)));
         const who = h("span", { class: "who" });
         fillWho(who, t.label, t.voice);
-        // A name found by voice reads as one, unconfirmed; an offer says who it sounds like.
-        if (t.voice)
-          who.setAttribute(
-            "aria-label",
-            t.voice.status === "named" ? voiceWords(t.voice) : `${t.label}, ${voiceWords(t.voice)}`,
+        // A name found by voice reads as one, unconfirmed; an offer says who it sounds like. A
+        // span may not carry an aria-label, so the words are text a screen reader reads, not drawn.
+        if (t.voice) {
+          who.querySelector(".offer")?.setAttribute("aria-hidden", "true");
+          who.append(
+            h(
+              "span",
+              { class: "vh" },
+              t.voice.status === "named"
+                ? ", recognised by voice, not confirmed"
+                : `, ${voiceWords(t.voice)}`,
+            ),
           );
+        }
         return h(
           "li",
           { attrs: { "data-spk": t.spk }, class: t.voice?.status === "named" ? "voice" : "" },

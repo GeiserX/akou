@@ -240,7 +240,8 @@ export class VoicesList {
               go.classList.add("armed");
               return;
             }
-            void this.rename(v.name, to);
+            // The store matches names exactly: a join goes to the name as it is saved.
+            void this.rename(v.name, other ? other.name : to);
           },
         },
       },

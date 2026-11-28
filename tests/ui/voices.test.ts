@@ -213,10 +213,15 @@ describe("names found by voice in the window", () => {
         // The People strip marks the same.
         const strip = page.locator('#people li[data-spk="c1"]');
         expect(await strip.getAttribute("class")).toContain("voice");
-        expect(await strip.locator(".who").getAttribute("aria-label")).toBe(
-          "Ben, recognised by voice, not confirmed",
-        );
-        expect(await page.locator('#people li[data-spk="c2"] .offer').textContent()).toBe("Cy?");
+        // A span takes no aria-label: the words are in the chip, read and not drawn.
+        expect(await strip.locator(".who").getAttribute("aria-label")).toBeNull();
+        // The hidden words are a box of their own, so a reader may put a space before the comma.
+        expect(await strip.ariaSnapshot()).toMatch(/: Ben ?, recognised by voice, not confirmed /);
+        expect((await strip.locator(".who .vh").boundingBox())?.width).toBeLessThanOrEqual(1);
+        const offer = page.locator('#people li[data-spk="c2"]');
+        expect(await offer.locator(".offer").textContent()).toBe("Cy?");
+        expect(await offer.ariaSnapshot()).toMatch(/: c2\? ?, sounds like Cy /);
+        expect(await offer.ariaSnapshot()).not.toContain("Cy?");
         await shoot(page, "voices-transcript");
         // Positive control: a typed name reads solid, with no mark and no offer.
         expect(
@@ -755,6 +760,32 @@ describe("Settings > Voices", () => {
         expect(apiCalls(log).filter((c) => c.what.startsWith("POST"))).toEqual([
           { what: "POST /voices/rename", body: { from: "Cy", to: "Cyrus" } },
         ]);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a join typed in another case goes to the saved name, so the two become one person",
+    async () => {
+      await withRig({}, async (rig) => {
+        await seedVoices(rig);
+        const page = await rig.open();
+        await openVoices(page);
+        const cy = page.locator('#settings-voices li[data-name="Cy"]');
+        await cy.locator(".pg-link").click();
+        const log = requestLog(page);
+        await cy.locator(".voice-rename input").fill("ben");
+        await cy.locator(".voice-rename .rename").click();
+        expect(await cy.locator(".voice-rename .rename").textContent()).toBe("Join with Ben?");
+        await cy.locator(".voice-rename .rename").click();
+        await page.waitForSelector('#settings-voices li[data-name="Cy"]', { state: "detached" });
+        expect(apiCalls(log).filter((c) => c.what.startsWith("POST"))).toEqual([
+          { what: "POST /voices/rename", body: { from: "Cy", to: "Ben" } },
+        ]);
+        expect(
+          ((await rig.api("GET", "/voices")).body.voices as { name: string }[]).map((v) => v.name),
+        ).toEqual(["Ben"]);
       });
     },
     UI_TIMEOUT,
