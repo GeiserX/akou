@@ -68,9 +68,35 @@ describe("[TS-15c] every UI run saves screenshots for review", () => {
         await page.waitForSelector("#lines .row >> nth=3");
         await settle(page);
         // Positive control: a theme switch starts the rows' colour transition, so a shot taken
-        // at once would catch it.
+        // at once would catch it. The page counts in the switch's own change event, so a slow
+        // runner cannot let the transition end before the count.
+        await page.emulateMedia({ colorScheme: "light" });
+        await settle(page);
+        await page.evaluate(() => {
+          const w = window as unknown as { atSwitch: Promise<number> };
+          w.atSwitch = new Promise((done) =>
+            matchMedia("(prefers-color-scheme: dark)").addEventListener(
+              "change",
+              () => {
+                void document.body.offsetHeight;
+                done(
+                  document
+                    .getAnimations()
+                    .filter(
+                      (a) =>
+                        a.playState === "running" &&
+                        a.effect?.getComputedTiming().iterations !== Number.POSITIVE_INFINITY,
+                    ).length,
+                );
+              },
+              { once: true },
+            ),
+          );
+        });
         await page.emulateMedia({ colorScheme: "dark" });
-        expect(await fading(page)).toBeGreaterThan(0);
+        expect(
+          await page.evaluate(() => (window as unknown as { atSwitch: Promise<number> }).atSwitch),
+        ).toBeGreaterThan(0);
         await page.emulateMedia({ colorScheme: "light" });
         await settle(page);
         const atShot: number[] = [];
